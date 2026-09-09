@@ -1,0 +1,13 @@
+[package]
+name = "local-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+model.workspace = true
+rusqlite.workspace = true
+dirs.workspace = true
+
+[lints]
+workspace = true

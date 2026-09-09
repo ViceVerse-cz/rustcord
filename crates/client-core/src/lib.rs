@@ -1,0 +1,938 @@
+//! Single UI-thread state owner. Adapters deliver generation-tagged typed events.
+pub mod auth;
+pub mod voice;
+use model::*;
+use session_cache::Timeline;
+use std::collections::{BTreeMap, BTreeSet};
+
+pub const MAX_DRAFT_BYTES: usize = 2 * 1024 * 1024;
+pub const MAX_CONTENT: usize = 2000;
+pub const MAX_NAV: usize = 4000;
+pub const MAX_EVENT_BYTES: usize = 4 * 1024 * 1024;
+pub const EVENT_SLOTS: usize = 8; // <= 32 MiB wire-derived data, not including one decoder
+pub const COMMAND_SLOTS: usize = 16; // each admitted command <= 16 KiB
+
+pub enum Command {
+    Voice(voice::Command),
+    Members {
+        guild: Option<Id>,
+        channel: Option<Id>,
+        request: u64,
+        list_id: Option<String>,
+    },
+    History {
+        channel: Id,
+        before: Option<Id>,
+        request: u64,
+    },
+    Send {
+        channel: Id,
+        content: String,
+        nonce: String,
+        reply: Option<Id>,
+    },
+    Edit {
+        channel: Id,
+        message: Id,
+        content: String,
+    },
+    Delete {
+        channel: Id,
+        message: Id,
+    },
+}
+pub enum Event {
+    Voice(voice::Event),
+    Members(MemberList),
+    RecipientAdded {
+        channel: Id,
+        user: User,
+    },
+    RecipientRemoved {
+        channel: Id,
+        user: Id,
+    },
+    Ready {
+        user: User,
+        guilds: Vec<Guild>,
+        channels: Vec<Channel>,
+    },
+    History {
+        channel: Id,
+        request: u64,
+        older: bool,
+        messages: Vec<Message>,
+    },
+    HistoryFailed {
+        channel: Id,
+        request: u64,
+        failure: auth::Failure,
+    },
+    Message(Message),
+    Patch(MessagePatch),
+    Delete {
+        channel: Id,
+        id: Id,
+    },
+    DeleteBulk {
+        channel: Id,
+        ids: Vec<Id>,
+    },
+    SendResult {
+        nonce: String,
+        result: Result<Message, auth::Failure>,
+    },
+    Failure(auth::Failure),
+    Disconnected,
+    Resumed,
+    Resync,
+    Unavailable(Id),
+    PermissionsChanged,
+}
+pub struct Envelope {
+    pub generation: u64,
+    pub event: Event,
+}
+pub struct Pending {
+    pub channel: Id,
+    pub content: String,
+    pub nonce: String,
+    pub delivery: Delivery,
+    pub confirmed: Option<Id>,
+}
+pub struct State {
+    pub voice: voice::State,
+    pub generation: u64,
+    pub auth: auth::AuthState,
+    pub user: Option<User>,
+    pub members: Option<MemberList>,
+    pub member_request: u64,
+    pub guilds: Vec<Guild>,
+    pub channels: Vec<Channel>,
+    pub selected: Option<Id>,
+    pub timeline: Timeline,
+    pub freshness: Freshness,
+    pub status: &'static str,
+    pub drafts: BTreeMap<Id, String>,
+    pub pending: Vec<Pending>,
+    pub reply: Option<Id>,
+    pub send_sequence: u64,
+    pub request: u64,
+    pub history_before: Option<Id>,
+    pub history_pending: bool,
+    pub older_exhausted: bool,
+    pub gateway_connected: bool,
+    pub revision: u64,
+    pub demo: bool,
+}
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            voice: voice::State::default(),
+            generation: 1,
+            auth: auth::AuthState::Unauthenticated,
+            user: None,
+            members: None,
+            member_request: 0,
+            guilds: vec![],
+            channels: vec![],
+            selected: None,
+            timeline: Timeline::default(),
+            freshness: Freshness::Stale,
+            status: "Disconnected",
+            drafts: BTreeMap::new(),
+            pending: vec![],
+            reply: None,
+            send_sequence: 0,
+            request: 0,
+            history_before: None,
+            history_pending: false,
+            older_exhausted: false,
+            gateway_connected: false,
+            revision: 0,
+            demo: false,
+        }
+    }
+}
+impl State {
+    pub fn logout(&mut self) {
+        let generation = self.generation.wrapping_add(1);
+        *self = Self {
+            generation,
+            ..Self::default()
+        };
+    }
+    pub fn has_unsent(&self) -> bool {
+        self.drafts.values().any(|s| !s.is_empty())
+            || self
+                .pending
+                .iter()
+                .any(|p| p.delivery != Delivery::Confirmed)
+    }
+    pub fn draft_bytes(&self) -> usize {
+        self.drafts.values().map(String::capacity).sum::<usize>()
+            + self
+                .pending
+                .iter()
+                .map(|p| p.content.capacity() + p.nonce.capacity() + size_of::<Pending>())
+                .sum::<usize>()
+    }
+    pub fn select(&mut self, channel: Id) -> Option<Command> {
+        if !self
+            .channels
+            .iter()
+            .any(|c| c.id == channel && c.supports_text())
+        {
+            self.status = "This channel kind is unsupported";
+            return None;
+        }
+        self.members = None;
+        self.selected = Some(channel);
+        self.timeline.clear();
+        self.older_exhausted = false;
+        self.reply = None;
+        self.revision += 1;
+        Some(self.history(None))
+    }
+    pub fn request_members(&mut self) -> Option<Command> {
+        let channel = self.channels.iter().find(|c| Some(c.id) == self.selected)?;
+        self.member_request = self.member_request.wrapping_add(1);
+        let rows = if channel.guild.is_none() && self.freshness != Freshness::Unavailable {
+            let mut users = channel.recipients.clone();
+            if let Some(user) = &self.user
+                && !users.iter().any(|u| u.id == user.id)
+            {
+                users.push(user.clone());
+            }
+            users
+                .into_iter()
+                .map(|user| {
+                    Some(Member {
+                        user,
+                        nick: None,
+                        status: None,
+                    })
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+        let freshness = if self.freshness == Freshness::Unavailable {
+            Freshness::Unavailable
+        } else if channel.guild.is_none() {
+            Freshness::Fresh
+        } else if channel.member_list_id.is_none() {
+            Freshness::Unavailable
+        } else {
+            Freshness::Loading
+        };
+        self.members = Some(MemberList {
+            guild: channel.guild,
+            channel: channel.id,
+            request: self.member_request,
+            total: rows.len() as u64,
+            rows,
+            freshness,
+        });
+        Some(Command::Members {
+            guild: channel.guild.filter(|_| {
+                channel.member_list_id.is_some() && self.freshness != Freshness::Unavailable
+            }),
+            channel: Some(channel.id),
+            request: self.member_request,
+            list_id: channel.member_list_id.clone(),
+        })
+    }
+    pub fn close_members(&mut self) -> Command {
+        self.member_request = self.member_request.wrapping_add(1);
+        self.members = None;
+        Command::Members {
+            guild: None,
+            channel: None,
+            request: self.member_request,
+            list_id: None,
+        }
+    }
+    pub fn history(&mut self, before: Option<Id>) -> Command {
+        self.request += 1;
+        self.history_before = before;
+        self.history_pending = true;
+        self.freshness = Freshness::Loading;
+        self.timeline.begin_page();
+        Command::History {
+            channel: self.selected.expect("selected channel"),
+            before,
+            request: self.request,
+        }
+    }
+    pub fn can_load_older(&self) -> bool {
+        self.gateway_connected
+            && self.freshness == Freshness::Fresh
+            && !self.history_pending
+            && !self.older_exhausted
+            && !self.timeline.is_empty()
+    }
+    pub fn older_history(&mut self) -> Option<Command> {
+        if !self.can_load_older() {
+            return None;
+        }
+        let before = self.timeline.iter().next()?.id;
+        Some(self.history(Some(before)))
+    }
+    pub fn prepare_send(&mut self) -> Option<Command> {
+        let channel = self.selected?;
+        if self.auth != auth::AuthState::Authenticated || self.freshness != Freshness::Fresh {
+            self.status = "Wait for a current connected channel";
+            return None;
+        }
+        let content = self.drafts.get(&channel)?;
+        if content.trim().is_empty()
+            || content.chars().count() > MAX_CONTENT
+            || self.pending.len() >= 64
+            || self.draft_bytes() + content.len() > MAX_DRAFT_BYTES
+        {
+            self.status = "Send exceeds the session input budget";
+            return None;
+        }
+        let content = content.clone();
+        self.send_sequence += 1;
+        let epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let nonce = format!("{epoch}{:06}", self.send_sequence % 1_000_000);
+        self.pending.push(Pending {
+            channel,
+            content: content.clone(),
+            nonce: nonce.clone(),
+            delivery: Delivery::Sending,
+            confirmed: None,
+        });
+        self.drafts.remove(&channel);
+        Some(Command::Send {
+            channel,
+            content,
+            nonce,
+            reply: self.reply.take(),
+        })
+    }
+    pub fn command_rejected(&mut self, command: Command) {
+        if let Command::Voice(control) = command {
+            match control {
+                voice::Command::Join {
+                    channel, request, ..
+                }
+                | voice::Command::Ring { channel, request } => {
+                    self.apply_voice(voice::Event::Failed {
+                        channel,
+                        request,
+                        message: "Call action was not sent; the work queue is full",
+                    })
+                }
+                _ => self.status = "Call control was not sent; local mute/hangup still applies",
+            }
+            return;
+        }
+        if matches!(&command, Command::Members { .. }) {
+            self.invalidate_members();
+            return;
+        }
+        if matches!(&command, Command::History { request, .. } if *request == self.request) {
+            self.cancel_history();
+        }
+        if let Command::Send { nonce, .. } = command
+            && let Some(p) = self.pending.iter_mut().find(|p| p.nonce == nonce)
+        {
+            p.delivery = Delivery::Rejected;
+        }
+        self.status = "Work queue full; action was not sent";
+        self.freshness = Freshness::Stale;
+    }
+    pub fn apply(&mut self, envelope: Envelope) {
+        if envelope.generation != self.generation {
+            return;
+        }
+        self.revision += 1;
+        let result = match envelope.event {
+            Event::Voice(event) => {
+                self.apply_voice(event);
+                Ok(())
+            }
+            Event::RecipientAdded { channel, user } => {
+                if let Some(c) = self
+                    .channels
+                    .iter_mut()
+                    .find(|c| c.id == channel && c.guild.is_none())
+                {
+                    if let Some(old) = c.recipients.iter_mut().find(|u| u.id == user.id) {
+                        *old = user;
+                    } else if c.recipients.len() < 64 {
+                        c.recipients.push(user);
+                    } else {
+                        self.fail(auth::Failure::Capacity);
+                        return;
+                    }
+                    if self.selected == Some(channel) && self.members.is_some() {
+                        let _ = self.request_members();
+                    }
+                }
+                Ok(())
+            }
+            Event::RecipientRemoved { channel, user } => {
+                if self.user.as_ref().is_some_and(|u| u.id == user) {
+                    self.channels.retain(|c| c.id != channel);
+                    if self.selected == Some(channel) {
+                        self.invalidate_members();
+                        self.timeline.clear();
+                        self.freshness = Freshness::Unavailable;
+                        self.cancel_history();
+                        self.status = "Conversation unavailable; account removed";
+                    }
+                    return;
+                }
+                if let Some(c) = self
+                    .channels
+                    .iter_mut()
+                    .find(|c| c.id == channel && c.guild.is_none())
+                {
+                    c.recipients.retain(|u| u.id != user);
+                    if self.selected == Some(channel) && self.members.is_some() {
+                        let _ = self.request_members();
+                    }
+                }
+                Ok(())
+            }
+            Event::Members(list) => {
+                if !self.gateway_connected
+                    || self.freshness == Freshness::Unavailable
+                    || self.selected != Some(list.channel)
+                    || self
+                        .members
+                        .as_ref()
+                        .is_none_or(|m| m.request != list.request || m.guild != list.guild)
+                {
+                    return;
+                }
+                if list.rows.len() > 100
+                    || list.rows.iter().flatten().map(Member::bytes).sum::<usize>() > 128 * 1024
+                {
+                    self.members.as_mut().unwrap().freshness = Freshness::Unavailable;
+                } else {
+                    self.members = Some(list);
+                }
+                Ok(())
+            }
+            Event::Ready {
+                user,
+                guilds,
+                channels,
+            } => {
+                if self
+                    .user
+                    .as_ref()
+                    .is_some_and(|previous| previous.id != user.id)
+                {
+                    self.auth = auth::AuthState::Failed;
+                    self.status = "Different account rejected; log out before switching accounts";
+                    return;
+                }
+                if channels.len() + guilds.len() > MAX_NAV
+                    || channels.iter().any(|c| c.recipients.len() > 64)
+                {
+                    self.auth = auth::AuthState::Failed;
+                    self.status = "Account navigation exceeds safe capacity";
+                    return;
+                }
+                self.members = None;
+                self.user = Some(user);
+                self.guilds = guilds;
+                self.channels = channels;
+                self.auth = auth::AuthState::Authenticated;
+                self.gateway_connected = true;
+                self.status = "Connected · unofficial session";
+                Ok(())
+            }
+            Event::History {
+                channel,
+                request,
+                older,
+                messages,
+            } => {
+                if self.selected != Some(channel)
+                    || request != self.request
+                    || !self.history_pending
+                {
+                    return;
+                }
+                let mut ids = BTreeSet::new();
+                if older != self.history_before.is_some()
+                    || messages.len() > 50
+                    || messages.iter().any(|message| {
+                        message.channel != channel
+                            || self
+                                .history_before
+                                .is_some_and(|before| message.id >= before)
+                            || !ids.insert(message.id)
+                    })
+                {
+                    self.cancel_history();
+                    self.fail(auth::Failure::Protocol);
+                    return;
+                }
+                self.history_pending = false;
+                self.older_exhausted = messages.len() < 50;
+                let r = self.timeline.finish_page(messages, older);
+                if r.is_ok() && self.gateway_connected {
+                    self.freshness = Freshness::Fresh;
+                }
+                r
+            }
+            Event::HistoryFailed {
+                channel,
+                request,
+                failure,
+            } => {
+                if self.selected != Some(channel)
+                    || request != self.request
+                    || !self.history_pending
+                {
+                    return;
+                }
+                self.cancel_history();
+                if failure == auth::Failure::Forbidden {
+                    self.invalidate_members();
+                    self.timeline.clear();
+                    self.freshness = Freshness::Unavailable;
+                    self.status = "Channel unavailable or permission denied";
+                } else {
+                    self.fail(failure);
+                }
+                Ok(())
+            }
+            Event::Message(m) => {
+                self.confirm(&m);
+                if self.selected == Some(m.channel) && self.freshness != Freshness::Unavailable {
+                    self.timeline.insert(m, true, false)
+                } else {
+                    Ok(())
+                }
+            }
+            Event::Patch(p) => {
+                if self.selected == Some(p.channel) && self.freshness != Freshness::Unavailable {
+                    self.timeline.patch(p)
+                } else {
+                    Ok(())
+                }
+            }
+            Event::Delete { channel, id } => {
+                if self.selected == Some(channel) {
+                    self.timeline.delete(id)
+                } else {
+                    Ok(())
+                }
+            }
+            Event::DeleteBulk { channel, ids } => {
+                if ids.len() > 100 {
+                    Err("Bulk deletion exceeds safe capacity")
+                } else if self.selected == Some(channel) {
+                    ids.into_iter().try_for_each(|id| self.timeline.delete(id))
+                } else {
+                    Ok(())
+                }
+            }
+            Event::SendResult { nonce, result } => {
+                match result {
+                    Ok(m) => {
+                        if let Some(p) = self.pending.iter_mut().find(|p| p.nonce == nonce) {
+                            p.delivery = Delivery::Confirmed;
+                            p.confirmed = Some(m.id);
+                        }
+                        if self.selected == Some(m.channel)
+                            && self.freshness != Freshness::Unavailable
+                            && self.timeline.get(m.id).is_none()
+                            && self.timeline.insert(m, false, false).is_err()
+                        {
+                            self.freshness = Freshness::Stale;
+                            self.status = "Message exceeds safe capacity";
+                        }
+                    }
+                    Err(f) => {
+                        if let Some(p) = self
+                            .pending
+                            .iter_mut()
+                            .find(|p| p.nonce == nonce && p.delivery != Delivery::Confirmed)
+                        {
+                            p.delivery = if f == auth::Failure::Ambiguous {
+                                Delivery::Ambiguous
+                            } else {
+                                Delivery::Rejected
+                            };
+                        }
+                        self.fail(f);
+                    }
+                }
+                self.pending.retain(|p| p.delivery != Delivery::Confirmed);
+                Ok(())
+            }
+            Event::Failure(f) => {
+                self.fail(f);
+                Ok(())
+            }
+            Event::Disconnected => {
+                self.disconnect_voice();
+                self.invalidate_members();
+                self.gateway_connected = false;
+                self.cancel_history();
+                self.freshness = Freshness::Stale;
+                self.status = "Disconnected · history may be stale";
+                Ok(())
+            }
+            Event::Resumed => {
+                self.members = None;
+                self.gateway_connected = true;
+                self.cancel_history();
+                self.freshness = Freshness::Stale;
+                self.status = "Gateway resumed · reload active history to verify freshness";
+                Ok(())
+            }
+            Event::Resync | Event::PermissionsChanged => {
+                self.disconnect_voice();
+                self.invalidate_members();
+                self.timeline.clear();
+                self.freshness = Freshness::Stale;
+                self.cancel_history();
+                self.status = "Session or permissions changed · reload active history";
+                Ok(())
+            }
+            Event::Unavailable(channel) => {
+                if self
+                    .voice
+                    .active
+                    .as_ref()
+                    .is_some_and(|c| c.channel == channel)
+                {
+                    self.disconnect_voice();
+                }
+                if self.selected == Some(channel) {
+                    self.invalidate_members();
+                    self.timeline.clear();
+                    self.freshness = Freshness::Unavailable;
+                    self.cancel_history();
+                }
+                self.status = "Channel unavailable or permission denied";
+                Ok(())
+            }
+        };
+        if let Err(status) = result {
+            self.status = status;
+            self.freshness = Freshness::Stale;
+            self.timeline.clear();
+            self.cancel_history();
+        }
+    }
+    fn invalidate_members(&mut self) {
+        self.member_request = self.member_request.wrapping_add(1);
+        if let Some(list) = &mut self.members {
+            list.request = self.member_request;
+            list.rows.clear();
+            list.freshness = Freshness::Unavailable;
+        }
+    }
+    fn confirm(&mut self, message: &Message) {
+        if self.user.as_ref().map(|u| u.id) != Some(message.author.id) {
+            return;
+        }
+        if let Some(nonce) = &message.nonce {
+            self.pending
+                .retain(|p| !(p.nonce == *nonce && p.channel == message.channel));
+        }
+    }
+    fn fail(&mut self, failure: auth::Failure) {
+        self.status = failure.label();
+        match failure {
+            auth::Failure::Expired => self.auth = auth::AuthState::Expired,
+            auth::Failure::Challenged => self.auth = auth::AuthState::Challenged,
+            _ => {}
+        }
+        if failure.ends_session() {
+            self.disconnect_voice();
+            self.gateway_connected = false;
+            self.invalidate_members();
+            self.cancel_history();
+        }
+        self.freshness = Freshness::Stale;
+    }
+    fn cancel_history(&mut self) {
+        self.request += 1;
+        self.history_pending = false;
+        self.timeline.cancel_page();
+    }
+}
+
+impl Event {
+    /// Admission estimate for heap-owned fields; rejects oversized items before entering the UI queue.
+    pub fn bytes(&self) -> usize {
+        size_of::<Self>()
+            + match self {
+                Self::Voice(event) => event.bytes(),
+                Self::Ready {
+                    user,
+                    guilds,
+                    channels,
+                } => {
+                    user.heap_bytes()
+                        + guilds
+                            .iter()
+                            .map(|g| size_of::<Guild>() + g.name.capacity())
+                            .sum::<usize>()
+                        + channels
+                            .iter()
+                            .map(|c| {
+                                size_of::<Channel>()
+                                    + c.name.capacity()
+                                    + c.member_list_id.as_ref().map_or(0, String::capacity)
+                                    + c.recipients
+                                        .iter()
+                                        .map(|u| size_of::<User>() + u.heap_bytes())
+                                        .sum::<usize>()
+                            })
+                            .sum::<usize>()
+                }
+                Self::Members(list) => {
+                    list.rows.capacity() * size_of::<Option<Member>>()
+                        + list.rows.iter().flatten().map(Member::bytes).sum::<usize>()
+                }
+                Self::RecipientAdded { user, .. } => user.heap_bytes(),
+                Self::History { messages, .. } => messages.iter().map(Message::bytes).sum(),
+                Self::Message(m) => m.bytes(),
+                Self::Patch(p) => match &p.content {
+                    Patch::Value(s) => s.capacity(),
+                    _ => 0,
+                },
+                Self::DeleteBulk { ids, .. } => ids.capacity() * size_of::<Id>(),
+                Self::SendResult { nonce, result } => {
+                    nonce.capacity() + result.as_ref().map_or(0, Message::bytes)
+                }
+                _ => 0,
+            }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn apply(state: &mut State, event: Event) {
+        state.apply(Envelope {
+            generation: state.generation,
+            event,
+        });
+    }
+    fn message(id: u64) -> Message {
+        Message {
+            id: Id(id),
+            channel: Id(1),
+            author: User {
+                id: Id(2),
+                name: "Synthetic".into(),
+                avatar: None,
+                discriminator: 0,
+            },
+            content: "Synthetic history".into(),
+            edited: false,
+            edited_at: None,
+            revision: 0,
+            nonce: None,
+            reply_to: None,
+            unsupported: false,
+        }
+    }
+    #[test]
+    fn members_reject_late_requests_and_permission_invalidations() {
+        let user = message(1).author;
+        let mut state = State {
+            user: Some(user.clone()),
+            gateway_connected: true,
+            auth: auth::AuthState::Authenticated,
+            channels: vec![Channel {
+                id: Id(1),
+                guild: None,
+                name: "DM".into(),
+                kind: 1,
+                recipients: vec![user.clone()],
+                member_list_id: None,
+            }],
+            ..State::default()
+        };
+        state.select(Id(1));
+        state.request_members();
+        assert_eq!(state.members.as_ref().unwrap().rows.len(), 1);
+        let previous = state.members.clone().unwrap();
+        state.close_members();
+        apply(&mut state, Event::Members(previous.clone()));
+        assert!(state.members.is_none());
+        state.request_members();
+        apply(&mut state, Event::PermissionsChanged);
+        apply(&mut state, Event::Members(previous));
+        assert!(state.members.as_ref().unwrap().rows.is_empty());
+        assert_eq!(
+            state.members.as_ref().unwrap().freshness,
+            Freshness::Unavailable
+        );
+        apply(&mut state, Event::Resumed);
+        assert!(state.members.is_none());
+        state.request_members();
+        apply(
+            &mut state,
+            Event::RecipientAdded {
+                channel: Id(1),
+                user: User {
+                    id: Id(3),
+                    name: "Other".into(),
+                    avatar: None,
+                    discriminator: 0,
+                },
+            },
+        );
+        assert_eq!(state.members.as_ref().unwrap().rows.len(), 2);
+        apply(
+            &mut state,
+            Event::RecipientRemoved {
+                channel: Id(1),
+                user: Id(3),
+            },
+        );
+        assert_eq!(state.members.as_ref().unwrap().rows.len(), 1);
+    }
+    #[test]
+    fn history_is_scoped_bounded_and_cannot_restore_freshness_after_disconnect() {
+        let mut state = State::default();
+        apply(
+            &mut state,
+            Event::Ready {
+                user: User {
+                    id: Id(2),
+                    name: "Synthetic".into(),
+                    avatar: None,
+                    discriminator: 0,
+                },
+                guilds: vec![],
+                channels: vec![Channel {
+                    id: Id(1),
+                    guild: None,
+                    name: "Synthetic".into(),
+                    kind: 1,
+                    recipients: vec![],
+                    member_list_id: None,
+                }],
+            },
+        );
+        state.select(Id(1));
+        let old_request = state.request;
+        apply(&mut state, Event::Disconnected);
+        apply(
+            &mut state,
+            Event::History {
+                channel: Id(1),
+                request: old_request,
+                older: false,
+                messages: vec![message(99)],
+            },
+        );
+        assert_eq!(state.freshness, Freshness::Stale);
+        assert!(state.timeline.is_empty());
+        assert!(!state.can_load_older());
+
+        apply(&mut state, Event::Resumed);
+        state.history(None);
+        let request = state.request;
+        apply(
+            &mut state,
+            Event::History {
+                channel: Id(1),
+                request,
+                older: false,
+                messages: (51..101).map(message).collect(),
+            },
+        );
+        assert_eq!(state.freshness, Freshness::Fresh);
+        assert!(state.can_load_older());
+        assert!(matches!(
+            state.older_history(),
+            Some(Command::History {
+                before: Some(Id(51)),
+                ..
+            })
+        ));
+        assert!(state.older_history().is_none()); // no duplicate concurrent page
+        let request = state.request;
+        apply(
+            &mut state,
+            Event::HistoryFailed {
+                channel: Id(1),
+                request: old_request,
+                failure: auth::Failure::Forbidden,
+            },
+        );
+        assert_eq!(state.freshness, Freshness::Loading);
+        apply(
+            &mut state,
+            Event::History {
+                channel: Id(1),
+                request,
+                older: true,
+                messages: vec![message(50)],
+            },
+        );
+        assert_eq!(state.timeline.len(), 51);
+        assert!(!state.can_load_older()); // short final page
+        apply(
+            &mut state,
+            Event::DeleteBulk {
+                channel: Id(1),
+                ids: vec![Id(50), Id(51)],
+            },
+        );
+        assert_eq!(state.timeline.len(), 49);
+        assert!(state.timeline.get(Id(50)).is_none());
+
+        state.history(None);
+        let request = state.request;
+        apply(
+            &mut state,
+            Event::History {
+                channel: Id(1),
+                request,
+                older: false,
+                messages: vec![message(100)],
+            },
+        );
+        assert_eq!(state.timeline.len(), 1); // old records absent from fresh page disappear
+        state.history(Some(Id(100)));
+        let request = state.request;
+        apply(
+            &mut state,
+            Event::History {
+                channel: Id(1),
+                request,
+                older: true,
+                messages: vec![message(100)],
+            },
+        );
+        assert_eq!(state.freshness, Freshness::Stale); // before boundary cannot repeat itself
+        state.history(None);
+        let request = state.request;
+        apply(
+            &mut state,
+            Event::HistoryFailed {
+                channel: Id(1),
+                request,
+                failure: auth::Failure::Forbidden,
+            },
+        );
+        assert_eq!(state.freshness, Freshness::Unavailable);
+        assert!(state.timeline.is_empty());
+        apply(&mut state, Event::Message(message(200)));
+        assert!(state.timeline.is_empty()); // queued live content cannot undo revocation
+    }
+}

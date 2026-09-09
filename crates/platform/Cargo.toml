@@ -1,0 +1,20 @@
+[package]
+name = "platform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+client-core.workspace = true
+wry.workspace = true
+winit.workspace = true
+keyring.workspace = true
+url.workspace = true
+zeroize.workspace = true
+getrandom.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+
+[lints]
+workspace = true

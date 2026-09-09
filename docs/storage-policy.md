@@ -1,0 +1,34 @@
+# Local storage policy and audit
+
+The owner explicitly withdrew the no-storage policy on 2026-09-09. Local files, SQLite, saved drafts, settings and caches are permitted. The implementation persists **history, avatar metadata/images, drafts, appearance, and the login token**. Window geometry remains session-local.
+
+| Data | Location / bound | Removal |
+|---|---|---|
+| Discord token | OS credential store, service `org.serein.desktop`, account `discord-session`; at most 2048 bytes | Explicit logout / Forget saved login; invalid-token expiry also requests deletion |
+| History and drafts | `dirs::data_local_dir()/serein/client.sqlite3` | Clear cached history also clears avatar images and keeps drafts; logout clears the authenticated account’s history and drafts |
+| Messages | 500 per window, at most 20 stored channel windows globally, 48 MiB estimated text/metadata; SQLite main database capped at 64 MiB | Oldest touched channel evicted transactionally |
+| Avatar PNGs | Account subdirectory beneath `dirs::data_local_dir()/serein/avatars`; 1 GiB / 4096 files per account, 90 days since last use, at most 512 KiB per PNG | Clear cache or account logout; versioned avatar keys avoid stale pictures after hash changes |
+| Drafts | 64 globally, at most 2 MiB content; each draft at most 8192 UTF-8 bytes | Clear draft, confirmed send, or account logout |
+| Appearance | One application-wide SQLite row: Light or Dark; absent means System | Select System to remove the override; retained across account logout |
+| SQLite working files | DELETE journal mode, in-memory temporary tables, 2 MiB page cache; transaction journal may temporarily add disk usage | SQLite transaction completion; normal SQLite crash recovery |
+| Voice credentials, DAVE identities/keys and PCM/Opus audio | Session memory only; one call, bounded media queues; no recording or audio cache | Hangup, failure, logout and application teardown; no forensic-erasure claim |
+| Audio devices and push-to-talk preferences | Session memory only | Application exit / UI reset; not saved in SQLite |
+| Authentication page | Wry incognito/nonpersistent mode requested, destroyed on token handoff/cancel/timeout | Platform engine teardown; OS artifacts not promised erased |
+
+Typical database directories: macOS `~/Library/Application Support/serein`, Windows `%LOCALAPPDATA%/serein`, Linux `$XDG_DATA_HOME/serein` or `~/.local/share/serein`. The Unix directory is private (0700). Database contents are **not encrypted by Serein**. OS token protection does not encrypt history, backups or drafts.
+
+The app writes no background log, analytics, crash upload, saved password, MFA ticket, or plaintext credential file. A separate credential-free CDN downloader loads only visible avatars. Build outputs, this documentation, synthetic test databases and package files are development artifacts.
+
+SQLite work is serialized on a worker. Normal startup opens the database to load appearance before authentication; `--demo` does not open the database, credential store or network. Schema version 3 preserves author avatar hashes and discriminators alongside cached messages; older history remains readable. Draft save status is visible; a full queue or disk failure is reported and must not be described as saved. An interrupted send may leave a saved draft for content Discord already accepted: recovered text never automatically sends. Normal close waits for queued store work if necessary; logout orders one transactional account deletion after earlier writes. Deletion is not a forensic erasure guarantee.
+
+Saved recovery text prefers the current nonempty draft, otherwise the most recent unresolved send in that channel. Only a matching own-author/channel/nonce confirmation updates this recovery record. This is one recovery draft per channel, not a durable multi-message outbox; additional unresolved sends remain in RAM and the close prompt warns before discarding them. Incoming hidden-channel events do not rewrite the active cache; accepted active-view changes are coalesced into at most one snapshot per event-drain pass.
+
+Source checks verify disabled eframe persistence, disabled REST cookies, one renderer, and an ephemeral webview request. egui-wgpu 0.36.2 creates its render pipeline with `cache: None`. Avatar decoding and disk I/O run on a dedicated worker; egui receives bounded decoded results. These are chosen implementation settings, **not a renewed no-storage requirement**.
+
+Offline SQLite tests exercise real temporary-file reopen, schema upgrade, appearance reset, read-only failure, draft capacity rollback, account isolation, 20-channel eviction and atomic logout rollback/deletion. They remove their synthetic test files. OS credential-store and webview write tracing remain unverified. Windows WebView2 may create user-data/runtime artifacts even for InPrivate mode; this must be measured, and old WebView2 runtimes that ignore incognito must not be claimed ephemeral. No zero-byte storage claim is made.
+
+A process-write trace was attempted with `sudo -n fs_usage -w -f filesys -t 3 <synthetic-app-pid>`; the OS returned “a password is required.” No trace was obtained. The account/cache code and synthetic SQLite files were tested, but actual process-write behavior is not certified.
+
+The September 10 owner clarification prioritizes low RAM and small packages over minimizing disk caches. Avatar hashes identify versioned static CDN PNGs; no animation or new image codec is enabled. One worker downloads/decodes at a time, with 128 bounded keys waiting, eight decoded results (at most 512 KiB total), a 512 KiB encoded body cap, 256×256 source dimensions, a 1 MiB decoder allocation limit, and 128×128 output. The UI holds at most 64 textures (4 MiB RGBA). These are component bounds, not measured whole-process RSS or driver allocations. Disk eviction retains only 32 candidate paths at a time. Worker completion fences replacement and deletion, so logout/clear cannot race an older worker’s cache writes. Picture-cache failures appear in the existing local-storage status. Disk cache contents are unencrypted.
+
+The optional voice feature introduces no application audio files, recordings, voice-key store or saved device preference. Voice tokens/session IDs use redacted, zeroizing buffers and never enter SQLite or diagnostics; DAVE identities are regenerated for a new call. Eight-frame PCM queues, bounded Opus packets and the fixed jitter buffer are transient media working sets, not disk caches. Upstream cryptographic tracing is compiled out. Audio-device shutdown is fenced before another device session starts. Synthetic crypto, transport and device-free capture-gate tests passed; actual audio-driver/permission artifacts and process writes during a physical call have not been traced. OS microphone permissions and driver behavior are outside Serein's cache-clearing guarantee.

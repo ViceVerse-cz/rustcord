@@ -1,0 +1,18 @@
+[package]
+name = "ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+egui.workspace = true
+model.workspace = true
+client-core.workspace = true
+pulldown-cmark = { version = "=0.13.4", default-features = false }
+url.workspace = true
+
+[dev-dependencies]
+skrifa = { version = "=0.44.0", default-features = false, features = ["std"] }
+
+[lints]
+workspace = true

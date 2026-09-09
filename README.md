@@ -1,2 +1,28 @@
-# rustcord
-Native Discord client made in Rust
+# Serein
+
+An open-source native Discord desktop client in Rust and egui/eframe. **Experimental, unofficial, and not endorsed by Discord.** The normal-user live message exchange gate has not passed. This is not yet a completed Discord replacement.
+
+```sh
+cargo run --locked -- --demo       # synthetic, no network or user storage
+cargo run --locked                 # saved login, or official Discord login webview; text-only
+cargo run --locked --features voice # optional one-to-one DM audio calls
+cargo xtask check
+node tests/login-handoff.cjs       # development-only JS bridge test
+cargo replay
+cargo xtask package                # text-only package; macOS uses ad-hoc signing
+cargo xtask package-voice          # separate voice build under dist/voice
+```
+
+Rust 1.98.1 is pinned. See [platform build requirements](docs/platform-support.md) before building on Linux or Windows.
+
+The messaging interface is native egui/wgpu. A temporary platform webview displays Discord’s actual login page; after login, an origin-checked handoff accepts the session credential used by that webview’s own Discord requests and closes the webview. Passwords, QR exchange, and challenges are handled by Discord’s page. Acceptance of this embedded login and each authentication method remains **live-unverified**. Unsupported challenges are never bypassed.
+
+The owner revised SPEC.md to **allow local storage**. Login uses the OS credential store. Recent history and drafts use an account-isolated, bounded local SQLite cache. Clear cached history removes cached messages and avatar images; logout removes the saved credential and that account’s cache/drafts. SQLite content is not encrypted by the application. Light/Dark appearance persists across launches; System removes the override. See [storage policy](docs/storage-policy.md).
+
+Implemented: native navigation, virtualized variable-height text rows, composition, bounded Markdown formatting, safe link confirmation, conservative spoiler concealment, CJK/Arabic font fallbacks, synthetic send/edit/delete/reply, direct experimental REST/Gateway adapters, rate-limit cooldowns, heartbeat/reconnect/resume handling, partial patches, bounded message reconciliation, cached history and saved drafts, an on-demand People pane, basic profile cards, and static profile pictures cached on disk with a small RAM texture working set. Guild lists currently show the first 100 list positions, including group separators; DM participants come from the session snapshot. Live functionality is not proven by fixtures or local socket tests. Attachments, reactions, Discord Markdown parity, remote read markers, search, video and screen sharing remain incomplete. Multilingual glyph coverage is tested; actual IME, bidirectional editing and screen-reader behavior remain unverified.
+
+The optional `voice` feature implements existing one-to-one DM calls: Start/Answer/Decline/Hangup, native device selection, mute/deafen, focused V push-to-talk, Opus audio, Discord voice WebSocket/UDP transport and DAVE version 1. Default builds remain text-only. Voice has synthetic protocol/codec tests, **no live Discord or physical microphone/speaker validation**. Use headphones: acoustic echo cancellation is not implemented. See [voice scope and live procedure](docs/voice.md).
+
+Discord forbids automating normal accounts outside its OAuth2/bot API and warns of account termination. Interactive use and open source do not establish approval. Read the [compatibility matrix](docs/discord-compatibility.md) and [owner-controlled live procedure](docs/authentication.md). No bot substitution, backend, relay, credential extraction from other applications, CAPTCHA/MFA bypass, fingerprint spoofing, or telemetry.
+
+See [progress and actual checks](docs/progress.md), [performance](docs/performance.md), [architecture](docs/architecture.md), and [dependency notices](THIRD_PARTY_NOTICES.md). Original code: MIT OR Apache-2.0.

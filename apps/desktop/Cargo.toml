@@ -1,0 +1,32 @@
+[package]
+name = "serein"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+developer-session = []
+voice = ["dep:discord-voice"]
+
+[dependencies]
+discord-voice = { workspace = true, optional = true }
+eframe.workspace = true
+ui.workspace = true
+model.workspace = true
+client-core.workspace = true
+discord-api.workspace = true
+discord-gateway.workspace = true
+discord-protocol.workspace = true
+test-support.workspace = true
+tokio.workspace = true
+zeroize.workspace = true
+platform.workspace = true
+local-store.workspace = true
+winit.workspace = true
+reqwest.workspace = true
+dirs.workspace = true
+image = { version = "=0.25.10", default-features = false, features = ["png"] }
+
+[lints]
+workspace = true

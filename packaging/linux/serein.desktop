@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Serein
+Comment=Experimental unofficial native Discord client
+Exec=serein
+Terminal=false
+Categories=Network;InstantMessaging;

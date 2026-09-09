@@ -1,0 +1,15 @@
+# Authentication and owner-controlled live validation
+
+Serein uses Discord’s official login page in a temporary platform webview, not OAuth. The credential handoff is unofficial and live-unverified; see the compatibility matrix. Complete authentication yourself, in the application. Never send passwords, tokens, MFA codes, QR screenshots, or private message contents to the coding agent, issues, logs, or CI.
+
+1. Build `cargo run --locked` on a supported platform. Use a private conversation controlled by the account owner. The owner enables the private-test acknowledgment and presses **Sign in with Discord**.
+2. Complete one of the real login methods available in Discord’s page. Do not bypass a challenge or spoof a fingerprint if Discord rejects the engine. Cancel if the page or handoff is unsupported. The webview expires after ten minutes and closes when it supplies a candidate token.
+3. Native REST verifies `/users/@me`, rejects a bot account, retrieves the gateway location, and waits for normal-user READY. A socket opening is not authentication success. The token is saved in the OS credential store only after readiness; if saving fails, the UI reports session-only login.
+4. Choose the existing private channel/DM. Load one 50-message page. Deliberately compose and send one short test message. Verify it appears in an official Discord client. Reply from that official client and verify the reply appears natively through Gateway. Do not count an offline fixture, matching text, or a bot reply as success.
+5. In the same conversation, verify an edit, deletion, HTTP/Gateway confirmation ordering, permission rejection if available, disconnect/resume and non-resumable reload. Keep traffic small; run stress tests only against synthetic transports.
+6. Quit after local saves finish. Relaunch and verify credential-store restoration and saved draft recovery without opening the webview. Inspect recovered drafts before sending: an interrupted send can have succeeded remotely.
+7. Log out and verify saved-login deletion and local account cache/draft cleanup. The UI must show credential-store or SQLite deletion failures. Local logout does not claim remote session revocation.
+
+Record only date, OS/build, methods tested, pass/fail and redacted failure category in docs/progress.md. Never record credentials, account/channel IDs, signed URLs, message contents or QR data. **No real owner-controlled session was supplied or exercised during implementation; the live milestone remains blocked.**
+
+A separate `--features developer-session` build exposes an explicitly labeled, RAM-only owner-provided token field for adapter diagnosis. It is not the normal login, is disabled in release packaging, and never permits extraction from other software.

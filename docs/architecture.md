@@ -1,0 +1,40 @@
+# Architecture
+
+Serein is a desktop protocol client for Discord, with no project messaging service. The final owner revisions permit an authentication-only webview, saved login, and local caches.
+
+- `model`: IDs preserved as strings on the wire / u64 in memory, typed entities and absent/null/value patches. No GUI, filesystem or networking.
+- `discord-protocol`: bounded wire decoding and Discord DTOs, independent of rendering.
+- `client-core`: single UI-thread state owner, generation-tagged events, composer/send lifecycle, navigation and freshness. Network callbacks never mutate it directly.
+- `session-cache`: one active 500-message / 4 MiB timeline, bounded patches/tombstones. Inactive history goes to `local-store`; no unbounded RAM cache per channel.
+- `discord-api`: fixed Discord origin, verified TLS, no redirects, cookies or proxy discovery, serialized REST, bounded response bodies and conservative shared service cooldown.
+- `discord-gateway`: independent Tokio task; JSON without compression, Hello/ACK/heartbeats, Identify/Resume, bounded retry lifecycle. UI queue overload stops the connection instead of silently losing message mutations.
+- `local-store`: SQLite transactions, global disk ceilings, account-isolated messages/drafts. A dedicated worker serializes operations away from rendering.
+- `platform`: OS credential store and temporary Wry login webview. No system profile/token extraction. Credential operations are serialized by a dedicated worker to order saves before logout deletion.
+- `ui`: egui panels, viewport virtualization and multiline composition; typed commands only. No network requests or tokens.
+- `apps/desktop`: wiring, cancellation, bounded queues, native login lifecycle, cache hydration and eframe options. `test-support` is explicitly synthetic; `xtask` and `replay-bench` are development tools.
+
+No generic plugin system, bot SDK or external database is introduced. The optional `discord-voice` crate provides native DM media; the default desktop dependency graph remains text-only.
+
+The storage worker admits at most 16 operations, each capped by the active 4 MiB window; UI/network event queue is 8 × at most 4 MiB. HTTP work is serialized, Gateway control runs independently, history work is canceled on newer navigation. A separate 16-slot serial message-write worker keeps slow REST writes from blocking call controls. Session generations reject old outcomes. Credential queues are four small operations and serialize read/save/delete. UI snapshots do not clone the account per frame.
+
+The native message renderer uses pulldown-cmark without its HTML or command-line features. Parsing is capped at 8192 UTF-8 bytes / 128 lines, 512 parser events and 16 nesting levels; complexity overflow falls back to bounded literal text. A 64-entry / 1 MiB estimated source-and-span MRU serves visible messages. HTML remains inert text and Markdown images are placeholders. HTTP(S) links require an explicit destination confirmation; nothing fetches them for previews. Spoiler syntax conservatively conceals the whole message until revealed; consent is invalidated when the original content changes. Spoiler consent copies are bounded by the active message window. Native height caches include message content/metadata, width, body font size and display scale.
+
+Bundled OFL Noto CJK/Arabic fallbacks add 16.51 MiB raw font data; there is no runtime download or system-font scan. See assets/README.md for provenance, regional forms and shaping limitations.
+
+History responses/errors must match the active request and connection state. Recent reload replaces the retained view while preserving mutations observed during the request; back-pagination validates page channel, ID boundary, duplicates and cardinality. At capacity, an older window retains its reading position instead of evicting its anchor for new messages; Reload returns to latest. Successful Resume triggers active-page revalidation. Bulk deletions occupy one bounded event instead of flooding the UI queue.
+
+Known limits: one RAM channel window, a CommonMark subset rather than Discord Markdown parity, conservative shared rate cooldown, six reconnect attempts between stable-ready periods, and full-window cache writes rather than per-message SQL updates. These are implementation limits, not claims of full milestone completion.
+
+The active People pane retains at most 100 service list positions and 128 KiB of member metadata. DM participants are retained with navigation; guild member subscriptions are on demand and remain unofficial/live-unverified. Member events are tagged with the active request and matched to the service list identity; closing or navigating the pane releases its working set.
+
+Avatar metadata travels through user/message DTOs and SQLite schema v3. A credential-free worker constructs only Discord CDN PNG URLs from validated IDs/hashes, disables redirects/proxy discovery, and does disk I/O and bounded decoding away from the render thread. The UI requests visible images, deduplicates attempts, and owns a 64-entry / 4 MiB texture cache. Account cache directories can retain 1 GiB / 4096 compressed PNGs for faster revisits while RAM stays small. See storage-policy.md for exact queue/decoder limits and cleanup ordering.
+
+## Optional one-to-one DM voice
+
+`client-core::voice` owns one active call and one incoming indicator, with generation/request matching and no automatic answer/rejoin. Only existing kind-1 DMs with one recipient are eligible. `discord-protocol` decodes CALL_* and voice state/server dispatches; `discord-gateway` sends the unofficial normal-user opcodes 13/4. Leaving retains a barrier until the owner's null voice state or CALL_DELETE acknowledges departure; after ten seconds it reports a timeout and continues rejecting another join until acknowledgment or reconnect. An old departure cannot become the next call's negotiation event.
+
+The desktop consumes redacted, zeroizing voice credentials before core reduction. It pairs the owner's session with a channel-scoped voice server/token, bounded by a 30-second allocation deadline. Outgoing ringing is a separate, once-per-request REST command after transport allocation is confirmed, before waiting for the peer-dependent DAVE group. Answer never rings. Failed/ambiguous ringing writes are not replayed. Slow REST cannot block native mute or hangup; call control and notice queues each hold eight items.
+
+`discord-voice` owns the voice WebSocket, public-address UDP discovery, RTP transport authentication, DAVE/OpenMLS state, Opus and native CPAL audio. TLS/origin validation and required DAVE readiness gate media; there is no encryption downgrade. Audio callbacks use preallocated rings, while codecs/networking and device work run off the render thread. Capture/playback are enabled only after required encryption, and stop on hangup, session failure or account change. The desktop polls media lifecycle from eframe logic as well as after UI gestures, so teardown and focused push-to-talk do not depend on a visible repaint.
+
+Device choices, mute/deafen and focused V push-to-talk remain session-local. Voice WebSocket resumption is bounded and preserves the current call's cryptographic state; rejected resumption and main Gateway disconnect require deliberate rejoin. No recording, AEC, group-DM/guild calls, camera or screen-sharing engine is included. Exact media limits and offline evidence are in [the adapter README](../crates/discord-voice/README.md); [the live gate](voice.md) is still blocked.

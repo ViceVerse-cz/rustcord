@@ -1,0 +1,31 @@
+[package]
+name = "discord-voice"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+client-core.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+serde_json.workspace = true
+zeroize.workspace = true
+url.workspace = true
+getrandom.workspace = true
+tracing = { version = "0.1", default-features = false, features = ["max_level_off", "release_max_level_off"] }
+davey = { version = "=0.1.4", default-features = false }
+openmls = { version = "=0.8.1", default-features = false }
+chacha20poly1305 = { version = "=0.10.1", default-features = false, features = ["alloc"] }
+opus2 = { version = "=0.4.0", default-features = false, features = ["backend-libopus", "static", "bundled"] }
+rtrb = "=0.4.0"
+cpal = { version = "=0.18.2", default-features = false }
+
+[dev-dependencies]
+sha3 = { version = "=0.10.9", default-features = false }
+openmls_rust_crypto = "=0.5.1"
+openmls_basic_credential = "=0.5.0"
+model.workspace = true
+
+[lints]
+workspace = true
