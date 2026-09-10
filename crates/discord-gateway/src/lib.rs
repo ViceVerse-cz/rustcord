@@ -99,17 +99,44 @@ fn jitter_ms(max: u64) -> u64 {
         % max.max(1)
 }
 
-// Explicit troubleshooting only. Static labels cannot contain credentials, IDs or payloads.
-// At most 64 lines (<8 KiB) per Gateway run, including reconnects; stderr only.
-struct MemberDiagnostics {
+// Explicit troubleshooting only. Each scope shares its budgets across reconnects.
+// Static labels never contain received event names, credentials, IDs or payloads.
+struct Diagnostics {
+    scope: &'static str,
     remaining: u8,
+    bytes: usize,
 }
-impl MemberDiagnostics {
-    fn record(&mut self, label: &'static str) {
-        if self.remaining > 0 {
-            self.remaining -= 1;
-            eprintln!("[Serein members] {label}");
+impl Diagnostics {
+    fn new(scope: &'static str, enabled: bool) -> Self {
+        Self {
+            scope,
+            remaining: if enabled { 64 } else { 0 },
+            bytes: 8 * 1024,
         }
+    }
+    fn record(&mut self, label: &'static str) {
+        self.record_to(label, &mut std::io::stderr());
+    }
+    fn record_to(&mut self, label: &'static str, writer: &mut impl std::io::Write) {
+        let bytes = self
+            .scope
+            .len()
+            .saturating_add(label.len())
+            .saturating_add(11);
+        if self.remaining == 0 || bytes > self.bytes {
+            return;
+        }
+        // Charge attempted output even if stderr is closed or accepts only part of a line.
+        self.remaining -= 1;
+        self.bytes -= bytes;
+        let _ = writeln!(writer, "[Serein {}] {label}", self.scope);
+    }
+}
+fn ignored_dispatch_label(name: Option<&str>) -> &'static str {
+    if name.is_none_or(str::is_empty) {
+        "dispatch name missing; ignored"
+    } else {
+        "unsupported dispatch ignored"
     }
 }
 
@@ -381,15 +408,15 @@ async fn run_inner(
     #[cfg(test)] test_endpoint: Option<&str>,
 ) -> Result<(), Failure> {
     let initial_url = validated_url(&initial_url)?;
-    let mut member_diagnostics = MemberDiagnostics {
-        remaining: if std::env::var_os("SEREIN_MEMBER_DIAGNOSTICS").as_deref()
-            == Some(std::ffi::OsStr::new("1"))
-        {
-            64
-        } else {
-            0
-        },
-    };
+    let mut member_diagnostics = Diagnostics::new(
+        "members",
+        std::env::var_os("SEREIN_MEMBER_DIAGNOSTICS").as_deref() == Some(std::ffi::OsStr::new("1")),
+    );
+    let mut gateway_diagnostics = Diagnostics::new(
+        "gateway",
+        std::env::var_os("SEREIN_GATEWAY_DIAGNOSTICS").as_deref()
+            == Some(std::ffi::OsStr::new("1")),
+    );
     let mut state = ResumeState::default();
     let mut was_ready = false;
     let mut owner_id = None;
@@ -767,9 +794,12 @@ async fn run_inner(
                                         let (guild,id)=permissions::role_removed(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
                                         emit(Event::Permissions(client_core::permissions::Event::RoleRemoved {guild,id}))?;
                                     }
-                                    _ => {} // No raw-event archive; unsupported events grant no capabilities.
+                                    _ => gateway_diagnostics.record(ignored_dispatch_label(packet.t.as_deref())),
                                 },
-                                _ => return Err(Failure::Protocol),
+                                _ => {
+                                    gateway_diagnostics.record("unsupported opcode; connection stopped");
+                                    return Err(Failure::Protocol);
+                                },
                             }
                         }
                         Some(Ok(Frame::Close(close))) => {
@@ -927,7 +957,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_typing_ignores_bad_ephemeral_payloads_and_keeps_delivering_messages() {
+    async fn local_ignored_dispatches_and_typing_keep_delivering_messages() {
         timeout(Duration::from_secs(10), async {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let endpoint = format!("ws://{}/", listener.local_addr().unwrap());
@@ -937,15 +967,20 @@ mod tests {
                 send(&mut socket, json!({"op":10,"d":{"heartbeat_interval":1000}})).await;
                 assert_eq!(packet(&mut socket).await["op"], 2);
                 send(&mut socket, ready(1, "synthetic-typing-session")).await;
+                for (sequence, name) in [(2, Some("SYNTHETIC_PRIVATE_EVENT_NAME")), (3, None), (4, Some(""))] {
+                    send(&mut socket, json!({"op":0,"t":name,"s":sequence,"d":{
+                        "token":"SYNTHETIC_PRIVATE_PAYLOAD", "permissions":"8", "content":"not a message"
+                    }})).await;
+                }
                 for (sequence, data) in [
-                    (2, json!({"channel_id":"2","user_id":"3","timestamp":1700000000,"member":{"user":{"username":"discarded"}}})),
-                    (3, json!({"channel_id":"2","user_id":"3","timestamp":"invalid"})),
-                    (4, json!({"channel_id":"2","user_id":"3","timestamp":1700000000,"member":{"padding":"x".repeat(discord_protocol::typing::MAX_WIRE)}})),
+                    (5, json!({"channel_id":"2","user_id":"3","timestamp":1700000000,"member":{"user":{"username":"discarded"}}})),
+                    (6, json!({"channel_id":"2","user_id":"3","timestamp":"invalid"})),
+                    (7, json!({"channel_id":"2","user_id":"3","timestamp":1700000000,"member":{"padding":"x".repeat(discord_protocol::typing::MAX_WIRE)}})),
                 ] {
                     send(&mut socket, json!({"op":0,"t":"TYPING_START","s":sequence,"d":data})).await;
                 }
-                send(&mut socket, json!({"op":0,"t":"MESSAGE_CREATE","s":5,"d":{"id":"4","channel_id":"2","author":{"id":"3","username":"Synthetic"},"content":"Message after invalid typing"}})).await;
-                acknowledge(&mut socket, 5).await;
+                send(&mut socket, json!({"op":0,"t":"MESSAGE_CREATE","s":8,"d":{"id":"4","channel_id":"2","author":{"id":"3","username":"Synthetic"},"content":"Message after invalid typing"}})).await;
+                acknowledge(&mut socket, 8).await;
                 socket.send(Frame::Close(Some(CloseFrame {
                     code: CloseCode::from(4004), reason: "synthetic stop".into(),
                 }))).await.unwrap();
@@ -1372,15 +1407,57 @@ mod member_tests {
         }
     }
     #[test]
-    fn member_diagnostics_are_opt_in_and_capped() {
-        let mut disabled = MemberDiagnostics { remaining: 0 };
-        disabled.record("synthetic diagnostic");
-        assert_eq!(disabled.remaining, 0);
-        let mut enabled = MemberDiagnostics { remaining: 64 };
+    fn diagnostics_are_opt_in_byte_bounded_redacted_and_tolerate_closed_output() {
+        let mut output = Vec::new();
+        Diagnostics::new("gateway", false).record_to("disabled", &mut output);
+        assert!(output.is_empty());
+        let label = ignored_dispatch_label(Some("SYNTHETIC_PRIVATE_EVENT_NAME"));
+        assert_eq!(label, "unsupported dispatch ignored");
+        assert_eq!(
+            ignored_dispatch_label(None),
+            ignored_dispatch_label(Some(""))
+        );
+        let mut enabled = Diagnostics::new("gateway", true);
         for _ in 0..1000 {
-            enabled.record("synthetic diagnostic");
+            enabled.record_to(label, &mut output);
         }
+        let line = "[Serein gateway] unsupported dispatch ignored\n";
+        assert_eq!(output, line.repeat(64).as_bytes());
         assert_eq!(enabled.remaining, 0);
+        assert_eq!(enabled.bytes, 8 * 1024 - output.len());
+        assert!(!String::from_utf8_lossy(&output).contains("SYNTHETIC_PRIVATE"));
+
+        // Byte accounting includes UTF-8 and formatting, independently of the line cap.
+        output.clear();
+        let mut short = Diagnostics::new("members", true);
+        short.bytes = 20;
+        short.record_to("\u{e9}", &mut output);
+        short.record_to("another line", &mut output);
+        assert_eq!(output, "[Serein members] \u{e9}\n".as_bytes());
+        assert_eq!((short.remaining, short.bytes), (63, 0));
+        static OVERSIZED: [u8; 8192] = [b'x'; 8192];
+        let mut oversized = Diagnostics::new("gateway", true);
+        oversized.record_to(std::str::from_utf8(&OVERSIZED).unwrap(), &mut output);
+        assert_eq!(oversized.remaining, 64);
+        assert_eq!(output.len(), 20);
+
+        struct Closed;
+        impl std::io::Write for Closed {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut closed = Diagnostics::new("gateway", true);
+        for _ in 0..1000 {
+            closed.record_to(label, &mut Closed);
+        }
+        assert_eq!(
+            (closed.remaining, closed.bytes),
+            (enabled.remaining, enabled.bytes)
+        );
     }
     #[test]
     fn custom_status_patches_preserve_replace_clear_and_coalesce() {

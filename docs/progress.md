@@ -2,9 +2,9 @@
 
 ## Current scope and gates
 
-Current slice: Debian/Ubuntu distribution packaging from main 68526e8. Full SPEC completion
-remains active; native automation and live-account validation remain owner-controlled.
-See the Linux packaging entry for verification.
+Current slice: bounded Gateway compatibility diagnostics from main 31bf546. Full SPEC
+completion remains active; native automation and live-account validation remain owner-controlled.
+See the Gateway diagnostics entry for verification.
 
 ## Inline message spoilers (merged PR #36)
 
@@ -1805,3 +1805,26 @@ changes; the final combined `cargo xtask check` passed again (353 tests, Clippy 
   Wayland/X11, desktop services, IME, accessibility and physical/live audio remain unverified.
   Remaining implementation work includes bounded unknown-event compatibility diagnostics;
   source-license assembly and the documented runtime/live evidence gates remain incomplete.
+
+
+## Bounded Gateway compatibility diagnostics (September 10, 2026)
+
+- Baseline main `31bf546a0754f157e131007003b6df70db57f353`; isolated branch
+  `feat/bounded-gateway-diagnostics`. SPEC7.2 unsupported dispatches now have opt-in fixed-label
+  diagnostics, including missing names and unsupported opcodes. Received event names, payloads,
+  credentials and account/message metadata are never logged. Existing ignore/protocol-error
+  behavior is preserved; no new capabilities are inferred from unknown inputs.
+- Reuses member diagnostics with independent 64-record/8-KiB attempted-output budgets per
+  enabled scope, across reconnects. No raw archive, retained strings, queue or new dependency.
+  Broken stderr and partial writes are charged but cannot panic these diagnostic paths.
+  The desktop's existing terminal diagnostic also uses fallible output, for either enabled scope.
+- Focused synthetic tests pass disabled output, exact UTF-8/line bounds, oversized labels,
+  failed writes, redaction and continued message/heartbeat flow after unsupported events.
+  A separate opt-in loopback run emitted exactly the three expected fixed labels and no
+  synthetic private markers. No owner account, desktop, microphone or speaker was accessed.
+- Validation exposed cached xtask selecting its compilation checkout instead of the caller's
+  workspace. `cargo locate-project --workspace` now resolves it at runtime. The new Node
+  regression failed on the old binary and passed after the fix, from a nested synthetic workspace.
+  CI runs that regression. Shared Cargo output also reused an old test binary; those initial
+  full-suite results are discarded. The final suite and release variants are being rebuilt in
+  a private per-worktree Cargo target directory; CONTRIBUTING documents this requirement.

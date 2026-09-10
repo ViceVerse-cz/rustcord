@@ -432,3 +432,13 @@ The [unofficial READY capability description](https://docs.discord.food/gateway/
 documents this format distinction. A synthetic already-running Genshin Impact activity exercises
 the missing startup path. This does not verify the owner's reported live payload, change activity
 subscriptions, or promote guild-scoped presence into globally authoritative DM presence.
+
+
+### Unknown Gateway variants (September 10, 2026)
+
+Unknown dispatches remain ignored without granting capabilities; unsupported opcodes retain the
+existing protocol-error behavior. Opt-in `SEREIN_GATEWAY_DIAGNOSTICS=1` now records bounded fixed
+categories for these cases and missing dispatch names. Received names and payloads never enter
+diagnostics. This changes observability, not the supported service contract. Offline local-socket
+checks cover continued message delivery and heartbeat cursor advancement; normal-user service
+behavior remains unverified. See storage-policy.md for exact per-run limits and stderr handling.
