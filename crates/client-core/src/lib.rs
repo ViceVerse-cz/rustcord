@@ -10,6 +10,7 @@ mod presence;
 pub mod profile;
 pub mod reactions;
 pub mod read_state;
+pub mod resident;
 pub mod search;
 mod threads;
 pub mod voice;
@@ -216,6 +217,7 @@ pub struct State {
     pub channels: Vec<Channel>,
     pub selected: Option<Id>,
     pub timeline: Timeline,
+    pub resident: resident::Windows,
     pub freshness: Freshness,
     pub status: &'static str,
     pub drafts: BTreeMap<Id, String>,
@@ -254,6 +256,7 @@ impl Default for State {
             channels: vec![],
             selected: None,
             timeline: Timeline::default(),
+            resident: resident::Windows::default(),
             freshness: Freshness::Stale,
             status: "Disconnected",
             drafts: BTreeMap::new(),
@@ -312,12 +315,12 @@ impl State {
             return None;
         }
         self.retire_archived_thread(Some(channel));
+        self.select_resident(channel);
         self.members = None;
         self.selected = Some(channel);
         self.clear_search();
         self.search_target = None;
         self.reactions.reset();
-        self.timeline.clear();
         self.older_exhausted = false;
         self.reply = None;
         self.revision += 1;
@@ -326,7 +329,11 @@ impl State {
             self.freshness = Freshness::Fresh;
             return None;
         }
-        Some(self.history(None))
+        let command = self.history(None);
+        if self.freshness == Freshness::Loading && self.timeline.row_count() != 0 {
+            self.status = "Showing recent conversation · revalidating history";
+        }
+        Some(command)
     }
     pub fn request_members(&mut self) -> Option<Command> {
         let channel = self.channels.iter().find(|c| Some(c.id) == self.selected)?;
@@ -687,6 +694,7 @@ impl State {
         {
             return;
         }
+        self.invalidate_resident_event(&envelope.event);
         self.revision += 1;
         if matches!(
             &envelope.event,
@@ -1323,6 +1331,7 @@ impl State {
             }
         };
         if let Err(status) = result {
+            self.clear_cached_history();
             self.status = status;
             self.freshness = Freshness::Stale;
             self.timeline.clear();
@@ -1331,6 +1340,7 @@ impl State {
         if access_changed {
             self.reconcile_permissions(previous_access);
             self.reconcile_notifications();
+            self.prune_resident();
         }
         if self.search.is_some() && !self.can_search() {
             self.clear_search();
@@ -1342,6 +1352,7 @@ impl State {
         {
             self.clear_archives();
         }
+        self.enforce_resident_budget();
     }
     fn invalidate_members(&mut self) {
         self.member_request = self.member_request.wrapping_add(1);
@@ -1352,6 +1363,9 @@ impl State {
         }
     }
     fn remove_channels(&mut self, removed: &BTreeSet<Id>) {
+        for id in removed {
+            self.resident.remove(*id);
+        }
         if self
             .archives
             .as_ref()
@@ -1402,6 +1416,7 @@ impl State {
             _ => {}
         }
         if failure.ends_session() {
+            self.clear_cached_history();
             self.clear_search();
             self.search_target = None;
             self.read_state.cancel();

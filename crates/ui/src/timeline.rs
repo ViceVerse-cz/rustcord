@@ -1237,6 +1237,161 @@ mod tests {
         }
     }
     #[test]
+    fn resident_preview_renders_only_selected_rows_while_revalidating() {
+        fn collect(shape: &egui::Shape, labels: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(text) => labels.push(text.galley.job.text.clone()),
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        collect(shape, labels);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for (width, dark) in [(900.0, true), (360.0, false)] {
+            for deleted_only in [false, true] {
+                let mut state = test_support::demo_state();
+                state.timeline.clear();
+                state.history(None);
+                let messages = (500..550)
+                    .map(|id| {
+                        let mut message = text_message(id);
+                        message.content = format!("Resident alpha row {id}");
+                        message
+                    })
+                    .collect();
+                state.apply(client_core::Envelope {
+                    generation: state.generation,
+                    event: client_core::Event::History {
+                        channel: Id(20),
+                        request: state.request,
+                        older: false,
+                        messages,
+                    },
+                });
+                if deleted_only {
+                    state.apply(client_core::Envelope {
+                        generation: state.generation,
+                        event: client_core::Event::DeleteBulk {
+                            channel: Id(20),
+                            ids: (500..550).map(Id).collect(),
+                        },
+                    });
+                }
+                let expected: Vec<_> = state.timeline.row_ids().collect();
+                assert_eq!(expected.len(), 50);
+                let ctx = egui::Context::default();
+                crate::design::apply(&ctx);
+                ctx.set_visuals(if dark {
+                    egui::Visuals::dark()
+                } else {
+                    egui::Visuals::light()
+                });
+                let mut view = TimelineView::default();
+                let mut avatars = crate::avatars::Avatars::default();
+                let mut render = |view: &mut TimelineView, state: &mut State| {
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 480.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            view.show(ui, state, &mut None, &mut None, &mut avatars, &mut None);
+                            assert!(ui.min_rect().right() <= ui.max_rect().right() + 1.0);
+                        },
+                    );
+                    assert!(output.platform_output.commands.is_empty());
+                    let mut labels = vec![];
+                    for shape in &output.shapes {
+                        collect(&shape.shape, &mut labels);
+                    }
+                    output.drop_without_applying_deltas();
+                    labels
+                };
+                for _ in 0..6 {
+                    render(&mut view, &mut state);
+                }
+                assert!(matches!(
+                    state.select(Id(21)),
+                    Some(client_core::Command::History {
+                        channel: Id(21),
+                        before: None,
+                        ..
+                    })
+                ));
+                let labels = render(&mut view, &mut state);
+                assert!(view.rows.is_empty());
+                assert!(!labels.iter().any(|text| text.contains("Resident alpha")));
+                let mut beta = text_message(900);
+                beta.channel = Id(21);
+                beta.content = "Resident beta content".into();
+                state.apply(client_core::Envelope {
+                    generation: state.generation,
+                    event: client_core::Event::History {
+                        channel: Id(21),
+                        request: state.request,
+                        older: false,
+                        messages: vec![beta],
+                    },
+                });
+                for _ in 0..3 {
+                    render(&mut view, &mut state);
+                }
+                assert_eq!(
+                    view.rows.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+                    vec![Id(900)]
+                );
+                assert!(matches!(
+                    state.select(Id(20)),
+                    Some(client_core::Command::History {
+                        channel: Id(20),
+                        before: None,
+                        ..
+                    })
+                ));
+                assert_eq!(state.freshness, model::Freshness::Loading);
+                assert!(state.history_pending);
+                assert_eq!(state.timeline.row_ids().collect::<Vec<_>>(), expected);
+                for _ in 0..6 {
+                    render(&mut view, &mut state);
+                }
+                let labels = render(&mut view, &mut state);
+                assert!(!labels.iter().any(|text| text.contains("Resident beta")));
+                assert_eq!(
+                    view.rows.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+                    expected
+                );
+                assert!(
+                    view.rows
+                        .iter()
+                        .all(|(_, height)| height.is_finite() && *height > 0.0)
+                );
+                assert!(
+                    view.following,
+                    "Resident navigation starts at the latest loaded row"
+                );
+                assert!(
+                    view.mark_read.is_none(),
+                    "Unrevalidated resident rows must not acknowledge read state"
+                );
+                if deleted_only {
+                    assert!(state.timeline.is_empty());
+                    assert!(labels.iter().any(|text| text == "Message deleted"));
+                    assert!(!labels.iter().any(|text| text.contains("Resident alpha")
+                        || text == "Loading messages?"
+                        || text.contains("No messages yet")));
+                } else {
+                    assert!(labels.iter().any(|text| text.contains("Resident alpha")));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn mixed_height_virtualization_visits_only_viewport() {
         let rows: Vec<_> = (1..=500)
             .map(|id| (Id(id), if id % 2 == 0 { 100.0 } else { 40.0 }))

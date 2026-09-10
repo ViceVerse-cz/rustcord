@@ -2,6 +2,38 @@
 
 ## Current scope and gates
 
+Current work: the SPEC 8.1 in-memory MRU of recently visited conversations. The baseline
+State::select drops the sole timeline, so returning to a channel waits for SQLite or the service.
+The new slice retains at most two dormant windows, moves them back without cloning, and always
+requests service revalidation. Cache hits remain Loading; they do not grant read/notification or
+message-action authority. Mutation, identity, permission and lifecycle invalidations must remove
+unsafe dormant windows. This restores an immediate preview, not an older-range scroll session.
+Desktop SQLite admission uses visible row count, including deleted-only windows, and explicit
+cache clear removes dormant history while preserving the conversation already displayed.
+
+Baseline b4c66ac (PR #29) Windows packages were copied and hash-verified. The unchanged reducer
+replay and the new navigation harness were built before core edits and copied separately. The
+navigation harness uses the baseline API for 10,000 selections over three 50-message conversations;
+baseline immediate previews were 0/10,000 while all selections still requested revalidation.
+One warmup and five measured runs were recorded. Native automation remains owner-paused.
+Windows cargo xtask check passed 228 offline Rust tests, doctests, formatting, strict all-feature
+Clippy, text-only compilation and policy checks. Eleven new regressions cover move reuse, request
+generations, row/byte eviction, permissions, mutations, archive retirement, deleted-only previews,
+SQLite admission, allocation accounting and headless narrow/wide UI. Independent review found
+and verified the archive retirement ordering fix and reported no remaining actionable issue.
+The changed navigation harness produced 10,000/10,000 immediate previews while retaining all
+10,000 revalidation requests, two dormant windows, 150 total rows and 199,654 estimated retained
+bytes. Core selection median/p95 was 0.2/0.2 microseconds across five runs versus baseline
+median 1.2..1.3 / p95 1.6..1.8 microseconds; these tiny timings exclude native rendering and I/O.
+The ordinary 100,000-event replay median changed from 37.7021 to 38.4952 ms (+2.10%) with
+overlapping ranges. Both unsigned Windows packages passed; executable, installed and ZIP sizes
+and SHA256 hashes are recorded in performance.md. The seven original dirty files remain
+hash-identical. Native before/after images and live validation remain pending.
+
+The current source audit also found missing saved reading/layout preferences (only theme persists)
+and inert reply previews without explicit target navigation. Those remain subsequent implementation
+work, alongside the unresolved native/live, storage tracing and performance acceptance gates.
+
 Current work: visible deletion state (SPEC 9.3) and known-deleted disk-cache safety (SPEC 2.1).
 Only an already-loaded message leaves a Message deleted row at its existing ID; live message
 lookup remains absent so edit/reaction/media paths cannot treat a placeholder as content.
@@ -145,10 +177,10 @@ Read the original SPEC.md completely before implementation. Repository initially
 |---|---|
 | 0 — native shell / feasibility | Native egui/eframe/wgpu app, Cargo workspace, pinned Rust, lockfile, synthetic fixture, real composition/variable-height timeline, compatibility evidence and initial tests implemented. macOS native launch verified. OS credential-store and login-method round trips remain unverified |
 | 1 — real normal-user message exchange | **BLOCKED: no owner-controlled authenticated session/private live conversation was supplied or exercised.** Direct REST/Gateway adapters and own-webview credential handoff are implemented, but normal-user acceptance is not established. No real message/reply exchange with an official client is claimed |
-| 2 — reliable text | Partial: bounded cache/queues, partial patches, timestamps, deletes/tombstones, late-history reconciliation, session generations, ambiguous-send state, back-pagination, cancellation, heartbeat/finite reconnect/resume, SQLite history/drafts. Scoped history failures, page validation/exhaustion, authoritative refresh and a local WebSocket lifecycle test added September 10. Full failure matrix, long process soak and live freshness recovery remain open |
-| 3 — everyday messaging | Partial native text UI, server categories/icons, loaded thread/forum-post navigation and archived-thread browsing, bundled Unicode emoji and server emoji picker, grouped timeline and hover actions, native embeds/static images, bounded CommonMark formatting, spoiler concealment, explicit link confirmation, CJK/Arabic fallback fonts, copy/reply/edit/delete controls, clickable user/channel mentions and autocomplete, service profiles, reaction counts/add/remove controls, image viewing and general attachment downloads, single-file picker/drop uploads, conversation search, explicit remote read markers, paginated pinned-message browsing, history clear/logout and saved theme. Discord Markdown parity, multiple-file uploads, animation, pin mutations, notifications, complete active-thread discovery/create/join controls and actual IME/screen-reader tests remain open |
+| 2 — reliable text | Partial: bounded cache/queues, partial patches, timestamps, deletes/tombstones, late-history reconciliation, session generations, ambiguous-send state, back-pagination, cancellation, heartbeat/finite reconnect/resume, SQLite history/drafts and bounded resident conversation previews. Scoped history failures, page validation/exhaustion, authoritative refresh and a local WebSocket lifecycle test added September 10. Full failure matrix, long process soak and live freshness recovery remain open |
+| 3 — everyday messaging | Partial native text UI, server categories/icons, loaded thread/forum-post navigation and archived-thread browsing, bundled Unicode emoji and server emoji picker, grouped timeline and hover actions, native embeds/static images, bounded CommonMark formatting, spoiler concealment, explicit link confirmation, CJK/Arabic fallback fonts, copy/reply/edit/delete controls, clickable user/channel mentions and autocomplete, service profiles, reaction counts/add/remove controls, image viewing and general attachment downloads, single-file picker/drop uploads, conversation search, explicit remote read markers, paginated pinned-message browsing, history clear/logout, saved theme, loaded-user presence, in-app alerts and opt-in native notification adapters. Saved reading/layout preferences, reply-target navigation and actual native IME/screen-reader/notification validation remain open; richer unsupported behaviors are tracked in the capability docs |
 | 4 — voice | **Partial; live gate blocked.** Optional one-to-one DM and guild voice UI/signaling, bounded participant rosters, native CPAL/Opus mixed playback and DAVE group encryption implemented. Synthetic crypto/transport/mixer tests pass. No real Discord call, physical microphone/speaker, device-permission or cross-platform audio validation |
-| 5 — release | Partial: docs, dual licenses, dependency inventory, xtask, CI matrix and locally ad-hoc-signed macOS package. Strict audit warnings, Windows/Linux execution, signing/installer work, complete transitive license-text packaging and performance/platform gates remain open |
+| 5 — release | Partial: docs, dual licenses, dependency inventory, xtask, CI matrix and locally ad-hoc-signed macOS package. Inherited dependency graph passed strict security CI on PR #29. Native platform execution, signing/installer work, complete transitive license-text review, storage tracing and performance/platform gates remain open |
 
 This is a runnable native implementation with experimental service adapters, **not a completed Discord replacement**. Offline fixtures and bot behavior do not count as live success. No other application’s credentials, existing browser profiles, account IDs or private history were read. No Discord account action or production message was performed.
 

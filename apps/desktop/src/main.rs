@@ -72,28 +72,32 @@ struct Desktop {
     #[cfg(feature = "developer-session")]
     token_input: Zeroizing<String>,
 }
+fn wants_cached_history(state: &State, channel: model::Id, request: u64) -> bool {
+    state.selected == Some(channel)
+        && state.request == request
+        && state.history_pending
+        && state.freshness == model::Freshness::Loading
+        && state.timeline.row_count() == 0
+        && state.can_read_history(channel)
+        && state
+            .channels
+            .iter()
+            .any(|c| c.id == channel && c.supports_text())
+}
 fn hydrate_cached_history(
     state: &mut State,
     channel: model::Id,
     request: u64,
     messages: Vec<model::Message>,
 ) {
-    if state.selected == Some(channel)
-        && state.request == request
-        && state.history_pending
-        && state.freshness == model::Freshness::Loading
-        && state.timeline.is_empty()
-        && state.can_read_history(channel)
-        && state
-            .channels
-            .iter()
-            .any(|c| c.id == channel && c.supports_text())
+    if wants_cached_history(state, channel, request)
         && messages.iter().all(|message| message.channel == channel)
         && state.timeline.seed_cache(messages).is_ok()
     {
         state.revision += 1;
         state.status = "Showing cached history · waiting for Discord revalidation";
     }
+    state.enforce_resident_budget();
 }
 fn hydrate_cache_result(state: &mut State, safety: &cache::HistorySafety, outcome: cache::Outcome) {
     if let cache::Outcome::Channel {
@@ -535,6 +539,7 @@ impl Desktop {
             before: None,
             request,
         } = &command
+            && wants_cached_history(&self.state, *channel, *request)
         {
             self.queue_cache(cache::Operation::LoadChannel {
                 channel: *channel,
@@ -1605,6 +1610,7 @@ impl eframe::App for Desktop {
             }
             if self.messaging.clear_cache_requested {
                 self.messaging.clear_cache_requested = false;
+                self.state.clear_cached_history();
                 self.clear_avatars(&ctx);
                 self.queue_cache(cache::Operation::ClearHistory);
             }
@@ -1655,6 +1661,71 @@ impl eframe::App for Desktop {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn disk_cache_does_not_replace_resident_previews_or_deleted_positions() {
+        for deleted in [false, true] {
+            let mut state = test_support::demo_state();
+            let alpha = state.selected.unwrap();
+            let beta = model::Id(900);
+            let mut other = state
+                .channels
+                .iter()
+                .find(|c| c.id == alpha)
+                .unwrap()
+                .clone();
+            other.id = beta;
+            other.guild = None;
+            other.kind = 1;
+            state.channels.push(other);
+            state.timeline.clear();
+            state
+                .timeline
+                .insert(test_support::message(1001, alpha), false, false)
+                .unwrap();
+            if deleted {
+                state.timeline.delete(model::Id(1001)).unwrap();
+            }
+            state.select(beta).unwrap();
+            state.apply(Envelope {
+                generation: state.generation,
+                event: Event::History {
+                    channel: beta,
+                    request: state.request,
+                    older: false,
+                    messages: vec![test_support::message(1002, beta)],
+                },
+            });
+            state.select(alpha).unwrap();
+            let request = state.request;
+            assert_eq!(state.timeline.row_count(), 1);
+            assert!(!wants_cached_history(&state, alpha, request));
+            hydrate_cached_history(
+                &mut state,
+                alpha,
+                request,
+                vec![test_support::message(1003, alpha)],
+            );
+            assert_eq!(
+                state.timeline.row_ids().collect::<Vec<_>>(),
+                [model::Id(1001)]
+            );
+            assert_eq!(state.timeline.is_empty(), deleted);
+            assert_eq!(state.freshness, model::Freshness::Loading);
+            state.clear_cached_history();
+            assert_eq!(
+                state.timeline.row_count(),
+                1,
+                "Clear keeps the displayed conversation"
+            );
+            state.select(beta).unwrap();
+            assert_eq!(
+                state.timeline.row_count(),
+                0,
+                "Cleared dormant windows cannot return"
+            );
+            assert!(wants_cached_history(&state, beta, state.request));
+        }
+    }
     #[test]
     fn delayed_cache_results_cannot_hydrate_after_a_known_deletion() {
         let mut state = test_support::demo_state();

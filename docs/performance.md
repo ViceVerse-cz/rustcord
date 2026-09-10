@@ -1,5 +1,61 @@
 # Initial performance evidence
 
+## Recently visited conversation windows - September 10, 2026
+
+Baseline b4c66ac0c8f226bdfdc22d904fbde8a239975dcb (PR #29) packages were copied and hash-verified.
+The baseline reducer executable and navigation harness were built and copied before core edits.
+Same Windows 11 Home 10.0.26200 / Ryzen 7 7800X3D (16 logical CPUs) / about 31 GiB RAM /
+Rust 1.98.1, release thin LTO, one codegen unit, wgpu.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| text executable bytes | 49,824,256 | 49,840,128 | +15,872 (+0.032%) |
+| text installed bytes | 50,326,094 | 50,349,976 | +23,882 (+0.047%) |
+| text ZIP bytes | 31,186,721 | 31,194,530 | +7,809 (+0.025%) |
+| voice executable bytes | 53,180,416 | 53,196,800 | +16,384 (+0.031%) |
+| voice installed bytes | 53,905,027 | 53,929,436 | +24,409 (+0.045%) |
+| voice ZIP bytes | 32,560,106 | 32,570,631 | +10,525 (+0.032%) |
+
+Both unsigned Windows packages passed. One measurement each; ZIP DEFLATE level 9; text
+excludes the voice folder. File counts remain 50/96, with no dependency or notices changes.
+Installed totals describe staged docs before this measurement addendum; no PR evidence is bundled.
+
+SHA256 of measured executables:
+
+- text: AAAEC68E80A62E89A98129A3BB342BBE2B75B6D2DEDD94B58A212809D2222145
+- voice: 0F5403607ADF30286D37783FCAFF6D02BD2D65D4B634C1D7CB196D385735D8C6
+
+One warmup and five measured direct executable runs per workload/revision:
+
+| Metric | Baseline | Resident windows | Delta |
+| --- | ---: | ---: | ---: |
+| Immediate previews / 10,000 selections | 0 | 10,000 | +10,000 |
+| Revalidation requests / 10,000 selections | 10,000 | 10,000 | 0 |
+| Core select median, microseconds (five-run median) | 1.3 | 0.2 | -1.1 |
+| Core select p95, microseconds (five-run median) | 1.7 | 0.2 | -1.5 |
+| Ordinary 100,000-event replay median, ms | 37.7021 | 38.4952 | +0.7931 (+2.10%) |
+| Ordinary replay retained live payload bytes / 500 rows | 220,992..221,477 | 220,992..221,477 | 0 |
+
+Navigation: `cargo replay -- --navigation`; three synthetic 50-message DMs, three initial loads,
+then 10,000 selections and handcrafted authoritative history responses. Only State::select is
+timed; fixtures/responses and rendering/I/O are excluded. Baseline medians: 1.3, 1.2, 1.3, 1.3,
+1.3 microseconds; p95: 1.7, 1.6, 1.8, 1.7, 1.6. Changed medians and p95 were 0.2 in all runs.
+These tiny measurements are quantized and sensitive to timer overhead; this does not establish
+native channel-switch p95. Every changed run retained two dormant windows / 150 total rows /
+199,654 estimated allocation bytes. The accounting footer was added after the baseline capture;
+the timed workload is unchanged. Baseline had no dormant windows.
+
+Ordinary replay baseline samples: 38.6347, 36.0714, 35.9521, 37.7021, 38.2936 ms; changed:
+38.4947, 39.0375, 39.4187, 38.2191, 38.4952 ms. The median is slower, with overlapping ranges;
+no ordinary-message speed improvement is claimed. This is not RSS or live compatibility evidence.
+
+Component bounds: at most two dormant windows, with active+dormant rows capped at 1,475 and
+estimated allocations at 16 MiB minus 66 KiB; reserve 25 rows and 66 KiB for search/pins.
+The estimate now includes row/container storage, pending patch capacity and reconciliation sets,
+with a B-tree slack allowance. Individual timelines retain their 500-row / 4 MiB payload limit.
+No additional worker, network request, schema or runtime dependency. Native screenshots,
+CPU/RSS, GPU allocations and frame/startup/channel-switch measurements remain owner-paused.
+
 ## Deleted message state - September 10, 2026
 
 Baseline e0f18d0d2c2d783ad85ec8793f62288aca259d31 (PR #28) packages and replay executable

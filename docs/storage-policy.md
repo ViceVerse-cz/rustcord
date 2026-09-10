@@ -1,5 +1,22 @@
 # Local storage policy and audit
 
+Recently visited conversations now keep at most two dormant RAM timelines in the current
+account session, moved rather than cloned. Only readable Fresh ordinary text windows are parked;
+search-target ranges and transient archived threads are excluded. Promotion rechecks identity
+and read permission, shows a Loading preview, and always requests a fresh recent service page.
+This is a preview cache, not saved historical scroll position. It avoids a SQLite read on a hit.
+Unknown/deleted-only row handling retains the same guards as the active window.
+
+Active plus dormant timelines share 1,475 rows and 16 MiB minus 66 KiB of estimated allocations,
+reserving 25 rows and 66 KiB for the single search/pins page and query/view metadata. Estimation
+includes retained payloads, pending patches, mutation/deletion sets, container storage and a
+B-tree slack allowance; it is not an allocator or RSS measurement. Each individual timeline keeps
+its existing 500-row / 4 MiB payload limit. Oldest whole dormant windows are evicted when needed,
+without touching drafts or pending sends. Incoming mutations evict the affected dormant channel;
+permission/identity changes prune it, and session replacement/resync/logout removes all dormant
+history. Clear cached history removes dormant RAM and disk history while preserving the active
+displayed conversation. No new disk data, database schema, worker or service request is added.
+
 Loaded messages deleted by the service leave only their ID as a session-local reading row.
 Author, body, attachment and embed metadata are dropped from the timeline and its formatted /
 revealed-content views. An untouched open editor closes; text the user modified remains an
