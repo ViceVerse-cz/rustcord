@@ -4,7 +4,6 @@ use hpke_rs_crypto::{
     types::{AeadAlgorithm, KdfAlgorithm, KemAlgorithm},
     HpkeCrypto,
 };
-use hpke_rs_libcrux::HpkeLibcrux;
 use hpke_rs_rust_crypto::*;
 use rand::Rng;
 
@@ -259,7 +258,6 @@ fn benchmark<Crypto: HpkeCrypto + 'static>(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    benchmark::<HpkeLibcrux>,
     benchmark::<HpkeRustCrypto>,
 );
 criterion_main!(benches);

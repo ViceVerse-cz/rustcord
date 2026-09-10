@@ -2,16 +2,228 @@
 
 ## Current scope and gates
 
+Current work: owner-requested integration of all twelve open implementation PRs (#17, #19,
+#21, #22, #23, #24, #26, #27, #28, #29, #31 and #32) with main 85fde15. All twelve heads are
+ancestors of published PR #32 at 57927c7. The isolated integration preserves main's image
+aspect ratios, anchored profile popouts/profile cache and system-message descriptions alongside
+the stack's permission, deletion, resident-history and reading-preference behavior.
+Unpublished reply-navigation work stays in its separate dirty worktree and is not included.
+
+Conflicts are resolved with combined schema 9: both independently introduced schema-7 message columns
+(system message kind and unsupported-content markers), plus schema-8 reading preferences.
+Migration regressions cover both schema-7 histories and schema 8 without losing drafts/settings,
+including atomic rollback on failure. Integration review also repaired typed permission changes
+leaving profile snapshots/in-flight responses alive, and presence updates leaving old custom-status
+text visible. Compact presence updates invalidate that text until a new member-list snapshot.
+Combined `cargo xtask check` passed: 248 offline tests, strict all-feature Clippy, formatting,
+text-only compilation and policy checks. `node tests/login-handoff.cjs` passed. Both text and
+voice release packages passed; measurements are recorded in docs/performance.md. Local `cargo audit --deny warnings` could not run because cargo-audit is not installed;
+the unchanged lockfile passed both PR #32 security jobs (runs 34506026424 and 34506044467).
+Fresh integration CI is still required for platform evidence. Existing native screenshots remain historical evidence;
+no new native/account/audio automation is permitted by this merge request or was performed.
+
+Current work: saved reading and layout preferences (SPEC 2.2 / 9.1). Add application-wide
+display scale (80..150%), sidebar width (190..360 points) and wide-layout People visibility,
+with reset/retry controls in sign-in and messaging settings. SQLite schema 8 adds one fixed
+singleton; account logout preserves these non-account preferences, like the existing theme.
+Native notification opt-in and narrow People overlays remain session-only. Delayed hydration
+cannot replace user changes; saves coalesce for 300 ms with one write in flight and one latest
+value. Failures remain visible and require deliberate retry; pending changes participate in
+close confirmation. Entering the in-app preview finishes earlier real changes without saving
+preview edits. A standalone --demo still opens no database or account session.
+
+Baseline dfe9e3f (PR #31) text/voice executables were separately copied and hash-verified
+before edits; baseline package size reports were preserved. Independent review identified
+and fixed the preview-transition pending-save gap. The initial full check exposed sidebar
+contents shrinking to the panel minimum; explicitly filling the panel fixed the real geometry
+and its regression. Focused reading UI tests and the subsequent cargo xtask check passed,
+including 237 offline Rust tests, doctests, formatting, strict all-feature Clippy and text-only
+policy checks. Both unsigned Windows packages passed; measured executable/installed/ZIP sizes
+and SHA256 hashes are in performance.md. Original seven dirty files remain hash-identical.
+Native before/after screenshots, resource measurements and live compatibility remain owner-paused.
+
+Next remaining implementation work includes reply-target navigation; native accessibility,
+storage tracing, long-running resource measurements and owner-controlled live gates remain open.
+
+Current work: the SPEC 8.1 in-memory MRU of recently visited conversations. The baseline
+State::select drops the sole timeline, so returning to a channel waits for SQLite or the service.
+The new slice retains at most two dormant windows, moves them back without cloning, and always
+requests service revalidation. Cache hits remain Loading; they do not grant read/notification or
+message-action authority. Mutation, identity, permission and lifecycle invalidations must remove
+unsafe dormant windows. This restores an immediate preview, not an older-range scroll session.
+Desktop SQLite admission uses visible row count, including deleted-only windows, and explicit
+cache clear removes dormant history while preserving the conversation already displayed.
+
+Baseline b4c66ac (PR #29) Windows packages were copied and hash-verified. The unchanged reducer
+replay and the new navigation harness were built before core edits and copied separately. The
+navigation harness uses the baseline API for 10,000 selections over three 50-message conversations;
+baseline immediate previews were 0/10,000 while all selections still requested revalidation.
+One warmup and five measured runs were recorded. Native automation remains owner-paused.
+Windows cargo xtask check passed 228 offline Rust tests, doctests, formatting, strict all-feature
+Clippy, text-only compilation and policy checks. Eleven new regressions cover move reuse, request
+generations, row/byte eviction, permissions, mutations, archive retirement, deleted-only previews,
+SQLite admission, allocation accounting and headless narrow/wide UI. Independent review found
+and verified the archive retirement ordering fix and reported no remaining actionable issue.
+The changed navigation harness produced 10,000/10,000 immediate previews while retaining all
+10,000 revalidation requests, two dormant windows, 150 total rows and 199,654 estimated retained
+bytes. Core selection median/p95 was 0.2/0.2 microseconds across five runs versus baseline
+median 1.2..1.3 / p95 1.6..1.8 microseconds; these tiny timings exclude native rendering and I/O.
+The ordinary 100,000-event replay median changed from 37.7021 to 38.4952 ms (+2.10%) with
+overlapping ranges. Both unsigned Windows packages passed; executable, installed and ZIP sizes
+and SHA256 hashes are recorded in performance.md. The seven original dirty files remain
+hash-identical. Native before/after images and live validation remain pending.
+
+The current source audit also found missing saved reading/layout preferences (only theme persists)
+and inert reply previews without explicit target navigation. Those remain subsequent implementation
+work, alongside the unresolved native/live, storage tracing and performance acceptance gates.
+
+Current work: visible deletion state (SPEC 9.3) and known-deleted disk-cache safety (SPEC 2.1).
+Only an already-loaded message leaves a Message deleted row at its existing ID; live message
+lookup remains absent so edit/reaction/media paths cannot treat a placeholder as content.
+Author/body/media data is released. Visible rows share the existing item/byte ceilings and
+history reconciliation, while unknown deletion IDs remain internal guards. Pagination includes
+deleted rows. An unchanged editor closes; modified unsent edit text remains available to copy
+or cancel, with saving disabled while the message is absent. Focused session-cache/client-core/UI
+tests passed (102 tests and doctests), including headless light/dark and narrow deleted-only views,
+reading anchors, payload release, reconciliation limits and all-deleted pagination.
+Disk deletion covers inactive/loading conversations and rejects stale queued cache work
+independently of timeline freshness. Windows cargo xtask check passed 217 offline Rust tests,
+doctests, formatting, strict all-feature Clippy, text-only compilation and policy checks.
+SQLite tests cover reopen, transaction rollback, channel/account isolation and preserved drafts;
+cache tests cover queue saturation, delayed hydration, stale saves, cross-generation cleanup
+acknowledgements and the permanent failure latch. A hard storage failure disables history caching
+until restart and reports that content may remain on disk. No restart-erasure guarantee is made.
+Independent review found and verified fixes for retained editor undo snapshots and re-editing the
+same message; the headless regression verifies actual hover Edit and Undo after deletion.
+Deletion events also clean the single retained editor immediately while viewing another channel,
+without suppressing that channel's input or sending the old channel's draft on a closing-frame Enter.
+Both unsigned Windows release packages passed; measured executable, installed and ZIP sizes
+and SHA256 hashes are in performance.md. The seven original dirty files remain hash-identical.
+Native before/after images and live validation remain pending.
+Baseline e0f18d0 (PR #28) packages were copied/hash-verified. The baseline replay executable
+was copied separately and sampled once for warmup plus five measured runs. Native automation
+remains owner-paused; this work uses synthetic data and does not open accounts or native apps.
+The existing release replay median changed from 36.9497 to 37.0905 ms across five measured runs
+each, with overlapping ranges; both retain 500 live records / 220,992..221,477 estimated payload
+bytes. This ordinary-message workload does not measure deletion I/O, UI latency or process RSS.
+
+Current work: preserve unsupported-content presence in ordinary message types (SPEC 9.1).
+Polls, sticker_items, legacy stickers, components and the Components V2 flag have independently
+patchable markers. Missing fields preserve state; explicit null/empty values clear only their
+own source. The decoder discards the payload; SQLite schema 7 stores only five presence bits.
+Native labels and the existing confirmed Open in Discord fallback accompany supported text/media.
+Marker-only replacements invalidate timeline layout, and pending patches reconcile before history
+without resurrecting deleted messages. Baseline 8c6976e (PR #27) packages were copied/hash-verified;
+one warmup and five baseline reducer replay samples were recorded before edits. Windows
+cargo xtask check passed 205 offline Rust tests, doctests, formatting, strict all-feature Clippy,
+text-only compilation and policy checks. Seven new tests cover model bit validation/patches,
+bounded presence decoding, absent/null/source independence, pending and stale-page reconciliation,
+deletions, revision changes, schema migration/cache reopen/corruption/account isolation, and headless
+egui layout with labels and explicit fallback. Independent review found no actionable issue.
+The synthetic 100,000-event replay median changed from 37.0330 to 38.3804 ms across five measured
+runs each, with overlapping ranges; both retain 500 records / 220,992..221,477 estimated bytes.
+Both unsigned Windows release packages passed: text executable 49,810,944 bytes (+12,800),
+voice 53,163,520 bytes (+12,800). Installed/ZIP measurements and hashes are in performance.md.
+The seven original dirty files remain hash-identical. Native automation remains owner-paused; no live service,
+browser, microphone or account action is part of this implementation testing.
+
+Current implementation: SPEC 9.1 external fallback for unsupported channel/message content.
+Unsupported channel rows gain a keyboard-focusable Open in Discord arrow; message placeholders
+gain a labeled button. The existing timeline link confirmation is shared at the messaging-view
+level so sidebar actions work without a selected conversation. Destinations use fixed HTTPS
+Discord routes and typed IDs, with view-permission/metadata guards; no selection, fetch, call
+or browser action occurs before deliberate confirmation. Cancellation/Escape dismiss the modal.
+The one bounded pending link resets on logout. This branch starts at 36ab5e7 (PR #26), with
+separately copied/hash-verified baseline packages. Native automation remains paused after owner
+Escape stops; no browser, account, microphone or OS notification action is authorized for tests.
+Windows cargo xtask check passed 198 offline Rust tests, doctests, formatting, strict
+all-feature Clippy, text-only compilation and policy checks. Five new tests cover typed routes,
+explicit confirmation/cancel/Escape, normalized displayed/emitted destinations, keyboard sidebar
+actions, message fallback clicks, permission/metadata guards, logout reset and confirmation
+without a selected channel. Review found and fixed Escape reaching background Search/Archives;
+a regression test now preserves Search while canceling the foreground confirmation.
+PR #26's deterministic Gateway fixture fix is integrated; its repaired macOS PR job passed.
+Both unsigned Windows packages passed. Text executable: 49,798,144 bytes (+21,504 / 0.043%);
+voice executable: 53,150,720 bytes (+22,016 / 0.041%). Full installed/ZIP sizes and hashes are
+in docs/performance.md. Seven original dirty files were hash-verified unchanged. Packages
+were measured without launching them. Native/browser/live evidence remains unverified.
+
+Latest implementation: session-only microphone gain and speaker volume (SPEC 11). Both Audio
+menu controls range from 0% to 200%, start at 100%, support keyboard input and offer Reset levels.
+Changes apply to an active call without reopening devices, survive device/call changes in the
+session and reset on logout/preview reset. Two bounded integer atomics feed callback-local gain
+snapshots; PCM is finite and clipped. Existing readiness, permission, mute/deafen/PTT and stop
+gates retain priority. No devices are opened by settings, and no protocol or persistence changes
+are introduced. Already-captured input/resampler data keeps its existing bounded latency.
+
+Baseline packages at 3f9aa0edcd35f82eb83d5576a63d453fc384725c (PR #24) were copied and hash-verified
+before edits. The branch also integrates #24's GTK v4_10 CI feature fix; the measured Windows
+baseline predates that Linux-only feature/docs adjustment. Original dirty checkout work is kept.
+Windows cargo xtask check passed 193 offline Rust tests, doctests, formatting, strict all-feature
+Clippy, text-only compilation and policy checks. The three new tests cover keyboard/clamping/reset
+and real callback helpers with 0/100/200% gain, clipping, nonfinite PCM, independent runtime
+changes, stereo playback and readiness/mute/deafen/stopped-buffer behavior without audio devices.
+Independent review found no actionable issue. Native screenshots, real gain perception, callback
+timing and live calls remain unverified; desktop automation remains paused after owner Escape stops.
+Both Windows release packages passed: text executable 49,776,640 bytes (+119,296 / 0.240%);
+voice executable 53,128,704 bytes (+112,640 / 0.212%). Installed/ZIP sizes and executable
+hashes are recorded in docs/performance.md. Packages were measured without launching them.
+
+PR #26 macOS CI exposed a pre-existing synthetic Gateway race: dropping TCP immediately
+after invalid-session could discard that frame when a heartbeat reply remained unread.
+The fixture now injects that heartbeat and waits for the client's post-Resume Disconnected
+event before dropping the socket, under the existing 45-second test deadline. The focused
+local test passed; no runtime or gain code changed. Repaired CI remains pending.
+
+Linux CI follow-up: both initial builds failed in WebKit6 because GTK4 0.11.4 exports
+Accessible only with its v4_10 feature. Enabled that feature and documented GTK >=4.10;
+the CI apt log confirms GTK 4.14.5. No source API workaround or dependency version changed.
+The repaired PR Linux job 102930632100 passed cargo xtask check, login-handoff tests,
+replay and text packaging; voice packaging was still running when recorded. The duplicate
+push job remained in progress. Both security jobs passed. This is CI, not live login evidence.
+
+Latest slice: Linux GTK4/WebKit6 authentication migration from 512b5e7 (PR #23), in a new
+isolated worktree with separately copied/hash-verified text and voice package baselines.
+The temporary Linux login window uses an ephemeral NetworkSession and normal TLS. A protected
+top-frame bridge keeps one bounded capability-prefixed candidate; IPC carries only a boolean
+wake. One cancellable main-frame query, at least 100 ms apart, rechecks origin and ASCII bounds
+before native capability/lifetime validation. Close/drop invalidates late results and clears
+secrets/scripts/handler, cancels evaluation and terminates the web process. See authentication.md.
+
+Windows/macOS Wry backend sources remain unchanged in a provenance-preserving fork removing
+old Linux dependency declarations. Linux CI now installs GTK4/WebKitGTK 6 development packages.
+The strict cargo-audit 0.22.2 gate passes with zero vulnerabilities and warnings, down from the
+two Linux warnings at baseline, without suppressions. Cargo.lock drops from 738 to 726 packages.
+New component notices are staged in both package variants; system engines remain prerequisites.
+
+Windows cargo xtask check passed 190 offline Rust tests, doctests, formatting, strict all-feature
+Clippy, text-only compilation and policy checks. node tests/login-handoff.cjs passes existing
+handoff tests plus Linux bridge origin/frame, ASCII bounds, protected one-shot slot, expiry,
+navigation invalidation and token-free wake checks. Independent API/security review found one
+orphan manifest-table cleanup (fixed) and no remaining actionable issue. Linux's Rust handoff
+regression and backend compilation require Linux CI; local WSL lacks GTK4/WebKit6 development
+libraries. Native screenshots, X11/Wayland input, actual teardown/storage tracing and live login
+remain unverified. Desktop automation remains paused; no native window or account action ran.
+
+Both unsigned Windows packages passed; text executable size is down 1,024 bytes and voice is
+unchanged. Eight login notice files are included in each; installed/ZIP totals and limits are
+in performance.md. All 45 Wry backend source files match the pinned registry archive byte-for-byte.
+The original seven dirty source files were hash-checked unchanged. Linux CI remains pending.
+
+The full SPEC objective remains open. Further implementation gaps found in current sources
+include visible deletion state;
+native/live acceptance and release evidence remain separate gates. Historical entries follow.
+
 Read the original SPEC.md completely before implementation. Repository initially contained only the tracked two-line README and an untracked SPEC.md; no existing source or agent instructions were removed. The owner explicitly revised authentication and storage during implementation. The final spec now requires the official Discord login in a temporary webview, secure remembered login, and allows bounded local SQLite caches, saved drafts/settings and files. Those changes were applied throughout SPEC.md and AGENTS.md.
 
 | Milestone | Actual status |
 |---|---|
 | 0 — native shell / feasibility | Native egui/eframe/wgpu app, Cargo workspace, pinned Rust, lockfile, synthetic fixture, real composition/variable-height timeline, compatibility evidence and initial tests implemented. macOS native launch verified. OS credential-store and login-method round trips remain unverified |
 | 1 — real normal-user message exchange | **BLOCKED: no owner-controlled authenticated session/private live conversation was supplied or exercised.** Direct REST/Gateway adapters and own-webview credential handoff are implemented, but normal-user acceptance is not established. No real message/reply exchange with an official client is claimed |
-| 2 — reliable text | Partial: bounded cache/queues, partial patches, timestamps, deletes/tombstones, late-history reconciliation, session generations, ambiguous-send state, back-pagination, cancellation, heartbeat/finite reconnect/resume, SQLite history/drafts. Scoped history failures, page validation/exhaustion, authoritative refresh and a local WebSocket lifecycle test added September 10. Full failure matrix, long process soak and live freshness recovery remain open |
-| 3 — everyday messaging | Partial native text UI, server categories/icons, loaded thread/forum-post navigation and archived-thread browsing, bundled Unicode emoji and server emoji picker, grouped timeline and hover actions, native embeds/static images, bounded CommonMark formatting, spoiler concealment, explicit link confirmation, CJK/Arabic fallback fonts, copy/reply/edit/delete controls, clickable user/channel mentions and autocomplete, service profiles, reaction counts/add/remove controls, image viewing and general attachment downloads, single-file picker/drop uploads, conversation search, explicit remote read markers, paginated pinned-message browsing, history clear/logout and saved theme. Discord Markdown parity, multiple-file uploads, animation, pin mutations, notifications, complete active-thread discovery/create/join controls and actual IME/screen-reader tests remain open |
+| 2 — reliable text | Partial: bounded cache/queues, partial patches, timestamps, deletes/tombstones, late-history reconciliation, session generations, ambiguous-send state, back-pagination, cancellation, heartbeat/finite reconnect/resume, SQLite history/drafts and bounded resident conversation previews. Scoped history failures, page validation/exhaustion, authoritative refresh and a local WebSocket lifecycle test added September 10. Full failure matrix, long process soak and live freshness recovery remain open |
+| 3 — everyday messaging | Partial native text UI, server categories/icons, loaded thread/forum-post navigation and archived-thread browsing, bundled Unicode emoji and server emoji picker, grouped timeline and hover actions, native embeds/static images, bounded CommonMark formatting, spoiler concealment, explicit link confirmation, CJK/Arabic fallback fonts, copy/reply/edit/delete controls, clickable user/channel mentions and autocomplete, service profiles, reaction counts/add/remove controls, image viewing and general attachment downloads, single-file picker/drop uploads, conversation search, explicit remote read markers, paginated pinned-message browsing, history clear/logout, saved theme, loaded-user presence, in-app alerts and opt-in native notification adapters. Saved reading/layout preferences passed offline validation; reply-target navigation and actual native IME/screen-reader/notification validation remain open; richer unsupported behaviors are tracked in the capability docs |
 | 4 — voice | **Partial; live gate blocked.** Optional one-to-one DM and guild voice UI/signaling, bounded participant rosters, native CPAL/Opus mixed playback and DAVE group encryption implemented. Synthetic crypto/transport/mixer tests pass. No real Discord call, physical microphone/speaker, device-permission or cross-platform audio validation |
-| 5 — release | Partial: docs, dual licenses, dependency inventory, xtask, CI matrix and locally ad-hoc-signed macOS package. Strict audit warnings, Windows/Linux execution, signing/installer work, complete transitive license-text packaging and performance/platform gates remain open |
+| 5 — release | Partial: docs, dual licenses, dependency inventory, xtask, CI matrix and locally ad-hoc-signed macOS package. Inherited dependency graph passed strict security CI on PR #29. Native platform execution, signing/installer work, complete transitive license-text review, storage tracing and performance/platform gates remain open |
 
 This is a runnable native implementation with experimental service adapters, **not a completed Discord replacement**. Offline fixtures and bot behavior do not count as live success. No other application’s credentials, existing browser profiles, account IDs or private history were read. No Discord account action or production message was performed.
 
@@ -846,3 +1058,115 @@ Both Windows package commands passed. Text/voice executables grew by 13,824 / 13
 installed and ZIP totals are in performance.md. Five-run reducer median was 37.4956 ms versus
 37.5618 ms at baseline, retaining the same 500 records / 220,992-221,477 estimated bytes; the
 small difference is noise. Original seven dirty-source hashes were rechecked unchanged.
+
+
+## Keyboard conversation navigation - September 10, 2026
+
+This SPEC 9.1/9.5 slice starts at f8baa2df1f705b771b5a2cd99a10bb13b4d8a4c3 (draft PR #21),
+with separate text/voice package baselines verified against their recorded executable hashes.
+The new isolated branch adds Find conversation in the sidebar and Ctrl/Cmd+K. Search covers
+already loaded, VIEW-accessible text channels, DMs, group DMs, threads and voice channels;
+unsupported kinds and categories are excluded. Server/channel names and known DM recipients
+match case-insensitive query words. Results identify their server or DM scope and show voice
+as a roster destination. Selection uses State::select; it never joins a call or sends text.
+
+The picker keeps at most 128 query characters / 512 UTF-8 bytes and 20 bounded result labels.
+It recomputes from current navigation/permissions while open and adds no service request,
+relationship directory, background index or saved query. Up/Down, Enter, Escape, Tab and mouse
+interaction use native egui controls. IME preedit/commit cannot activate or close the picker,
+and the composer does not process picker keyboard input, including its closing frame. Cancel
+restores prior focus; selecting a text conversation focuses its composer after the modal closes.
+Existing drafts and unfinished inline edits remain intact; ordinary navigation cancellation
+continues to govern uploads and history. Selecting the current conversation does not reload it.
+
+Native desktop automation remains paused following owner Escape stops. Headless input/shape
+checks are synthetic evidence, not native screenshots, screen-reader verification or real IME
+validation. No Discord account, OS notification, browser or microphone action was taken. This
+branch is stacked on #21; main's independent image-aspect-ratio PR #20 is outside the baseline.
+The full SPEC objective, live/platform gates and inherited security findings remain open.
+
+
+cargo xtask check passed 190 offline Rust tests plus doctests, formatting, strict all-feature
+Clippy, text-only compilation and policy checks. Focused input regressions verify query arrows,
+Tab to results/Close, Enter targeting, Unicode paste limits, IME keyboard/pointer dismissal,
+restored focus, preserved drafts/inline edits and no accidental send or voice action. An extended
+post-selection test confirms subsequent typing reaches the newly selected conversation's draft.
+Independent review found no remaining actionable issue after the input/focus fixes. Native
+screenshots, physical IME/accessibility and process RSS/idle CPU remain unmeasured; no native
+or live behavior is inferred from these tests. Base #21 native Linux/macOS CI passed in its PR
+run while Windows remained pending; its inherited security job failed. This delivery stays draft.
+
+
+Both unsigned Windows packages passed. Text/voice executables grew by 33,792 / 33,280 bytes
+(under 0.07%); full installed/ZIP comparisons are in performance.md. Native picker latency
+and memory remain unmeasured. Original seven dirty-source hashes were rechecked unchanged.
+
+Next concrete hardening step: repair the inherited dependency/security audit failures without
+waiving checks, then continue the remaining text/platform/live gates from the full specification.
+
+
+## Native dependency hardening - September 10, 2026
+
+This SPEC 12/14.5 slice starts at e4ef4a852415e5061735f9183ca65dd202406ecd (PR #22) in an
+isolated worktree. Baseline text/voice packages were copied before edits and their recorded
+SHA256 hashes verified. Main's independent image-aspect-ratio PR #20 remains outside this
+stack's baseline; the original dirty checkout is preserved.
+
+The existing HPKE fork removes its unused optional libcrux backend. A documented Davey 0.1.4
+manifest-only fork removes OpenMLS browser timer features from the native build; all Davey
+Rust sources and the selected RustCrypto provider are unchanged. No new runtime dependency,
+service route, UI behavior, persistence, queue or payload limit is introduced. Original crate
+checksums, manifests and licenses are retained; voice packages continue shipping the modified
+MPL HPKE source and Davey's existing MIT notice.
+
+The unchanged strict cargo-audit 0.22.2 command improves from six vulnerability-class findings
+and five denied warnings to zero and two, dropping 37 packages net from Cargo.lock. It still
+exits 1 for Linux glib 0.18.5 unsoundness and proc-macro-error 1.0.4 maintenance. No finding
+is suppressed. The Linux authentication migration/backport decision remains a release gate;
+see dependency-audit.md. This delivery remains draft while those findings and platform/live
+evidence are open. No native UI, OS notification, account, browser, call or microphone action
+was taken; desktop automation remains paused after owner Escape stops.
+
+
+cargo xtask check passed all 190 offline Rust tests, doctests, formatting, strict all-feature
+Clippy, text-only compilation and policy checks. This includes the exact SHAKE adapter vectors,
+two-party DAVE encryption/decryption and tampering/transition handling, and localhost encrypted
+Opus transport. These checks do not establish Discord interoperability. Feature trees confirm
+OpenMLS no longer enables js and retains its existing RustCrypto provider. Independent review
+verified all 17 vendored Davey Rust source files byte-for-byte against the pinned registry
+release, checked the lockfile scope and license/source packaging, and found no actionable issue.
+
+
+Both unsigned Windows packages passed. Text executable size is unchanged; voice grows 25,600
+bytes (0.048%). Exact installed/ZIP deltas and hashes are in performance.md. Packaged modified
+HPKE source and Davey's existing MIT notice were verified. Original seven dirty-source hashes
+were rechecked unchanged. The complete SPEC objective, native/live acceptance and Linux audit
+remediation remain open; this slice does not claim a working live Discord client.
+
+## Image aspect ratios — September 10, 2026
+
+Task baseline: clean `main` at `2879fbc`, fetched `origin/main`; branch `fix/image-aspect-ratios`, Rust 1.98.1. The shared texture painter previously stretched decoded pixels into metadata/layout rectangles. It now contains them at their actual aspect ratio without changing reserved message geometry. Server icons use a square 38-point image slot, profile avatars use their requested square size, and non-square custom emoji preserve proportions in messages, the composer and picker. Existing banner cropping and bounded worker/cache policies remain intact.
+
+Validation: focused media rendering and custom-emoji checks pass; `cargo xtask check` passes (workspace tests, format, strict Clippy, policy). Rendering coverage includes portrait, landscape and square textures, absent/mismatched metadata, inline/enlarged media, and unchanged geometry after loading. Native synthetic before/after evidence and release measurement details are recorded with this task. The existing demo landscape is a vector placeholder, so its screenshots establish layout/viewer behavior; decoded-pixel aspect correctness is verified by the rendering tests. No Discord session, messages, downloads, calls or microphone were used. Windows/Linux and live CDN behavior remain unverified.
+
+Final host text/voice packages pass. Text executable +16 bytes; voice executable unchanged. Settled median CPU remained 0%; RSS samples were noisy (see performance report). Native dark/default-size timeline and enlarged viewer were captured and inspected. Further light/narrow native interaction was blocked by CUA `noWindowsAvailable` / ScreenCaptureKit invalid-parameter errors after repeated target refresh; those variants remain unverified. PR stays draft for that visual verification limitation and pending CI.
+
+## Profile popout — September 10, 2026
+
+Task baseline: clean `main` at `74709e2`, fetched `origin/main`; branch `feat/profile-popout`, Rust 1.98.1. The modal profile card was replaced by a compact 300-point popout anchored beside the clicked user (People row, message author, mention, footer avatar). It flips left near the right edge, stays in the window, and closes on Escape or an outside click. The card now paints the account's two profile theme colors as a gradient when returned, shows the server tag (primary guild/clan) with its badge, badge artwork, a presence dot and custom-status bubble from the retained People rows, and a full-width Message action. The People pane lists custom status under names. Parsing adds `theme_colors` (exactly two bounded RGB values), `primary_guild`/`clan` (disabled tags hidden, 8-character text), `badges[].icon` and the type-4 custom-status activity (128 characters, unicode emoji only). Badge and server-tag artwork use two new validated CDN key forms through the existing bounded image worker. The profile event payload is boxed so the core event enum did not grow. No animated decoration or profile effect is rendered.
+
+Follow-up in the same task: the owner asked that profiles be cached instead of reloaded on every click. A RAM-only cache in `State` keeps up to 32 profiles / 1 MiB for 15 minutes, keyed by user and server scope, cleared on session start, resync/permission change, server removal, session failure and logout. Reopening a cached card issues no command.
+
+Validation: `cargo xtask check` (see the final line of this section), focused UI tests for anchor placement/flip/Escape/outside-click/no requests, parser tests for the new fields, CDN key tests. Native macOS dark-mode capture used the new disclosed `--demo --demo-profile` fixture because pointer automation was unavailable without accessibility permission; before/after images are under `docs/pr-evidence/profile-popout`. Light mode, narrow windows, keyboard-only use and any live payload remain unverified. No Discord session, messages or media requests were used.
+
+## September 10: welcome and other system messages
+
+Implemented native descriptions for all 33 documented nonordinary message types, including welcome joins, recipient changes, pins, boosts, channel/thread notices and calls. Preserve the numeric type through REST/Gateway models and SQLite; render original content separately. Copy and loaded reply previews include descriptions. Unknown types retain a numbered fallback. System rows stay ungrouped and cannot use the own-message edit control. Rich call/subscription/poll details are not invented; search/pins snapshot excerpts remain content-only.
+
+Checked all repository PRs and inspected #27/#28: they cover external fallback and unsupported content markers, not welcome rendering. This PR is based on main, not stacked on them. Integration must combine the timeline controls and the independently introduced schema7 columns. Legacy unsupported cached messages migrate to unknown255 and need ordinary history reload to recover actual kinds. No dependencies/notices changed.
+
+Verification: `cargo test --locked -p discord-protocol -p local-store -p ui` passed. `cargo xtask check` passed 160 offline tests, doctests, format, strict all-feature Clippy, text compilation and policy checks after correcting the fixture-placement lint. Protocol checks cover all documented kinds, ordinary/unknown variants, missing recipient data, bounded Unicode names, original/copy text and invalid type ranges; SQLite checks cover migration, roundtrip/reopen and invalid values; egui checks cover known/unknown rows and light/narrow/wide/dark rendering. Independent diff review found no correctness blocker. Text and voice macOS release packages passed strict ad-hoc signature verification. Native synthetic before/after screenshots are under `docs/pr-evidence/system-messages/`; no account, Discord message, call or microphone action was performed.
+
+Performance methods/results are in the system-message section of `docs/performance.md`: text executable +18,464 bytes, voice +2,064 bytes; idle CPU median 0% both; short native RSS median +1,312 KiB; ordinary reducer replay 29.332→28.687 ms, unchanged retained byte range, no speed claim.
+
+Reproduce: `cargo run --locked -p serein -- --demo --demo-system-messages`, scroll to top for welcome, addition, pin and boost events; scroll down for rename/thread/call/unknown examples. Before screenshot uses the same fixture backported to the baseline without production changes. Native dark screenshots/scrolling were inspected; native light selection via automation did not visibly apply and native keyboard behavior remains unverified (headless light/narrow checks pass). Live account behavior, other OSes and p95 timing remain unverified. Delivered draft [PR #30](https://github.com/ViceVerse-cz/rustcord/pull/30), branch `feat/system-messages`, implementation commit `49a2459`. Native macOS/Windows/Linux and security CI jobs were queued/in progress at handoff; no remote pass is claimed. Both commit-pinned screenshot files were verified through the GitHub contents API. Draft also records outstanding native light/keyboard verification.
