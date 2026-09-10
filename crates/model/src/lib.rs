@@ -174,6 +174,8 @@ pub struct Message {
     pub reply_to: Option<Id>,
     /// Discord message type; 255 denotes an unknown legacy cached type.
     pub kind: u8,
+    /// The service explicitly returned a null referenced message, not an unresolved preview.
+    pub reply_deleted: bool,
     pub unsupported: bool,
     pub extra_content: ExtraContent,
     pub embeds: Vec<Embed>,

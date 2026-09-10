@@ -406,6 +406,35 @@ mod tests {
             panic!()
         };
         assert_eq!(messages.len(), 2);
+        let mut state = client_core::State {
+            user: Some(test_support::message(1, channel).author),
+            auth: client_core::auth::AuthState::Authenticated,
+            gateway_connected: true,
+            selected: Some(channel),
+            freshness: model::Freshness::Fresh,
+            channels: vec![model::Channel {
+                id: channel,
+                guild: None,
+                parent_id: None,
+                kind: 1,
+                name: "Synthetic DM".into(),
+                position: 0,
+                recipients: vec![],
+                last_message: None,
+                member_list_id: None,
+            }],
+            ..Default::default()
+        };
+        let mut reply = test_support::message(12, channel);
+        reply.kind = 19;
+        reply.reply_to = Some(Id(10));
+        reply.reply_deleted = true;
+        state.apply(client_core::Envelope {
+            generation: state.generation,
+            event: client_core::Event::Message(reply),
+        });
+        let deletions = state.take_reply_deletions();
+        assert_eq!(deletions, vec![(channel, Id(10))]);
         safety.invalidate();
         assert!(!safety.allows(epoch));
         assert!(matches!(
@@ -428,7 +457,7 @@ mod tests {
             safety.epoch(),
             Operation::DeleteMessages {
                 channel,
-                ids: vec![Id(10)],
+                ids: deletions.into_iter().map(|(_, id)| id).collect(),
             },
         );
         execute(

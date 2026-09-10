@@ -168,10 +168,6 @@ impl State {
         {
             return None;
         }
-        let before = Id(message.0.checked_add(1)?);
-        self.timeline.clear();
-        self.revision += 1;
-        self.search_target = Some(message);
-        Some(self.history(Some(before)))
+        self.open_target_window(message)
     }
 }

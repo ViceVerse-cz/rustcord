@@ -48,6 +48,7 @@ pub fn message(id: u64, channel: Id) -> Message {
         nonce: None,
         reply_to: None,
         kind: 0,
+        reply_deleted: false,
         unsupported: false,
         extra_content: Default::default(),
         embeds: demo_embeds(id),

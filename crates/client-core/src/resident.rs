@@ -114,6 +114,7 @@ impl State {
         });
         let eligible = previous.is_some_and(|identity| {
             self.search_target.is_none()
+                && !self.history_targeted
                 && self.archived_thread != Some(identity.id)
                 && self.freshness == Freshness::Fresh
                 && self.can_read_history(identity.id)
@@ -199,6 +200,7 @@ mod tests {
             revision: 0,
             nonce: None,
             reply_to: None,
+            reply_deleted: false,
             unsupported: false,
             extra_content: Default::default(),
             embeds: vec![],

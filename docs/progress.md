@@ -2,6 +2,32 @@
 
 ## Current scope and gates
 
+Current work: reply-target navigation (SPEC 9.2/9.3) from merged main 33181a0.
+Reply previews and the composer's View original action jump locally when the target is loaded;
+otherwise one bounded history request opens the earlier range. Targets remain same-channel and
+permission-gated. Old-range browsing never automatically acknowledges newer messages, and
+explicit Reload/Jump to latest returns to recent history. Missing targets remain unavailable.
+
+Explicit service-null referenced messages retain a deleted marker. Validated core admission
+produces at most 50 deletion effects for one channel, then the desktop fences disk epochs,
+deletes cached target bodies and retires the affected editor. Stale/malformed histories and
+uncorrelated send results cannot emit these effects. SQLite schema 10 adds the bounded boolean
+while preserving schema-9 message kinds, content markers, reading settings and drafts.
+
+`cargo xtask check` passed: 268 offline tests, strict all-feature Clippy, formatting, text-only
+compilation and policy checks. Protocol/store/UI focused checks and the deletion-capacity
+regression passed. Independent review found and resolved the full deletion-guard SendResult
+edge case; failures now clear the unreliable timeline while preserving drafts and disk effects.
+Both `cargo xtask package` and `cargo xtask package-voice` passed. Package sizes and the
+five-run release replay comparison are recorded in docs/performance.md. Native desktop automation remains paused after the earlier
+owner Escape stop; opening the regular app on request did not run synthetic visual tests or
+authorize interacting with that account. No new screenshots, account actions or audio tests
+have been performed for this change. Native visual/RSS/IME/screen-reader evidence remains absent.
+The original dirty checkout and old unpublished reply worktree are preserved; another open
+theme-shell PR (#33) is independent of this branch.
+
+## Prior completed integration
+
 Current work: owner-requested integration of all twelve open implementation PRs (#17, #19,
 #21, #22, #23, #24, #26, #27, #28, #29, #31 and #32) with main 85fde15. All twelve heads are
 ancestors of published PR #32 at 57927c7. The isolated integration preserves main's image

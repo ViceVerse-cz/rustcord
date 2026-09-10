@@ -426,6 +426,8 @@ pub struct MessageDto {
     #[serde(default)]
     pub message_reference: Option<Reference>,
     #[serde(default)]
+    pub referenced_message: model::Patch<extra_content::Object>,
+    #[serde(default)]
     pub attachments: AttachmentList,
     #[serde(default)]
     pub embeds: EmbedList,
@@ -443,9 +445,28 @@ pub enum Nonce {
 #[derive(Deserialize)]
 pub struct Reference {
     pub message_id: Option<Id>,
+    pub channel_id: Option<Id>,
+    #[serde(rename = "type", default)]
+    pub kind: u64,
 }
 impl MessageDto {
     pub fn into_model(self) -> Message {
+        // Reply navigation is confined to this conversation. Crossposts, forwards and
+        // incomplete/unknown references retain the ordinary unsupported-content fallback.
+        let reply_to = self
+            .message_reference
+            .as_ref()
+            .filter(|reference| {
+                matches!(self.kind, 19 | 23)
+                    && self.flags & (1 << 1) == 0
+                    && reference.kind == 0
+                    && reference.channel_id == Some(self.channel_id)
+            })
+            .and_then(|reference| reference.message_id)
+            .filter(|id| id.0 > 0 && id.0 < self.id.0);
+        let unsupported_reference = self.message_reference.is_some() && reply_to.is_none();
+        let reply_deleted =
+            reply_to.is_some() && matches!(self.referenced_message, model::Patch::Null);
         Message {
             extra_content: model::ExtraContent {
                 poll: self.poll.is_some(),
@@ -472,9 +493,10 @@ impl MessageDto {
                 Nonce::Text(s) => s,
                 Nonce::Number(n) => n.to_string(),
             }),
-            reply_to: self.message_reference.and_then(|r| r.message_id),
             kind: self.kind,
-            unsupported: !matches!(self.kind, 0 | 19 | 20 | 23),
+            reply_to,
+            reply_deleted,
+            unsupported: !matches!(self.kind, 0 | 19 | 20 | 23) || unsupported_reference,
             attachments: self.attachments.0,
             embeds: embeds::bounded(self.embeds.0),
             embeds_suppressed: self.flags & 4 != 0,
@@ -602,6 +624,90 @@ pub struct ErrorBody {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reply_references_require_same_channel_and_distinguish_deleted_from_unknown() {
+        let wire = || {
+            serde_json::json!({
+                "id":"100", "channel_id":"2", "author":{"id":"3","username":"Synthetic"},
+                "type":19, "message_reference":{"message_id":"50","channel_id":"2"}
+            })
+        };
+        let read = |value: serde_json::Value| {
+            decode::<MessageDto>(&serde_json::to_vec(&value).unwrap())
+                .unwrap()
+                .into_model()
+        };
+        let unknown = read(wire());
+        assert_eq!(unknown.reply_to, Some(Id(50)));
+        assert!(!unknown.reply_deleted && !unknown.unsupported);
+        for kind in [19, 23] {
+            let mut value = wire();
+            value["type"] = kind.into();
+            value["referenced_message"] = serde_json::Value::Null;
+            let deleted = read(value);
+            assert_eq!(deleted.reply_to, Some(Id(50)));
+            assert!(deleted.reply_deleted && !deleted.unsupported);
+        }
+        let mut value = wire();
+        // Nested bodies are deliberately discarded, never rendered or cached as another message.
+        value["referenced_message"] = serde_json::json!({"content":"nested secret marker", "referenced_message":{"content":"nested"}});
+        let resolved = read(value);
+        assert!(!resolved.reply_deleted);
+        assert!(resolved.content.is_empty());
+        for invalid in 0..9 {
+            let mut value = wire();
+            value["referenced_message"] = serde_json::Value::Null;
+            match invalid {
+                0 => {
+                    value["message_reference"]["channel_id"] = "9".into();
+                }
+                1 => {
+                    value["message_reference"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("channel_id");
+                }
+                2 => {
+                    value["message_reference"]["type"] = 1.into();
+                }
+                3 => {
+                    value["message_reference"]["type"] = 999.into();
+                }
+                4 => {
+                    value["message_reference"]["message_id"] = "0".into();
+                    assert!(decode::<MessageDto>(&serde_json::to_vec(&value).unwrap()).is_err());
+                    continue;
+                }
+                5 => {
+                    value["message_reference"]["message_id"] = "100".into();
+                }
+                6 => {
+                    value["message_reference"]["message_id"] = "101".into();
+                }
+                7 => {
+                    value["type"] = 21.into();
+                }
+                _ => {
+                    value["flags"] = 2.into();
+                }
+            }
+            let message = read(value);
+            assert!(message.reply_to.is_none() && !message.reply_deleted && message.unsupported);
+        }
+        for invalid in [
+            serde_json::json!([]),
+            serde_json::json!("invalid"),
+            serde_json::Value::Object(
+                (0..65)
+                    .map(|i| (i.to_string(), serde_json::Value::Null))
+                    .collect(),
+            ),
+        ] {
+            let mut value = wire();
+            value["referenced_message"] = invalid;
+            assert!(decode::<MessageDto>(&serde_json::to_vec(&value).unwrap()).is_err());
+        }
+    }
     #[test]
     fn system_types_keep_original_content_and_describe_known_events() {
         let wire = |kind| {

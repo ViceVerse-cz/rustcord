@@ -592,9 +592,11 @@ impl DiscordApi {
         )
         .await
         .and_then(|bytes| {
-            decode::<MessageDto>(&bytes)
-                .map(MessageDto::into_model)
-                .map_err(|_| Failure::Ambiguous)
+            let message = decode::<MessageDto>(&bytes).map_err(|_| Failure::Ambiguous)?;
+            if message.channel_id != channel {
+                return Err(Failure::Ambiguous);
+            }
+            Ok(message.into_model())
         })
     }
 }
@@ -852,6 +854,57 @@ mod tests {
             )
             .is_none()
         );
+    }
+    #[tokio::test]
+    async fn send_response_must_belong_to_the_requested_channel() {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let mut api = DiscordApi::new(Arc::new(
+                SessionSecret::from_owner_input("SYNTHETIC_SEND_TOKEN".into()).unwrap(),
+            )).unwrap();
+            api.base = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                for channel in [2, 9] {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut request = Vec::new();
+                    loop {
+                        let mut bytes = [0; 1024];
+                        let count = socket.read(&mut bytes).await.unwrap();
+                        assert!(count > 0);
+                        request.extend_from_slice(&bytes[..count]);
+                        assert!(request.len() < 4096);
+                        if request.windows(4).any(|bytes| bytes == b"\r\n\r\n") { break; }
+                    }
+                    assert!(request.starts_with(b"POST /channels/2/messages HTTP/1.1\r\n"));
+                    let body = serde_json::json!({
+                        "id":"100", "channel_id":channel.to_string(),
+                        "author":{"id":"1","username":"Synthetic"},
+                        "type":19, "content":"Synthetic reply", "nonce":"local",
+                        "message_reference":{"type":0,"channel_id":channel.to_string(),"message_id":"50"},
+                        "referenced_message":null,
+                    }).to_string();
+                    socket.write_all(format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len(),
+                    ).as_bytes()).await.unwrap();
+                }
+            });
+            for accepted in [true, false] {
+                let Event::SendResult { nonce, result } = api.execute(Command::Send {
+                    channel: model::Id(2), content: "Synthetic reply".into(),
+                    nonce: "local".into(), reply: Some(model::Id(50)),
+                }).await else { panic!("send response"); };
+                assert_eq!(nonce, "local");
+                if accepted {
+                    let message = result.unwrap();
+                    assert_eq!(message.channel, model::Id(2));
+                    assert!(message.reply_deleted);
+                } else {
+                    assert!(matches!(result, Err(Failure::Ambiguous)));
+                }
+            }
+            server.await.unwrap();
+            assert!(!api.stopped());
+        }).await.unwrap();
     }
     #[tokio::test]
     async fn profiles_are_scoped_capped_and_do_not_block_message_writes() {
