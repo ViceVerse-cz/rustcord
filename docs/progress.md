@@ -1358,3 +1358,33 @@ native screenshots were accessed; the owner performs the live retry.
   13,824/13,312 bytes; installed packages and ZIPs are measured in docs/performance.md.
   `cargo replay` plus one warmup/five direct runs passed, retaining 500 messages within the
   unchanged estimated 228,992..229,477-byte range. Timings are noisy; no speedup claim.
+
+## September 10, 2026 — message images and continuation spacing
+
+Implemented responsive rows for adjacent image attachments (two columns, one below 280 pt),
+with aspect-preserving previews and individually accessible viewer actions. Image filenames
+are no longer captions in chat; file attachment names/downloads and viewer metadata remain.
+Removed final Markdown block newlines that created a blank line after normal messages,
+preserving internal breaks and existing author/reply/date/unread grouping boundaries.
+Updated width-aware timeline estimates and added a second synthetic image to the default demo.
+No network, credential, storage, decoder, dependency or cache-limit change.
+
+Baseline: clean task branch `t3code/improve-message-images-spacing`, commit `c4ae54d`, equal
+to fetched `origin/main`; Rust 1.98.1, macOS 27.0 / Apple M1 Pro / 16 GiB. Reused this task's
+branch. Baseline and changed release packages are kept separately under ignored `target/`.
+`cargo test --locked -p ui`: 85 passed. `cargo xtask check`: passed strict all-feature Clippy,
+307 workspace/doc tests, text-only check and repository policy checks. Regression coverage
+checks image wrapping/click targets/hidden captions and compact rows with internal newlines;
+the existing short-viewport embed assertion now accounts for removal of its blank text line.
+Native screenshots, release package measurements and remaining platform limits are recorded
+in `docs/pr-evidence/message-images-spacing/` and `docs/performance.md`.
+
+`cargo xtask package` and `cargo xtask package-voice` passed; host packages were ad-hoc
+signed/verified, not notarized. Native dark/light gallery screenshots and unchanged chat-fixture
+before/after screenshots were inspected. The second image opened via its accessible action;
+Escape closed the viewer. Narrow layout was checked headlessly because native resize automation
+did not resize the window. Native control reconnection after relaunch required unique local
+bundle IDs (evidence copies only). Executable deltas: text +16,960 bytes (0.036%), voice +544
+bytes (0.001%). Idle CPU median 0.0% in both matched runs; RSS varied with desktop conditions,
+so there is no established memory improvement. See the full measurements and target miss.
+Windows/Linux visual checks, live Discord behavior, screen readers and latency remain unverified.

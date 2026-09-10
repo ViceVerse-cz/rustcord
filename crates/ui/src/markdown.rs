@@ -295,6 +295,13 @@ impl Formatted {
                 }
             }
         }
+        // Block endings separate content, but the final one must not add an empty chat line.
+        for (text, _) in output.spans.iter_mut().rev() {
+            text.truncate(text.trim_end_matches('\n').len());
+            if !text.is_empty() {
+                break;
+            }
+        }
         output
     }
     fn limited_literal(input: &str, concealed: bool) -> Self {
@@ -764,6 +771,23 @@ impl Formatted {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn block_endings_do_not_leave_a_blank_final_line() {
+        for (source, expected) in [
+            ("Hello", "Hello"),
+            ("**Hello**", "Hello"),
+            ("One\nTwo", "One\nTwo"),
+            ("One\n\nTwo", "One\nTwo"),
+            ("```\none\ntwo\n```", "one\ntwo"),
+            ("[Link](https://example.org)", "Link"),
+            ("||Hidden||", "Hidden"),
+            ("", ""),
+        ] {
+            let parsed = Formatted::parse(source);
+            let text: String = parsed.spans.iter().map(|(text, _)| text.as_str()).collect();
+            assert_eq!(text, expected, "{source:?}");
+        }
+    }
     #[test]
     fn discord_routes_use_only_valid_typed_ids() {
         let mut channel = model::Channel {

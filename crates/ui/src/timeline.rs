@@ -355,8 +355,10 @@ impl TimelineView {
                         0.0
                     } else {
                         crate::embeds::estimated_height(&m.embeds)
-                    }) + crate::attachments::estimated_height(&m.attachments)
-                        + 58.0
+                    }) + crate::attachments::estimated_height(
+                        &m.attachments,
+                        (width - 88.0).max(1.0),
+                    ) + 58.0
                         + 18.0
                             * (m.content
                                 .lines()
@@ -1013,6 +1015,47 @@ mod tests {
         next.id = Id(86_400_000 << 22);
         assert!(!grouped(Some(&first), &next, None));
         assert_eq!(timestamp(Id(u64::MAX)).year(), 2154);
+    }
+    #[test]
+    fn short_continuations_use_one_line_and_keep_internal_breaks() {
+        for (width, dark) in [(900.0, true), (360.0, false)] {
+            let ctx = egui::Context::default();
+            crate::design::apply(&ctx);
+            ctx.set_theme(if dark {
+                egui::Theme::Dark
+            } else {
+                egui::Theme::Light
+            });
+            let mut state = test_support::demo_state();
+            state.timeline.clear();
+            state.read_state.reset();
+            for (id, content) in [(1, "First"), (2, "Next"), (3, "One\nTwo")] {
+                let mut message = text_message(id);
+                message.content = content.into();
+                state.timeline.insert(message, false, false).unwrap();
+            }
+            let mut view = TimelineView::default();
+            let mut images = crate::avatars::Avatars::default();
+            for _ in 0..5 {
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 600.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| view.show(ui, &mut state, &mut None, &mut None, &mut images, &mut None),
+                )
+                .drop_without_applying_deltas();
+            }
+            let short = view.heights[&Id(2)].1;
+            assert!(short <= 26.0, "single-line continuation is {short} pt tall");
+            assert!(
+                view.heights[&Id(3)].1 > short + 8.0,
+                "internal newline must remain visible"
+            );
+        }
     }
     #[test]
     fn unsupported_message_fallback_only_requests_confirmation() {
@@ -2223,7 +2266,10 @@ mod tests {
                     &mut None,
                     true,
                 );
-                assert!(ui.min_rect().height() > 200.0);
+                assert!(
+                    ui.min_rect().height() > 120.0,
+                    "card must fit its full image plus text even in an 80 pt viewport"
+                );
             },
         );
         output.textures_delta.clear();
