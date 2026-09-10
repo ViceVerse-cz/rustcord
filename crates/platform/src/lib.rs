@@ -1,4 +1,5 @@
 //! The only credential-persistence boundary; the only webview is a temporary login surface.
+pub mod notifications;
 pub mod save;
 use client_core::auth::{Failure, SessionSecret};
 use std::{

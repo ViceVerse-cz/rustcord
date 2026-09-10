@@ -263,11 +263,37 @@ pub fn demo_state() -> State {
         generation: state.generation,
         event: Event::ReadState(client_core::read_state::Event::Snapshot {
             partial: false,
-            entries: Some(vec![(Id(20), Some(Id(495)))]),
+            entries: Some(vec![(Id(20), Some(Id(495)), 0)]),
             version: Some(1),
         }),
     });
     state.status = "Offline fixture · no network access";
+    state
+}
+/// Notification rail evidence: synthetic incoming DMs and a guild mention, no OS delivery.
+pub fn notification_demo_state() -> State {
+    let mut state = demo_state();
+    let dm = state
+        .channels
+        .iter()
+        .find(|c| c.guild.is_none() && c.supports_text())
+        .unwrap()
+        .id;
+    let guild = state
+        .channels
+        .iter()
+        .find(|c| c.guild.is_some() && c.supports_text() && Some(c.id) != state.selected)
+        .unwrap()
+        .id;
+    for (id, channel) in [(1001, dm), (1003, dm), (1005, guild)] {
+        let mut message = message(id, channel);
+        message.mentions = vec![state.user.clone().unwrap()];
+        state.apply(Envelope {
+            generation: state.generation,
+            event: Event::Message(message),
+        });
+    }
+    state.status = "Offline notification fixture · no network or OS alerts";
     state
 }
 /// Voice-only visual evidence: synthetic membership, no media or gateway commands.
@@ -344,7 +370,13 @@ pub fn voice_demo_state() -> State {
 }
 pub fn load_page(state: &mut State, before: Option<Id>) {
     let channel = state.selected.unwrap();
-    let end = before.map_or(501, |id| id.0);
+    let latest = state
+        .channels
+        .iter()
+        .find(|c| c.id == channel)
+        .and_then(|c| c.last_message)
+        .map_or(500, |id| id.0.max(500));
+    let end = before.map_or_else(|| latest.saturating_add(1), |id| id.0);
     let start = end.saturating_sub(50).max(1);
     state.apply(Envelope {
         generation: state.generation,
@@ -394,6 +426,7 @@ pub fn chat_demo_state() -> State {
             channel: Id(20),
             message: Some(read),
             manual: true,
+            mention_count: None,
             version: Some(2),
         }),
     });
@@ -403,6 +436,311 @@ pub fn chat_demo_state() -> State {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn notification_preview_history_reaches_latest_and_clears_viewed_badge() {
+        let mut state = notification_demo_state();
+        let dm = state
+            .channels
+            .iter()
+            .find(|c| c.guild.is_none() && c.supports_text())
+            .unwrap()
+            .id;
+        assert_eq!(state.unread_count(dm), 2);
+        state.select(dm);
+        load_page(&mut state, None);
+        let latest = state.timeline.iter().last().unwrap().id;
+        assert_eq!(latest, Id(1003));
+        let client_core::Command::MarkRead {
+            channel,
+            message,
+            request,
+        } = state.prepare_mark_read(latest).unwrap()
+        else {
+            panic!()
+        };
+        state
+            .apply_read_state(client_core::read_state::Event::Result {
+                channel,
+                message,
+                request,
+                result: Ok(()),
+            })
+            .unwrap();
+        assert_eq!(state.unread_count(dm), 0);
+        assert_eq!(state.unread(dm), Some(false));
+    }
+    #[test]
+    fn notification_activity_deduplicates_and_preserves_partial_ack() {
+        use client_core::{notifications as n, read_state as r};
+        let mut state = demo_state();
+        let channel = state
+            .channels
+            .iter()
+            .find(|c| c.guild.is_none() && c.supports_text())
+            .unwrap()
+            .id;
+        state
+            .apply_notification_preferences(n::Event::Settings {
+                entries: vec![n::Setting {
+                    guild: None,
+                    muted: Some(false),
+                    level: Some(0),
+                    channels: vec![],
+                }],
+                replace: true,
+            })
+            .unwrap();
+        state
+            .apply_notification_preferences(n::Event::Presence(Some(false)))
+            .unwrap();
+        for id in [1001, 1001, 1000, 1003] {
+            state.apply(Envelope {
+                generation: state.generation,
+                event: Event::Message(message(id, channel)),
+            });
+        }
+        assert_eq!(state.unread_count(channel), 2);
+        assert_eq!(state.mention_count(channel), 2);
+        assert_eq!(state.take_notification().unwrap().message, Id(1001));
+        assert_eq!(state.take_notification().unwrap().message, Id(1003));
+        assert!(state.take_notification().is_none());
+        state
+            .apply_read_state(r::Event::Ack {
+                channel,
+                message: Some(Id(1001)),
+                manual: false,
+                mention_count: None,
+                version: Some(2),
+            })
+            .unwrap();
+        assert_eq!(state.unread_count(channel), 1);
+        state.apply(Envelope {
+            generation: state.generation,
+            event: Event::Message(message(1001, channel)),
+        });
+        assert_eq!(state.unread_count(channel), 1);
+        assert!(state.take_notification().is_none());
+        state
+            .apply_read_state(r::Event::Ack {
+                channel,
+                message: Some(Id(1003)),
+                manual: false,
+                mention_count: Some(0),
+                version: Some(3),
+            })
+            .unwrap();
+        assert_eq!(state.unread_count(channel), 0);
+        state
+            .apply_read_state(r::Event::Ack {
+                channel,
+                message: None,
+                manual: true,
+                mention_count: Some(7),
+                version: Some(4),
+            })
+            .unwrap();
+        assert_eq!(state.mention_count(channel), 7);
+        state
+            .apply_read_state(r::Event::Ack {
+                channel,
+                message: Some(Id(1003)),
+                manual: false,
+                mention_count: Some(0),
+                version: Some(3),
+            })
+            .unwrap();
+        assert_eq!(state.mention_count(channel), 7);
+        state.apply(Envelope {
+            generation: state.generation,
+            event: Event::Message(message(1004, channel)),
+        });
+        assert_eq!(state.unread_count(channel), 0);
+        assert_eq!(state.unread(channel), Some(false));
+        assert!(state.take_notification().is_none());
+        let mut new_dm = state
+            .channels
+            .iter()
+            .find(|c| c.id == channel)
+            .unwrap()
+            .clone();
+        new_dm.id = Id(909);
+        new_dm.last_message = Some(Id(2001));
+        state.apply(Envelope {
+            generation: state.generation,
+            event: Event::ChannelCreated(new_dm),
+        });
+        state.apply(Envelope {
+            generation: state.generation,
+            event: Event::Message(message(2001, Id(909))),
+        });
+        assert_eq!(state.unread_count(Id(909)), 1);
+        assert_eq!(state.take_notification().unwrap().message, Id(2001));
+        state.apply(Envelope {
+            generation: state.generation,
+            event: Event::Unavailable(channel),
+        });
+        assert_eq!(state.unread_count(channel), 0);
+        assert!(state.take_notification().is_none());
+    }
+    #[test]
+    fn guild_notification_levels_and_category_mutes_are_respected() {
+        use client_core::notifications as n;
+        let mut state = demo_state();
+        let channel = state
+            .channels
+            .iter()
+            .find(|c| c.guild.is_some() && c.supports_text())
+            .unwrap()
+            .clone();
+        let setting = n::Setting {
+            guild: channel.guild,
+            muted: Some(false),
+            level: Some(1),
+            channels: vec![],
+        };
+        state
+            .apply_notification_preferences(n::Event::Settings {
+                entries: vec![setting.clone()],
+                replace: true,
+            })
+            .unwrap();
+        state
+            .apply_notification_preferences(n::Event::Presence(Some(false)))
+            .unwrap();
+        state.apply(Envelope {
+            generation: state.generation,
+            event: Event::Message(message(1001, channel.id)),
+        });
+        assert!(state.take_notification().is_none());
+        let mut mention = message(1003, channel.id);
+        mention.mentions = vec![state.user.clone().unwrap()];
+        state.apply(Envelope {
+            generation: state.generation,
+            event: Event::Message(mention),
+        });
+        assert_eq!(state.take_notification().unwrap().message, Id(1003));
+        let mut all = setting.clone();
+        all.level = Some(0);
+        state
+            .apply_notification_preferences(n::Event::Settings {
+                entries: vec![all.clone()],
+                replace: true,
+            })
+            .unwrap();
+        state.apply(Envelope {
+            generation: state.generation,
+            event: Event::Message(message(1005, channel.id)),
+        });
+        assert_eq!(state.take_notification().unwrap().message, Id(1005));
+        all.channels = vec![(channel.parent_id.unwrap_or(channel.id), Some(true), Some(0))];
+        state
+            .apply_notification_preferences(n::Event::Settings {
+                entries: vec![all],
+                replace: true,
+            })
+            .unwrap();
+        assert!(!state.notification_allowed(channel.id));
+        let mut oversized = setting;
+        oversized.channels = Vec::with_capacity(100_000);
+        assert!(
+            state
+                .apply_notification_preferences(n::Event::Settings {
+                    entries: vec![oversized],
+                    replace: true
+                })
+                .is_err()
+        );
+        assert!(!state.notification_preferences_known());
+    }
+    #[test]
+    fn notifications_honor_unknown_preferences_mutes_dnd_and_queue_bounds() {
+        use client_core::notifications as n;
+        let mut state = demo_state();
+        let channel = state
+            .channels
+            .iter()
+            .find(|c| c.guild.is_none() && c.supports_text())
+            .unwrap()
+            .id;
+        state.apply(Envelope {
+            generation: state.generation,
+            event: Event::Message(message(1001, channel)),
+        });
+        assert!(state.take_notification().is_none());
+        state
+            .apply_notification_preferences(n::Event::Settings {
+                entries: vec![n::Setting {
+                    guild: None,
+                    muted: Some(false),
+                    level: Some(0),
+                    channels: vec![],
+                }],
+                replace: true,
+            })
+            .unwrap();
+        state
+            .apply_notification_preferences(n::Event::Presence(Some(true)))
+            .unwrap();
+        state.apply(Envelope {
+            generation: state.generation,
+            event: Event::Message(message(1003, channel)),
+        });
+        assert!(state.take_notification().is_none());
+        state
+            .apply_notification_preferences(n::Event::Presence(Some(false)))
+            .unwrap();
+        state
+            .apply_notification_preferences(n::Event::Settings {
+                entries: vec![n::Setting {
+                    guild: None,
+                    muted: Some(false),
+                    level: Some(0),
+                    channels: vec![(channel, Some(true), Some(0))],
+                }],
+                replace: true,
+            })
+            .unwrap();
+        state.apply(Envelope {
+            generation: state.generation,
+            event: Event::Message(message(1005, channel)),
+        });
+        assert!(state.take_notification().is_none());
+        state
+            .apply_notification_preferences(n::Event::Settings {
+                entries: vec![n::Setting {
+                    guild: None,
+                    muted: Some(false),
+                    level: Some(0),
+                    channels: vec![],
+                }],
+                replace: true,
+            })
+            .unwrap();
+        for id in (1007..11007).step_by(2) {
+            state.apply(Envelope {
+                generation: state.generation,
+                event: Event::Message(message(id, channel)),
+            });
+        }
+        assert_eq!(state.unread_count(channel), 4096);
+        let mut count = 0;
+        while state.take_notification().is_some() {
+            count += 1;
+        }
+        assert_eq!(count, 32);
+        state.apply(Envelope {
+            generation: state.generation,
+            event: Event::Message(message(1007, channel)),
+        });
+        assert!(state.take_notification().is_none());
+        state.apply(Envelope {
+            generation: state.generation,
+            event: Event::Message(message(11009, channel)),
+        });
+        state.logout();
+        assert!(state.take_notification().is_none());
+        assert_eq!(state.unread_count(channel), 0);
+    }
     #[test]
     fn pin_snapshots_are_scoped_cancellable_and_open_revalidated_history() {
         use client_core::{Command, search::Outcome};
@@ -673,6 +1011,7 @@ mod tests {
                 channel,
                 message: Some(Id(480)),
                 manual: true,
+                mention_count: None,
                 version: Some(3),
             })
             .unwrap();
@@ -690,6 +1029,7 @@ mod tests {
                 channel,
                 message: Some(Id(499)),
                 manual: false,
+                mention_count: None,
                 version: Some(2),
             })
             .unwrap();
@@ -733,10 +1073,11 @@ mod tests {
                 channel,
                 message: None,
                 manual: true,
+                mention_count: None,
                 version: Some(4),
             })
             .unwrap();
-        let Command::MarkRead { request, .. } = state.prepare_mark_read(Id(500)).unwrap() else {
+        let Command::MarkRead { request, .. } = state.prepare_mark_read(Id(600)).unwrap() else {
             panic!()
         };
         state.apply(Envelope {
@@ -805,7 +1146,7 @@ mod tests {
             state
                 .apply_read_state(R::Snapshot {
                     partial: false,
-                    entries: Some(vec![(Id(22), None), (Id(22), None)]),
+                    entries: Some(vec![(Id(22), None, 0), (Id(22), None, 0)]),
                     version: None
                 })
                 .is_err()
@@ -814,7 +1155,7 @@ mod tests {
         state = demo_state();
         state
             .apply_read_state(R::Snapshot {
-                entries: Some(vec![(Id(20), Some(Id(495)))]),
+                entries: Some(vec![(Id(20), Some(Id(495)), 0)]),
                 version: Some(1),
                 partial: true,
             })

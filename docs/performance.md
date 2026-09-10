@@ -487,6 +487,50 @@ wire subscription control only. Receiving the required guild typing subscription
 increase incoming event traffic; Serein discards unhandled typing events and clears the
 subscription when the member pane closes. No live performance claim is made.
 
+## Composer, inline editing and notifications — September 10, 2026
+
+Baseline `efa724b` versus `feat/composer-notifications`, locked release builds on
+macOS 27.0 arm64, Apple M1 Pro (8 CPU cores), 16 GB RAM, WGPU/Metal. Text and
+optional voice packages were built separately with `cargo xtask package` and
+`cargo xtask package-voice`. Installed bytes sum regular files inside each `.app`;
+compressed bytes use `ditto -c -k --sequesterRsrc --keepParent`. These are local
+ad-hoc-signed packages; archive metadata can introduce small variation.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable bytes | 45,176,288 | 45,521,920 | +345,632 (+0.77%) |
+| Text installed bytes | 45,476,218 | 45,842,027 | +365,809 (+0.80%) |
+| Text compressed bytes | 29,533,549 | 29,690,224 | +156,675 (+0.53%) |
+| Voice executable bytes | 48,060,336 | 48,384,320 | +323,984 (+0.67%) |
+| Voice installed bytes | 48,591,227 | 48,937,514 | +346,287 (+0.71%) |
+| Voice compressed bytes | 30,925,091 | 31,074,546 | +149,455 (+0.48%) |
+| 100,000-event reducer median | 27.854 ms | 30.185 ms | +2.332 ms (+8.37%) |
+| Retained timeline estimate | 220,992–221,477 B / 500 records | same | unchanged |
+
+Replay: one warmup and five measured direct binary runs per revision, builds
+completed beforehand. Baseline measured runs: 28.682, 27.871, 27.854, 27.097,
+27.139 ms; after: 35.392, 33.829, 30.185, 30.032, 30.069 ms. The observed
+regression includes the new bounded activity tracking (~23 ns/event at these
+medians). It is a synthetic reducer measurement, not UI latency, live throughput
+or RSS; concurrent desktop work and short durations add noise.
+
+Native sampling uses the same offline chat, nominal 1120×760 viewport, 2× display
+scale, external 4096×2304 display and draft `Hi <@2> 👋 🎉 <:serein_leaf:9001>`.
+After at least 60 seconds of warmup, `ps` samples RSS and CPU every second for
+10 samples. The final validation copy changes only the default demo argument
+selection and bundle identity to prevent accidental authenticated auto-launches;
+shipping package size/replay numbers above use the normal builds. System alerts
+are disabled for this memory scenario. RSS excludes GPU allocations and other
+OS processes; no app helper process is spawned for this scenario. Startup peak,
+physical footprint, p95 frame time and OS notification service memory are unmeasured.
+
+Native RSS samples were 113,088 KiB throughout baseline and 135,648 KiB throughout
+after: +22,560 KiB (+19.95%). This is the maximum and settled RSS within the
+10-second sampling window, not a startup peak. CPU median was 0.0% for both; after
+had two samples at 1.7% and 2.1% (mean 0.38%), baseline all 0.0%. This shows higher
+retained process memory for the rich composer scenario; no memory improvement is
+claimed. The package measurements precede these final evidence paragraphs; bundled
+documentation/archive metadata can change the distribution total slightly.
 ## September 10: integration of all open PRs (Windows)
 
 The owner explicitly requested merging every open PR into main. Baseline is the verified feature-stack tree 0f67e69757983c52e1a45c03030a09e7c16a3b30 (same tree as consolidated 9e069ca), copied before integration. After combines that stack with main efa724b, including the already-merged Twemoji artwork/picker, grouped/hover timeline, guild voice and People subscription repair. These deltas measure the combined feature set against the incoming stack, not an individual feature or a comparison against main alone.

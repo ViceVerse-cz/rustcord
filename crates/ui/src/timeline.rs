@@ -12,6 +12,8 @@ pub struct TimelineView {
     pub(super) channel_reference: Option<Id>,
     channel_labels: u64,
     pub(super) mark_read: Option<Id>,
+    auto_read_attempt: Option<Id>,
+    at_current_latest: bool,
     pub(super) reaction: Option<(Id, Option<model::ReactionEmoji>)>,
     toolbar: Option<(Id, egui::Rect)>,
     heights: BTreeMap<Id, (u64, f32)>,
@@ -230,6 +232,9 @@ fn message_actions(
     menu.on_hover_text("Message actions");
 }
 impl TimelineView {
+    pub(super) fn viewing_latest(&self, channel: Id) -> bool {
+        self.channel == Some(channel) && self.following && self.at_current_latest
+    }
     pub(super) fn follow_latest(&mut self) {
         self.following = true;
         self.jump = true;
@@ -510,6 +515,22 @@ impl TimelineView {
         });
         self.following =
             output.state.offset.y + output.inner_rect.height() >= output.content_size.y - 3.0;
+        self.at_current_latest = state.timeline.iter().last().is_some_and(|message| {
+            state.channels.iter().any(|channel| {
+                Some(channel.id) == state.selected && channel.last_message == Some(message.id)
+            })
+        });
+        if self.following
+            && ui.input(|i| i.focused)
+            && let Some(message) = state.timeline.iter().last()
+            && self.auto_read_attempt != Some(message.id)
+            && self.at_current_latest
+            && state.can_mark_read(message.id)
+        {
+            // One automatic attempt per viewed latest message; failed ACKs remain manually retryable.
+            self.auto_read_attempt = Some(message.id);
+            self.mark_read = Some(message.id);
+        }
         let mut reflow = false;
         for (id, key, height) in measurements {
             if self
@@ -793,6 +814,63 @@ mod tests {
                 "Keyboard navigation must reach Reply"
             );
         }
+    }
+    #[test]
+    fn auto_read_requires_focused_latest_and_does_not_retry_failed_marker() {
+        let mut state = State {
+            auth: client_core::auth::AuthState::Authenticated,
+            gateway_connected: true,
+            freshness: model::Freshness::Fresh,
+            selected: Some(Id(20)),
+            channels: vec![model::Channel {
+                id: Id(20),
+                guild: None,
+                parent_id: None,
+                position: 0,
+                name: "Synthetic DM".into(),
+                kind: 1,
+                recipients: vec![],
+                member_list_id: None,
+                last_message: Some(Id(1)),
+            }],
+            ..Default::default()
+        };
+        state
+            .timeline
+            .insert(text_message(1), false, false)
+            .unwrap();
+        let ctx = egui::Context::default();
+        let mut view = TimelineView::default();
+        let mut avatars = crate::avatars::Avatars::default();
+        let mut frame = |view: &mut TimelineView, state: &mut State, focused| {
+            ctx.run_ui(
+                egui::RawInput {
+                    focused,
+                    ..Default::default()
+                },
+                |ui| {
+                    view.show(ui, state, &mut None, &mut None, &mut avatars, &mut None);
+                },
+            )
+            .drop_without_applying_deltas();
+        };
+        frame(&mut view, &mut state, false);
+        assert!(view.mark_read.is_none());
+        frame(&mut view, &mut state, true);
+        assert_eq!(view.mark_read.take(), Some(Id(1)));
+        frame(&mut view, &mut state, true);
+        assert!(view.mark_read.is_none());
+        state.channels[0].last_message = Some(Id(3));
+        state
+            .timeline
+            .insert(text_message(2), false, false)
+            .unwrap();
+        state.revision += 1;
+        frame(&mut view, &mut state, true);
+        assert!(
+            view.mark_read.is_none(),
+            "Historical window is not the latest message"
+        );
     }
     #[test]
     fn native_layout_virtualizes_preserves_anchor_and_jumps_after_scrolling() {

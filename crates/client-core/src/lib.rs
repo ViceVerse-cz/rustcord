@@ -1,6 +1,7 @@
 //! Single UI-thread state owner. Adapters deliver generation-tagged typed events.
 pub mod archives;
 pub mod auth;
+pub mod notifications;
 pub mod profile;
 pub mod reactions;
 pub mod read_state;
@@ -91,6 +92,7 @@ pub enum Event {
         result: Result<search::Outcome, auth::Failure>,
     },
     ReadState(read_state::Event),
+    NotificationPreferences(notifications::Event),
     Reactions(reactions::Event),
     Profile {
         user: Id,
@@ -184,6 +186,7 @@ pub struct State {
     pub search_request: u64,
     pub search_target: Option<Id>,
     pub read_state: read_state::ReadState,
+    pub notification_preferences: notifications::Preferences,
     pub reactions: reactions::Reactions,
     pub profile: Option<profile::ProfileView>,
     pub profile_request: u64,
@@ -220,6 +223,7 @@ impl Default for State {
             search_request: 0,
             search_target: None,
             read_state: read_state::ReadState::default(),
+            notification_preferences: notifications::Preferences::default(),
             reactions: reactions::Reactions::default(),
             profile: None,
             profile_request: 0,
@@ -642,6 +646,7 @@ impl State {
                 Ok(())
             }
             Event::ReadState(event) => self.apply_read_state(event),
+            Event::NotificationPreferences(event) => self.apply_notification_preferences(event),
             Event::ThreadsSync {
                 guild,
                 parents,
@@ -894,6 +899,7 @@ impl State {
                 self.members = None;
                 self.clear_profile();
                 self.read_state.reset();
+                self.notification_preferences = notifications::Preferences::default();
                 self.user = Some(user);
                 self.guilds = guilds;
                 self.channels = channels;
@@ -969,6 +975,7 @@ impl State {
                 Ok(())
             }
             Event::Message(mut m) => {
+                self.observe_notification(&m);
                 self.observe_last_message(m.channel, m.id);
                 if self.selected == Some(m.channel)
                     && self.reactions.invalidated(m.id)
@@ -1003,6 +1010,7 @@ impl State {
                 }
             }
             Event::Delete { channel, id } => {
+                self.read_state.activity.delete(channel, id);
                 if let Some(channel) = self
                     .channels
                     .iter_mut()
@@ -1017,6 +1025,11 @@ impl State {
                 }
             }
             Event::DeleteBulk { channel, ids } => {
+                if ids.len() <= 100 {
+                    for id in &ids {
+                        self.read_state.activity.delete(channel, *id);
+                    }
+                }
                 if let Some(channel) = self
                     .channels
                     .iter_mut()
@@ -1223,7 +1236,8 @@ impl Event {
                 } => page.bytes(),
                 Self::ReadState(read_state::Event::Snapshot { entries, .. }) => entries
                     .as_ref()
-                    .map_or(0, |e| e.capacity() * size_of::<(Id, Option<Id>)>()),
+                    .map_or(0, |e| e.capacity() * size_of::<(Id, Option<Id>, u32)>()),
+                Self::NotificationPreferences(event) => event.bytes(),
                 Self::ReadState(read_state::Event::Latest(entries)) => {
                     entries.capacity() * size_of::<(Id, Patch<Id>)>()
                 }
