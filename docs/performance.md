@@ -1,5 +1,38 @@
 # Initial performance evidence
 
+## Inline message spoilers - September 10, 2026
+
+Baseline main b92a082a4b06c480fe6509252712f6513cd7dc62 / PR #35. Its verified text/voice
+executables were copied before edits and kept separately; the complete package directories
+were measured again. Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical CPUs),
+31.1 GiB visible RAM, Rust 1.98.1, release thin LTO / one codegen unit / wgpu.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| text executable bytes | 49,982,976 | 49,995,264 | +12,288 (+0.025%) |
+| text installed bytes | 50,534,234 | 50,552,906 | +18,672 (+0.037%) |
+| text ZIP bytes | 31,263,624 | 31,275,003 | +11,379 (+0.036%) |
+| voice executable bytes | 53,336,576 | 53,348,864 | +12,288 (+0.023%) |
+| voice installed bytes | 54,111,170 | 54,129,279 | +18,109 (+0.033%) |
+| voice ZIP bytes | 32,640,183 | 32,647,306 | +7,123 (+0.022%) |
+
+Both unsigned Windows packages passed. One measurement each, ZIP DEFLATE level 9; text
+excludes nested voice. File counts remain 50/96. No dependencies, assets or notices changed.
+Installed totals describe staged docs before this measurement addendum, not an extra repack.
+Measured SHA256: text 4E786EB9AAA322EDCD0ED2DEF1C8D416233326F510BB3DFA310C64FCF202B132;
+voice 76879F8C79E971306F4B0BC868E78994142F34527DAB4943D4403337EC629EED.
+
+The parser keeps the existing 8192-byte/128-line, 512-event and 16-depth limits and adds a
+32-region ceiling represented by one u32 reveal mask per revealed message. Exact reveal
+snapshots remain pruned to the active 500-row / 4-MiB message window; the existing parsed/source
+cache remains 64 entries / 1 MiB with span allocation accounting. Hidden regions are skipped
+before text layout, link/reference interaction or emoji requests. No worker, timer or disk
+state was added. UI rendering is the changed workload; ordinary reducer replay would not
+measure it. Native before/after screenshots, idle CPU/RSS/GPU and frame/startup timing remain
+unmeasured because desktop automation is owner-paused. Headless keyboard, pointer, selection,
+light/narrow and dark/wide tests are synthetic behavior checks, not native performance or
+screen-reader evidence. No runtime-speed or memory improvement is claimed.
+
 ## Incoming typing indicators - September 10, 2026
 
 Baseline main dff09752cb501aa5243334cd27f87a2c8c514db9 has the exact tested source tree of

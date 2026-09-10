@@ -9,6 +9,7 @@ const MAX_INPUT: usize = 8192;
 const MAX_EVENTS: usize = 512;
 const MAX_DEPTH: usize = 16;
 const MAX_LINKS: usize = 16;
+const MAX_SPOILERS: u8 = 32;
 
 #[derive(Clone, Copy, Default)]
 struct Style {
@@ -21,6 +22,7 @@ struct Style {
     mention: Option<Id>,
     channel: Option<Id>,
     no_autolink: bool,
+    spoiler: Option<u8>,
 }
 pub struct Formatted {
     spans: Vec<(String, Style)>,
@@ -145,12 +147,14 @@ impl Formatted {
             mention_count: 0,
             links: Vec::new(),
             limited: end < source.len(),
-            // ponytail: conceal the entire message for spoiler syntax, including code literals;
-            // replace with per-span concealment when Discord-specific parsing is implemented.
-            spoilers: source.contains("||"),
+            spoilers: false,
         };
         let mut stack = Vec::new();
         let mut style = Style::default();
+        // Spoiler scope is independent of Markdown's style stack: emphasis and
+        // link boundaries may start or end inside a concealed region.
+        let mut open_spoiler: Option<(usize, u8)> = None;
+        let mut regions = 0;
         let literal = |text: &str, range: &std::ops::Range<usize>| {
             text == &input[range.clone()]
                 && input[..range.start]
@@ -187,12 +191,9 @@ impl Formatted {
         });
         for (count, (event, range)) in events.enumerate() {
             if count >= MAX_EVENTS || stack.len() > MAX_DEPTH {
-                // Complexity overflow displays bounded literal text, never a partial misleading parse.
-                output.spans = vec![(input.to_owned(), Style::default())];
-                output.links.clear();
-                output.limited = true;
-                return output;
+                return Self::limited_literal(input, source.contains("||"));
             }
+            style.spoiler = open_spoiler.map(|(_, region)| region);
             match event {
                 Event::Start(tag) => {
                     stack.push(style);
@@ -230,14 +231,45 @@ impl Formatted {
                     style = stack.pop().unwrap_or_default();
                 }
                 Event::Text(text) => {
-                    if style.code || style.no_autolink || !literal(&text, &range) {
+                    if style.code || text.as_ref() != &input[range.clone()] {
                         output.push(&text, style);
                     } else {
-                        output.push_mentions(&text, style, &input[range]);
+                        // A raw-equal Text event can begin with one escaped character
+                        // followed by ordinary source text. Keep that first character
+                        // inert without suppressing later literal spoiler delimiters.
+                        let escaped = if literal(&text, &range) {
+                            0
+                        } else {
+                            text.chars().next().map_or(0, char::len_utf8)
+                        };
+                        output.push(&text[..escaped], style);
+                        if !output.push_spoiler_literal(
+                            &text[escaped..],
+                            style,
+                            &mut open_spoiler,
+                            &mut regions,
+                        ) {
+                            return Self::limited_literal(input, true);
+                        }
                     }
                 }
                 Event::Html(text) | Event::InlineHtml(text) => {
-                    output.push(&text, style);
+                    let inert = Style {
+                        no_autolink: true,
+                        ..style
+                    };
+                    if literal(&text, &range) {
+                        if !output.push_spoiler_literal(
+                            &text,
+                            inert,
+                            &mut open_spoiler,
+                            &mut regions,
+                        ) {
+                            return Self::limited_literal(input, true);
+                        }
+                    } else {
+                        output.push(&text, inert);
+                    }
                 }
                 Event::Code(text) => output.push(
                     &text,
@@ -251,7 +283,86 @@ impl Formatted {
                 _ => {}
             }
         }
+        if let Some((opening, region)) = open_spoiler {
+            if end < source.len() {
+                // A closing delimiter may be outside our byte/line window.
+                return Self::limited_literal(input, true);
+            }
+            // An unmatched opening delimiter is literal, including its contents.
+            for (_, style) in &mut output.spans[opening..] {
+                if style.spoiler == Some(region) {
+                    style.spoiler = None;
+                }
+            }
+        }
         output
+    }
+    fn limited_literal(input: &str, concealed: bool) -> Self {
+        Self {
+            spans: vec![(
+                input.to_owned(),
+                Style {
+                    spoiler: concealed.then_some(0),
+                    ..Default::default()
+                },
+            )],
+            mention_count: 0,
+            links: Vec::new(),
+            limited: true,
+            spoilers: concealed,
+        }
+    }
+    fn push_spoiler_literal(
+        &mut self,
+        text: &str,
+        mut style: Style,
+        open: &mut Option<(usize, u8)>,
+        regions: &mut u8,
+    ) -> bool {
+        let mut consumed = 0;
+        let mut search = 0;
+        while let Some(offset) = text[search..].find("||") {
+            let start = search + offset;
+            search = start + 1;
+            if text[..start]
+                .bytes()
+                .rev()
+                .take_while(|byte| *byte == b'\\')
+                .count()
+                % 2
+                != 0
+            {
+                continue;
+            }
+            self.push_literal(&text[consumed..start], style);
+            if let Some((opening, region)) = open.take() {
+                // Retain an empty marker so an empty paired region still has a reveal control.
+                self.spans[opening].0.clear();
+                self.spans[opening].1.spoiler = Some(region);
+                *regions += 1;
+                self.spoilers = true;
+                style.spoiler = None;
+            } else {
+                if *regions == MAX_SPOILERS {
+                    return false;
+                }
+                let opening = self.spans.len();
+                self.push("||", style);
+                *open = Some((opening, *regions));
+                style.spoiler = Some(*regions);
+            }
+            consumed = start + 2;
+            search = consumed;
+        }
+        self.push_literal(&text[consumed..], style);
+        true
+    }
+    fn push_literal(&mut self, text: &str, style: Style) {
+        if style.no_autolink {
+            self.push(text, style);
+        } else {
+            self.push_mentions(text, style, text);
+        }
     }
     fn add_link(&mut self, target: &str) -> Option<usize> {
         let url = external_url(target)?;
@@ -369,13 +480,14 @@ impl Formatted {
         images: &mut crate::avatars::Avatars,
         demo: bool,
     ) {
+        let mut revealed = u32::MAX;
         self.show_references(
             ui,
             opening,
             users,
             profile,
             (&[], &mut None),
-            (images, demo),
+            (images, demo, &mut revealed),
         );
     }
     pub fn show_references(
@@ -385,10 +497,10 @@ impl Formatted {
         users: &[model::User],
         profile: &mut Option<model::User>,
         references: (&[model::Channel], &mut Option<Id>),
-        media: (&mut crate::avatars::Avatars, bool),
+        media: (&mut crate::avatars::Avatars, bool, &mut u32),
     ) {
         let (channels, channel) = references;
-        let (images, demo) = media;
+        let (images, demo, revealed) = media;
         ui.allocate_ui_with_layout(
             egui::vec2(ui.available_width(), 0.0),
             egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true),
@@ -397,6 +509,30 @@ impl Formatted {
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
                 let mut start = 0;
                 while start < self.spans.len() {
+                    let spoiler = self.spans[start].1.spoiler;
+                    if let Some(region) = spoiler
+                        && *revealed & (1_u32 << region) == 0
+                    {
+                        // Hidden text never reaches labels, selection, tooltips, links,
+                        // mention actions, accessibility values or emoji image requests.
+                        let count = self.spans[start..]
+                            .iter()
+                            .take_while(|(_, style)| style.spoiler == spoiler)
+                            .count();
+                        if ui
+                            .push_id(("spoiler", region), |ui| ui.button("Reveal spoiler"))
+                            .inner
+                            .clicked()
+                        {
+                            *revealed |= 1_u32 << region;
+                        }
+                        start += count;
+                        continue;
+                    }
+                    if self.spans[start].0.is_empty() {
+                        start += 1;
+                        continue;
+                    }
                     if let Some(id) = self.spans[start].1.channel {
                         if let Some(target) = channels.iter().find(|target| {
                             target.id == id && target.guild.is_some() && target.supports_text()
@@ -456,6 +592,7 @@ impl Formatted {
                         .iter()
                         .take_while(|(_, style)| {
                             style.link == target
+                                && style.spoiler == spoiler
                                 && style.mention.is_none()
                                 && style.channel.is_none()
                         })
@@ -791,6 +928,329 @@ mod tests {
     }
 
     #[test]
+    fn inline_spoilers_preserve_crossing_styles_and_ignore_nonliteral_delimiters() {
+        let parsed = Formatted::parse(
+            "**Visible ||secret** still hidden|| end ||<@42> <#43> [link](https://hidden.example) 👩🏽‍💻||.",
+        );
+        assert!(parsed.spoilers && !parsed.limited);
+        assert!(
+            parsed
+                .spans
+                .iter()
+                .any(|(text, style)| text == "secret" && style.strong && style.spoiler == Some(0))
+        );
+        assert!(
+            parsed
+                .spans
+                .iter()
+                .any(|(text, style)| text.contains("still hidden")
+                    && !style.strong
+                    && style.spoiler == Some(0))
+        );
+        assert!(
+            parsed
+                .spans
+                .iter()
+                .any(|(_, style)| style.mention == Some(Id(42)) && style.spoiler == Some(1))
+        );
+        assert!(
+            parsed
+                .spans
+                .iter()
+                .any(|(_, style)| style.channel == Some(Id(43)) && style.spoiler == Some(1))
+        );
+        let visible: String = parsed
+            .spans
+            .iter()
+            .filter(|(_, style)| style.spoiler.is_none())
+            .map(|(text, _)| text.as_str())
+            .collect();
+        assert_eq!(visible.trim_end(), "Visible  end .");
+        let crossing = Formatted::parse("||hidden **also hidden|| visible**");
+        assert!(
+            crossing
+                .spans
+                .iter()
+                .any(|(text, style)| text == " visible" && style.strong && style.spoiler.is_none())
+        );
+        for source in [
+            "`||code||`",
+            "```\n||code||\n```",
+            r"\|\|escaped\|\|",
+            "&#124;&#124;entity&#124;&#124;",
+            "||unmatched",
+            "unmatched||",
+        ] {
+            let parsed = Formatted::parse(source);
+            assert!(!parsed.spoilers, "not a spoiler: {source}");
+            assert!(
+                parsed
+                    .spans
+                    .iter()
+                    .all(|(_, style)| style.spoiler.is_none())
+            );
+        }
+        let mixed = Formatted::parse(r"\|\|literal\|\| then ||hidden `||code||`||");
+        assert!(mixed.spoilers);
+        assert!(
+            mixed
+                .spans
+                .iter()
+                .any(|(text, style)| style.code && text == "||code||" && style.spoiler == Some(0))
+        );
+        let unmatched = Formatted::parse("plain ||unmatched **bold**");
+        assert_eq!(
+            unmatched
+                .spans
+                .iter()
+                .map(|(text, _)| text.as_str())
+                .collect::<String>()
+                .trim_end(),
+            "plain ||unmatched bold"
+        );
+    }
+
+    #[test]
+    fn spoiler_limits_never_fall_back_to_visible_secret_text() {
+        let exact = Formatted::parse(&"||x|| ".repeat(32));
+        assert!(exact.spoilers && !exact.limited);
+        assert!(
+            exact
+                .spans
+                .iter()
+                .any(|(_, style)| style.spoiler == Some(31))
+        );
+        for source in [
+            "||x|| ".repeat(33),
+            format!("visible ||{}", "s".repeat(MAX_INPUT)),
+            format!("visible ||{}", "secret\n".repeat(130)),
+            format!("||secret|| {}", "*a* ".repeat(MAX_EVENTS)),
+            format!("{}||secret||", "> ".repeat(MAX_DEPTH + 2)),
+        ] {
+            let parsed = Formatted::parse(&source);
+            assert!(parsed.limited && parsed.spoilers);
+            assert!(parsed.links.is_empty());
+            assert!(
+                parsed
+                    .spans
+                    .iter()
+                    .all(|(_, style)| style.spoiler == Some(0))
+            );
+            assert!(parsed.bytes() < 16 * 1024);
+        }
+    }
+
+    #[test]
+    fn concealed_regions_skip_actions_images_and_text_until_keyboard_or_pointer_reveal() {
+        fn collect(shape: &egui::Shape, texts: &mut Vec<(String, egui::Rect)>) {
+            match shape {
+                egui::Shape::Text(text) => texts.push((
+                    text.galley.text().into(),
+                    egui::Rect::from_min_size(text.pos, text.galley.size()),
+                )),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, texts)),
+                _ => {}
+            }
+        }
+        let key = |key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for (width, dark) in [(220.0, false), (700.0, true)] {
+            let parsed = Formatted::parse(
+                "Visible ||secret <@42> <#43> [hidden link](https://hidden.example) <:wave:9001>|| end",
+            );
+            let ctx = egui::Context::default();
+            ctx.set_visuals(if dark {
+                egui::Visuals::dark()
+            } else {
+                egui::Visuals::light()
+            });
+            let mut images = crate::avatars::Avatars::default();
+            let mut opening = None;
+            let mut profile = None;
+            let mut channel = None;
+            let mut mask = 0;
+            let mut render = |mask: &mut u32, events| {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 500.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        parsed.show_references(
+                            ui,
+                            &mut opening,
+                            &[],
+                            &mut profile,
+                            (&[], &mut channel),
+                            (&mut images, false, mask),
+                        )
+                    },
+                );
+                assert!(output.platform_output.commands.is_empty());
+                assert!(opening.is_none() && profile.is_none() && channel.is_none());
+                let requests = images.take_requests();
+                if *mask == 0 {
+                    assert!(requests.is_empty());
+                }
+                let mut texts = Vec::new();
+                for shape in &output.shapes {
+                    collect(&shape.shape, &mut texts);
+                }
+                output.textures_delta.clear();
+                output.drop_without_applying_deltas();
+                texts
+            };
+            render(&mut mask, vec![]);
+            let texts = render(&mut mask, vec![]);
+            assert_eq!(
+                texts
+                    .iter()
+                    .filter(|(text, _)| text == "Reveal spoiler")
+                    .count(),
+                1
+            );
+            assert!(texts.iter().any(|(text, _)| text.contains("Visible")));
+            assert!(!texts.iter().any(|(text, _)| text.contains("secret")
+                || text.contains("hidden")
+                || text.contains("9001")
+                || text.contains("42")));
+            render(&mut mask, vec![key(egui::Key::Tab)]);
+            render(&mut mask, vec![key(egui::Key::Enter)]);
+            assert_eq!(mask, 1);
+            let texts = render(&mut mask, vec![]);
+            assert!(texts.iter().any(|(text, _)| text.contains("secret")));
+            mask = 0;
+            let texts = render(&mut mask, vec![]);
+            assert!(!texts.iter().any(|(text, _)| text.contains("secret")));
+            let pos = texts
+                .iter()
+                .find(|(text, _)| text == "Reveal spoiler")
+                .unwrap()
+                .1
+                .center();
+            render(
+                &mut mask,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+            render(
+                &mut mask,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            assert_eq!(mask, 1);
+        }
+    }
+
+    #[test]
+    fn selecting_across_a_concealed_region_cannot_copy_its_text() {
+        let ctx = egui::Context::default();
+        let parsed = Formatted::parse("A ||private spoiler|| Z");
+        let mut images = crate::avatars::Avatars::default();
+        let mut mask = 0;
+        let mut clock = 0.0;
+        let mut run = |events| {
+            clock += 1.0;
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(700.0, 200.0),
+                    )),
+                    events,
+                    time: Some(clock),
+                    ..Default::default()
+                },
+                |ui| {
+                    parsed.show_references(
+                        ui,
+                        &mut None,
+                        &[],
+                        &mut None,
+                        (&[], &mut None),
+                        (&mut images, false, &mut mask),
+                    )
+                },
+            )
+        };
+        run(vec![]).drop_without_applying_deltas();
+        let output = run(vec![]);
+        let text_rect = |prefix: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| {
+                    if let egui::Shape::Text(text) = &shape.shape
+                        && text.galley.text().starts_with(prefix)
+                    {
+                        Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+                    } else {
+                        None
+                    }
+                })
+                .expect("visible selectable text")
+        };
+        let start = text_rect("A ").left_top() + egui::vec2(0.0, 5.0);
+        let end = text_rect(" Z").right_top() + egui::vec2(0.0, 5.0);
+        output.drop_without_applying_deltas();
+        for events in [
+            vec![
+                egui::Event::PointerMoved(start),
+                egui::Event::PointerButton {
+                    pos: start,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            vec![egui::Event::PointerMoved(end)],
+            vec![egui::Event::PointerButton {
+                pos: end,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        ] {
+            run(events).drop_without_applying_deltas();
+        }
+        let output = run(vec![egui::Event::Copy]);
+        let copied = output
+            .platform_output
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                egui::OutputCommand::CopyText(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .expect("selected visible text");
+        assert!(
+            copied.contains('A') && copied.contains('Z') && !copied.contains("private spoiler")
+        );
+        output.drop_without_applying_deltas();
+        assert_eq!(mask, 0);
+    }
+
+    #[test]
     fn channel_references_keep_literals_bounded_and_activate_only_loaded_text_channels() {
         let parsed = Formatted::parse(
             "**<#42>** `<#43>` \\<#44> &lt;#45&gt; [<#46>](https://example.com) <#0>\n\n```\n<#47>\n```",
@@ -865,6 +1325,7 @@ mod tests {
             let mut opening = None;
             let mut profile = None;
             let mut channel = None;
+            let mut revealed = u32::MAX;
             for key in [egui::Key::Tab, egui::Key::Enter] {
                 let mut output = ctx.run_ui(
                     egui::RawInput {
@@ -884,7 +1345,7 @@ mod tests {
                             &[],
                             &mut profile,
                             (&channels, &mut channel),
-                            (&mut crate::avatars::Avatars::default(), true),
+                            (&mut crate::avatars::Avatars::default(), true, &mut revealed),
                         )
                     },
                 );

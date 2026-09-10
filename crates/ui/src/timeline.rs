@@ -29,7 +29,7 @@ pub struct TimelineView {
     formatted: FormatCache,
     // Exact revealed content prevents a reload that resets model revisions from revealing edits.
     // Pruned with the active window: at most its 500 records / 4 MiB content budget.
-    revealed: BTreeMap<Id, (String, Vec<model::Embed>, Vec<model::Attachment>)>,
+    revealed: BTreeMap<Id, Revealed>,
     viewing: Option<(Id, Id)>,
     pub(super) download: crate::attachments::DownloadUi,
     pub(super) opening: Option<String>,
@@ -39,6 +39,29 @@ pub struct TimelineView {
     pub(super) latest: bool,
     jump: bool,
     unread_boundary: Option<Id>,
+}
+struct Revealed {
+    content: String,
+    embeds: Vec<model::Embed>,
+    attachments: Vec<model::Attachment>,
+    text: u32,
+    media: bool,
+}
+impl Revealed {
+    fn new(message: &Message, text: u32, media: bool) -> Self {
+        Self {
+            content: message.content.clone(),
+            embeds: message.embeds.clone(),
+            attachments: message.attachments.clone(),
+            text,
+            media,
+        }
+    }
+    fn matches(&self, message: &Message) -> bool {
+        self.content == message.content
+            && self.embeds == message.embeds
+            && self.attachments == message.attachments
+    }
 }
 pub fn visible_range(rows: &[(Id, f32)], min: f32, max: f32) -> (usize, usize, f32) {
     let mut top = 0.0;
@@ -337,11 +360,8 @@ impl TimelineView {
             self.toolbar = self
                 .toolbar
                 .filter(|(id, _)| state.timeline.get(*id).is_some());
-            self.revealed.retain(|id, content| {
-                state.timeline.get(*id).is_some_and(|m| {
-                    m.content == content.0 && m.embeds == content.1 && m.attachments == content.2
-                })
-            });
+            self.revealed
+                .retain(|id, content| state.timeline.get(*id).is_some_and(|m| content.matches(m)));
             let mut previous = None;
             self.rows = row_ids
                 .into_iter()
@@ -516,23 +536,32 @@ impl TimelineView {
                                         ui.label(RichText::new(summary).color(colors.muted));
                                     }
                                     let formatted = self.formatted.get(*id, &message.content);
-                                    let spoilers = formatted.spoilers || crate::embeds::has_spoilers(message);
-                                    if spoilers
-                                        && !self.revealed.get(id).is_some_and(|(content, embeds, attachments)| content == &message.content && embeds == &message.embeds && attachments == &message.attachments)
-                                    {
-                                        if ui.button("Reveal spoiler").clicked() {
-                                            self.revealed.insert(*id, (message.content.clone(), message.embeds.clone(), message.attachments.clone()));
-                                        }
+                                    let reveal = self.revealed.get(id).filter(|reveal| reveal.matches(message));
+                                    let before = reveal.map_or((0, false), |reveal| (reveal.text, reveal.media));
+                                    let mut text = if formatted.spoilers { before.0 } else { 0 };
+                                    let mut media = before.1;
+                                    formatted.show_references(ui, &mut self.opening, &message.mentions, profile, (&state.channels, &mut self.channel_reference), (avatars, state.demo, &mut text));
+                                    if formatted.limited {
+                                        ui.label(RichText::new("Display limited · Copy message for the full text").small().color(colors.muted));
+                                    }
+                                    if crate::embeds::has_media_spoilers(message) && !media {
+                                        if ui.button("Reveal spoiler media").clicked() { media = true; }
                                     } else {
-                                        formatted.show_references(ui, &mut self.opening, &message.mentions, profile, (&state.channels, &mut self.channel_reference), (avatars, state.demo));
-                                        if formatted.limited {
-                                            ui.label(RichText::new("Display limited · Copy message for the full text").small().color(colors.muted));
-                                        }
                                         crate::embeds::show(ui, message, &mut self.formatted, avatars, &mut self.opening, profile, state.demo);
                                         crate::attachments::show(ui, message, avatars, &mut self.viewing, &mut self.opening, &mut self.download, state.demo);
-                                        if spoilers && ui.small_button("Hide spoiler").clicked() {
+                                    }
+                                    if (text != 0 || media) && ui.small_button("Hide spoilers").clicked() {
+                                        text = 0;
+                                        media = false;
+                                    }
+                                    if before != (text, media) {
+                                        if text == 0 && !media {
                                             self.revealed.remove(id);
+                                        } else {
+                                            self.revealed.insert(*id, Revealed::new(message, text, media));
                                         }
+                                        self.heights.remove(id);
+                                        ui.ctx().request_repaint();
                                     }
                                     if message.edited {
                                         ui.label(RichText::new("(edited)").small().color(colors.muted));
@@ -685,15 +714,11 @@ impl TimelineView {
                 .timeline
                 .get(message_id)
                 .filter(|m| {
-                    !crate::embeds::has_spoilers(m)
+                    !crate::embeds::has_media_spoilers(m)
                         || self
                             .revealed
                             .get(&m.id)
-                            .is_some_and(|(content, embeds, attachments)| {
-                                content == &m.content
-                                    && embeds == &m.embeds
-                                    && attachments == &m.attachments
-                            })
+                            .is_some_and(|reveal| reveal.media && reveal.matches(m))
                 })
                 .and_then(|m| {
                     m.attachments
@@ -736,6 +761,158 @@ mod tests {
             mentions: vec![],
             reactions: Some(vec![]),
             embeds_suppressed: false,
+        }
+    }
+    #[test]
+    fn inline_reveals_are_independent_of_media_and_reset_on_edit_and_navigation() {
+        fn collect(shape: &egui::Shape, labels: &mut Vec<(String, egui::Rect)>) {
+            match shape {
+                egui::Shape::Text(text) => {
+                    labels.push((text.galley.job.text.clone(), text.visual_bounding_rect()))
+                }
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        collect(shape, labels);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for width in [260.0, 800.0] {
+            let ctx = egui::Context::default();
+            ctx.set_visuals(if width < 300.0 {
+                egui::Visuals::light()
+            } else {
+                egui::Visuals::dark()
+            });
+            let mut message = text_message(1);
+            message.content =
+                "Public before ||secret one|| middle ||secret two|| after `||code literal||`"
+                    .into();
+            message.embeds = vec![model::Embed {
+                title: Some("Visible card".into()),
+                ..Default::default()
+            }];
+            let mut state = State {
+                demo: true,
+                selected: Some(message.channel),
+                ..Default::default()
+            };
+            state
+                .timeline
+                .insert(message.clone(), false, false)
+                .unwrap();
+            let mut view = TimelineView::default();
+            let mut images = crate::avatars::Avatars::default();
+            let mut render = |view: &mut TimelineView, state: &mut State, events| {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        focused: true,
+                        events,
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 700.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| view.show(ui, state, &mut None, &mut None, &mut images, &mut None),
+                );
+                assert!(output.platform_output.commands.is_empty());
+                let mut labels = vec![];
+                for shape in &output.shapes {
+                    collect(&shape.shape, &mut labels);
+                }
+                output.drop_without_applying_deltas();
+                assert!(view.opening.is_none() && view.channel_reference.is_none());
+                labels
+            };
+            for _ in 0..3 {
+                render(&mut view, &mut state, vec![]);
+            }
+            let labels = render(&mut view, &mut state, vec![]);
+            let visible: String = labels.iter().map(|(text, _)| text.as_str()).collect();
+            assert!(visible.contains("Public before") && visible.contains("Visible card"));
+            assert!(visible.contains("||code literal||"));
+            assert!(!visible.contains("secret one") && !visible.contains("secret two"));
+            assert_eq!(
+                labels
+                    .iter()
+                    .filter(|(text, _)| text == "Reveal spoiler")
+                    .count(),
+                2
+            );
+            let click = |label: &str, labels: &[(String, egui::Rect)]| {
+                let pos = labels
+                    .iter()
+                    .find(|(text, _)| text == label)
+                    .unwrap()
+                    .1
+                    .center();
+                [true, false].map(|pressed| {
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ]
+                })
+            };
+            for events in click("Reveal spoiler", &labels) {
+                render(&mut view, &mut state, events);
+            }
+            let labels = render(&mut view, &mut state, vec![]);
+            let visible: String = labels.iter().map(|(text, _)| text.as_str()).collect();
+            assert!(visible.contains("secret one") && !visible.contains("secret two"));
+            assert_eq!(view.revealed[&message.id].text, 1);
+            assert!(!view.revealed[&message.id].media);
+            for events in click("Hide spoilers", &labels) {
+                render(&mut view, &mut state, events);
+            }
+            render(&mut view, &mut state, vec![]);
+            assert!(view.revealed.is_empty());
+
+            // A text reveal cannot grant access to a separately concealed card.
+            message.embeds[0].title = Some("||hidden card||".into());
+            state.timeline.insert(message.clone(), true, false).unwrap();
+            state.revision += 1;
+            let labels = render(&mut view, &mut state, vec![]);
+            for events in click("Reveal spoiler", &labels) {
+                render(&mut view, &mut state, events);
+            }
+            let labels = render(&mut view, &mut state, vec![]);
+            assert!(
+                labels
+                    .iter()
+                    .any(|(text, _)| text == "Reveal spoiler media")
+            );
+            assert!(!labels.iter().any(|(text, _)| text.contains("hidden card")));
+            for events in click("Reveal spoiler media", &labels) {
+                render(&mut view, &mut state, events);
+            }
+            let labels = render(&mut view, &mut state, vec![]);
+            assert!(labels.iter().any(|(text, _)| text.contains("hidden card")));
+            assert!(view.revealed[&message.id].media);
+
+            message.content = "Public changed ||new secret||".into();
+            state.timeline.insert(message.clone(), true, false).unwrap();
+            state.revision += 1;
+            let labels = render(&mut view, &mut state, vec![]);
+            assert!(
+                !labels
+                    .iter()
+                    .any(|(text, _)| text.contains("new secret") || text.contains("hidden card"))
+            );
+            assert!(view.revealed.is_empty());
+            for events in click("Reveal spoiler", &labels) {
+                render(&mut view, &mut state, events);
+            }
+            assert!(!view.revealed.is_empty());
+            state.selected = Some(Id(30));
+            render(&mut view, &mut state, vec![]);
+            assert!(view.revealed.is_empty());
         }
     }
     #[test]
@@ -1736,14 +1913,8 @@ mod tests {
             for _ in 0..3 {
                 render(&mut view, &mut state);
             }
-            view.revealed.insert(
-                message.id,
-                (
-                    message.content.clone(),
-                    message.embeds.clone(),
-                    message.attachments.clone(),
-                ),
-            );
+            view.revealed
+                .insert(message.id, Revealed::new(&message, u32::MAX, true));
             view.viewing = Some((message.id, Id(9)));
             view.toolbar = Some((message.id, egui::Rect::EVERYTHING));
             state.timeline.delete(message.id).unwrap();
@@ -1952,14 +2123,8 @@ mod tests {
             channel: Some(Id(2)),
             ..Default::default()
         };
-        view.revealed.insert(
-            message.id,
-            (
-                message.content.clone(),
-                message.embeds.clone(),
-                message.attachments.clone(),
-            ),
-        );
+        view.revealed
+            .insert(message.id, Revealed::new(&message, u32::MAX, true));
         view.heights
             .insert(message.id, (layout_key(&message), 4000.0));
         message.content = "||new concealed content||".into();
@@ -2114,14 +2279,8 @@ mod tests {
         assert!(concealed.contains("Reveal spoiler"));
         assert!(!concealed.contains("Hidden title"));
         assert!(!concealed.contains("Embed description"));
-        view.revealed.insert(
-            message.id,
-            (
-                message.content.clone(),
-                message.embeds.clone(),
-                message.attachments.clone(),
-            ),
-        );
+        view.revealed
+            .insert(message.id, Revealed::new(&message, u32::MAX, true));
         let revealed = render(&mut view, &mut state, &mut images);
         assert!(revealed.contains("Hidden title"));
         assert!(revealed.contains("Embed description"));
@@ -2176,14 +2335,8 @@ mod tests {
                 .all(|key| !key.starts_with("embed:")),
             "Hidden attachments must not request media; the visible author avatar is independent"
         );
-        view.revealed.insert(
-            message.id,
-            (
-                message.content.clone(),
-                message.embeds.clone(),
-                message.attachments.clone(),
-            ),
-        );
+        view.revealed
+            .insert(message.id, Revealed::new(&message, u32::MAX, true));
         view.viewing = Some((message.id, Id(7)));
         render(&mut view, &mut state, &mut images); // Modal sizing pass precedes visible paint.
         let shown = render(&mut view, &mut state, &mut images);
