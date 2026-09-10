@@ -133,3 +133,24 @@ Replay: release replay-bench built per revision, one warmup plus five direct exe
 Native automation remains paused after the owner's preceding physical Escape stops. No comparable current-task native process samples, idle CPU, peak/settled memory, helper/GPU usage, actual adapter/display scale or startup/frame p95 are available. The application uses wgpu, but no renderer timing claim is made. Required native before/after screenshots and changed-build interaction remain draft blockers.
 
 Resource limits: eight locally loaded same-server channel suggestions, 120-character suggestion labels, 64-character queries; user/channel links share 100 interactive references per formatted part. Existing 8 KiB formatter input, event/depth/link and cache limits remain unchanged. A bounded channel-label hash is calculated on state revision changes to invalidate row heights, never on unchanged idle frames. No new cache or directory lookup was introduced.
+
+## September 10: general attachment downloads (Windows)
+
+Baseline ae360f3f912ff15e99af5d1fe0d4f330b2545414 versus this general-file download change. The verified parent text/voice packages were copied separately before edits. Host: Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical processors), approximately 31 GiB visible RAM; pinned Rust 1.98.1, existing release profile and feature split. No dependencies/fonts/codecs changed. Both unsigned packages passed packaging. Installed/ZIP totals were taken before this final measurement/progress addendum was staged; text excludes its sibling voice directory and both exclude PR evidence. ZIP uses all respective package files with Python zipfile DEFLATE level 9. WebView2 and drivers are external.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable, bytes | 42,149,888 | 42,150,400 | +512 (+0.001%) |
+| Voice executable, bytes | 45,462,528 | 45,463,552 | +1,024 (+0.002%) |
+| Text installed package, bytes | 42,403,234 | 42,411,458 | +8,224 (+0.019%) |
+| Voice installed package, bytes | 45,939,432 | 45,948,168 | +8,736 (+0.019%) |
+| Text ZIP, bytes | 24,491,835 | 24,495,907 | +4,072 (+0.017%) |
+| Voice ZIP, bytes | 25,845,493 | 25,848,999 | +3,506 (+0.014%) |
+| Reducer replay median, milliseconds | 26.7206 | 27.7784 | +1.0578 (+3.96%, noisy) |
+| Retained timeline estimated bytes | 220,992-221,477 | 220,992-221,477 | Unchanged, 500 records |
+
+Release replay-bench: one warmup plus five direct executable samples per revision, 100,000 synthetic events each, after compilation finished. Baseline: 26.4996, 26.7206, 26.4924, 26.8281, 28.4031 ms. After: 31.0129, 27.7784, 27.5397, 27.0537, 28.2892 ms. Reducer logic is unchanged; only generated demo message 500 gained file-attachment metadata. The small timing difference is inconclusive; this workload measures neither downloads nor UI latency.
+
+Native automation remains paused after the owner's earlier physical Escape stops. Comparable native process-memory/CPU samples, actual Save dialog/transfer-load measurements, GPU/helpers, display scale/adapter and startup/frame p95 remain unmeasured. No screenshot or runtime performance improvement is claimed; native evidence remains a draft blocker.
+
+The existing one-dialog/transfer slot, 100 MiB original-file cap, at-most-32-KiB disk writes, expected-length checking, latest-value progress and 15/30/300-second connection/read/overall timeouts are unchanged. General files are streamed without decoding or deliberately retaining a complete file buffer. Transport/TLS/OS buffers are additional; this is a component policy, not a measured process-memory ceiling.

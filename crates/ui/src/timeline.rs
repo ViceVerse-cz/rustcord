@@ -93,6 +93,7 @@ impl TimelineView {
             *self = Self {
                 channel: state.selected,
                 following: true,
+                download: std::mem::take(&mut self.download),
                 ..Self::default()
             };
         }
@@ -304,7 +305,7 @@ impl TimelineView {
                                             ui.label(RichText::new("Display limited · Copy message for the full text").small().color(colors.muted));
                                         }
                                         crate::embeds::show(ui, message, &mut self.formatted, avatars, &mut self.opening, profile, state.demo);
-                                        crate::attachments::show(ui, message, avatars, &mut self.viewing, &mut self.opening, state.demo);
+                                        crate::attachments::show(ui, message, avatars, &mut self.viewing, &mut self.opening, &mut self.download, state.demo);
                                         if spoilers && ui.small_button("Hide spoiler").clicked() {
                                             self.revealed.remove(id);
                                         }
@@ -527,6 +528,32 @@ mod tests {
             "The renamed references must be measured with their new wrapped labels"
         );
         assert!(images.take_requests().is_empty());
+    }
+    #[test]
+    fn navigation_preserves_active_download_controls() {
+        let mut view = TimelineView::default();
+        view.download.active = true;
+        view.download.status = "Downloading: 1 / 2 KiB".into();
+        view.download.cancel_requested = true;
+        let mut state = State::default();
+        let context = egui::Context::default();
+        for channel in [Some(Id(2)), Some(Id(3)), None] {
+            state.selected = channel;
+            context
+                .run_ui(Default::default(), |ui| {
+                    view.show(
+                        ui,
+                        &mut state,
+                        &mut None,
+                        &mut None,
+                        &mut crate::avatars::Avatars::default(),
+                        &mut None,
+                    );
+                })
+                .drop_without_applying_deltas();
+            assert!(view.download.active && view.download.cancel_requested);
+            assert_eq!(view.download.status, "Downloading: 1 / 2 KiB");
+        }
     }
     #[test]
     fn same_id_revision_reset_does_not_reuse_reveal_or_height() {

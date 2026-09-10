@@ -1167,11 +1167,11 @@ impl eframe::App for Desktop {
         }
         let download_status = match self.downloads.poll() {
             downloads::Status::Idle => String::new(),
-            downloads::Status::Choosing => "Choose where to save the image…".into(),
+            downloads::Status::Choosing => "Choose where to save the attachment…".into(),
             downloads::Status::Downloading { received, total } => {
                 format!("Downloading: {} / {} KiB", received / 1024, total / 1024)
             }
-            downloads::Status::Saved => "Image downloaded".into(),
+            downloads::Status::Saved => "Attachment downloaded".into(),
             downloads::Status::Cancelled => "Download cancelled".into(),
             downloads::Status::Failed(error) => (*error).into(),
         };

@@ -50,23 +50,40 @@ pub fn message(id: u64, channel: Id) -> Message {
         unsupported: false,
         embeds: demo_embeds(id),
         attachments: if id == 500 {
-            vec![Attachment {
-                id: Id(700),
-                filename: "synthetic-landscape.png".into(),
-                description: Some("Original synthetic landscape · offline preview".into()),
-                content_type: Some("image/png".into()),
-                size: 2048,
-                spoiler: false,
-                media: EmbedMedia {
-                    url: Some(
-                        "https://cdn.discordapp.com/attachments/1/700/synthetic-landscape.png"
-                            .into(),
-                    ),
-                    proxy_url: None,
-                    width: 640,
-                    height: 240,
+            vec![
+                Attachment {
+                    id: Id(700),
+                    filename: "synthetic-landscape.png".into(),
+                    description: Some("Original synthetic landscape · offline preview".into()),
+                    content_type: Some("image/png".into()),
+                    size: 2048,
+                    spoiler: false,
+                    media: EmbedMedia {
+                        url: Some(
+                            "https://cdn.discordapp.com/attachments/1/700/synthetic-landscape.png"
+                                .into(),
+                        ),
+                        proxy_url: None,
+                        width: 640,
+                        height: 240,
+                    },
                 },
-            }]
+                Attachment {
+                    id: Id(701),
+                    filename: "synthetic-notes.txt".into(),
+                    description: None,
+                    content_type: Some("text/plain".into()),
+                    size: 128,
+                    spoiler: false,
+                    media: EmbedMedia {
+                        url: Some(
+                            "https://cdn.discordapp.com/attachments/1/701/synthetic-notes.txt"
+                                .into(),
+                        ),
+                        ..Default::default()
+                    },
+                },
+            ]
         } else {
             vec![]
         },

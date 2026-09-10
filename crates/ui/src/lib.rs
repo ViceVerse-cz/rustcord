@@ -800,6 +800,7 @@ impl MessagingUi {
                                 self.reconnect_requested = true;
                             }
                         });
+                        self.timeline.download.show_status(ui);
                     });
                 self.call_bar(ui, state, &mut commands);
                 let Some(channel) = state.selected else {
