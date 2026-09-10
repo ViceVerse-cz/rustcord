@@ -365,6 +365,7 @@ mod tests {
             revision: 0,
             nonce: None,
             reply_to: None,
+            kind: 0,
             unsupported: false,
             attachments: Vec::new(),
             embeds: Vec::new(),

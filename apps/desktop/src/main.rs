@@ -163,7 +163,9 @@ impl Desktop {
         let mut store = (!demo).then(|| credentials::Store::start(cc.egui_ctx.clone()));
         let cache = (!demo).then(|| cache::Cache::start(cc.egui_ctx.clone()));
         let mut state = if demo {
-            if std::env::args().any(|arg| arg == "--demo-notifications") {
+            if std::env::args().any(|arg| arg == "--demo-system-messages") {
+                test_support::system_demo_state()
+            } else if std::env::args().any(|arg| arg == "--demo-notifications") {
                 test_support::notification_demo_state()
             } else if std::env::args().any(|arg| arg == "--demo-voice") {
                 test_support::voice_demo_state()

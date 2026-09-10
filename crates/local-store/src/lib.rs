@@ -79,7 +79,7 @@ impl LocalStore {
     fn initialize(connection: Connection) -> Result<Self> {
         connection.busy_timeout(std::time::Duration::from_secs(2))?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 6 {
+        if version > 7 {
             return Err(StoreError::Incompatible);
         }
         connection.execute_batch("PRAGMA page_size=4096; PRAGMA max_page_count=16384; PRAGMA cache_size=-2048; PRAGMA temp_store=MEMORY; PRAGMA journal_mode=DELETE; PRAGMA secure_delete=ON; PRAGMA auto_vacuum=FULL;
@@ -123,6 +123,16 @@ impl LocalStore {
             connection.execute_batch("BEGIN; ALTER TABLE messages ADD COLUMN mentions TEXT NOT NULL DEFAULT '[]'; PRAGMA user_version=6; COMMIT;")?;
         } else {
             connection.pragma_update(None, "user_version", 6)?;
+        }
+        let has_message_kind: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('messages') WHERE name='message_kind')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_message_kind {
+            connection.execute_batch("BEGIN; ALTER TABLE messages ADD COLUMN message_kind INTEGER NOT NULL DEFAULT 0 CHECK(typeof(message_kind)='integer' AND message_kind BETWEEN 0 AND 255); UPDATE messages SET message_kind=255 WHERE unsupported<>0; PRAGMA user_version=7; COMMIT;")?;
+        } else {
+            connection.pragma_update(None, "user_version", 7)?;
         }
         Ok(Self(connection))
     }
@@ -192,7 +202,7 @@ impl LocalStore {
                 return Err(StoreError::Capacity);
             }
             transaction.execute(
-                "INSERT INTO messages(account,channel,id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+                "INSERT INTO messages(account,channel,id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions,message_kind) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
                 params![
                     account,
                     channel,
@@ -208,7 +218,8 @@ impl LocalStore {
                     embeds,
                     message.embeds_suppressed,
                     attachments,
-                    mentions
+                    mentions,
+                    message.kind
                 ],
             )?;
         }
@@ -237,7 +248,7 @@ impl LocalStore {
         Ok(())
     }
     pub fn load_channel(&self, account: Id, channel: Id) -> Result<Vec<Message>> {
-        let mut query = self.0.prepare("SELECT id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions FROM messages WHERE account=?1 AND channel=?2 ORDER BY length(id),id LIMIT 500")?;
+        let mut query = self.0.prepare("SELECT id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions,message_kind FROM messages WHERE account=?1 AND channel=?2 ORDER BY length(id),id LIMIT 500")?;
         let mut rows = query.query(params![account.to_string(), channel.to_string()])?;
         let mut messages = Vec::new();
         let mut bytes = 0;
@@ -317,6 +328,7 @@ impl LocalStore {
                 edited_at: None,
                 reply_to: row.get::<_, Option<String>>(5)?.map(parse).transpose()?,
                 unsupported: row.get(6)?,
+                kind: row.get(13)?,
                 nonce: None,
                 revision: 0,
                 embeds,
@@ -405,6 +417,38 @@ impl LocalStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn message_kind_migration_round_trip_and_bounds() {
+        let store = LocalStore::initialize(Connection::open_in_memory().unwrap()).unwrap();
+        store
+            .0
+            .execute_batch("ALTER TABLE messages DROP COLUMN message_kind; PRAGMA user_version=6;")
+            .unwrap();
+        store.0.execute("INSERT INTO messages(account,channel,id,author,name,content,edited,unsupported) VALUES('1','2','3','4','Synthetic','',0,1),('1','2','4','4','Synthetic','body',0,0)", []).unwrap();
+        let mut store = LocalStore::initialize(store.0).unwrap();
+        let mut messages = store.load_channel(Id(1), Id(2)).unwrap();
+        assert_eq!(messages[0].kind, 255);
+        assert_eq!(messages[1].kind, 0);
+        messages[0].kind = 7;
+        store.save_channel(Id(1), Id(2), &messages).unwrap();
+        let store = LocalStore::initialize(store.0).unwrap();
+        assert_eq!(store.load_channel(Id(1), Id(2)).unwrap()[0].kind, 7);
+        for value in ["-1", "256", "1.5", "'invalid'"] {
+            assert!(
+                store
+                    .0
+                    .execute(&format!("UPDATE messages SET message_kind={value}"), [])
+                    .is_err()
+            );
+        }
+        // Column detection also handles another feature using this schema version.
+        store
+            .0
+            .execute_batch("ALTER TABLE messages DROP COLUMN message_kind; PRAGMA user_version=7;")
+            .unwrap();
+        let store = LocalStore::initialize(store.0).unwrap();
+        assert_eq!(store.load_channel(Id(1), Id(2)).unwrap()[0].kind, 255);
+    }
     #[test]
     fn schema_five_mentions_round_trip_and_reject_oversized_metadata() {
         let mut store = LocalStore::initialize(Connection::open_in_memory().unwrap()).unwrap();
@@ -526,7 +570,7 @@ mod tests {
             .0
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 6);
+        assert_eq!(version, 7);
         for (json, error) in [
             ("broken JSON".to_owned(), StoreError::Incompatible),
             (
@@ -624,6 +668,7 @@ mod tests {
                 edited_at: None,
                 reply_to: None,
                 unsupported: false,
+                kind: 0,
                 embeds: vec![model::Embed {
                     title: Some("Cached synthetic embed".into()),
                     ..Default::default()

@@ -583,3 +583,29 @@ Same macOS arm64 host, Rust 1.98.1, release profile (thin LTO), lockfile unchang
 | Sampled CPU after warmup | 0.0% | 0.0–1.0% (one 7.1% first sample) | no sustained change |
 
 Method: wgpu/Metal renderer, 1120×792 logical window at 2× scale, no interaction after launch beyond activating the window, no network, no helper processes. RSS is whole-process resident memory of the single executable; GPU and driver allocations are not included. The two-sample difference is inside run-to-run noise and is not called a regression or improvement. Frame time and p95 latency were not instrumented. A new RAM-only profile cache holds at most 32 entries / 1 MiB estimated model bytes for 15 minutes (cleared on session changes), so reopening a card costs one clone instead of a REST round-trip. Other new retained data is bounded inside existing caps: profile ≤64 KiB (theme colors 8 B, tag ≤8 chars + 32-hex badge hash, ≤16 badge icon hashes), member custom status ≤128 chars inside the 128 KiB member budget; badge/tag artwork uses the existing 16 MiB / 64-texture allowance with 64-pixel requests.
+
+## September 10: welcome and system messages
+
+Baseline `6053299` (clean main, origin/main fetched and unchanged), task branch `feat/system-messages`.
+macOS 27.0 (26A428), MacBookPro18,3 / Apple M1 Pro, 16 GiB, arm64, pinned Rust 1.98.1, release thin LTO / one codegen unit, wgpu. No dependency or lockfile changes.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| text executable bytes | 46,141,408 | 46,159,872 | +18,464 (+0.040%) |
+| text installed bytes | 46,581,502 | 46,599,966 | +18,464 (+0.040%) |
+| text zip bytes | 29,911,653 | 29,918,046 | +6,393 (+0.021%) |
+| voice executable bytes | 48,977,264 | 48,979,328 | +2,064 (+0.004%) |
+| voice installed bytes | 49,648,319 | 49,652,424 | +4,105 (+0.008%) |
+| voice zip bytes | 31,253,839 | 31,258,631 | +4,792 (+0.015%) |
+| Native RSS median KiB | 153888 | 155200 | +1312 |
+| Native RSS sample peak KiB | 153952 | 155584 | +1632 |
+| Native CPU median % | 0 | 0 | +0 |
+| Reducer replay median ms | 29.331958 | 28.687209 | -0.644749 (-2.20%) |
+
+Both `cargo xtask package` and `cargo xtask package-voice` passed with strict ad-hoc signature verification. Package file counts are 47 text / 93 voice. Sizes are one measurement per variant: executable, sum of staged installed files, Python ZIP DEFLATE level 9. Excludes prior distribution ZIPs left in dist and the separate voice subdirectory from text. Outputs were copied to separate before/after directories; baseline voice was built from an isolated baseline checkout. Staged docs precede this measurement addendum; changed voice includes the compatibility/storage notes written between package builds. No PR evidence or debug symbols are bundled.
+
+Native samples use the same existing `--demo --demo-chat` fixture, default viewport (observed 1087×768 screenshot), system dark appearance, no extra navigation, 10-second warmup and ten `ps -p PID -o %cpu=,rss=` samples at one-second intervals for each fresh process. Median and sample peak RSS are not launch peak, GPU memory or macOS physical footprint. CPU ranges were 0..0.2% before and 0..3.0% after; medians 0%. No login/voice helpers were started by these demo processes. Display scale was not instrumented; both runs used the same display without changing its settings. RSS rose about 1.3 MiB; this short synthetic sample does not establish long-run memory or live-channel acceptance.
+
+Replay: `cargo replay`, then one warmup and five direct `replay-bench` runs per revision. Baseline measured runs: 29.622583, 29.331958, 29.198583, 29.183917, 29.527458 ms. After: 29.256916, 29.038542, 28.407292, 28.603875, 28.687209 ms. Both retain 500 records / 220,992–221,477 estimated bytes. These timings overlap; no speed improvement is claimed. Replay measures the existing 100,000 ordinary synthetic reducer events, not system-message rendering or SQLite migration. A stale cross-worktree Cargo artifact initially failed the changed replay compile; rebuilding the model resolved it before these measured runs.
+
+The screenshot pair uses an identical new eight-event synthetic fixture (`--demo --demo-system-messages`) and scroll-to-top at the same viewport/appearance. Baseline screenshot was rebuilt at `6053299` with only the fixture and demo selector backported; it still discards kinds and renders the old placeholder. Package size and CPU/RSS baseline use the unmodified baseline. Dark native rendering/scrolling inspected; light/narrow rendering checked with headless egui at 280px, wide/dark at 900px. Native light-theme selection did not visibly change via automation, so native light/keyboard, display scale, p95 startup/frame latency, GPU allocation and other platforms remain unverified. No live Discord compatibility claim.
