@@ -2,6 +2,30 @@
 
 ## Current scope and gates
 
+Current work: inline message spoilers (SPEC 9.3), based on merged main b92a082 / typing PR #35.
+Only marked text regions are concealed; normal surrounding text and ordinary media remain
+visible. Up to 32 regions have separate reveal bits, and spoiler-marked media has an independent
+explicit reveal. Hidden text is skipped before links, references, emoji and selection rendering.
+Original text and explicit whole-message Copy remain unchanged. Exact text/media changes,
+deletion and navigation discard reveal consent; complexity-limited input stays conservative.
+Reply previews retain conservative concealment; embedded cards retain their existing media gate.
+
+All 78 focused UI tests pass, and `cargo xtask check` passes 287 offline Rust tests,
+doctests, formatting, strict all-feature Clippy, text-only compilation and policy checks.
+Coverage includes mixed styles/escapes/code/HTML, parser limits, hidden link/reference/image
+actions, keyboard and pointer reveal, selection excluding concealed text, independent media
+reveal, light/narrow and dark/wide layouts, and consent invalidation. The first focused run
+found escaped leading pipes suppressing later valid delimiters; splitting the inert leading
+character fixed that case without weakening its regression. Independent final review found
+no remaining blocker. Both unsigned Windows packages passed; text and voice executables each
+grow by 12,288 bytes. Full package measurements are in docs/performance.md. Original dirty
+source hashes remain unchanged. This slice adds no protocol, storage or dependency change.
+Native automation remains owner-paused, so native
+screenshots, accessibility, resource measurements and live behavior are unverified. No account,
+message, audio or native-window actions were performed. The complete SPEC goal remains active.
+
+## Incoming typing indicators (merged PR #35)
+
 Current work: incoming typing indicators (SPEC 8.3/9.2) from merged main dff0975,
 after reply-target PR #34. Only service-supplied events for the fresh, readable selected
 text conversation can appear. The fixed eight-user state expires after at most ten seconds;

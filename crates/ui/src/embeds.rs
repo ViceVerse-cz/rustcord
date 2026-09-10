@@ -7,25 +7,27 @@ use egui::RichText;
 use model::{Embed, Message};
 
 pub fn has_spoilers(message: &Message) -> bool {
+    has_media_spoilers(message) || message.content.contains("||")
+}
+pub fn has_media_spoilers(message: &Message) -> bool {
     message.attachments.iter().any(|a| {
         a.spoiler
             || a.filename.starts_with("SPOILER_")
             || a.description.as_deref().is_some_and(|s| s.contains("||"))
-    }) || message.content.contains("||")
-        || message.embeds.iter().any(|e| {
-            [&e.title, &e.description]
+    }) || message.embeds.iter().any(|e| {
+        [&e.title, &e.description]
+            .into_iter()
+            .flatten()
+            .any(|s| s.contains("||"))
+            || e.fields
+                .iter()
+                .any(|f| f.name.contains("||") || f.value.contains("||"))
+            || [&e.author, &e.provider]
                 .into_iter()
                 .flatten()
-                .any(|s| s.contains("||"))
-                || e.fields
-                    .iter()
-                    .any(|f| f.name.contains("||") || f.value.contains("||"))
-                || [&e.author, &e.provider]
-                    .into_iter()
-                    .flatten()
-                    .any(|a| a.name.contains("||"))
-                || e.footer.as_ref().is_some_and(|f| f.text.contains("||"))
-        })
+                .any(|a| a.name.contains("||"))
+            || e.footer.as_ref().is_some_and(|f| f.text.contains("||"))
+    })
 }
 fn link(
     ui: &mut egui::Ui,
@@ -277,4 +279,69 @@ pub fn estimated_height(embeds: &[Embed]) -> f32 {
         .map(|e| 100.0 + e.fields.len() as f32 * 44.0 + if e.image.is_some() { 200.0 } else { 0.0 })
         .map(|h| h.min(664.0))
         .sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_spoilers_do_not_hide_ordinary_media_but_keep_reply_previews_conservative() {
+        let mut message = test_support::message(1, model::Id(1));
+        message.embeds = vec![Embed::default()];
+        message.attachments = vec![model::Attachment {
+            id: model::Id(2),
+            filename: "photo.png".into(),
+            description: None,
+            content_type: Some("image/png".into()),
+            size: 1,
+            media: Default::default(),
+            spoiler: false,
+        }];
+        message.content = "Ordinary text".into();
+        assert!(!has_spoilers(&message));
+        message.content = "Ordinary text ||hidden text||".into();
+        assert!(!has_media_spoilers(&message));
+        assert!(has_spoilers(&message));
+        message.content.clear();
+        for field in 0..10 {
+            let mut guarded = message.clone();
+            let embed = &mut guarded.embeds[0];
+            match field {
+                0 => guarded.attachments[0].spoiler = true,
+                1 => guarded.attachments[0].filename = "SPOILER_photo.png".into(),
+                2 => guarded.attachments[0].description = Some("||hidden||".into()),
+                3 => embed.title = Some("||hidden||".into()),
+                4 => embed.description = Some("||hidden||".into()),
+                5 => embed.fields.push(model::EmbedField {
+                    name: "||hidden||".into(),
+                    ..Default::default()
+                }),
+                6 => embed.fields.push(model::EmbedField {
+                    value: "||hidden||".into(),
+                    ..Default::default()
+                }),
+                7 => {
+                    embed.author = Some(model::EmbedAuthor {
+                        name: "||hidden||".into(),
+                        ..Default::default()
+                    })
+                }
+                8 => {
+                    embed.provider = Some(model::EmbedAuthor {
+                        name: "||hidden||".into(),
+                        ..Default::default()
+                    })
+                }
+                _ => {
+                    embed.footer = Some(model::EmbedFooter {
+                        text: "||hidden||".into(),
+                        ..Default::default()
+                    })
+                }
+            }
+            assert!(has_media_spoilers(&guarded), "media safety field {field}");
+            assert!(has_spoilers(&guarded), "reply safety field {field}");
+        }
+    }
 }
