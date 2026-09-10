@@ -595,6 +595,48 @@ pub struct MemberDto {
 #[derive(Deserialize)]
 pub struct PresenceDto {
     pub status: String,
+    #[serde(default)]
+    pub activities: Vec<ActivityDto>,
+}
+/// Only the custom status (type 4) is retained; rich activities are ignored.
+#[derive(Deserialize)]
+pub struct ActivityDto {
+    #[serde(rename = "type")]
+    pub kind: u8,
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default)]
+    pub emoji: Option<ActivityEmojiDto>,
+}
+#[derive(Deserialize)]
+pub struct ActivityEmojiDto {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub id: Option<Id>,
+}
+impl PresenceDto {
+    /// Bounded custom status text; unicode emoji are kept, custom emoji are not fabricated.
+    pub fn custom_status(&self) -> Option<String> {
+        let activity = self.activities.iter().take(16).find(|a| a.kind == 4)?;
+        let emoji = activity
+            .emoji
+            .as_ref()
+            .filter(|e| e.id.is_none())
+            .and_then(|e| e.name.as_deref())
+            .filter(|name| name.chars().count() <= 8);
+        let state = activity.state.as_deref().map(str::trim).unwrap_or_default();
+        let text: String = emoji
+            .into_iter()
+            .chain((!state.is_empty()).then_some(state))
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(128)
+            .collect();
+        (!text.is_empty()).then_some(text)
+    }
 }
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -614,6 +656,7 @@ impl MemberItem {
             Self::Member { member: m } => Some(model::Member {
                 user: m.user.into_model(),
                 nick: m.nick.map(|n| n.chars().take(128).collect()),
+                custom_status: m.presence.as_ref().and_then(PresenceDto::custom_status),
                 status: m.presence.and_then(|p| match p.status.as_str() {
                     "online" | "idle" | "dnd" | "offline" => Some(p.status),
                     _ => None,
@@ -685,6 +728,25 @@ mod member_tests {
         assert_eq!(
             user.avatar_url(),
             "https://cdn.discordapp.com/embed/avatars/1.png"
+        );
+        let member: MemberItem = decode(br#"{"member":{"user":{"id":"5","username":"Presence"},"presence":{"status":"idle","activities":[{"type":0,"name":"Game","state":"ignored"},{"type":4,"name":"Custom Status","state":" semifluent in computerspeak ","emoji":{"name":"\ud83c\udf19","id":null}}]}}}"#).unwrap();
+        let member = member.into_model().unwrap();
+        assert_eq!(member.status.as_deref(), Some("idle"));
+        assert_eq!(
+            member.custom_status.as_deref(),
+            Some("🌙 semifluent in computerspeak")
+        );
+        let custom_emoji: MemberItem = decode(br#"{"member":{"user":{"id":"5","username":"Presence"},"presence":{"status":"online","activities":[{"type":4,"emoji":{"name":"serein_wave","id":"9001"}}]}}}"#).unwrap();
+        assert!(custom_emoji.into_model().unwrap().custom_status.is_none());
+        let long: MemberItem = decode(format!(r#"{{"member":{{"user":{{"id":"5","username":"P"}},"presence":{{"status":"dnd","activities":[{{"type":4,"state":"{}"}}]}}}}}}"#, "x".repeat(400)).as_bytes()).unwrap();
+        assert_eq!(
+            long.into_model()
+                .unwrap()
+                .custom_status
+                .unwrap()
+                .chars()
+                .count(),
+            128
         );
         assert_eq!(murmur3(b""), 0);
         assert_eq!(murmur3(b"foo"), 0xf6a5c420);

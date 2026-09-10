@@ -86,6 +86,7 @@ impl Calls {
                 .or_else(|| member.user_id.and_then(|id| self.users.get(&id).cloned()))?,
             nick: member.nick.map(|n| n.chars().take(128).collect()),
             status: None,
+            custom_status: None,
         })
     }
     pub(super) fn snapshot(&self, guild: &mut GuildDto, partial: bool) -> Result<Event, Failure> {
