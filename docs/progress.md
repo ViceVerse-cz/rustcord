@@ -2080,3 +2080,27 @@ rerun. Native playback/screenshots and final release measurements remain unverif
 the owner paused native automation and explicitly requested merging their PRs.
 
 September 11 owner-requested PR47 integration: preserved current main fast-local policy and all runtime changes. Four TOML files, settings JSON, three Claude frontmatters and both skills validated; no hooks or permission bypasses added. Runtime unchanged by this PR; no new native run needed.
+### Audio player styling — September 11, 2026
+
+The inline MP3/WAV card now uses shared theme colors and icons, a circular
+play/pause control, visible progress tracks, compact timestamps and speaker-volume
+controls. Small painted slider thumbs retain the shared 32-point interaction
+targets. Playback, download, classification and decoder behavior are unchanged.
+
+On baseline `d8e3bd6`, `cargo xtask check`, `cargo xtask package` and
+`cargo xtask package-voice` passed for the final styling. The UI keyboard regression
+exercises Play/Pause/seek/volume at 220/380-point widths in both dark and light
+themes using the actual design styles. Independent read-only review returned ship.
+The branch was then rebased without conflicts onto `7ce5c55`.
+`cargo test --locked -p ui` passed on the integrated branch. The integrated
+`cargo xtask check` stops on two pre-existing `chunks_exact_to_as_chunks` Clippy
+errors at `crates/discord-voice/src/audio/echo.rs:39,48`; that file is identical to
+origin/main and outside this styling change. Package deltas are in `docs/performance.md`.
+
+Reproduce with `cargo run --locked -p serein -- --demo --demo-audio`.
+The reviewed baseline screenshot is `docs/pr-evidence/audio-player-design/before.png`.
+An intermediate native dark preview was inspected. The owner stopped Computer Use
+with physical Escape before the final capture, then explicitly requested merging
+to main. Final native after/light/narrow captures, native process measurements,
+live account playback and other OS verification remain unverified; no substitute
+image or live-compatibility claim is made. No account or microphone action occurred.

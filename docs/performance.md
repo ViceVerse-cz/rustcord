@@ -1969,3 +1969,24 @@ The implementation adds no extra layout pass, cache or dependency. Native before
 screenshots, renderer/display scale, idle CPU, peak/settled process memory and native
 p95 frame time are unmeasured because native Computer Use remains owner-paused after
 the earlier Escape interruption. No native performance improvement is claimed.
+### Audio player styling — September 11, 2026
+
+Same Windows 11 host, Rust 1.98.1, locked release profile; baseline `d8e3bd6`
+and the final audio styling before rebasing onto `7ce5c55`. One package per variant.
+These isolate the UI change; they do not measure the subsequently integrated voice changes.
+
+| Metric (bytes) | Baseline | Styled | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable | 51,709,440 | 51,721,216 | +11,776 |
+| Text installed files | 52,809,724 | 52,821,500 | +11,776 |
+| Text ZIP | 32,348,612 | 32,353,436 | +4,824 |
+| Voice executable | 54,986,752 | 54,998,528 | +11,776 |
+| Voice installed files | 56,192,827 | 56,204,603 | +11,776 |
+| Voice ZIP | 33,647,926 | 33,650,880 | +2,954 |
+
+Installed sums include all package files (66 text, 93 voice), excluding the separate
+voice subdirectory from text. ZIP: Python zipfile, sorted paths, DEFLATE level 9,
+fixed 2026-09-11 timestamps. Sizes precede this documentation addendum. No dependency
+was added. CPU, memory and frame latency remain unmeasured: the baseline process
+ended before sampling, and the owner subsequently stopped Computer Use with Escape.
+No runtime speed or memory improvement is claimed.
