@@ -8,6 +8,14 @@ description: Deliver Serein feature and fix requests as tested pull requests wit
 Follow root `AGENTS.md` and `SPEC.md`. This skill supplies the evidence and PR procedure;
 it does not grant new account, deployment, microphone or credential permissions.
 
+## `!fast` local delivery
+
+If the request begins with `!fast`, follow the root fast-local policy instead of the rest of this
+skill: implement locally, run one smallest useful debug command, and leave the result uncommitted.
+Do not collect baselines, tests, packages, screenshots, or performance/size evidence, and do not
+update progress docs, open a PR, or push. End by asking the owner to check it and explicitly
+confirm before committing and pushing to `main`.
+
 ## Establish the baseline
 
 Record the task's starting commit, dirty paths, active branch, remote/default branch, Rust version
