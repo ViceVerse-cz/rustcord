@@ -319,7 +319,7 @@ pub fn apply(ctx: &egui::Context) {
         style.spacing.interact_size.y = 32.0;
         style.spacing.menu_margin = egui::Margin::same(8);
         style.visuals.panel_fill = p.chat;
-        style.visuals.window_fill = p.raised;
+        style.visuals.window_fill = p.raised.to_opaque();
         style.visuals.window_corner_radius = 8.into();
         style.visuals.menu_corner_radius = 8.into();
         style.visuals.window_stroke = Stroke::new(1.0, p.border);
