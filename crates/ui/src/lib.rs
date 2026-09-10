@@ -6,6 +6,8 @@ mod avatars;
 mod categories;
 pub mod design;
 mod embeds;
+pub mod emoji;
+mod emoji_picker;
 pub mod fonts;
 mod markdown;
 mod mentions;
@@ -59,6 +61,7 @@ pub struct MessagingUi {
     deleting: Option<(Id, Id)>,
     ime_active: bool,
     mention_menu: mentions::Menu,
+    emoji_picker: emoji_picker::Picker,
 }
 
 impl MessagingUi {
@@ -349,9 +352,33 @@ impl MessagingUi {
             .corner_radius(12)
             .inner_margin(14)
             .show(ui, |ui| {
+                let pick = ui
+                    .add_enabled_ui(!self.ime_active && !ime_this_frame, |ui| {
+                        self.emoji_picker
+                            .show(ui, state, channel, &mut self.avatars)
+                    })
+                    .inner;
+                let remaining = MAX_DRAFT_BYTES.saturating_sub(state.draft_bytes());
                 let mut new_draft = String::new();
                 let draft = state.drafts.get_mut(&channel).unwrap_or(&mut new_draft);
                 let mut mention_changed = false;
+                if let Some(pick) = pick {
+                    let mut edit_state =
+                        egui::text_edit::TextEditState::load(ctx, composer_id).unwrap_or_default();
+                    let range = edit_state.cursor.char_range();
+                    if let Some(cursor) = emoji_picker::insert(draft, &pick, range, remaining) {
+                        edit_state
+                            .cursor
+                            .set_char_range(Some(egui::text::CCursorRange::one(
+                                egui::text::CCursor::new(cursor),
+                            )));
+                        edit_state.store(ctx, composer_id);
+                        mention_changed = true;
+                    } else {
+                        state.status =
+                            "Emoji will not fit. Shorten this message or free draft space.";
+                    }
+                }
                 if let Some(pick) = mention_pick
                     && let Some(cursor) = mentions::insert(draft, pick)
                 {
@@ -373,6 +400,9 @@ impl MessagingUi {
                     .frame(egui::Frame::NONE)
                     .hint_text("Write a message… @ person or # channel")
                     .show(ui);
+                if mention_changed {
+                    output.response.request_focus();
+                }
                 let mention_cursor = output
                     .cursor_range
                     .filter(|r| r.is_empty())
@@ -658,8 +688,13 @@ impl MessagingUi {
                     commands.push(command);
                 }
             });
+        let selected_voice = state
+            .channels
+            .iter()
+            .any(|c| Some(c.id) == state.selected && c.kind == 2);
         let wide_members = ui.available_width() >= 720.0;
-        let show_members = state.selected.is_some()
+        let show_members = !selected_voice
+            && state.selected.is_some()
             && if wide_members {
                 !self.members_hidden
             } else {
@@ -717,15 +752,23 @@ impl MessagingUi {
                             let channel = state
                                 .selected
                                 .and_then(|id| state.channels.iter().find(|c| c.id == id));
-                            ui.label(
-                                RichText::new(if channel.is_some_and(|c| c.guild.is_some()) {
-                                    "#"
-                                } else {
-                                    "@"
-                                })
-                                .size(23.0)
-                                .color(colors.muted),
-                            );
+                            if selected_voice {
+                                let (rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(23.0, 23.0),
+                                    egui::Sense::hover(),
+                                );
+                                voice::speaker(ui, rect, colors.muted);
+                            } else {
+                                ui.label(
+                                    RichText::new(if channel.is_some_and(|c| c.guild.is_some()) {
+                                        "#"
+                                    } else {
+                                        "@"
+                                    })
+                                    .size(23.0)
+                                    .color(colors.muted),
+                                );
+                            }
                             ui.allocate_ui_with_layout(
                                 egui::vec2(
                                     (ui.available_width()
@@ -760,7 +803,7 @@ impl MessagingUi {
                                 |ui| {
                                     if ui
                                         .add_enabled(
-                                            state.selected.is_some(),
+                                            state.selected.is_some() && !selected_voice,
                                             egui::Button::selectable(show_members, "People"),
                                         )
                                         .on_hover_text("Show conversation members")
@@ -826,6 +869,10 @@ impl MessagingUi {
                     });
                     return;
                 };
+                if selected_voice {
+                    self.voice_channel(ui, state, channel, &mut commands);
+                    return;
+                }
                 egui::Panel::bottom("composer")
                     .frame(
                         egui::Frame::new()
@@ -893,7 +940,7 @@ impl MessagingUi {
                                         )
                                         .clicked()
                                     {
-                                        state.timeline.clear();
+                                        self.timeline.follow_latest();
                                         commands.push(state.history(None));
                                     }
                                     if ui
@@ -925,9 +972,11 @@ impl MessagingUi {
                         }
                         if state.history_before.is_some() {
                             ui.label(
-                                RichText::new("Browsing older history · Reload returns to latest")
-                                    .size(11.0)
-                                    .color(colors.muted),
+                                RichText::new(
+                                    "Browsing earlier messages · Jump to latest to return",
+                                )
+                                .size(11.0)
+                                .color(colors.muted),
                             );
                         }
                     });
@@ -942,6 +991,13 @@ impl MessagingUi {
                             &mut self.avatars,
                             &mut self.profile,
                         );
+                        if std::mem::take(&mut self.timeline.latest) {
+                            commands.push(state.history(None));
+                        } else if std::mem::take(&mut self.timeline.load_older)
+                            && let Some(command) = state.older_history()
+                        {
+                            commands.push(command);
+                        }
                     });
             });
         if state

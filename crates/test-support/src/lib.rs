@@ -132,6 +132,24 @@ pub fn demo_state() -> State {
                 name: "You (synthetic)".into(),
             },
             guilds: vec![Guild {
+                emojis: Some(vec![
+                    model::CustomEmoji {
+                        id: Id(9001),
+                        name: "serein_wave".into(),
+                        animated: false,
+                        available: true,
+                        managed: false,
+                        roles: Some(vec![]),
+                    },
+                    model::CustomEmoji {
+                        id: Id(9002),
+                        name: "serein_party".into(),
+                        animated: true,
+                        available: true,
+                        managed: false,
+                        roles: Some(vec![]),
+                    },
+                ]),
                 icon: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
                 id: Id(10),
                 name: "Synthetic workspace".into(),
@@ -252,6 +270,78 @@ pub fn demo_state() -> State {
     state.status = "Offline fixture · no network access";
     state
 }
+/// Voice-only visual evidence: synthetic membership, no media or gateway commands.
+pub fn voice_demo_state() -> State {
+    use client_core::voice::{Call, Participant, Phase, RosterEntry};
+    use std::time::{Duration, Instant};
+    let mut state = demo_state();
+    state
+        .channels
+        .iter_mut()
+        .find(|c| c.id == Id(25))
+        .unwrap()
+        .name = "Room 3,5".into();
+    state.channels.push(Channel {
+        id: Id(26),
+        guild: Some(Id(10)),
+        parent_id: Some(Id(24)),
+        position: 2,
+        name: "Quiet room".into(),
+        kind: 2,
+        recipients: vec![],
+        member_list_id: None,
+        last_message: None,
+    });
+    state.voice.roster = [
+        (1, "You (synthetic)", false, false),
+        (2, "Robin with a rather long display name", true, true),
+        (3, "Fern and the midnight orchestra", true, false),
+    ]
+    .into_iter()
+    .map(|(id, name, muted, deafened)| RosterEntry {
+        guild: Id(10),
+        channel: Id(25),
+        participant: Participant {
+            user: Id(id),
+            muted,
+            deafened,
+            server_muted: false,
+            server_deafened: false,
+        },
+        member: Some(Member {
+            user: User {
+                id: Id(id),
+                name: name.into(),
+                avatar: None,
+                discriminator: 0,
+            },
+            nick: None,
+            status: None,
+        }),
+    })
+    .collect();
+    state.voice.active = Some(Call {
+        channel: Id(25),
+        guild: Some(Id(10)),
+        request: 0,
+        phase: Phase::Connected,
+        connected_at: Some(Instant::now() - Duration::from_secs(3663)),
+        muted: false,
+        deafened: false,
+        server_muted: false,
+        server_deafened: false,
+        participants: state
+            .voice
+            .roster
+            .iter()
+            .map(|entry| entry.participant)
+            .collect(),
+        error: None,
+    });
+    state.select(Id(25));
+    state.status = "Offline voice fixture · no microphone or network access";
+    state
+}
 pub fn load_page(state: &mut State, before: Option<Id>) {
     let channel = state.selected.unwrap();
     let end = before.map_or(501, |id| id.0);
@@ -265,6 +355,50 @@ pub fn load_page(state: &mut State, before: Option<Id>) {
             messages: (start..end).map(|id| message(id, channel)).collect(),
         },
     });
+}
+/// Additional native chat scenario: fixed dates, grouped authors and unread events.
+pub fn chat_demo_state() -> State {
+    let mut state = demo_state();
+    state.timeline.clear();
+    state.older_exhausted = true;
+    let texts = [
+        "Can we keep the conversation simple?",
+        "Names and times, with room for the messages.",
+        "And keep my place when earlier history arrives.",
+        "Yes. History loads in small pages as you scroll up.",
+        "Only nearby messages are rendered. The cache has a fixed memory budget.",
+        "A new day, same conversation.",
+        "This looks much easier to read.",
+        "Two new messages arrived while you were away.",
+        "Welcome back. All of this is synthetic, offline data.",
+    ];
+    for (i, text) in texts.iter().enumerate() {
+        let mut m = message(i as u64 + 1, Id(20));
+        // September 9, 2026, 23:55 UTC, one minute between records.
+        m.id = Id(((1_788_998_100_000u64 + i as u64 * 60_000 - 1_420_070_400_000) << 22) | 1);
+        m.author = message(if !(3..7).contains(&i) { 1 } else { 2 }, Id(20)).author;
+        m.content = (*text).into();
+        if i < 7 {
+            state.timeline.insert(m, false, false).unwrap();
+        } else {
+            state.apply(Envelope {
+                generation: state.generation,
+                event: Event::Message(m),
+            });
+        }
+    }
+    let read = state.timeline.iter().nth(6).unwrap().id;
+    state.apply(Envelope {
+        generation: state.generation,
+        event: Event::ReadState(client_core::read_state::Event::Ack {
+            channel: Id(20),
+            message: Some(read),
+            manual: true,
+            version: Some(2),
+        }),
+    });
+    state.revision += 1;
+    state
 }
 #[cfg(test)]
 mod tests {

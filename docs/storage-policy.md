@@ -36,7 +36,7 @@ A process-write trace was attempted with `sudo -n fs_usage -w -f filesys -t 3 <s
 
 The September 10 owner clarification prioritizes low RAM and small packages over minimizing disk caches. Avatars/icons remain static PNGs; visible embed previews use validated Discord media proxies. No animation or new image codec is enabled. One worker downloads/decodes at a time, with 128 bounded keys waiting, two decoded results (at most 2 MiB total), a 2 MiB encoded body ceiling, and 512×512 preview output. Avatar/icon decode limits remain 256×256 source / 1 MiB decoder allocations / 128×128 output; message previews and profile banners allow 1024×1024 source / 8 MiB decoder allocations. Shared textures are bounded by 64 entries and 16 MiB RGBA. These are component bounds, not whole-process RSS or driver allocations. Disk eviction retains only 32 candidate paths at a time. Worker completion fences replacement and deletion, so logout/clear cannot race an older worker's writes. Picture-cache failures appear in local-storage status. Disk cache contents are unencrypted. Category collapse preferences remain session-local. See [image policy](icons.md) and [embed persistence](embeds.md).
 
-The optional voice feature introduces no application audio files, recordings, voice-key store or saved device preference. Voice tokens/session IDs use redacted, zeroizing buffers and never enter SQLite or diagnostics; DAVE identities are regenerated for a new call. Eight-frame PCM queues, bounded Opus packets and the fixed jitter buffer are transient media working sets, not disk caches. Upstream cryptographic tracing is compiled out. Audio-device shutdown is fenced before another device session starts. Synthetic crypto, transport and device-free capture-gate tests passed; actual audio-driver/permission artifacts and process writes during a physical call have not been traced. OS microphone permissions and driver behavior are outside Serein's cache-clearing guarantee.
+The optional voice feature introduces no application audio files, recordings, voice-key store or saved device preference. Voice tokens/session IDs use redacted, zeroizing buffers and never enter SQLite or diagnostics; DAVE identities are regenerated for a new call. Eight-frame PCM queues, bounded Opus packets and one bounded decoder/jitter/PCM working set per remote speaker (up to 63) are transient media allocations, not disk caches. Guild voice rosters are session-only with 4,096-entry and 1 MiB budgets; they are never persisted. Upstream cryptographic tracing is compiled out. Audio-device shutdown is fenced before another device session starts. Synthetic crypto, transport and device-free capture-gate tests passed; actual audio-driver/permission artifacts and process writes during a physical call have not been traced. OS microphone permissions and driver behavior are outside Serein's cache-clearing guarantee.
 
 Image attachment metadata remains bounded by 10 attachments / 64 KiB retained metadata and 256 KiB JSON per message, including original/proxy signed URLs. It counts toward existing window, pending-patch and database budgets. Decoded pixels reuse the shared media worker/cache; spoiler attachments are not requested before explicit reveal. Profile metadata (bio, pronouns, badges, connections and mutual-server summaries) stays in the single bounded RAM view. Profile and server-specific banner/avatar pixels may remain in the shared account image cache after closing the profile; cache clear/logout removes them under the same policy.
 
@@ -49,3 +49,25 @@ Archived-thread pages share the same exclusive read/result slot with search and 
 Pinned-message summaries share search's single session-only 25-item / 64 KiB result slot and 512 KiB response limit. Manual older-page navigation replaces that slot instead of accumulating results; two optional fixed-size timestamp cursors track the request and next page. Failed older requests can be retried deliberately, with no background retry. Opening a result uses ordinary bounded history caching; pin snapshots/cursors are not written to SQLite. PR screenshots are synthetic development evidence under docs/pr-evidence and are excluded from packaged documentation.
 
 Uploads do not persist local source paths, signed staging targets or file bytes. Pending filename/size labels remain bounded session metadata; existing recovery drafts retain only composed text, so retrying an attachment requires selecting the source again. Files are opened for reading and checked for observable size/modification changes; this is not an immutable snapshot guarantee. Cancellation stops the local job, but bytes already uploaded to Discord staging may remain there without a created message; no remote cleanup or retention guarantee is claimed. Completed messages and their returned attachment metadata can enter the existing bounded history cache. The OS file picker may retain OS-managed recent-location history. No new application log or hidden upload recovery store is introduced.
+
+Twemoji artwork is public bundled data, not an account cache: one 6,002,931-byte PNG
+and a fixed 4,009-entry Unicode index are embedded in the executable. Startup decodes
+one 2,048×2,016 RGBA atlas (15.75 MiB) before the first render callback; the GPU texture
+has the same pixel payload, with driver overhead additional. Decode/conversion/upload
+can temporarily hold multiple copies. The context retains the single atlas until exit,
+including across logout; there are no emoji downloads, disk writes, or growing texture
+queues. Unknown sequences and explicit text-presentation selectors remain font text.
+
+Custom server emoji catalogs live only in session navigation memory: at most 1,000 entries
+and 256 KiB allocated data per server, including names and role lists, within the shared
+4 MiB navigation budget. Reconnect READY replaces catalogs; full emoji-update events replace
+a server catalog; deletion clears it and old session generations cannot repopulate it.
+No catalog table or schema migration is added. Custom PNG previews reuse the existing
+account-isolated image worker/disk cache and its 64-texture / 16 MiB GPU working set, request
+and retry limits, 512 KiB icon decode input and 128×128 decoded dimension cap. They use
+validated numeric `emoji-ID` keys and credential-free Discord CDN PNG requests (64px static
+preview), never arbitrary URLs or automatic animation. Cache clear/logout follows the existing
+image-cache policy. Synthetic IDs 9001/9002 only get local generated images in `--demo`.
+The standard picker palette has 3,953 fixed named entries and renders only viewport rows;
+search input is capped at 64 characters. Picker insertion honors character and total draft
+capacity limits and never sends a message on selection.

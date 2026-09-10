@@ -3,6 +3,7 @@ use egui::{FontId, Stroke, TextFormat, text::LayoutJob};
 use model::Id;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use std::collections::VecDeque;
+use unicode_segmentation::UnicodeSegmentation;
 
 const MAX_INPUT: usize = 8192;
 const MAX_EVENTS: usize = 512;
@@ -296,6 +297,7 @@ impl Formatted {
     pub fn show(&self, ui: &mut egui::Ui, opening: &mut Option<String>) {
         self.show_mentions(ui, opening, &[], &mut None);
     }
+    #[cfg(test)]
     pub fn show_mentions(
         &self,
         ui: &mut egui::Ui,
@@ -303,7 +305,32 @@ impl Formatted {
         users: &[model::User],
         profile: &mut Option<model::User>,
     ) {
-        self.show_references(ui, opening, users, profile, &[], &mut None);
+        self.show_with_images(
+            ui,
+            opening,
+            users,
+            profile,
+            &mut crate::avatars::Avatars::default(),
+            true,
+        );
+    }
+    pub fn show_with_images(
+        &self,
+        ui: &mut egui::Ui,
+        opening: &mut Option<String>,
+        users: &[model::User],
+        profile: &mut Option<model::User>,
+        images: &mut crate::avatars::Avatars,
+        demo: bool,
+    ) {
+        self.show_references(
+            ui,
+            opening,
+            users,
+            profile,
+            (&[], &mut None),
+            (images, demo),
+        );
     }
     pub fn show_references(
         &self,
@@ -311,9 +338,11 @@ impl Formatted {
         opening: &mut Option<String>,
         users: &[model::User],
         profile: &mut Option<model::User>,
-        channels: &[model::Channel],
-        channel: &mut Option<Id>,
+        references: (&[model::Channel], &mut Option<Id>),
+        media: (&mut crate::avatars::Avatars, bool),
     ) {
+        let (channels, channel) = references;
+        let (images, demo) = media;
         ui.allocate_ui_with_layout(
             egui::vec2(ui.available_width(), 0.0),
             egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true),
@@ -385,11 +414,12 @@ impl Formatted {
                                 && style.channel.is_none()
                         })
                         .count();
-                    let job = Self::layout(&self.spans[start..start + count], ui);
+                    let spans = &self.spans[start..start + count];
                     if let Some(index) = target {
                         let url = &self.links[index];
-                        let label = job.text.clone();
-                        let response = ui.add(egui::Link::new(job)).on_hover_text(url);
+                        let label: String = spans.iter().map(|(text, _)| text.as_str()).collect();
+                        let response =
+                            Self::show_emoji(spans, ui, true, images, demo).on_hover_text(url);
                         // Text selection in egui's Link overwrites its accessibility role.
                         response.widget_info(|| {
                             egui::WidgetInfo::labeled(
@@ -402,12 +432,92 @@ impl Formatted {
                             *opening = Some(url.clone());
                         }
                     } else {
-                        ui.add(egui::Label::new(job).wrap().selectable(true));
+                        Self::show_emoji(spans, ui, false, images, demo);
                     }
                     start += count;
                 }
             },
         );
+    }
+    fn show_emoji(
+        spans: &[(String, Style)],
+        ui: &mut egui::Ui,
+        link: bool,
+        images: &mut crate::avatars::Avatars,
+        demo: bool,
+    ) -> egui::Response {
+        let mut response: Option<egui::Response> = None;
+        let mut pending = Vec::new();
+        let size = egui::TextStyle::Body.resolve(ui.style()).size * 1.25;
+        let flush = |pending: &mut Vec<(String, Style)>, ui: &mut egui::Ui| {
+            let job = Self::layout(pending, ui);
+            pending.clear();
+            if link {
+                ui.add(egui::Link::new(job))
+            } else {
+                ui.add(egui::Label::new(job).wrap().selectable(true))
+            }
+        };
+        for (text, style) in spans {
+            let mut start = 0;
+            let mut offset = 0;
+            while offset < text.len() {
+                let custom = (!style.code)
+                    .then(|| crate::emoji::custom_prefix(&text[offset..]))
+                    .flatten();
+                let len = custom.map_or_else(
+                    || {
+                        text[offset..]
+                            .graphemes(true)
+                            .next()
+                            .expect("remaining text")
+                            .len()
+                    },
+                    |(_, len)| len,
+                );
+                let cluster = &text[offset..offset + len];
+                let image = if custom.is_none() && !style.code {
+                    crate::emoji::image(ui.ctx(), cluster, size)
+                } else {
+                    None
+                };
+                if image.is_none() && custom.is_none() {
+                    offset += len;
+                    continue;
+                }
+                if offset > start {
+                    pending.push((text[start..offset].to_owned(), *style));
+                }
+                if !pending.is_empty() {
+                    let next = flush(&mut pending, ui);
+                    response = Some(response.map_or(next.clone(), |r| r.union(next)));
+                }
+                let next = crate::emoji::selectable(
+                    ui,
+                    cluster,
+                    |ui| {
+                        if let Some((id, _)) = custom {
+                            images.custom_image(ui.ctx(), id, size, demo)
+                        } else {
+                            image
+                        }
+                    },
+                    size,
+                    link,
+                );
+                response = Some(response.map_or(next.clone(), |r| r.union(next)));
+                offset += len;
+                start = offset;
+            }
+            if start < text.len() {
+                pending.push((text[start..].to_owned(), *style));
+            }
+        }
+        if !pending.is_empty() || response.is_none() {
+            let next = flush(&mut pending, ui);
+            response = Some(response.map_or(next.clone(), |r| r.union(next)));
+        }
+        response.expect("text or emoji response")
     }
     fn push(&mut self, text: &str, style: Style) {
         if !text.is_empty() {
@@ -564,8 +674,8 @@ mod tests {
                             &mut opening,
                             &[],
                             &mut profile,
-                            &channels,
-                            &mut channel,
+                            (&channels, &mut channel),
+                            (&mut crate::avatars::Avatars::default(), true),
                         )
                     },
                 );
@@ -575,6 +685,147 @@ mod tests {
             assert_eq!(channel, (id == 4).then_some(Id(4)));
             assert!(opening.is_none() && profile.is_none());
         }
+    }
+    #[test]
+    fn selecting_across_images_copies_unicode_and_custom_markup() {
+        let ctx = egui::Context::default();
+        crate::emoji::install(&ctx).unwrap();
+        let source = "A 👩🏽‍💻 ❤️ <:serein_wave:9001> Z";
+        let parsed = Formatted::parse(source);
+        let mut avatars = crate::avatars::Avatars::default();
+        let mut clock = 0.0;
+        let mut run = |events| {
+            clock += 1.0;
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 200.0),
+                    )),
+                    events,
+                    time: Some(clock),
+                    ..Default::default()
+                },
+                |ui| parsed.show_with_images(ui, &mut None, &[], &mut None, &mut avatars, true),
+            )
+        };
+        let mut output = run(vec![]);
+        let mut start = egui::Pos2::ZERO;
+        let mut end = egui::Pos2::ZERO;
+        let mut custom_rect = egui::Rect::NOTHING;
+        for shape in &output.shapes {
+            if let egui::Shape::Text(text) = &shape.shape {
+                if text.galley.text() == "A " {
+                    start = text.pos + egui::vec2(0.0, 5.0);
+                }
+                if text.galley.text() == "<:serein_wave:9001>" {
+                    custom_rect = egui::Rect::from_min_size(text.pos, text.galley.size());
+                }
+                if text.galley.text().starts_with(" Z") {
+                    end = text.pos + egui::vec2(text.galley.size().x, 5.0);
+                }
+            }
+        }
+        output.textures_delta.clear();
+        assert!(end.x > start.x);
+        for events in [
+            vec![
+                egui::Event::PointerMoved(start),
+                egui::Event::PointerButton {
+                    pos: start,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            vec![egui::Event::PointerMoved(end)],
+            vec![egui::Event::PointerButton {
+                pos: end,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        ] {
+            run(events).drop_without_applying_deltas();
+        }
+        let mut output = run(vec![egui::Event::Copy]);
+        output.textures_delta.clear();
+        let copied = output
+            .platform_output
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                egui::OutputCommand::CopyText(text) => Some(text.as_str()),
+                _ => None,
+            });
+        assert_eq!(copied.map(str::trim_end), Some(source));
+        for fraction in [0.25, 0.75] {
+            let start = custom_rect.left_top() + egui::vec2(custom_rect.width() * fraction, 5.0);
+            for events in [
+                vec![
+                    egui::Event::PointerMoved(start),
+                    egui::Event::PointerButton {
+                        pos: start,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                vec![egui::Event::PointerMoved(end)],
+                vec![egui::Event::PointerButton {
+                    pos: end,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            ] {
+                run(events).drop_without_applying_deltas();
+            }
+            let mut output = run(vec![egui::Event::Copy]);
+            output.textures_delta.clear();
+            let copied = output
+                .platform_output
+                .commands
+                .iter()
+                .find_map(|command| match command {
+                    egui::OutputCommand::CopyText(text) => Some(text.as_str()),
+                    _ => None,
+                });
+            assert!(
+                matches!(
+                    copied.map(str::trim_end),
+                    Some("<:serein_wave:9001> Z" | " Z")
+                ),
+                "partial emoji copied: {copied:?}"
+            );
+        }
+    }
+    #[test]
+    fn emoji_render_as_whole_images_but_code_and_source_stay_literal() {
+        let ctx = egui::Context::default();
+        crate::emoji::install(&ctx).unwrap();
+        let source = "👩🏽‍💻 `😀` 🇨🇿";
+        let parsed = Formatted::parse(source);
+        assert!(
+            parsed
+                .spans
+                .iter()
+                .any(|(text, style)| style.code && text == "😀")
+        );
+        let output = ctx.run_ui(Default::default(), |ui| {
+            parsed.show(ui, &mut None);
+        });
+        let images = output
+            .shapes
+            .iter()
+            .filter(|shape| {
+                matches!(
+                    &shape.shape, egui::Shape::Rect(rect) if rect.brush.is_some()
+                )
+            })
+            .count();
+        output.drop_without_applying_deltas();
+        assert_eq!(images, 2, "one image per complete grapheme, none in code");
     }
     #[test]
     fn user_mentions_preserve_literals_and_open_native_profiles() {

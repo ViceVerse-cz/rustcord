@@ -149,6 +149,7 @@ mod tests {
                     id: Id(100),
                     name: "Synthetic".into(),
                     icon: None,
+                    emojis: None,
                 }],
                 channels: vec![channel(7, 15, None)],
                 ..State::default()

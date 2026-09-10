@@ -9,8 +9,8 @@ Read the original SPEC.md completely before implementation. Repository initially
 | 0 — native shell / feasibility | Native egui/eframe/wgpu app, Cargo workspace, pinned Rust, lockfile, synthetic fixture, real composition/variable-height timeline, compatibility evidence and initial tests implemented. macOS native launch verified. OS credential-store and login-method round trips remain unverified |
 | 1 — real normal-user message exchange | **BLOCKED: no owner-controlled authenticated session/private live conversation was supplied or exercised.** Direct REST/Gateway adapters and own-webview credential handoff are implemented, but normal-user acceptance is not established. No real message/reply exchange with an official client is claimed |
 | 2 — reliable text | Partial: bounded cache/queues, partial patches, timestamps, deletes/tombstones, late-history reconciliation, session generations, ambiguous-send state, back-pagination, cancellation, heartbeat/finite reconnect/resume, SQLite history/drafts. Scoped history failures, page validation/exhaustion, authoritative refresh and a local WebSocket lifecycle test added September 10. Full failure matrix, long process soak and live freshness recovery remain open |
-| 3 — everyday messaging | Partial native text UI, server categories/icons, loaded thread/forum-post navigation, native embeds/static images, bounded CommonMark formatting, spoiler concealment, explicit link confirmation, CJK/Arabic fallback fonts, copy/reply/edit/delete controls, clickable user/channel mentions and autocomplete, service profiles, reaction counts/add/remove controls, image viewing and general attachment downloads, single-file picker/drop uploads, conversation search, explicit remote read markers, paginated pinned-message browsing, history clear/logout and saved theme. Discord Markdown parity, multiple-file uploads, animation, pin mutations, notifications, thread directory/archive/create/join controls and actual IME/screen-reader tests remain open |
-| 4 — voice | **Partial; live gate blocked.** Optional existing one-to-one DM call UI/signaling, native CPAL/Opus audio and DAVE v1 adapter implemented. Synthetic two-party crypto/transport tests pass. No real Discord call, physical microphone/speaker, device-permission or cross-platform audio validation |
+| 3 — everyday messaging | Partial native text UI, server categories/icons, loaded thread/forum-post navigation and archived-thread browsing, bundled Unicode emoji and server emoji picker, grouped timeline and hover actions, native embeds/static images, bounded CommonMark formatting, spoiler concealment, explicit link confirmation, CJK/Arabic fallback fonts, copy/reply/edit/delete controls, clickable user/channel mentions and autocomplete, service profiles, reaction counts/add/remove controls, image viewing and general attachment downloads, single-file picker/drop uploads, conversation search, explicit remote read markers, paginated pinned-message browsing, history clear/logout and saved theme. Discord Markdown parity, multiple-file uploads, animation, pin mutations, notifications, complete active-thread discovery/create/join controls and actual IME/screen-reader tests remain open |
+| 4 — voice | **Partial; live gate blocked.** Optional one-to-one DM and guild voice UI/signaling, bounded participant rosters, native CPAL/Opus mixed playback and DAVE group encryption implemented. Synthetic crypto/transport/mixer tests pass. No real Discord call, physical microphone/speaker, device-permission or cross-platform audio validation |
 | 5 — release | Partial: docs, dual licenses, dependency inventory, xtask, CI matrix and locally ad-hoc-signed macOS package. Strict audit warnings, Windows/Linux execution, signing/installer work, complete transitive license-text packaging and performance/platform gates remain open |
 
 This is a runnable native implementation with experimental service adapters, **not a completed Discord replacement**. Offline fixtures and bot behavior do not count as live success. No other application’s credentials, existing browser profiles, account IDs or private history were read. No Discord account action or production message was performed.
@@ -358,3 +358,246 @@ Validation: cargo xtask check passed formatting, strict all-target/all-feature C
 Native automation remains paused following the owner's repeated physical Escape stops. Required native before/after images, actual keyboard/screen-reader/theme/narrow inspection and comparable native CPU/memory samples remain draft blockers. No live Discord/account or microphone action occurred. Parent PR #13's inspected security job reports the inherited six vulnerabilities and five denied warnings; dependencies and audit policy are unchanged. Full active-thread discovery, create/join controls, notification/presence completion and remaining platform/live specification gates are still open.
 
 Both unsigned release packages passed: text **42,437,632 bytes** (+95,744 / 0.226%), voice **45,750,784 bytes** (+95,744 / 0.210%). Full installed/ZIP totals and both five-run replay comparisons are in performance.md. The initial replay median increased 10.96%; a warmed, alternating-order comparison did not reproduce it (-2.47% with overlapping samples), so neither a speed improvement nor an established regression is claimed. Retained timeline bounds are unchanged. Required native evidence and inherited security failures keep delivery draft; full specification completion is not claimed.
+
+## September 10 continuation — chat timeline delivery
+
+Resumed the uncommitted `feat/chat-timeline` slice from e9fb3e4, preserving its work before
+integrating origin/main 74c0d79. The new main already implemented service read markers, reactions,
+search and login fixes; the final change reuses them and removes the redundant session-local
+read-state implementation. No automatic read ACK is sent by scrolling.
+
+Added grouped author rows, UTC timestamps/day separators, service unread dividers, bounded loaded
+reply previews, scroll-triggered history paging and explicit jump-to-latest behavior. Older-page
+retention now begins at request admission, protecting the reading window against live arrivals
+even when history fails. The existing history/reaction/search/authentication paths remain.
+Independent review found a hidden edited-label regression in grouped rows; edited messages now
+start a full row, with a regression check. See [scope and reproduction](chat-timeline.md).
+
+`cargo xtask check` passed: formatting, strict all-target/all-feature Clippy, **86 offline Rust
+tests**, doctests, the text-only build and policy checks. `node tests/login-handoff.cjs` passed.
+Focused UI/core/cache/fixture tests also passed. No dependency or schema changes were needed.
+
+Native screenshot/interaction evidence is blocked by `Sky Computer Use native pipe startup
+failed`, repeated after resetting the tool session. The obsolete before-only screenshot is
+preserved in ignored local artifacts rather than offered as a current comparison. Headless
+layout checks are not native visual or accessibility acceptance. This delivery remains a draft.
+Main's [CI run](https://github.com/ViceVerse-cz/rustcord/actions/runs/34462932351) passed all three
+native jobs but failed security audit with six vulnerabilities and five denied warnings before
+this task; no check was suppressed. The earlier owner-reported reaction disappearance and live
+text/voice gates remain unresolved. Performance/package results are recorded below and in
+[performance](performance.md).
+
+Both final macOS arm64 package variants passed strict local ad-hoc signature verification,
+and their compressed archives passed CRC checks. Text executable: **38,622,688 bytes**
+(+18,176); voice: **41,464,160 bytes** (+18,192), against the rebuilt 74c0d79 baseline.
+Five-run median reducer time: **27.005 → 27.224 ms** (+0.81%, noise-sized); retained timeline
+range is unchanged. Ten launch-only offline idle samples gave settled text RSS
+**113,568 → 113,712 KiB**, with median CPU 0.0% in both. Native interaction, display scale,
+GPU/helper memory and frame latency remain unmeasured; details and full package sizes are
+in the performance report. No release publication, real account messaging or microphone
+operation was performed.
+
+### September 10, 2026 — bundled Twemoji
+
+Implemented Twitter/contributor Twemoji 17.0.3 artwork for formatted message text,
+Unicode reaction counts and the existing eight-choice reaction menu. All 4,009 assets
+are bundled in one fixed atlas; no runtime CDN requests or new resolved Cargo packages.
+Complete grapheme matching handles skin tones, flags, keycaps and ZWJ combinations,
+normalizing emoji presentation selectors without partially matching unknown sequences.
+Code and explicit text-presentation stay literal. Message source, whole-message Copy,
+composer input and protocol payloads are unchanged. Custom server emoji/animation and
+color glyphs inside the editable composer remain outside this artwork change.
+Drag-selection excludes inline image widgets; use the existing message Copy action to
+copy complete original text. CC BY 4.0 attribution and full license ship in both packages.
+
+Baseline: clean `main` at `f708cb21fcefa741ce294afb49f1d34211a8160e`, fetched/up to date;
+task branch `feat/twemoji`. Native macOS offline baseline and changed builds used the same
+synthetic message, viewport and dark appearance. Inspected both light/dark, narrow layout,
+inline sequences, and adding a reaction in the offline fixture. Before/after evidence is
+in `docs/pr-evidence/twemoji`. No Discord messages, calls or microphone tests were performed.
+Focused tests cover complete sequence lookup, atlas/index bounds, code exclusion, real
+image rendering and keyboard reaction actions with the installed atlas. Full checks and
+both release packages are recorded in this task's performance/PR evidence. Windows/Linux,
+live compatibility, screen-reader output and frame/startup p95 remain unverified.
+
+Verification: `cargo test -p ui emoji` passed 2 focused tests; final `cargo xtask check`
+passed all 88 workspace tests, both strict Clippy configurations, format and policy checks.
+`cargo xtask package` and `cargo xtask package-voice` passed including strict ad-hoc
+codesign verification. The generator reproduced the atlas/index from a hash-verified
+upstream archive. Staged diff review passed except preserved upstream license whitespace.
+Text executable +6,170,256 bytes; compressed .app +6,075,785 bytes; median sampled RSS
++16,256 KiB. See `docs/performance.md` for full results and measurement limits.
+
+Delivery: [PR #6](https://github.com/ViceVerse-cz/rustcord/pull/6) is a draft while
+GitHub's macOS/Windows/Linux native jobs and security job are pending. Local checks
+and both host packages passed; pending CI is not reported as success.
+
+### September 10, 2026 — custom server emoji and composer picker
+
+Follow-up to Twemoji: receive bounded guild emoji catalogs over READY/GUILD_CREATE and
+GUILD_EMOJIS_UPDATE; render standard/static custom emoji in formatted text and reactions
+through the existing credential-free media worker; show a searchable 3,953-entry standard
+palette and current-server picker in the composer. Emoji selection inserts/replaces at the
+saved cursor without sending and respects message/draft capacity limits. Unknown/restricted
+catalog eligibility is visibly disabled. Two explicitly synthetic server emoji demonstrate
+the same insertion/rendering path offline; animated markup uses a still preview.
+
+Fixed inline selection/copy for both Unicode and custom image widgets. Original text stays
+in egui's selection model, with atomic emoji hit targets; dragging across images and beginning
+inside an image cannot copy a partial sequence/markup. Right-click Copy emoji is also available.
+Code/unknown sequences and the editable composer remain literal. No new runtime dependency,
+account action, schema migration, cross-server entitlement claim or live Discord test.
+
+Baseline `a270437cb6c1e69030420cda4e0fb6efa957bcb0` on clean `feat/twemoji`, fetched from origin;
+new task branch `feat/server-emoji-picker` is stacked on PR #6. Baseline packages reuse the
+previously verified exact runtime binaries (compared byte-for-byte); their packaged docs
+predate the previous final measurement report. A detached baseline source worktree supplies
+the reducer replay. Synthetic screenshots are in `docs/pr-evidence/server-emoji-picker`.
+Inherited CI blocker: PR #6's native jobs passed on macOS/Windows/Linux; its security job
+fails `cargo audit --deny warnings` with six vulnerabilities and five denied warnings
+(run 34466516925). This change does not modify Cargo.lock or those dependencies.
+
+Verification: final `cargo xtask check` passed 98 workspace unit tests, formatting,
+policy checks and default/all-feature strict Clippy. Both `cargo xtask package` and
+`cargo xtask package-voice` passed with signature verification. Pointer-event tests
+copy exact Unicode/ZWJ/custom markup across image labels and forbid partial emoji
+endpoints; picker tests cover filtering, replacement budgets, reset and viewport media
+requests. Native before/after screenshots show the same synthetic message; custom
+images and Emoji trigger are visible in the changed build. Native automation returned
+unchanged UI state on repeated AX/coordinate picker activation (and intermittent
+user-changed-state errors), including after resetting the session with only the final
+preview running. Full native picker/clipboard/light/narrow checks remain incomplete;
+unit selection output is not claimed as native clipboard verification.
+
+Measured text executable +224,240 bytes (+0.50%); compressed package +65,520 bytes
+(+0.22%); median RSS +21,600 KiB (+18.82%), with unequal extra picker activation attempts.
+Reducer median 27.093 → 26.771 ms is a noisy difference. See `docs/performance.md` for
+methods, full package comparisons and limits. Draft delivery is required for the native
+evidence gap and inherited dependency audit failure; no live Discord test was performed.
+
+Delivery: [PR #8](https://github.com/ViceVerse-cz/rustcord/pull/8), stacked on #6,
+contains the implementation and verified commit-pinned before/after images. New macOS,
+Windows, Linux and security checks are pending at handoff; local success does not
+represent CI success. The PR remains draft for the evidence/audit blockers above.
+
+## September 10, 2026 — message hover controls
+
+Implemented `feat/message-hover` from clean `main` at `d802b2a` (fetched origin/main;
+Rust 1.98.1). Consecutive same-author messages hide continuation times until hover/focus,
+share aligned content, retain edited labels and highlight with the existing theme surface.
+The upper-right hover toolbar provides reactions, reply, own-message edit and More;
+copy/delete/mark-read stay in the existing menu. Empty reaction rows take no space.
+Keyboard focus and open menus retain the toolbar without reflowing message content.
+No dependencies, network commands, storage policy or cache budgets changed.
+
+Verification: `cargo xtask check` passed workspace tests, formatting, strict Clippy and
+policy checks. A new offline egui check covers hidden/revealed timestamps, edited grouped
+messages, unchanged row heights, pointer reply and keyboard reply at 900-point dark and
+360-point light widths. Existing reaction toggle/disabled and virtualizer tests pass.
+Native macOS synthetic screenshots compare the unchanged `--demo --demo-chat` fixture
+at the top of history: `docs/pr-evidence/message-hover/before.png` and `after.png`.
+`own-message.png` shows the additional Edit control. Native checks verified reply context,
+adding/removing a reaction without losing other messages, the edit dialog/cancel, More menu
+and light-theme hover contrast. Window resize automation did not alter native dimensions;
+narrow and long-text layout is covered by the 360-point offline egui test.
+Release text and optional-voice packages are built locally; measurements are recorded in
+`docs/performance.md`. Screenshot evidence proves only offline presentation, not live
+Discord compatibility. Windows/Linux and screen-reader verification remain unperformed.
+
+Delivery: [PR #11](https://github.com/ViceVerse-cz/rustcord/pull/11), draft while macOS,
+Windows, Linux and security CI checks are pending. Implementation/evidence commit
+`7cb25ba`; commit-pinned screenshot paths verified on origin. Local checks and both
+release packages passed; remote CI is not yet a success claim.
+
+
+## September 10, 2026 — server voice channels
+
+Implemented `feat/guild-voice` from clean `main` at `619071c`, after fetching origin/main
+with Rust 1.98.1. Existing server voice channels are selectable and show bounded gateway
+participant rosters with avatars/names, separate mute/deafen indicators, a connected
+channel timer, explicit Join/Leave and existing audio/PTT controls. Browsing never starts
+a call. Group media extends the existing optional engine: guild-scoped signaling and
+Identify/Resume, DAVE membership transitions, empty-room waiting with devices off, up to
+64 participants, independent SSRC decoders/jitter buffers, mixed playback, server mute/
+deafen enforcement, and teardown on permission/removal/session changes. DMs keep their
+existing peer restriction/ringing. No dependencies, backend, voice-key storage or recordings.
+
+Verification: `cargo xtask check` passed formatting, strict workspace Clippy, **111 tests**
+(plus one deliberately ignored performance workload), text-only compilation and policy
+checks. Focused checks cover guild signaling/correlation/departure, initial/supplemental/
+passive roster hydration, bounds and permission invalidation, 3-party MLS join/remove and
+unauthorized/duplicate identity rejection, real local WebSocket/UDP encrypted mixed audio,
+voice resumption, empty-room silence, and native-device-free teardown. The ignored release
+mix benchmark was run separately and passed. Both `cargo xtask package` and
+`cargo xtask package-voice` built and verified local ad-hoc signatures.
+
+Native macOS evidence: `docs/pr-evidence/guild-voice/before.png` and `after.png` use the
+unchanged standard offline fixture and show the disabled voice row becoming selectable.
+`roster.png` and `roster-light.png` use the disclosed additional `--demo --demo-voice`
+fixture; all identities, status flags and elapsed time are synthetic. Inspected dark/light
+rosters, long-name truncation, separate status icons, empty-room navigation, return to text
+and call-bar retention while browsing another room. Native resize/drag automation did not
+alter the window/sidebar size; 190-point narrow rows, keyboard join and bounded viewport
+rendering passed offline egui tests. Screen readers and Windows/Linux native behavior were
+not exercised. No Discord call, microphone or speaker test was performed.
+
+Measured voice executable +184,896 bytes (+0.39%), voice ZIP +72,507 bytes (+0.24%);
+settled demo RSS +4,672 KiB with the comparison limitations in `docs/performance.md`.
+Both sampled idle CPU medians were 0%. New 63-remote-speaker synthetic mixing measured
+1.002 ms per 20 ms tick; this excludes encryption/network/hardware and is not live latency.
+Reducer median changed 26.700→27.443 ms (small noisy slowdown).
+
+`cargo-audit audit --deny warnings` was re-run and still exits 1 with the same six
+vulnerabilities and five warnings documented in `docs/dependency-audit.md`; this task
+changes neither dependencies nor Cargo.lock. Draft delivery is required for that inherited
+audit failure and the unperformed owner-controlled official-client two-way/multi-party
+voice gate. Current normal-user roster/signaling behavior remains unofficial/live-unverified;
+Stage/group DMs/video/screensharing, acoustic echo cancellation, automatic region/move
+rejoin and global push-to-talk are not implemented. Live validation procedure is in
+`docs/voice.md`; implementation, fixtures and a connected label do not pass milestone 4.
+
+
+Delivery: [PR #14](https://github.com/ViceVerse-cz/rustcord/pull/14), draft. Implementation
+and inspected native evidence are committed at `0a07e38`; all four commit-pinned screenshot
+paths and the PR body were verified on origin. macOS, Windows, Linux and security CI are
+pending at handoff. Local checks passed; remote CI success and live audio compatibility
+are not claimed. The inherited strict audit failure and owner-operated live voice gate
+remain the draft blockers described above.
+
+
+## Server people subscription repair — September 10, 2026
+
+Baseline: clean `main` at `dc48391`, matching fetched `origin/main`; task branch
+`fix/server-people-list`, pinned Rust 1.98.1. The owner's already-open app showed
+an unavailable people pane despite a nonzero server total. Only its visible UI was
+inspected and its existing Reload people control retried; no credentials, messages,
+calls, microphone, captured account payloads or live screenshots were used in artifacts.
+
+The active member request now uses opcode 37 and enables the prerequisite guild
+subscription (`typing:true`). Closing or changing the pane clears channel ranges and
+that subscription. It still requests just 100 list positions and retains the existing
+128-KiB member bound; no role UI or full-directory fetch was added. Role colors,
+role headings and member role display are not implemented. See compatibility notes
+for the dated primary implementation evidence and remaining unofficial behavior.
+
+Validation: `cargo test --locked -p discord-gateway member_tests` passed both tests;
+`cargo xtask check` passed workspace tests, formatting, strict Clippy and policy checks.
+An independent read-only review found no blocker in the final request/cleanup change.
+Native screenshots: not applicable to this wire-request-only patch; native layout and
+synthetic people rendering are unchanged, and identical demo pictures would not show
+whether Discord accepts a subscription. The repaired build remains live-unverified.
+Package and reducer comparison results are recorded in `docs/performance.md`.
+
+Both text and optional voice release packages built and passed strict local signature
+verification. Executables each changed by -32 bytes; installed bundles by +2,963 bytes.
+Synthetic reducer median 26.474→27.128 ms, with the same retained timeline range;
+this workload does not exercise the changed subscription. No performance improvement
+is claimed. Delivery remains draft pending CI and repaired-build live verification.
+
+## September 10: owner-requested merge of all open PRs
+
+The owner explicitly requested "merge everything to main". PR #15 (People subscriptions) was merged into main; the dependent #16, #13, #12, #10, #9 and #7 stack was consolidated into #4 because the repository allows only squash merges. Integration of that combined tree with main efa724b was performed in a separate clean worktree, preserving the original uncommitted channel-access work unchanged.
+
+Conflict resolution retains both the stack's reaction repair, uploads/downloads, channel references, pinned pages and thread/archive navigation, and main's grouped timeline, hover controls, bundled/server emoji and encrypted guild voice. Thread/archive budgets now include Guild::bytes so the new emoji catalogs remain inside navigation byte limits. A protocol emoji test was updated for navigation's Result return; no assertion was removed. Both documentation histories, licenses and existing native evidence were retained. Independent integration review found no concrete remaining blocker.
+
+The integrated tree passed cargo xtask check (139 offline Rust tests, doctests, formatting, strict Clippy, text-only and runtime policy), node tests/login-handoff.cjs, cargo xtask package and cargo xtask package-voice. Unsigned Windows executable sizes are 49,067,008 text and 52,400,128 voice bytes. Full package sizes and five-run reducer comparison are recorded in performance.md. New native interaction/live account/audio verification remains unperformed; these checks are synthetic. Prior security CI still reports six inherited vulnerabilities and five denied warnings; no audit policy or repository protection was changed. The merge is explicitly owner-authorized despite those known evidence gaps, not a claim of full-spec completion or clean security status.

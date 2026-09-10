@@ -31,12 +31,16 @@ impl Timeline {
     pub fn bytes(&self) -> usize {
         self.bytes
     }
-    pub fn begin_page(&mut self) {
+    pub fn begin_page(&mut self, older: bool) {
+        // Set eviction direction before live events can race the history response.
+        self.retain_older = older;
         self.loading = true;
         self.changed.clear();
         self.patches.clear();
     }
     pub fn cancel_page(&mut self) {
+        // Failure stops reconciliation, but preserves the window the user is reading.
+        // Starting a recent-page request restores newest-first retention.
         self.loading = false;
         self.changed.clear();
         self.patches.clear();
@@ -339,7 +343,7 @@ mod tests {
         assert!(timeline.get(Id(1)).unwrap().mentions.is_empty());
         assert!(timeline.bytes < before);
         timeline.clear();
-        timeline.begin_page();
+        timeline.begin_page(false);
         timeline.patch(patch).unwrap();
         timeline.finish_page(vec![original], false).unwrap();
         assert!(timeline.get(Id(1)).unwrap().mentions.is_empty());
@@ -368,6 +372,38 @@ mod tests {
             embeds_suppressed: false,
         }
     }
+    #[test]
+    fn pending_and_cancelled_older_pages_preserve_the_reading_window() {
+        let mut timeline = Timeline::default();
+        for id in 1..=MAX_MESSAGES as u64 {
+            timeline.insert(message(id), false, false).unwrap();
+        }
+        timeline.begin_page(true);
+        timeline.insert(message(501), true, false).unwrap();
+        assert!(timeline.get(Id(1)).is_some());
+        assert!(timeline.get(Id(501)).is_none());
+        timeline.cancel_page(); // Failed/queue-rejected page does not change reading position.
+        timeline.insert(message(502), true, false).unwrap();
+        assert!(timeline.get(Id(1)).is_some());
+        assert!(timeline.get(Id(502)).is_none());
+        timeline.begin_page(true);
+        timeline.finish_page(vec![message(0)], true).unwrap();
+        timeline.begin_page(true); // A further older-page failure preserves that older window.
+        timeline.cancel_page();
+        timeline.insert(message(503), true, false).unwrap();
+        assert!(timeline.get(Id(0)).is_some());
+        assert!(timeline.get(Id(503)).is_none());
+        timeline.begin_page(false); // Jump/reload latest resets retention immediately.
+        timeline.insert(message(504), true, false).unwrap();
+        assert!(timeline.get(Id(0)).is_none());
+        assert!(timeline.get(Id(504)).is_some());
+        timeline.cancel_page();
+        timeline.insert(message(505), true, false).unwrap();
+        assert!(timeline.get(Id(505)).is_some());
+        assert_eq!(timeline.len(), MAX_MESSAGES);
+        assert!(timeline.bytes() <= MAX_BYTES);
+    }
+
     #[test]
     fn attachment_only_mutations_clear_without_late_history_resurrection() {
         let attachment = |id| model::Attachment {
@@ -398,7 +434,7 @@ mod tests {
             attachments,
         };
         let mut timeline = Timeline::default();
-        timeline.begin_page();
+        timeline.begin_page(false);
         timeline
             .patch(update(Patch::Value(vec![attachment(10)])))
             .unwrap();
@@ -413,7 +449,7 @@ mod tests {
         assert_eq!(timeline.get(Id(1)).unwrap().attachments[0].id, Id(11));
         assert!(timeline.get(Id(1)).unwrap().revision > revision);
         for clear in [Patch::Null, Patch::Value(Vec::new())] {
-            timeline.begin_page();
+            timeline.begin_page(false);
             let mut old = message(1);
             old.attachments = vec![attachment(10)];
             timeline.patch(update(clear)).unwrap();
@@ -424,7 +460,7 @@ mod tests {
                 timeline.iter().map(Message::bytes).sum::<usize>()
             );
         }
-        timeline.begin_page();
+        timeline.begin_page(false);
         timeline.delete(Id(1)).unwrap();
         timeline
             .patch(update(Patch::Value(vec![attachment(12)])))
@@ -432,7 +468,7 @@ mod tests {
         timeline.finish_page(vec![message(1)], false).unwrap();
         assert!(timeline.is_empty());
         timeline.clear();
-        timeline.begin_page();
+        timeline.begin_page(false);
         let mut large = attachment(10);
         large.media.url = Some(format!("https://cdn.discordapp.com/{}", "x".repeat(1900)));
         large.media.proxy_url = large.media.url.clone();
@@ -472,7 +508,7 @@ mod tests {
             attachments: Patch::Absent,
         };
         let mut timeline = Timeline::default();
-        timeline.begin_page();
+        timeline.begin_page(false);
         timeline
             .patch(update(Patch::Value(vec![embed("first")])))
             .unwrap();
@@ -496,7 +532,7 @@ mod tests {
         );
         assert!(timeline.get(Id(1)).unwrap().revision > revision);
         for clear in [Patch::Null, Patch::Value(Vec::new())] {
-            timeline.begin_page();
+            timeline.begin_page(false);
             let mut old = message(1);
             old.embeds = vec![embed("stale")];
             timeline.patch(update(clear)).unwrap();
@@ -508,7 +544,7 @@ mod tests {
             );
         }
         timeline.clear();
-        timeline.begin_page();
+        timeline.begin_page(false);
         let large = model::Embed {
             description: Some("x".repeat(16_384)),
             ..Default::default()
@@ -530,7 +566,7 @@ mod tests {
     #[test]
     fn mutations_win_over_late_history_and_memory_is_bounded() {
         let mut t = Timeline::default();
-        t.begin_page();
+        t.begin_page(false);
         t.delete(Id(1)).unwrap();
         t.patch(MessagePatch {
             reactions: model::Patch::Absent,
@@ -573,7 +609,7 @@ mod tests {
         assert!(t.bytes() <= MAX_BYTES);
         t.clear();
         assert_eq!(t.bytes(), 0);
-        t.begin_page();
+        t.begin_page(false);
         t.seed_cache(vec![message(1), message(2)]).unwrap();
         t.finish_page(vec![message(2)], false).unwrap();
         assert!(t.get(Id(1)).is_none());
@@ -584,7 +620,7 @@ mod tests {
         for id in 1001..=1500 {
             timeline.insert(message(id), false, false).unwrap();
         }
-        timeline.begin_page();
+        timeline.begin_page(true);
         timeline
             .finish_page((951..=1000).map(message).collect(), true)
             .unwrap();
@@ -596,7 +632,7 @@ mod tests {
         assert_eq!(timeline.len(), MAX_MESSAGES);
 
         timeline.clear();
-        timeline.begin_page();
+        timeline.begin_page(false);
         for (at, content) in [(20, "new edit"), (10, "old edit")] {
             timeline
                 .patch(MessagePatch {
@@ -617,10 +653,10 @@ mod tests {
         timeline.finish_page(vec![message(1)], false).unwrap();
         assert_eq!(timeline.get(Id(1)).unwrap().edited_at, Some(20));
 
-        timeline.begin_page();
+        timeline.begin_page(false);
         timeline.delete(Id(1)).unwrap();
         timeline.cancel_page();
-        timeline.begin_page();
+        timeline.begin_page(false);
         timeline
             .finish_page(vec![message(1), message(2)], false)
             .unwrap();

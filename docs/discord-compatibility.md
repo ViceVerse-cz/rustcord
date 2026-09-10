@@ -15,7 +15,7 @@ Serein is unofficial and not endorsed by Discord. No normal-user live session ha
 | Server categories | [Channel resource](https://docs.discord.com/developers/resources/channel), existing session snapshot and channel events | Documented metadata; normal-user delivery unofficial | Ordered collapsible headings, orphan fallback, partial create/update/delete; offline and keyboard tests; [details](categories.md) |
 | Server icons | [Image reference](https://docs.discord.com/developers/reference#image-formatting), guild metadata and GUILD_UPDATE | Documented CDN path; nested READY properties unofficial | Cached static icons and hash updates, initials fallback, offline tests; [details](icons.md) |
 | Message embeds | [Message resource](https://docs.discord.com/developers/resources/message#embed-object) | Documented attributes; normal-user delivery/proxy conversion unverified | Native cards, partial embed-only updates, suppression/spoilers, cached static service-proxy previews; video opens externally, [limits](embeds.md) |
-| People / member pane | Normal session; [discord.py-self Gateway](https://github.com/dolfies/discord.py-self/blob/master/discord/gateway.py), [member-list identity](https://github.com/dolfies/discord.py-self/blob/master/discord/abc.py), [wire types](https://github.com/dolfies/discord.py-self/blob/master/discord/types/gateway.py) | Unofficial and unstable | On-demand opcode 14, first 100 list positions, typed incremental operations, identity/request filtering and 15-second timeout; DM recipients from READY. Missing metadata or unsupported replies show unavailable; live-unverified |
+| People / member pane | Normal session; [discord.py-self Gateway](https://github.com/dolfies/discord.py-self/blob/master/discord/gateway.py), [member-list identity](https://github.com/dolfies/discord.py-self/blob/master/discord/abc.py), [wire types](https://github.com/dolfies/discord.py-self/blob/master/discord/types/gateway.py) | Unofficial and unstable | On-demand opcode 37 with the required guild typing subscription, first 100 list positions, typed incremental operations, identity/request filtering and 15-second timeout; DM recipients from READY. Missing metadata or unsupported replies show unavailable; live-unverified |
 | Profile pictures | [Discord image formatting](https://docs.discord.com/developers/reference#image-formatting), [User resource](https://docs.discord.com/developers/resources/user#user-object) | Documented CDN paths and user metadata; normal-session acquisition unofficial | Static PNGs, credential-free requests, account-isolated disk cache, bounded decode/textures, fallback initials; offline transport/cache tests only |
 | User mentions | [Message formatting](https://docs.discord.com/developers/reference#message-formatting) | Documented syntax; normal-user notification behavior unverified | Local @ autocomplete, clickable names/profile cards, exact user allowlists, bounded SQLite metadata; [tests and limits](mentions.md) |
 | User profile cards | Normal session `/users/{id}/profile`; [public implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/http.py) | Unofficial route and payload; live-unverified | On-demand banner/avatar/bio/pronouns/badges/connections/mutual servers, cancellable requests and visible failures; [evidence](profiles.md) |
@@ -58,7 +58,7 @@ September 10 People/avatar continuation: the member subscription uses the opcode
 
 Normal-user DM entry uses guild_id:null with main Gateway opcodes 13/4, based on the original [discord.py-self Gateway implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/gateway.py). CALL_CREATE/UPDATE/DELETE and voice state/server shapes follow its [dispatch source](https://github.com/dolfies/discord.py-self/blob/master/discord/state.py) and [voice types](https://github.com/dolfies/discord.py-self/blob/master/discord/types/voice.py). Ring/stop-ringing use the [HTTP implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/http.py); its [DM connect flow](https://github.com/dolfies/discord.py-self/blob/master/discord/channel.py) establishes voice before ringing. These are unofficial interoperability evidence, not approved normal-account APIs or a bot-token workaround. No source-code blocks were copied.
 
-Discord's documented voice transport and [DAVE protocol](https://daveprotocol.com/) supply encryption/protocol requirements. Serein uses Davey 0.1.4/OpenMLS, an unofficial implementation, rather than claiming to ship Discord's libdave or an independently audited engine. Real MLS, DAVE, RTP, Opus and loopback WebSocket/UDP tests exercise the adapter with synthetic participants. They do not verify current Discord acceptance, microphone permission, device quality or a remote official client. Existing group DMs, guild voice, video and screen sharing remain unsupported. See [voice scope and owner-operated gate](voice.md) and [adapter details](../crates/discord-voice/README.md).
+Discord's documented voice transport and [DAVE protocol](https://daveprotocol.com/) supply encryption/protocol requirements. Serein uses Davey 0.1.4/OpenMLS, an unofficial implementation, rather than claiming to ship Discord's libdave or an independently audited engine. Real MLS, DAVE, RTP, Opus and loopback WebSocket/UDP tests exercise the adapter with synthetic participants. They do not verify current Discord acceptance, microphone permission, device quality or a remote official client. Existing group DMs, Stage channels, video and screen sharing remain unsupported. Guild voice is implemented separately below, with its live gate still unverified. See [voice scope and owner-operated gate](voice.md) and [adapter details](../crates/discord-voice/README.md).
 
 Image attachments: documented wire metadata and spoiler bit 3 are implemented; additional sensitive flags and proxy PNG conversion rely on unofficial implementation evidence. Native viewing and bounded cache/patch behavior have offline coverage; actual account image delivery remains unverified. [Scope and sources](chat-images.md).
 
@@ -91,3 +91,72 @@ Synthetic tests cover actual loopback HTTP, credential isolation, redirects, fil
 File selection also accepts one native file dropped into the active conversation window. The pinned egui 0.36.2 DroppedFileHandle exposes a path; Serein moves the event handles, accepts only one absolute path within the existing path limit, and never invokes their whole-file bytes API. Drops reuse the picker validation and cancellation slot. They cannot replace an existing selection or active operation and never start an upload themselves. Unsupported/multiple drops and unavailable conversation states report an error. A composer hover hint explains the limit and explicit Send behavior. Native OS drag/drop delivery remains unverified; synthetic handle admission and late-result isolation are tested.
 
 Archived-thread browsing (September 10): [Discord public/private/joined-private archive endpoints](https://docs.discord.com/developers/resources/channel#list-public-archived-threads) describe public and private pages ordered by archive timestamp with an ISO8601 before cursor; joined-private pages use descending thread IDs and a snowflake cursor. The primary normal-user implementation exposes the [same three HTTP routes](https://github.com/dolfies/discord.py-self/blob/master/discord/http.py) and [channel archive selection](https://github.com/dolfies/discord.py-self/blob/master/discord/channel.py). These sources supply wire evidence, not live account acceptance. Serein makes only explicit GET requests, limits each page to 25 entries, checks archived metadata, guild/parent/type, duplicates and cursor progress, and ignores member summaries. Public/private timestamps preserve nanoseconds. Private archive enumeration requires the service permissions described by Discord, including MANAGE_THREADS; joined-private is a separate choice. Open loads history without a join/reopen mutation. No live account was used to validate these routes.
+
+### Unicode emoji artwork (September 10, 2026)
+
+Formatted messages (including existing formatted embed/search surfaces), Unicode reaction
+counts and the reaction menu use bundled [Twemoji 17.0.3](https://github.com/jdecked/twemoji/releases/tag/v17.0.3)
+artwork from Twitter and contributors, under CC BY 4.0. This is a local rendering feature,
+not a new protocol endpoint or proof of matching Discord's current artwork revision.
+Grapheme matching supports flags, modifiers, keycaps and ZWJ sequences, including optional
+emoji presentation selectors. Code, explicit text-presentation and unknown sequences remain
+literal. Original message/reaction strings and outgoing requests are unchanged. Whole-message
+Copy preserves the original text; drag-selection of rendered text excludes inline image widgets.
+The editable composer continues to use native font text. Custom server emoji and animation
+are not supplied by Twemoji and retain their existing text fallback. Validation is synthetic;
+no live Discord session was used.
+
+### Custom server emoji, chat picker and copying (September 10, 2026)
+
+The current server's catalog is received from READY and known-guild GUILD_CREATE, updated
+by GUILD_EMOJIS_UPDATE, and cleared on GUILD_DELETE. The documented emoji fields and update
+shape are supported by [Emoji Resource](https://docs.discord.com/developers/resources/emoji)
+and [Gateway Events](https://docs.discord.com/developers/events/gateway-events#guild-emojis-update).
+Normal-user READY remains unofficial/unstable; this change was tested with synthetic events
+and local sockets, not a live account. Joining new guilds' full navigation remains pre-existing
+unsupported behavior. Missing catalogs are displayed as unavailable rather than empty.
+
+Formatted message/profile/embed text renders `<:name:id>` and `<a:name:id>` as static CDN
+images, using the documented [custom emoji CDN endpoint](https://docs.discord.com/developers/reference#image-formatting-cdn-endpoints).
+Custom reactions use the same bounded media worker. Deleted/failing previews have a fixed
+placeholder and retain copyable original markup. Standard Unicode and custom image widgets
+participate in text selection: copying a selection retains Unicode sequences/custom markup,
+and right-click Copy emoji copies the entire token. Selection endpoints treat each image as
+one item, avoiding broken ZWJ sequences or partial custom markup. Whole-message Copy is unchanged.
+
+The chat Emoji button opens a searchable Unicode/name palette and current-server tab. Choosing
+inserts at the saved text cursor or replaces its selection, preserves Unicode presentation
+selectors, and records the draft without sending. Escape/close restores keyboard focus.
+Only catalog entries explicitly available, unmanaged and unrestricted by roles are enabled;
+unknown eligibility remains disabled. Cross-server/DM catalog selection and full role/Nitro
+entitlement inference are not implemented; the service remains authoritative for actual sends.
+Animated emoji are inserted with their original animated markup and shown as still previews.
+The editable composer itself continues to display raw Unicode/markup while editing.
+
+
+## Server voice — September 10, 2026
+
+Guild voice entry uses the documented [Gateway voice state update and voice allocation flow](https://docs.discord.com/developers/topics/voice-connections): guild-scoped join/mute/leave, matching owner session plus guild server update, and guild ID as voice Identify/Resume server ID. The DAVE group remains identified by channel ID. This protocol documentation is not approval or live evidence for normal-user accounts. Server channel rosters use READY, GUILD_CREATE, VOICE_STATE_UPDATE and unofficial READY_SUPPLEMENTAL/PASSIVE_UPDATE_V2 shapes from the original [discord.py-self dispatcher](https://github.com/dolfies/discord.py-self/blob/master/discord/state.py).
+
+The optional media engine extends the existing DAVE/Opus path to bounded group membership and simultaneous remote audio mixing. Server mute/deafen gates local media. Empty rooms wait without opening audio devices; microphone capture requires an established encrypted group. Stage channels and group DMs remain visibly unsupported. Main Gateway disconnect, channel/session moves, permission invalidation or voice server migration stop the current media session and require deliberate rejoin. No automatic call or DM ringing is triggered by viewing a roster or joining a guild channel.
+
+The implementation is tested with synthetic protocol/crypto/UI data. The owner-controlled official-client two-way audio, multi-party join/leave, permission, device and network tests in [voice.md](voice.md) remain required before claiming working live interoperability.
+
+### Server people subscription repair (September 10, 2026)
+
+The member pane previously sent deprecated opcode 14 with `typing:false`. Current
+[Gateway implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/gateway.py)
+and [channel subscription prerequisites](https://github.com/dolfies/discord.py-self/blob/master/discord/state.py)
+show opcode 37 and a guild typing subscription before requesting channel member ranges.
+Serein now enables that subscription only for the active member pane and clears it with
+channel ranges when the pane closes or navigation changes. This receives typing events;
+it does not send typing notifications. Unhandled typing events are not retained.
+The request still covers only positions 0–99, with the existing 128-KiB retained member
+budget, request/list identity filtering and timeout. No full-directory fetch was added.
+
+A read-only observation of the owner's already-open app confirmed an unavailable pane
+with a nonzero server total. That is reproduction evidence, not successful validation of
+this repaired build. Tests use a synthetic local WebSocket; normal-user acceptance of the
+new request remains unverified. Role display is **not implemented**: only role permissions
+for list identity are read; member role IDs, group headings and role colors are discarded.
+Role administration is outside the product scope.

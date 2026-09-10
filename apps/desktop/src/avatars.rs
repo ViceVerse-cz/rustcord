@@ -121,6 +121,12 @@ fn clear_directory(root: Option<&Path>) -> Result<(), &'static str> {
 
 // Build, rather than accept, URLs. Even malformed service metadata cannot choose a host/path.
 fn cdn_url(key: &str) -> Option<String> {
+    if let Some(id) = key.strip_prefix("emoji-") {
+        let id: Id = id.parse().ok()?;
+        return Some(format!(
+            "https://cdn.discordapp.com/emojis/{id}.png?size=64"
+        ));
+    }
     if let Some(value) = key.strip_prefix("banner-") {
         let (id, hash) = value.split_once('-')?;
         let id: Id = id.parse().ok()?;
@@ -525,6 +531,23 @@ impl Disk {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn custom_emoji_urls_are_static_and_confined_to_discord_cdn() {
+        assert_eq!(
+            super::cdn_url("emoji-9001").as_deref(),
+            Some("https://cdn.discordapp.com/emojis/9001.png?size=64")
+        );
+        for key in [
+            "emoji-0",
+            "emoji-../9001",
+            "emoji-9001?size=8192",
+            "emoji-https://example.com",
+            "emoji-9001/foo",
+        ] {
+            assert!(super::cdn_url(key).is_none());
+        }
+    }
+
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 

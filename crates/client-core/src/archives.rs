@@ -152,15 +152,7 @@ impl State {
             .channels
             .iter()
             .filter(|c| Some(c.id) != self.archived_thread);
-        let guild_bytes = self
-            .guilds
-            .iter()
-            .map(|g| {
-                size_of::<model::Guild>()
-                    + g.name.capacity()
-                    + g.icon.as_ref().map_or(0, String::capacity)
-            })
-            .sum::<usize>();
+        let guild_bytes = self.guilds.iter().map(model::Guild::bytes).sum::<usize>();
         if retained.clone().count() + self.guilds.len() >= MAX_NAV
             || retained.map(Channel::bytes).sum::<usize>() + guild_bytes + thread.bytes()
                 > MAX_EVENT_BYTES
@@ -219,6 +211,7 @@ mod tests {
             freshness: Freshness::Fresh,
             selected: Some(Id(10)),
             guilds: vec![Guild {
+                emojis: None,
                 id: Id(1),
                 name: "Synthetic".into(),
                 icon: None,

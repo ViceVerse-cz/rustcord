@@ -50,6 +50,7 @@ impl State {
         if retained.clone().count() + threads.len() + self.guilds.len() > MAX_NAV
             || retained.map(Channel::bytes).sum::<usize>()
                 + threads.iter().map(Channel::bytes).sum::<usize>()
+                + self.guilds.iter().map(model::Guild::bytes).sum::<usize>()
                 > MAX_EVENT_BYTES
         {
             return Err("Thread snapshot exceeds safe capacity");
@@ -106,11 +107,13 @@ mod tests {
         let mut state = State {
             guilds: vec![
                 Guild {
+                    emojis: None,
                     id: Id(1),
                     name: "One".into(),
                     icon: None,
                 },
                 Guild {
+                    emojis: None,
                     id: Id(2),
                     name: "Two".into(),
                     icon: None,
@@ -317,6 +320,7 @@ mod tests {
         ] {
             let mut state = State {
                 guilds: vec![Guild {
+                    emojis: None,
                     id: Id(1),
                     name: "One".into(),
                     icon: None,

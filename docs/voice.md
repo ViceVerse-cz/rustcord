@@ -1,6 +1,6 @@
-# One-to-one DM voice
+# DM and server voice
 
-The optional `voice` build implements native audio calls in an existing one-to-one Discord DM. It uses the owner's existing account, Discord signaling/voice servers, Opus and DAVE version 1. There is no bot, project relay, separate account, recording service or webview call UI. **Live Discord interoperability and physical microphone/speaker behavior have not been tested; milestone 4 has not passed.**
+The optional `voice` build implements native audio calls in existing one-to-one Discord DMs and guild voice channels. It uses the owner's existing account, Discord signaling/voice servers, Opus and DAVE version 1. There is no bot, project relay, separate account, recording service or webview call UI. **Live Discord interoperability and physical microphone/speaker behavior have not been tested; milestone 4 has not passed.**
 
 ```sh
 cargo run --locked --features voice
@@ -16,7 +16,7 @@ Start calls the selected existing DM; incoming calls require Answer or Decline. 
 
 Mute/deafen, session-local input/output selection and focused V push-to-talk are implemented. Push-to-talk releases when focus is lost and is disabled while text entry has focus. It is not a global hotkey. Devices are initialized only following an explicit call and encrypted readiness; no microphone test runs at startup. Headphones are recommended because acoustic echo cancellation is absent. Device loss requires selecting a usable device and calling again; there is no automatic device fallback.
 
-Only one peer and DAVE version 1 are accepted. Additional participants or encryption downgrade fail closed. Group DMs, guild voice channels, recording, video and screen sharing are unsupported. Voice WebSocket resumption has a finite retry budget; failed resumption or main Gateway disconnect requires an explicit new call. Voice credentials, ephemeral DAVE identities and audio stay in bounded session memory. The displayed privacy code applies to the current group epoch; identities are not remembered across calls. Comparing codes does not establish long-term identity verification or text-message encryption.
+DM calls accept only their expected peer. Server calls support up to 64 total participants, with independent bounded decoder/jitter state and mixed mono playback. Only DAVE version 1 is accepted; encryption downgrades and group identities outside the authenticated participant roster fail closed. Group DMs, Stage channels, recording, video and screen sharing are unsupported. Voice WebSocket resumption has a finite retry budget; failed resumption or main Gateway disconnect requires an explicit new call. Voice credentials, ephemeral DAVE identities and audio stay in bounded session memory. The displayed privacy code applies to the current group epoch; identities are not remembered across calls. Comparing codes does not establish long-term identity verification or text-message encryption.
 
 ## Protocol classification
 
@@ -41,3 +41,14 @@ Run only when the owner explicitly elects to test and controls both sides of a p
 6. Record date, OS/hardware/build features, which cases passed, redacted failures and measured resource use. Do not retain voices or private conversation contents. Update progress only for observed behavior; Windows, macOS and Linux require separate physical tests.
 
 Until actual two-way official-client audio and the relevant encryption/teardown cases pass, the release voice gate remains blocked. Offline encrypted transport tests are useful implementation evidence, not that gate.
+
+
+## Server channel workflow and live gate
+
+Select an existing server voice channel to inspect its roster, then explicitly Join. Browsing alone never opens media devices. Participant rows show names/avatars and separate mute/deafen states; the connected channel shows elapsed local connection time. Mute/deafen, audio settings and Leave remain available while reading other channels. Server-enforced mute/deafen cannot be overridden locally. To switch rooms, leave the current room and join the next after departure is acknowledged. A rejected/full/inaccessible room fails visibly after the bounded allocation deadline.
+
+An authenticated empty room displays “Connected · waiting for others”; audio devices stay closed until another participant joins and DAVE is secured. The client does not transmit unencrypted microphone audio to make an empty room appear connected. A server move, changed voice endpoint/session or main Gateway failure requires an explicit rejoin. The roster is session-only, bounded to 4,096 entries and 1 MiB, and is cleared on fresh login/resync and relevant access invalidation; during a resumable disconnect it is labeled last-known until missed events replay. Missing user details use a fallback identity rather than fetching a whole guild directory.
+
+`cargo run --locked --features voice -- --demo --demo-voice` shows a separately labeled synthetic roster/call scene, including long names and mute/deafen states. It cannot connect, ring, or access devices. The ordinary `--demo` fixture remains the before/after comparison scenario.
+
+For live verification, the owner must explicitly enable `voice,developer-session` and control a private guild voice channel and the participating official clients. In addition to the DM gate above: join empty then add two official-client participants; verify actual intelligible audio in every direction and simultaneous speech; exercise encrypted joins/leaves and the last peer leaving/rejoining; check self mute/deafen, server mute/deafen, denied Connect/Speak, full room, deliberate switching, a server move/disconnect and voice region migration; verify devices/keys/tasks are released on Leave/logout/exit. Never record participants or publish private account/channel data. None of these live outcomes is established by the synthetic roster screenshot.

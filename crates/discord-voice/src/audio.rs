@@ -84,7 +84,7 @@ impl Audio {
         let (settings, mut selected) = tokio::sync::watch::channel(settings);
         let (finished, done) = mpsc::sync_channel(1);
         let thread = std::thread::Builder::new()
-            .name("dm-audio".into())
+            .name("voice-audio".into())
             .spawn(move || {
                 let mut streams = None;
                 let mut current = Devices::default();

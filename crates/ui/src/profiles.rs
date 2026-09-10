@@ -177,11 +177,13 @@ pub fn show(
                                 if !bio.is_empty() {
                                     heading(ui, "ABOUT ME");
                                     let mut linked_user = None;
-                                    Formatted::parse(bio).show_mentions(
+                                    Formatted::parse(bio).show_with_images(
                                         ui,
                                         opening,
                                         &[],
                                         &mut linked_user,
+                                        avatars,
+                                        state.demo,
                                     );
                                     if let Some(user) = linked_user {
                                         action = Some(Action::Profile(user));

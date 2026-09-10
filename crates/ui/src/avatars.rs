@@ -82,6 +82,45 @@ impl Avatars {
         let texture = ctx.load_texture("service-image", image, egui::TextureOptions::LINEAR);
         self.textures.push_back((key, texture));
     }
+    pub(crate) fn custom_image(
+        &mut self,
+        ctx: &egui::Context,
+        id: model::Id,
+        size: f32,
+        demo: bool,
+    ) -> Option<egui::Image<'static>> {
+        let key = format!("emoji-{id}");
+        if demo
+            && matches!(id.0, 9001 | 9002)
+            && !self.textures.iter().any(|(stored, _)| stored == &key)
+        {
+            let mut image = ColorImage::filled([32, 32], egui::Color32::TRANSPARENT);
+            for y in 3..29 {
+                for x in 3..29 {
+                    if (x + y + id.0 as usize) % 10 < 7 {
+                        image.pixels[y * 32 + x] = if id.0 == 9001 {
+                            egui::Color32::from_rgb(55, 180, 165)
+                        } else {
+                            egui::Color32::from_rgb(240, 150, 70)
+                        };
+                    }
+                }
+            }
+            self.attempts.insert(key.clone(), (Instant::now(), false));
+            self.accept(ctx, key.clone(), Some(image));
+        }
+        if let Some(index) = self.textures.iter().position(|(stored, _)| stored == &key) {
+            let entry = self.textures.remove(index).expect("located emoji texture");
+            let image = egui::Image::new((entry.1.id(), egui::Vec2::splat(size)));
+            self.textures.push_back(entry);
+            Some(image)
+        } else {
+            if !demo {
+                self.request(key);
+            }
+            None
+        }
+    }
     pub fn show_banner(
         &mut self,
         ui: &mut egui::Ui,
@@ -455,6 +494,7 @@ mod tests {
         );
         let mut preview = Avatars::default();
         let guild = model::Guild {
+            emojis: None,
             id: model::Id(10),
             name: "Synthetic server".into(),
             icon: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),

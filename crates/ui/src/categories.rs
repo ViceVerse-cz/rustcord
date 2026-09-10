@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 enum Row<'a> {
     Category(&'a Channel, usize),
     Channel(&'a Channel, bool),
+    Participant(&'a client_core::voice::RosterEntry),
 }
 
 fn rows<'a>(
@@ -84,7 +85,7 @@ fn kind_label(kind: u8) -> &'static str {
     match kind {
         0 => "Text channel",
         1 => "Direct message",
-        2 => "Server voice channel · not implemented",
+        2 => "Server voice channel",
         3 => "Group direct message",
         5 => "Announcement channel",
         10..=12 => "Thread",
@@ -107,12 +108,29 @@ impl MessagingUi {
             .collect();
         self.collapsed_categories
             .retain(|id| categories.contains(id));
-        let rows = rows(
+        let channel_rows = rows(
             &state.channels,
             self.guild,
             &self.collapsed_categories,
             state.selected,
         );
+        let mut participants = BTreeMap::<Id, Vec<_>>::new();
+        for entry in &state.voice.roster {
+            if Some(entry.guild) == self.guild {
+                participants.entry(entry.channel).or_default().push(entry);
+            }
+        }
+        let mut rows = Vec::with_capacity(channel_rows.len() + state.voice.roster.len());
+        for row in channel_rows {
+            let channel = match &row {
+                Row::Channel(channel, _) if channel.kind == 2 => Some(channel.id),
+                _ => None,
+            };
+            rows.push(row);
+            if let Some(entries) = channel.and_then(|id| participants.remove(&id)) {
+                rows.extend(entries.into_iter().map(Row::Participant));
+            }
+        }
         let colors = design::palette(ui);
         let mut selected = None;
         if rows.is_empty() {
@@ -124,6 +142,12 @@ impl MessagingUi {
                 ui.spacing_mut().item_spacing.y = 4.0;
                 for index in range {
                     match rows[index] {
+                        Row::Participant(entry) => {
+                            ui.horizontal(|ui| {
+                                ui.add_space(28.0);
+                                self.voice_participant(ui, state, entry);
+                            });
+                        }
                         Row::Category(category, count) => {
                             let collapsed = self.collapsed_categories.contains(&category.id);
                             let label =
@@ -172,6 +196,14 @@ impl MessagingUi {
                         }
                         Row::Channel(channel, nested) => {
                             let active = state.selected == Some(channel.id);
+                            if channel.kind == 2 {
+                                let response =
+                                    self.voice_channel_button(ui, state, channel, active);
+                                if response.clicked() {
+                                    selected = Some(channel.id);
+                                }
+                                continue;
+                            }
                             let unread = state.unread(channel.id) == Some(true);
                             let symbol = match channel.kind {
                                 1 | 3 => "@",
@@ -311,6 +343,7 @@ mod tests {
             rows.into_iter()
                 .map(|r| match r {
                     Row::Channel(c, _) | Row::Category(c, _) => c.id.0,
+                    Row::Participant(entry) => entry.participant.user.0,
                 })
                 .collect::<Vec<_>>()
         };

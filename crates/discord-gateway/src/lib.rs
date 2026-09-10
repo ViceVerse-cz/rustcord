@@ -108,7 +108,9 @@ fn subscription_packet(guild: Id, channel: Option<Id>) -> Frame {
         || serde_json::json!({}),
         |channel| serde_json::json!({channel.to_string():[[0,99]]}),
     );
-    Frame::Text(serde_json::json!({"op":14,"d":{"guild_id":guild,"typing":false,"threads":false,"activities":false,"members":[],"channels":channels}}).to_string().into())
+    // Unofficial guild subscriptions require typing=true before channel ranges work.
+    // This receives events; it does not send a typing notification or request members in bulk.
+    Frame::Text(serde_json::json!({"op":37,"d":{"subscriptions":{guild.to_string():{"typing":channel.is_some(),"threads":false,"activities":false,"members":[],"channels":channels}}}}).to_string().into())
 }
 struct ActiveMembers {
     subscription: MemberSubscription,
@@ -360,9 +362,9 @@ async fn run_inner(
                     let connect=if let client_core::voice::Command::Join{channel,..}=command {Some(channel)}else{None};
                     let packet=match calls.packet(command) {
                         Ok(packet)=>packet,
-                        Err(_) => {if let client_core::voice::Command::Join{channel,request,..}=command {emit(Event::Voice(client_core::voice::Event::Failed{channel,request,message:"Previous call is still leaving, or the DM is unavailable; wait for departure or reconnect"}))?;}continue;}
+                        Err(_) => {if let client_core::voice::Command::Join{channel,request,..}=command {emit(Event::Voice(client_core::voice::Event::Failed{channel,request,message:"Previous call is still leaving, or the channel is unavailable; wait for departure or reconnect"}))?;}continue;}
                     };
-                    if let Some(channel)=connect {
+                    if let Some(channel)=connect && calls.allowed.get(&channel) == Some(&None) {
                         let packet=Frame::Text(serde_json::json!({"op":13,"d":{"channel_id":channel}}).to_string().into());
                         if !matches!(timeout(Duration::from_secs(5),socket.send(packet)).await,Ok(Ok(()))) {break;}
                     }
@@ -415,14 +417,42 @@ async fn run_inner(
                                         if ready.session_id.len() > 2048 { return Err(Failure::Capacity); }
                                         state.url = Some(validated_url(&ready.resume_gateway_url).map_err(|f|f.protocol_at("Gateway login: resume address rejected"))?);
                                         state.session = Some(Zeroizing::new(std::mem::take(&mut ready.session_id)));
+                                        calls.remember_users(std::mem::take(&mut ready.users))?;
+                                        let mut participants = Vec::new();
+                                        let mut roster_bytes = 0;
+                                        for guild in &mut ready.guilds {
+                                            if guild.voice_states.is_empty() { continue; }
+                                            if let Event::Voice(client_core::voice::Event::Snapshot { participants: mut rows, .. }) = calls.snapshot(guild, false)? {
+                                                roster_bytes += rows.iter().map(client_core::voice::RosterEntry::bytes).sum::<usize>();
+                                                if participants.len() + rows.len() > client_core::voice::MAX_ROSTER || roster_bytes > client_core::voice::MAX_ROSTER_BYTES { return Err(Failure::Capacity); }
+                                                participants.append(&mut rows);
+                                            }
+                                        }
                                         let (guilds, channels) = ready.navigation().map_err(|_| Failure::ProtocolAt("Gateway login: invalid or oversized channel/thread navigation"))?;
                                         let (read_entries,read_version,partial)=ready.read_state.take().map_or((None,None,false),|snapshot|(Some(snapshot.entries.into_iter().filter(|e|e.kind==0).map(|e|(e.id,e.last_message_id)).collect()),snapshot.version,snapshot.partial));
                                         if guilds.len() + channels.len() > MAX_NAV { return Err(Failure::Capacity); }
-                                        calls.allowed=channels.iter().filter(|c|c.guild.is_none() && c.kind==1 && c.recipients.len()==1).map(|c|c.id).collect();
+                                        calls.allowed=channels.iter().filter(|c|(c.guild.is_none() && c.kind==1 && c.recipients.len()==1) || (c.guild.is_some() && c.kind==2)).map(|c|(c.id,c.guild)).collect();
                                         if was_ready { emit(Event::Resync)?; }
                                         emit(Event::Ready { user: ready.user.into_model(), guilds, channels })?; was_ready = true;
                                         emit(Event::ReadState(client_core::read_state::Event::Snapshot{entries:read_entries,version:read_version,partial}))?;
+                                        if !participants.is_empty() { emit(Event::Voice(client_core::voice::Event::Snapshot { partial: false, guild: None, participants }))?; }
                                         ready_at = Some(Instant::now());
+                                    }
+                                    "READY_SUPPLEMENTAL" => {
+                                        let mut extra: ReadySupplemental = decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
+                                        if extra.guilds.len() > MAX_NAV || extra.merged_members.len() > MAX_NAV { return Err(Failure::Capacity); }
+                                        let mut participants = Vec::new();
+                                        let mut roster_bytes = 0;
+                                        for (index, guild) in extra.guilds.iter_mut().enumerate() {
+                                            if let Some(members) = extra.merged_members.get_mut(index) { guild.members.append(members); }
+                                            if let Event::Voice(client_core::voice::Event::Snapshot { participants: mut rows, .. }) = calls.snapshot(guild, true)? {
+                                                roster_bytes += rows.iter().map(client_core::voice::RosterEntry::bytes).sum::<usize>();
+                                                if participants.len() + rows.len() > client_core::voice::MAX_ROSTER || roster_bytes > client_core::voice::MAX_ROSTER_BYTES { return Err(Failure::Capacity); }
+                                                participants.append(&mut rows);
+                                            }
+                                        }
+                                        if !participants.is_empty() { emit(Event::Voice(client_core::voice::Event::Snapshot { partial: true, guild: None, participants }))?; }
+                                        calls.users.clear();
                                     }
                                     "RESUMED" => { emit(Event::Resumed)?; ready_at = Some(Instant::now()); },
                                     "CALL_CREATE" | "CALL_UPDATE" | "CALL_DELETE" | "VOICE_STATE_UPDATE" | "VOICE_SERVER_UPDATE" => calls.dispatch(packet.t.as_deref().unwrap_or(""),packet.d.get().as_bytes(),owner_id,&emit)?,
@@ -443,6 +473,7 @@ async fn run_inner(
                                         emit(Event::ReadState(client_core::read_state::Event::Ack{channel:ack.channel_id,message:ack.message_id,manual:ack.manual,version:ack.version}))?;
                                     }
                                     "PASSIVE_UPDATE_V2" => {
+                                        calls.passive(decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?,owner_id,&emit)?;
                                         let update=decode::<read_state::PassiveUpdate>(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
                                         emit(Event::ReadState(client_core::read_state::Event::Latest(update.updated_channels.into_iter().map(|c|(c.id,c.last_message_id)).collect())))?;
                                     }
@@ -455,9 +486,10 @@ async fn run_inner(
                                     "MESSAGE_DELETE_BULK" => { let d: BulkDeleted = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?; if d.ids.len() > 100 { return Err(Failure::Capacity); } emit(Event::DeleteBulk { channel:d.channel_id, ids: d.ids })?; }
                                     "AUTH_SESSION_CHANGE" => return Err(Failure::Expired),
                                     "CHANNEL_DELETE" => { let c: ChannelDto = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?; calls.allowed.remove(&c.id); emit(Event::Unavailable(c.id))?; }
-                                    "CHANNEL_CREATE" => { let c=decode::<ChannelDto>(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?.into_model(); if c.guild.is_none() && c.kind==1 && c.recipients.len()==1 && calls.allowed.len()<MAX_NAV {calls.allowed.insert(c.id);} emit(Event::ChannelCreated(c))?; }
+                                    "CHANNEL_CREATE" => { let c=decode::<ChannelDto>(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?.into_model(); if ((c.guild.is_none() && c.kind==1 && c.recipients.len()==1) || (c.guild.is_some() && c.kind==2)) && calls.allowed.len()<MAX_NAV {calls.allowed.insert(c.id,c.guild);} emit(Event::ChannelCreated(c))?; }
                                     "CHANNEL_UPDATE" => {
                                         let patch:ChannelPatchDto=decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
+                                        if let model::Patch::Value(kind) = patch.kind && kind != 2 && kind != 1 { calls.allowed.remove(&patch.id); }
                                         let permissions=!matches!(patch.permission_overwrites,model::Patch::Absent) || !matches!(patch.flags,model::Patch::Absent);
                                         emit(Event::ChannelChanged(patch.into_model()))?;
                                         if permissions {emit(Event::PermissionsChanged)?;}
@@ -465,12 +497,35 @@ async fn run_inner(
                                     "THREAD_CREATE" | "THREAD_UPDATE" | "THREAD_DELETE" | "THREAD_LIST_SYNC" | "THREAD_MEMBERS_UPDATE" => {
                                         if let Some(event) = thread_events::decode_event(packet.t.as_deref().unwrap_or(""), packet.d.get().as_bytes(), owner_id)? { emit(event)?; }
                                     }
+                                    "GUILD_EMOJIS_UPDATE" => {
+                                        let update: GuildEmojisUpdate = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?;
+                                        emit(Event::GuildEmojis { guild: update.guild_id, emojis: update.emojis.0 })?;
+                                    }
+                                    "GUILD_CREATE" => {
+                                        let mut guild: GuildDto = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?;
+                                        if guild.channels.len() + calls.allowed.len() > MAX_NAV { return Err(Failure::Capacity); }
+                                        for mut channel in std::mem::take(&mut guild.channels) {
+                                            channel.guild_id = Some(guild.id);
+                                            let channel = channel.into_model();
+                                            if channel.kind == 2 { calls.allowed.insert(channel.id, channel.guild); }
+                                            emit(Event::ChannelCreated(channel))?;
+                                        }
+                                        emit(calls.snapshot(&mut guild, false)?)?;
+                                        if let Some(emojis) = guild.emojis { emit(Event::GuildEmojis { guild: guild.id, emojis: emojis.0 })?; }
+                                    }
                                     "GUILD_UPDATE" => emit(Event::GuildChanged(decode::<GuildPatchDto>(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?.into_model()))?,
                                     "GUILD_MEMBER_UPDATE" => {
                                         let update:MemberIdentity=decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
                                         if Some(update.user.id)==owner_id {emit(Event::PermissionsChanged)?;}
                                     }
-                                    "GUILD_ROLE_UPDATE" | "GUILD_ROLE_DELETE" | "GUILD_DELETE" => emit(Event::PermissionsChanged)?,
+                                    "GUILD_DELETE" => {
+                                        let guild: GuildDto = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?;
+                                        let removed: Vec<_> = calls.allowed.iter().filter_map(|(channel, id)| (*id == Some(guild.id)).then_some(*channel)).collect();
+                                        for channel in removed { calls.allowed.remove(&channel); emit(Event::Unavailable(channel))?; }
+                                        emit(Event::GuildEmojis { guild: guild.id, emojis: Vec::new() })?;
+                                        emit(Event::PermissionsChanged)?;
+                                    }
+                                    "GUILD_ROLE_UPDATE" | "GUILD_ROLE_DELETE" => emit(Event::PermissionsChanged)?,
                                     _ => {} // No raw-event archive; unsupported events grant no capabilities.
                                 },
                                 _ => return Err(Failure::Protocol),
@@ -576,8 +631,11 @@ mod tests {
                     (19,"THREAD_UPDATE",json!({"id":"7","guild_id":"2","thread_metadata":{"archived":true}})),
                     (20,"THREAD_CREATE",json!({"id":"8","guild_id":"2","parent_id":"4","type":10,"name":"Delete me"})),
                     (21,"THREAD_DELETE",json!({"id":"8","guild_id":"2","parent_id":"4","type":10})),
+                    (22,"GUILD_CREATE",json!({"id":"2","emojis":[{"id":"20","name":"wave","roles":[],"available":true}]})),
+                    (23,"GUILD_EMOJIS_UPDATE",json!({"guild_id":"2","emojis":[{"id":"21","name":"party","animated":true,"roles":[],"available":true}]})),
+                    (24,"GUILD_DELETE",json!({"id":"2"})),
                 ] {send(&mut socket,json!({"op":0,"t":name,"s":sequence,"d":data})).await;}
-                acknowledge(&mut socket,21).await;
+                acknowledge(&mut socket,24).await;
                 // Force a heartbeat reply to race the following terminal close.
                 send(&mut socket,json!({"op":1,"d":null})).await;
                 socket.send(Frame::Close(Some(CloseFrame {code:CloseCode::from(4004),reason:"synthetic expiration".into()}))).await.unwrap();
@@ -589,6 +647,7 @@ mod tests {
             let permission_changes=std::sync::atomic::AtomicUsize::new(0);
             let reaction_changes=std::sync::atomic::AtomicUsize::new(0);
             let thread_events=std::sync::atomic::AtomicUsize::new(0);
+            let emoji_changes=std::sync::atomic::AtomicUsize::new(0);
             let client=run_inner(
                 Arc::new(SessionSecret::from_owner_input("synthetic-owner-session".into()).unwrap()),
                 "wss://gateway.discord.gg/".into(),watch::channel(None).1,mpsc::channel(1).1,
@@ -605,6 +664,16 @@ mod tests {
                     if let Event::Reactions(client_core::reactions::Event::Changed{channel,message})=&event {
                         assert_eq!((*channel,*message),(Id(4),Id(9)));
                         reaction_changes.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
+                    }
+                    if let Event::GuildEmojis {guild,emojis}=&event {
+                        assert_eq!(*guild,Id(2));
+                        let change=emoji_changes.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
+                        match change {
+                            0 => assert_eq!(emojis[0].markup(),"<:wave:20>"),
+                            1 => assert_eq!(emojis[0].markup(),"<a:party:21>"),
+                            2 => assert!(emojis.is_empty()),
+                            _ => panic!("unexpected emoji update"),
+                        }
                     }
                     let mut state=state.lock().unwrap();
                     let thread_change=matches!(&event, Event::ThreadChanged{..}|Event::ThreadsSync{..}|Event::ThreadRemoved{..})
@@ -635,7 +704,9 @@ mod tests {
             assert_eq!(state.channels[0].name,"Synthetic channel");
             assert_eq!(state.read_marker(Id(4)),Some(Some(Id(8))));
             assert_eq!(state.unread(Id(4)),Some(true));
-            assert_eq!(permission_changes.load(std::sync::atomic::Ordering::Relaxed),1);
+            assert_eq!(permission_changes.load(std::sync::atomic::Ordering::Relaxed),2);
+            assert_eq!(emoji_changes.load(std::sync::atomic::Ordering::Relaxed),3);
+            assert!(state.guilds[0].emojis.as_ref().unwrap().is_empty());
             assert_eq!(reaction_changes.load(std::sync::atomic::Ordering::Relaxed),4);
             assert_eq!(thread_events.load(std::sync::atomic::Ordering::Relaxed),8);
         }).await.unwrap();
@@ -868,11 +939,16 @@ mod member_tests {
                 while let Some(Ok(Frame::Text(text)))=socket.next().await {
                     let packet:serde_json::Value=serde_json::from_str(&text).unwrap();
                     if packet["op"]==1 {socket.send(Frame::Text(json!({"op":11,"d":null}).to_string().into())).await.unwrap();continue;}
-                    assert_eq!(packet["op"],14);assert_eq!(packet["d"]["guild_id"],"1");
+                    assert_eq!(packet["op"],37);
+                    assert_eq!(packet["d"]["subscriptions"].as_object().unwrap().len(),1);
+                    let subscription=&packet["d"]["subscriptions"]["1"];
+                    assert_eq!(subscription["threads"],false);
+                    assert_eq!(subscription["activities"],false);
+                    assert_eq!(subscription["members"],json!([]));
                     if !subscribed {
-                        assert_eq!(packet["d"]["channels"]["2"],json!([[0,99]]));subscribed=true;
+                        assert_eq!(subscription["typing"],true);assert_eq!(subscription["channels"],json!({"2":[[0,99]]}));subscribed=true;
                         socket.send(Frame::Text(json!({"op":0,"t":"GUILD_MEMBER_LIST_UPDATE","s":2,"d":{"guild_id":"1","id":"everyone","member_count":1,"ops":[{"op":"SYNC","range":[0,99],"items":[{"member":{"user":{"id":"3","username":"Visible","avatar":"0123456789abcdef0123456789abcdef"}}}]}]}}).to_string().into())).await.unwrap();
-                    } else {assert_eq!(packet["d"]["channels"],json!({}));break;}
+                    } else {assert_eq!(subscription["typing"],false);assert_eq!(subscription["channels"],json!({}));break;}
                 }
                 socket.close(Some(CloseFrame{code:CloseCode::Library(4004),reason:"synthetic stop".into()})).await.unwrap();
             };

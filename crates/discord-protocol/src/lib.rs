@@ -11,7 +11,7 @@ pub mod threads;
 use attachments::AttachmentList;
 use embeds::EmbedList;
 use model::{Channel, Guild, Id, Message, MessagePatch, Patch, User};
-pub use reactions::ReactionTarget;
+pub use reactions::{GuildEmojisUpdate, ReactionTarget};
 use serde::Deserialize;
 use serde_json::value::RawValue;
 
@@ -183,6 +183,8 @@ mod channel_tests {
 }
 #[derive(Deserialize)]
 pub struct GuildDto {
+    #[serde(default)]
+    pub emojis: Option<reactions::CustomEmojiList>,
     pub id: Id,
     #[serde(default)]
     pub properties: Option<GuildProperties>,
@@ -196,6 +198,10 @@ pub struct GuildDto {
     pub threads: Vec<ChannelDto>,
     #[serde(default)]
     pub roles: Vec<RoleDto>,
+    #[serde(default)]
+    pub voice_states: Vec<VoiceStateDto>,
+    #[serde(default)]
+    pub members: Vec<VoiceMemberDto>,
 }
 #[derive(Deserialize)]
 pub struct GuildProperties {
@@ -221,6 +227,8 @@ impl GuildPatchDto {
 }
 #[derive(Deserialize)]
 pub struct Ready {
+    #[serde(default)]
+    pub users: Vec<UserDto>,
     #[serde(default)]
     pub read_state: Option<read_state::Snapshot>,
     pub user: UserDto,
@@ -274,6 +282,7 @@ impl Ready {
                     channels.push(threads::into_thread(thread, g.id)?);
                 }
                 Ok(Guild {
+                    emojis: g.emojis.map(|emojis| emojis.0),
                     id: g.id,
                     name: g.name.chars().take(128).collect(),
                     icon: g.icon.filter(|hash| model::valid_avatar_hash(hash)),
@@ -282,14 +291,7 @@ impl Ready {
             .collect::<Result<Vec<_>, DecodeError>>()?;
         let unique: std::collections::BTreeSet<_> = channels.iter().map(|c| c.id).collect();
         let bytes = channels.iter().map(Channel::bytes).sum::<usize>()
-            + guilds
-                .iter()
-                .map(|g| {
-                    size_of::<Guild>()
-                        + g.name.capacity()
-                        + g.icon.as_ref().map_or(0, String::capacity)
-                })
-                .sum::<usize>();
+            + guilds.iter().map(Guild::bytes).sum::<usize>();
         if channels.len() + guilds.len() > threads::MAX_ITEMS
             || bytes > MAX_WIRE
             || unique.len() != channels.len()
@@ -754,6 +756,14 @@ pub struct VoiceStateDto {
     pub self_mute: bool,
     #[serde(default)]
     pub self_deaf: bool,
+    #[serde(default)]
+    pub mute: bool,
+    #[serde(default)]
+    pub deaf: bool,
+    #[serde(default)]
+    pub suppress: bool,
+    #[serde(default)]
+    pub member: Option<VoiceMemberDto>,
 }
 #[derive(Deserialize)]
 pub struct VoiceServerDto {
@@ -763,4 +773,33 @@ pub struct VoiceServerDto {
     pub channel_id: Option<Id>,
     pub token: String,
     pub endpoint: Option<String>,
+}
+
+/// READY_SUPPLEMENTAL member identities can reference the READY users array.
+#[derive(Deserialize)]
+pub struct VoiceMemberDto {
+    #[serde(default)]
+    pub user: Option<UserDto>,
+    #[serde(default)]
+    pub user_id: Option<Id>,
+    #[serde(default)]
+    pub nick: Option<String>,
+}
+#[derive(Deserialize)]
+pub struct ReadySupplemental {
+    #[serde(default)]
+    pub guilds: Vec<GuildDto>,
+    #[serde(default)]
+    pub merged_members: Vec<Vec<VoiceMemberDto>>,
+}
+#[derive(Deserialize)]
+pub struct PassiveVoiceUpdate {
+    #[serde(default)]
+    pub guild_id: Option<Id>,
+    #[serde(default)]
+    pub updated_voice_states: Vec<VoiceStateDto>,
+    #[serde(default)]
+    pub removed_voice_states: Vec<Id>,
+    #[serde(default)]
+    pub updated_members: Vec<VoiceMemberDto>,
 }

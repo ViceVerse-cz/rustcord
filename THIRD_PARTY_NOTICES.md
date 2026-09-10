@@ -21,3 +21,11 @@ The initial packaging command stages original licenses and this inventory notice
 Native Save As uses rfd 0.17.2 (MIT) and its pollster 0.4.0 dependency (MIT OR Apache-2.0). Their unmodified license texts are in `assets/licenses/files` and are staged in `licenses/files` in both package variants.
 
 Single-file upload streaming enables existing reqwest's `stream` feature and Tokio's `fs` feature. The native dependency addition is **tokio-util 0.7.19** (MIT, Tokio Contributors); its unmodified registry `LICENSE` is included as `assets/licenses/files/tokio-util-LICENSE-MIT` and staged in both package variants. Existing futures-util remains MIT OR Apache-2.0. Cargo.lock also gains wasm-streams 0.5.0 through reqwest's wasm-only target declaration; it is not selected by these native builds. See the dated addendum in [the dependency inventory](docs/dependency-versions.md).
+
+Twemoji 17.0.3 graphics © Twitter, Inc. and other contributors are licensed under **CC BY 4.0**, separately from Serein code. Source: https://github.com/jdecked/twemoji/tree/v17.0.3. The bundled images are resized and packed into an atlas; see [assets/twemoji/README.md](assets/twemoji/README.md) for provenance and modifications. The full license is `assets/twemoji/LICENSE-GRAPHICS`, staged in both packages as `licenses/Twemoji-CC-BY-4.0.txt`. No Twemoji JavaScript is bundled.
+
+The emoji picker's English names and fully qualified sequences derive from Unicode 17.0
+`emoji-test.txt`, © 2025 Unicode, Inc., under Unicode License v3. Provenance and transformations
+are in `assets/twemoji/NAMES.md`; `assets/twemoji/LICENSE-UNICODE` is shipped in both packages
+as `licenses/Unicode-LICENSE.txt`. Custom server emoji are service content fetched on demand,
+not redistributed in this repository; demo custom images are original synthetic shapes.
