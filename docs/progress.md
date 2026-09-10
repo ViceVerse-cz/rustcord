@@ -11,7 +11,17 @@ or browser action occurs before deliberate confirmation. Cancellation/Escape dis
 The one bounded pending link resets on logout. This branch starts at 36ab5e7 (PR #26), with
 separately copied/hash-verified baseline packages. Native automation remains paused after owner
 Escape stops; no browser, account, microphone or OS notification action is authorized for tests.
-Validation and package measurements are pending for this slice.
+Windows cargo xtask check passed 198 offline Rust tests, doctests, formatting, strict
+all-feature Clippy, text-only compilation and policy checks. Five new tests cover typed routes,
+explicit confirmation/cancel/Escape, normalized displayed/emitted destinations, keyboard sidebar
+actions, message fallback clicks, permission/metadata guards, logout reset and confirmation
+without a selected channel. Review found and fixed Escape reaching background Search/Archives;
+a regression test now preserves Search while canceling the foreground confirmation.
+PR #26's deterministic Gateway fixture fix is integrated; its repaired macOS PR job passed.
+Both unsigned Windows packages passed. Text executable: 49,798,144 bytes (+21,504 / 0.043%);
+voice executable: 53,150,720 bytes (+22,016 / 0.041%). Full installed/ZIP sizes and hashes are
+in docs/performance.md. Seven original dirty files were hash-verified unchanged. Packages
+were measured without launching them. Native/browser/live evidence remains unverified.
 
 Latest implementation: session-only microphone gain and speaker volume (SPEC 11). Both Audio
 menu controls range from 0% to 200%, start at 100%, support keyboard input and offer Reset levels.

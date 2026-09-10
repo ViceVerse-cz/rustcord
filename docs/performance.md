@@ -1,5 +1,35 @@
 # Initial performance evidence
 
+## Unsupported-content fallback - Windows packages, September 10, 2026
+
+Baseline 36ab5e729571d7e42650b02ec3feefb9418652c3 (PR #26) packages were separately
+copied and hash-verified before edits. The changed branch also integrates the later Gateway
+fixture-only CI fix. Same Windows 11 Home 10.0.26200 / Ryzen 7 7800X3D (16 logical CPUs) /
+about 31 GiB RAM / Rust 1.98.1, release thin LTO, one codegen unit, wgpu.
+Both unsigned package commands passed. One size measurement per variant, ZIP DEFLATE level 9;
+text excludes the voice subdirectory.
+
+| Metric | Baseline | Fallback | Delta |
+| --- | ---: | ---: | ---: |
+| text executable bytes | 49,776,640 | 49,798,144 | +21,504 (+0.043%) |
+| text installed bytes | 50,255,386 | 50,286,162 | +30,776 (+0.061%) |
+| text ZIP bytes | 31,159,877 | 31,169,312 | +9,435 (+0.030%) |
+| voice executable bytes | 53,128,704 | 53,150,720 | +22,016 (+0.041%) |
+| voice installed bytes | 53,833,119 | 53,861,511 | +28,392 (+0.053%) |
+| voice ZIP bytes | 32,536,920 | 32,541,063 | +4,143 (+0.013%) |
+
+File counts remain 50/96; no dependency or notice change. Installed totals describe actual
+staged docs before this measurement addendum. Packages contain no PR evidence. Generated
+routes are bounded by three u64 IDs; the existing single pending external-link slot retains
+the 2,048-byte URL limit. Only visible rows create fallback controls. No new worker, queue,
+network request or persistent cache is added. No reducer/cache algorithm changed, so replay
+was not rerun. Native CPU/RSS, frame timing, browser-helper footprint and destination resolution
+remain unmeasured because desktop automation is paused. No runtime improvement is claimed.
+
+SHA256 of measured executables:
+- text: 6D1B66CA08D75A3910633388B43B3B9B41EFCEF54DE5AA44BC7CC4C2B84E3A9C
+- voice: 1A1FD426CED5D23386B6B8417A47940A8998D04364122542ECCF82D99B64A97E
+
 ## Session voice gain - Windows package comparison, September 10, 2026
 
 Baseline 3f9aa0edcd35f82eb83d5576a63d453fc384725c (PR #24) packages were copied and
