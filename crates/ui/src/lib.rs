@@ -34,6 +34,12 @@ pub struct MessagingUi {
     pub reconnect_requested: bool,
     pub draft_changes: Vec<Id>,
     pub draft_restore_pending: bool,
+    pub attachment: Option<(String, u64)>,
+    pub attach_requested: bool,
+    pub remove_attachment_requested: bool,
+    pub cancel_upload_requested: bool,
+    pub upload_busy: bool,
+    pub upload_status: Option<String>,
     pub clear_cache_requested: bool,
     pub voice_available: bool,
     pub voice_inputs: Vec<(String, String)>,
@@ -211,6 +217,9 @@ impl MessagingUi {
                 });
                 let preview: String = pending.content.chars().take(80).collect();
                 ui.label(preview);
+                if let Some(filename) = &pending.attachment {
+                    ui.label(format!("File: {filename}"));
+                }
                 if pending.delivery != Delivery::Sending && ui.small_button("Restore to draft").on_hover_text("For an unknown outcome, check the official client first; sending again can duplicate it.").clicked() { discard = Some(index); }
             });
         }
@@ -220,6 +229,9 @@ impl MessagingUi {
                     "Draft budget full. Clear an existing draft before restoring pending text";
             } else if state.drafts.get(&channel).is_none_or(String::is_empty) {
                 let pending = state.pending.remove(index);
+                if pending.attachment.is_some() {
+                    state.status = "Text restored; reselect the attachment before sending again";
+                }
                 state.drafts.insert(channel, pending.content);
                 self.draft_changes.push(channel);
             } else {
@@ -242,6 +254,32 @@ impl MessagingUi {
                 }
             });
             ui.add_space(6.0);
+        }
+        if let Some((filename, bytes)) = &self.attachment {
+            if state.demo {
+                ui.label("Uploads are disabled in offline preview");
+            }
+            ui.horizontal_wrapped(|ui| {
+                ui.label(format!("{filename} · {bytes} bytes"));
+                if ui
+                    .add_enabled(!self.upload_busy, egui::Button::new("Remove attachment"))
+                    .clicked()
+                {
+                    self.remove_attachment_requested = true;
+                }
+            });
+        }
+        if self.upload_busy || self.upload_status.is_some() {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    self.upload_status
+                        .as_deref()
+                        .unwrap_or("Preparing attachment…"),
+                );
+                if self.upload_busy && ui.button("Cancel upload").clicked() {
+                    self.cancel_upload_requested = true;
+                }
+            });
         }
         let full = state.draft_bytes() >= MAX_DRAFT_BYTES
             || (!state.drafts.contains_key(&channel) && state.drafts.len() >= 64);
@@ -361,7 +399,10 @@ impl MessagingUi {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
                             .add_enabled(
-                                state.freshness == Freshness::Fresh && count > 0,
+                                state.freshness == Freshness::Fresh
+                                    && !self.upload_busy
+                                    && !(state.demo && self.attachment.is_some())
+                                    && (count > 0 || self.attachment.is_some()),
                                 egui::Button::new(
                                     RichText::new("Send").strong().color(colors.accent_text),
                                 )
@@ -379,6 +420,9 @@ impl MessagingUi {
                                 .color(colors.muted),
                         );
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            if ui.add_enabled(state.gateway_connected && state.freshness == Freshness::Fresh && !self.upload_busy && self.attachment.is_none(), egui::Button::new("Attach file")).on_hover_text("Choose one file up to 20 MB. Upload starts only when you press Send.").clicked() {
+                                self.attach_requested = true;
+                            }
                             ui.add(
                                 egui::Label::new(
                                     RichText::new("Enter to send · Shift+Enter for a new line")
@@ -390,7 +434,8 @@ impl MessagingUi {
                         });
                     });
                 });
-                if send && let Some(command) = state.prepare_send() {
+                if send && !self.upload_busy && !(state.demo && self.attachment.is_some())
+                    && let Some(command) = state.prepare_send_with_attachment(self.attachment.as_ref().map(|(name, _)| name.as_str())) {
                     commands.push(command);
                     edit.request_focus();
                 }
@@ -1117,6 +1162,56 @@ mod composer_tests {
             );
             assert_eq!(state.profile.as_ref().unwrap().guild, guild);
             output.drop_without_applying_deltas();
+        }
+    }
+
+    #[test]
+    fn attachment_only_enter_sends_once_and_busy_upload_blocks_resending() {
+        for busy in [true, false] {
+            let ctx = egui::Context::default();
+            let mut state = State {
+                selected: Some(Id(1)),
+                auth: client_core::auth::AuthState::Authenticated,
+                freshness: Freshness::Fresh,
+                ..Default::default()
+            };
+            let mut messaging = MessagingUi {
+                attachment: Some(("synthetic.txt".into(), 32)),
+                upload_busy: busy,
+                ..Default::default()
+            };
+            let mut commands = Vec::new();
+            let mut editor = egui::Id::NULL;
+            ctx.run_ui(Default::default(), |ui| {
+                editor = ui.make_persistent_id("message-input");
+                messaging.composer(ui, &mut state, Id(1), &ctx, &mut commands);
+            })
+            .drop_without_applying_deltas();
+            ctx.memory_mut(|m| m.request_focus(editor));
+            ctx.run_ui(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key: egui::Key::Enter,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                    ..Default::default()
+                },
+                |ui| messaging.composer(ui, &mut state, Id(1), &ctx, &mut commands),
+            )
+            .drop_without_applying_deltas();
+            assert_eq!(commands.len(), usize::from(!busy));
+            if !busy {
+                assert!(
+                    matches!(&commands[0], Command::Send { content, .. } if content.is_empty())
+                );
+                assert_eq!(
+                    state.pending[0].attachment.as_deref(),
+                    Some("synthetic.txt")
+                );
+            }
         }
     }
 

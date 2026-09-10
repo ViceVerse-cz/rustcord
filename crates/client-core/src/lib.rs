@@ -140,6 +140,7 @@ pub struct Envelope {
 pub struct Pending {
     pub channel: Id,
     pub content: String,
+    pub attachment: Option<String>,
     pub nonce: String,
     pub delivery: Delivery,
     pub confirmed: Option<Id>,
@@ -232,7 +233,12 @@ impl State {
             + self
                 .pending
                 .iter()
-                .map(|p| p.content.capacity() + p.nonce.capacity() + size_of::<Pending>())
+                .map(|p| {
+                    p.content.capacity()
+                        + p.nonce.capacity()
+                        + p.attachment.as_ref().map_or(0, String::capacity)
+                        + size_of::<Pending>()
+                })
                 .sum::<usize>()
     }
     pub fn select(&mut self, channel: Id) -> Option<Command> {
@@ -348,21 +354,40 @@ impl State {
         Some(self.history(Some(before)))
     }
     pub fn prepare_send(&mut self) -> Option<Command> {
+        self.prepare_send_with_attachment(None)
+    }
+    pub fn prepare_send_with_attachment(&mut self, filename: Option<&str>) -> Option<Command> {
         let channel = self.selected?;
         if self.auth != auth::AuthState::Authenticated || self.freshness != Freshness::Fresh {
             self.status = "Wait for a current connected channel";
             return None;
         }
-        let content = self.drafts.get(&channel)?;
-        if content.trim().is_empty()
+        if filename.is_some_and(|name| {
+            name.trim().is_empty()
+                || name.len() > 256
+                || matches!(name, "." | "..")
+                || name
+                    .chars()
+                    .any(|c| c.is_control() || matches!(c, '/' | '\\' | ':'))
+        }) {
+            self.status = "Attachment filename is invalid or too long";
+            return None;
+        }
+        let content = self.drafts.get(&channel).map_or("", String::as_str);
+        if (content.trim().is_empty() && filename.is_none())
             || content.chars().count() > MAX_CONTENT
             || self.pending.len() >= 64
-            || self.draft_bytes() + content.len() > MAX_DRAFT_BYTES
+            || self.draft_bytes()
+                + content.len()
+                + filename.map_or(0, str::len)
+                + size_of::<Pending>()
+                + 32
+                > MAX_DRAFT_BYTES
         {
             self.status = "Send exceeds the session input budget";
             return None;
         }
-        let content = content.clone();
+        let content = content.to_owned();
         self.send_sequence += 1;
         let epoch = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -372,6 +397,7 @@ impl State {
         self.pending.push(Pending {
             channel,
             content: content.clone(),
+            attachment: filename.map(str::to_owned),
             nonce: nonce.clone(),
             delivery: Delivery::Sending,
             confirmed: None,
@@ -475,10 +501,17 @@ impl State {
         if matches!(&command, Command::History { request, .. } if *request == self.request) {
             self.cancel_history();
         }
-        if let Command::Send { nonce, .. } = command
-            && let Some(p) = self.pending.iter_mut().find(|p| p.nonce == nonce)
-        {
-            p.delivery = Delivery::Rejected;
+        if let Command::Send { nonce, .. } = command {
+            self.apply(Envelope {
+                generation: self.generation,
+                event: Event::SendResult {
+                    nonce,
+                    result: Err(auth::Failure::ProtocolAt(
+                        "Work queue full; message was not sent",
+                    )),
+                },
+            });
+            return;
         }
         self.status = "Work queue full; action was not sent";
         self.freshness = Freshness::Stale;
@@ -855,7 +888,11 @@ impl State {
                                 Delivery::Rejected
                             };
                         }
-                        self.fail(f);
+                        if f.ends_session() {
+                            self.fail(f);
+                        } else {
+                            self.status = f.label();
+                        }
                     }
                 }
                 self.pending.retain(|p| p.delivery != Delivery::Confirmed);
@@ -1060,6 +1097,114 @@ impl Event {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rejected_sends_do_not_invalidate_a_healthy_conversation() {
+        let mut state = State {
+            selected: Some(Id(1)),
+            auth: auth::AuthState::Authenticated,
+            freshness: Freshness::Fresh,
+            gateway_connected: true,
+            ..State::default()
+        };
+        let command = state.prepare_send_with_attachment(Some("a.txt")).unwrap();
+        let Command::Send { nonce, .. } = &command else {
+            panic!()
+        };
+        let nonce = nonce.clone();
+        state.selected = Some(Id(2));
+        state.command_rejected(command);
+        assert_eq!(state.pending[0].delivery, Delivery::Rejected);
+        assert_eq!(state.freshness, Freshness::Fresh);
+        apply(
+            &mut state,
+            Event::SendResult {
+                nonce: nonce.clone(),
+                result: Err(auth::Failure::ProtocolAt(
+                    "Upload cancelled; no message was sent",
+                )),
+            },
+        );
+        assert_eq!(state.freshness, Freshness::Fresh);
+        assert!(state.gateway_connected);
+        apply(
+            &mut state,
+            Event::SendResult {
+                nonce,
+                result: Err(auth::Failure::Expired),
+            },
+        );
+        assert_eq!(state.auth, auth::AuthState::Expired);
+        assert_eq!(state.freshness, Freshness::Stale);
+        assert!(!state.gateway_connected);
+    }
+    #[test]
+    fn attachment_only_sends_are_bounded_and_keep_existing_confirmation() {
+        let mut state = State {
+            selected: Some(Id(1)),
+            auth: auth::AuthState::Authenticated,
+            freshness: Freshness::Fresh,
+            ..State::default()
+        };
+        assert!(state.prepare_send().is_none());
+        for invalid in [
+            "",
+            " ",
+            ".",
+            "..",
+            "../secret.txt",
+            "C:\\secret.txt",
+            "a\nb",
+        ] {
+            assert!(state.prepare_send_with_attachment(Some(invalid)).is_none());
+        }
+        assert!(
+            state
+                .prepare_send_with_attachment(Some(&"é".repeat(129)))
+                .is_none()
+        );
+        state.reply = Some(Id(4));
+        let Command::Send {
+            content,
+            nonce,
+            reply,
+            ..
+        } = state
+            .prepare_send_with_attachment(Some("résumé.txt"))
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert!(content.is_empty());
+        assert_eq!(reply, Some(Id(4)));
+        assert_eq!(state.pending[0].attachment.as_deref(), Some("résumé.txt"));
+        assert!(state.draft_bytes() >= "résumé.txt".len() + nonce.len() + size_of::<Pending>());
+        apply(
+            &mut state,
+            Event::SendResult {
+                nonce: nonce.clone(),
+                result: Err(auth::Failure::Ambiguous),
+            },
+        );
+        assert_eq!(state.pending[0].delivery, Delivery::Ambiguous);
+        let mut confirmed = message(10);
+        confirmed.nonce = Some(nonce.clone());
+        apply(
+            &mut state,
+            Event::SendResult {
+                nonce,
+                result: Ok(confirmed),
+            },
+        );
+        assert!(state.pending.is_empty());
+        state.freshness = Freshness::Fresh;
+        state.drafts.insert(
+            Id(2),
+            "x".repeat(MAX_DRAFT_BYTES - size_of::<Pending>() - 32),
+        );
+        assert!(state.prepare_send_with_attachment(Some("a.txt")).is_none());
+        state.logout();
+        assert!(!state.has_unsent());
+    }
     use super::*;
 
     #[test]

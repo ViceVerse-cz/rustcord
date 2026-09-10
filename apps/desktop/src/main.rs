@@ -4,6 +4,7 @@ mod cache;
 mod connection;
 mod credentials;
 mod downloads;
+mod uploads;
 #[cfg(feature = "voice")]
 mod voice;
 use client_core::{
@@ -40,6 +41,7 @@ struct Desktop {
     state: State,
     messaging: ui::MessagingUi,
     downloads: downloads::Downloads,
+    uploads: uploads::Uploads,
     download_close_pending: bool,
     window: Arc<winit::window::Window>,
     avatars: Option<avatars::AvatarWorker>,
@@ -159,6 +161,7 @@ impl Desktop {
             state,
             messaging: ui::MessagingUi::default(),
             downloads: downloads::Downloads::default(),
+            uploads: uploads::Uploads::default(),
             download_close_pending: false,
             window: cc
                 .winit_window()
@@ -209,6 +212,7 @@ impl Desktop {
         #[cfg(feature = "voice")]
         self.voice.stop();
         self.state.disconnect_voice();
+        self.uploads.cancel();
         self.login = None;
         self.connection = None;
         if let Some(worker) = self.avatars.take() {
@@ -231,6 +235,7 @@ impl Desktop {
         ));
     }
     fn logout(&mut self, ctx: &egui::Context) {
+        self.uploads.cancel();
         if let Some(store) = &mut self.store {
             store.cancel_load();
         }
@@ -308,6 +313,59 @@ impl Desktop {
         false
     }
     fn command(&mut self, command: Command) {
+        if let Command::Send { channel, nonce, .. } = &command
+            && self
+                .state
+                .pending
+                .iter()
+                .any(|p| p.nonce == *nonce && p.attachment.is_some())
+        {
+            let (channel, nonce) = (*channel, nonce.clone());
+            let available = !self.state.demo
+                && !self.fixture_only
+                && self.state.auth == AuthState::Authenticated
+                && self.state.gateway_connected
+                && self.state.freshness == model::Freshness::Fresh
+                && self.state.selected == Some(channel)
+                && self.connection.is_some();
+            if available
+                && let Some(source) = self.uploads.take_source(self.state.generation, channel)
+            {
+                let (progress, receive) =
+                    tokio::sync::watch::channel(discord_api::upload::Status::Preparing);
+                let (cancel, _) = tokio::sync::watch::channel(false);
+                if self.uploads.begin_upload(receive, cancel.clone()).is_ok() {
+                    let request = uploads::UploadRequest {
+                        command,
+                        source,
+                        progress,
+                        cancel,
+                    };
+                    self.messaging.attachment = None;
+                    if let Err(error) = self.connection.as_ref().unwrap().uploads.try_send(request)
+                    {
+                        let request = error.into_inner();
+                        request
+                            .progress
+                            .send_replace(discord_api::upload::Status::Failed(
+                                "Upload queue full; reselect the file",
+                            ));
+                        self.state.command_rejected(request.command);
+                    }
+                    return;
+                }
+            }
+            self.state.apply(Envelope {
+                generation: self.state.generation,
+                event: Event::SendResult {
+                    nonce,
+                    result: Err(Failure::ProtocolAt(
+                        "File not sent; reconnect and reselect the attachment",
+                    )),
+                },
+            });
+            return;
+        }
         if let Command::Voice(control) = &command {
             if self.state.demo || self.fixture_only {
                 self.state.status = "Voice calls are unavailable in the offline preview";
@@ -1064,6 +1122,21 @@ impl eframe::App for Desktop {
     }
     fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        let upload_allowed = self.state.user.is_some()
+            && self.state.gateway_connected
+            && self.state.freshness == model::Freshness::Fresh;
+        self.uploads.poll(
+            self.state.generation,
+            self.state.selected,
+            upload_allowed,
+            &ctx,
+        );
+        self.messaging.attachment = self
+            .uploads
+            .selection()
+            .map(|(name, size)| (name.to_owned(), size));
+        self.messaging.upload_busy = self.uploads.busy();
+        self.messaging.upload_status = self.uploads.status();
         if self.state.user.is_none() {
             self.downloads.cancel();
         }
@@ -1104,6 +1177,7 @@ impl eframe::App for Desktop {
                     .iter()
                     .any(|p| p.delivery != Delivery::Confirmed)
                 || self.messaging.has_edit()
+                || self.uploads.has_unsent()
                 || self.forgetting
                 || self.avatar_cleanup.is_some()
                 || self.cache_pending > 0
@@ -1123,6 +1197,31 @@ impl eframe::App for Desktop {
         } else if self.state.user.is_some() {
             self.messaging.storage_status = self.cache_status;
             let commands = self.messaging.show(ui, &mut self.state);
+            // Selection may have changed during this frame; never reuse another channel's file.
+            self.uploads.poll(
+                self.state.generation,
+                self.state.selected,
+                self.state.gateway_connected && self.state.freshness == model::Freshness::Fresh,
+                &ctx,
+            );
+            if std::mem::take(&mut self.messaging.remove_attachment_requested) {
+                self.uploads.remove();
+            }
+            if std::mem::take(&mut self.messaging.cancel_upload_requested) {
+                self.uploads.cancel();
+            }
+            if std::mem::take(&mut self.messaging.attach_requested)
+                && let Some(channel) = self.state.selected
+                && let Err(error) = self.uploads.start_choose(
+                    self.state.generation,
+                    channel,
+                    self.runtime.handle(),
+                    &ctx,
+                    self.window.clone(),
+                )
+            {
+                self.state.status = error;
+            }
             if std::mem::take(&mut self.messaging.downloads().cancel_requested) {
                 self.downloads.cancel();
             }
@@ -1177,7 +1276,8 @@ impl eframe::App for Desktop {
             self.poll_voice(&ctx);
             if self.messaging.logout_requested {
                 self.messaging.logout_requested = false;
-                if self.state.has_unsent() || self.messaging.has_edit() {
+                if self.state.has_unsent() || self.messaging.has_edit() || self.uploads.has_unsent()
+                {
                     self.confirming_logout = true;
                 } else {
                     self.logout(&ctx);
@@ -1199,12 +1299,12 @@ impl eframe::App for Desktop {
         }
         if self.confirming_close || self.confirming_logout {
             egui::Window::new("Leave this session?").collapsible(false).show(&ctx,|ui|{
-                ui.label("Saved drafts survive exit. Logout removes local account data. Edits and uncertain sends need your attention.");
+                ui.label("Saved text drafts survive exit; selected files must be reselected. Logout removes local account data. Edits and uncertain sends need your attention.");
                 if self.forgetting{ui.label("Wait for saved-login removal to finish.");}
                 ui.horizontal(|ui|{
                     if ui.button("Keep working").clicked(){self.confirming_close=false;self.confirming_logout=false;self.download_close_pending=false;}
                     if ui.add_enabled(!self.forgetting,egui::Button::new("Discard and continue")).clicked(){
-                        if self.confirming_close{self.close_approved=true;if self.downloads.is_active(){self.downloads.cancel();self.download_close_pending=true;}else{ctx.send_viewport_cmd(egui::ViewportCommand::Close);}}else{self.logout(&ctx);}
+                        if self.confirming_close{self.close_approved=true;self.uploads.cancel();if self.downloads.is_active(){self.downloads.cancel();self.download_close_pending=true;}else{ctx.send_viewport_cmd(egui::ViewportCommand::Close);}}else{self.logout(&ctx);}
                     }
                 });
             });

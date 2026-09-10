@@ -73,3 +73,24 @@ Baseline 74c0d79 versus this reaction/pins change; both text and voice packages 
 Replay method: `cargo build --release --locked -p replay-bench`, then run the produced executable once for warmup and five measured times on each revision. Baseline runs: 26.4021, 26.2139, 25.7050, 26.6599, 25.9837 ms; after: 26.1046, 28.5302, 26.8548, 26.3168, 26.2875 ms. Each run reduces 100,000 synthetic events and checks bounded state/logout. The small median difference is noise, not an optimization claim. This workload does not measure the pins endpoint, actual network latency, UI frame time, process RSS or voice audio.
 
 Native baseline only: rebuilt text --demo, default dark 1122x792 captured window, wgpu renderer; selected adapter and display scale were not independently measured. After more than 30 seconds settling and one synthetic reaction toggle, 16 Get-Process samples at one-second intervals covered 15.247 seconds. Working set stayed 198,946,816 bytes, private bytes 412,827,648; CPU delta was 0.046875 seconds (0.307% of one core). This baseline exceeds the initial 150 MiB active-text working-set target. Whole-system contention, GPU allocations, helper-process usage, startup/frame p95 and voice memory were not measured. The owner stopped Computer Use before after-build interaction; no comparable after native-memory/CPU sample or performance improvement is claimed.
+
+## September 10: single-file uploads (Windows)
+
+Baseline e99bc8817454335789b84140c2998394bca899cf versus this attachment change. Same Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical processors), approximately 31 GiB visible RAM, pinned Rust 1.98.1 and release profile. The baseline text/voice packages were copied separately after their executable hashes matched the reviewed baseline builds. Both changed variants were packaged successfully. New native tokio-util 0.7.19 comes from enabling reqwest streaming; its MIT license is included. No fonts/codecs changed. These unsigned development-package measurements exclude the OS WebView2 runtime and drivers. Installed totals and ZIPs reflect staging before this final progress/performance note was added; text excludes its sibling voice directory and both exclude PR evidence. ZIP: all respective package files, Python zipfile DEFLATE level 9.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable, bytes | 41,835,008 | 42,109,440 | +274,432 (+0.656%) |
+| Voice executable, bytes | 45,182,976 | 45,423,616 | +240,640 (+0.533%) |
+| Text installed package, bytes | 42,060,801 | 42,345,271 | +284,470 (+0.676%) |
+| Voice installed package, bytes | 45,632,327 | 45,884,089 | +251,762 (+0.552%) |
+| Text ZIP, bytes | 24,380,566 | 24,476,080 | +95,514 (+0.392%) |
+| Voice ZIP, bytes | 25,746,892 | 25,829,810 | +82,918 (+0.322%) |
+| Reducer replay median, milliseconds | 26.8048 | 26.5324 | -0.2724 (-1.02%, noise) |
+| Retained timeline estimated bytes | 220,992-221,477 | 220,992-221,477 | Unchanged, 500 records |
+
+Replay: build release replay-bench once per revision; one warmup plus five direct executable runs, 100,000 synthetic events each. Baseline: 26.5979, 28.1066, 26.8048, 26.5815, 27.4200 ms. After: 26.2354, 26.3576, 27.3465, 28.1847, 26.5324 ms. This reducer workload does not measure file transfers, network throughput, process memory, UI latency or voice.
+
+Native baseline only: text --demo, dark 1122x792 window, wgpu; selected adapter/display scale unmeasured. After more than 30 seconds idle settling, 16 Get-Process samples at one-second intervals covered 15.273 seconds. Working set peaked at 158,564,352 bytes and settled at 158,547,968; private bytes peaked at 394,444,800 and settled at 394,412,032. CPU delta was 0.046875 seconds (0.307% of one core). The baseline was idle, with no picker/upload interaction. The owner stopped Computer Use before changed-build inspection, so no comparable after sample, upload-load memory, frame/startup p95, GPU/helper-process or voice-memory measurement is available. No native performance improvement is claimed.
+
+Resource ceilings: one selected file/job, file <=20,000,000 bytes, 64 KiB application chunks, latest-value progress, staging/storage responses <=64 KiB, local path <=4096 encoded bytes and filename <=256 UTF-8 bytes. Library, TLS, OS and driver buffers are additional. This avoids a deliberate whole-file allocation but is not a measured process-memory ceiling. Pending filename metadata shares existing draft/pending admission budgets; no upload disk snapshot or new database table exists.

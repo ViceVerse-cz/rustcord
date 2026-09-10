@@ -1,4 +1,5 @@
 // Direct, origin-fixed REST adapter. No cookies, redirects, logging, persistence or bot SDK.
+pub mod upload;
 use client_core::{
     Command, Event,
     auth::{AuthProvider, Failure, SessionSecret},
@@ -30,6 +31,8 @@ pub struct DiscordApi {
     stopped: AtomicBool,
     #[cfg(test)]
     base: String,
+    #[cfg(test)]
+    upload_origin: Option<std::net::SocketAddr>,
 }
 impl DiscordApi {
     pub fn new(secret: Arc<SessionSecret>) -> Result<Self, Failure> {
@@ -50,6 +53,8 @@ impl DiscordApi {
             stopped: AtomicBool::new(false),
             #[cfg(test)]
             base: "https://discord.com/api/v10".into(),
+            #[cfg(test)]
+            upload_origin: None,
         })
     }
     pub fn stop(&self) {
@@ -389,30 +394,9 @@ impl DiscordApi {
                 nonce,
                 reply,
             } => {
-                if content.trim().is_empty() || content.chars().count() > client_core::MAX_CONTENT {
-                    return Event::SendResult {
-                        nonce,
-                        result: Err(Failure::Capacity),
-                    };
-                }
-                let mut body = serde_json::json!({ "content": content, "nonce": nonce, "allowed_mentions": allowed_mentions(&content) });
-                if let Some(reply) = reply {
-                    body["message_reference"] =
-                        serde_json::json!({"message_id": reply, "channel_id": channel});
-                }
-                // No enforce_nonce claim until normal-user semantics are live verified. Never auto-retry writes.
                 let result = self
-                    .request(
-                        Method::POST,
-                        &format!("/channels/{channel}/messages"),
-                        Some(body),
-                    )
-                    .await
-                    .and_then(|bytes| {
-                        decode::<MessageDto>(&bytes)
-                            .map(MessageDto::into_model)
-                            .map_err(|_| Failure::Ambiguous)
-                    });
+                    .send_message(channel, &content, &nonce, reply, None)
+                    .await;
                 Event::SendResult { nonce, result }
             }
             Command::Edit {
@@ -551,6 +535,40 @@ impl DiscordApi {
             .into_page(channel, before)
             .map(client_core::search::Outcome::Page)
             .map_err(|_| Failure::Protocol)
+    }
+    async fn send_message(
+        &self,
+        channel: model::Id,
+        content: &str,
+        nonce: &str,
+        reply: Option<model::Id>,
+        attachment: Option<serde_json::Value>,
+    ) -> Result<model::Message, Failure> {
+        if (content.trim().is_empty() && attachment.is_none())
+            || content.chars().count() > client_core::MAX_CONTENT
+        {
+            return Err(Failure::Capacity);
+        }
+        let mut body = serde_json::json!({"content":content,"nonce":nonce,"allowed_mentions":allowed_mentions(content)});
+        if let Some(reply) = reply {
+            body["message_reference"] =
+                serde_json::json!({"message_id":reply,"channel_id":channel});
+        }
+        if let Some(attachment) = attachment {
+            body["attachments"] = serde_json::json!([attachment]);
+        }
+        // No enforce_nonce claim until normal-user semantics are live verified. Never auto-retry writes.
+        self.request(
+            Method::POST,
+            &format!("/channels/{channel}/messages"),
+            Some(body),
+        )
+        .await
+        .and_then(|bytes| {
+            decode::<MessageDto>(&bytes)
+                .map(MessageDto::into_model)
+                .map_err(|_| Failure::Ambiguous)
+        })
     }
 }
 impl AuthProvider for DiscordApi {
