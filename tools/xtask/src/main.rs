@@ -130,7 +130,10 @@ fn package(voice: bool) -> Result<(), String> {
     } else {
         root.join(exe)
     };
-    let source = PathBuf::from("target/release").join(exe);
+    let source = std::env::var_os("CARGO_TARGET_DIR")
+        .map_or_else(|| PathBuf::from("target"), PathBuf::from)
+        .join("release")
+        .join(exe);
     if cfg!(target_os = "macos") {
         // macOS caches code signatures by inode. Replace the executable rather
         // than overwrite a previously launched, signed file in place.

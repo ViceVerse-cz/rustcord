@@ -49,6 +49,7 @@ impl SearchUi {
         }
         let mut submit = false;
         let mut older = None;
+        let mut older_pins = false;
         let mut target = None;
         let allowed = state.can_search();
         let mut ime_frame = self.composing;
@@ -72,13 +73,40 @@ impl SearchUi {
         .max_height((ctx.content_rect().height() * 0.75).max(180.0))
         .show(ctx, |ui| {
             if self.pins {
-                ui.weak("Up to 25 newest pins. Snapshot only; Reload to check for changes.");
-                let reload = ui.add_enabled(allowed, egui::Button::new("Reload pins"));
-                if self.focus {
-                    reload.request_focus();
-                    self.focus = false;
-                }
-                submit = reload.clicked();
+                ui.weak(
+                    "One page of up to 25 pins. Snapshot only; Reload returns to the newest pins.",
+                );
+                ui.horizontal_wrapped(|ui| {
+                    let reload = ui.add_enabled(allowed, egui::Button::new("Reload pins"));
+                    if self.focus {
+                        reload.request_focus();
+                        self.focus = false;
+                    }
+                    submit = reload.clicked();
+                    if let Some(view) = &state.search {
+                        let retry = view.error.is_some() && view.pin_before.is_some();
+                        if retry
+                            || view
+                                .page
+                                .as_ref()
+                                .is_some_and(|page| page.pin_cursor.is_some())
+                        {
+                            older_pins = ui
+                                .push_id("older-pins", |ui| {
+                                    ui.add_enabled(
+                                        allowed && !view.loading,
+                                        egui::Button::new(if retry {
+                                            "Retry older pins"
+                                        } else {
+                                            "Older pins"
+                                        }),
+                                    )
+                                })
+                                .inner
+                                .clicked();
+                        }
+                    }
+                });
             } else {
                 let input = ui.add(
                     egui::TextEdit::singleline(&mut self.query)
@@ -119,7 +147,11 @@ impl SearchUi {
                 }
                 if view.loading {
                     ui.weak(if view.pins {
-                        "Loading pins..."
+                        if view.pin_before.is_some() {
+                            "Loading older pins..."
+                        } else {
+                            "Loading newest pins..."
+                        }
                     } else {
                         "Searching..."
                     });
@@ -130,11 +162,20 @@ impl SearchUi {
                 if let Some(page) = &view.page {
                     if view.pins {
                         ui.weak(format!(
-                            "{} pinned messages in this snapshot",
-                            page.hits.len()
+                            "{} pinned messages · {} page",
+                            page.hits.len(),
+                            if view.pin_before.is_some() {
+                                "older"
+                            } else {
+                                "newest"
+                            }
                         ));
-                        if page.partial {
-                            ui.label("Older pins are not shown in this version.");
+                        if page.pin_cursor.is_none() && !view.loading {
+                            ui.label(if page.partial {
+                                "More pins may exist, but this page has no usable continuation."
+                            } else {
+                                "No older pins reported by the service."
+                            });
                         }
                     } else {
                         ui.weak(format!("{} results reported by the service", page.total));
@@ -211,6 +252,9 @@ impl SearchUi {
         if let Some((query, before)) = older
             && let Some(command) = state.request_search(query, before)
         {
+            commands.push(command);
+        }
+        if older_pins && let Some(command) = state.request_older_pins() {
             commands.push(command);
         }
         if let Some(target) = target
@@ -314,6 +358,88 @@ mod tests {
             assert!(!view.open);
             assert!(state.search.is_none());
             assert!(matches!(commands.last(), Some(Command::CancelSearch)));
+            let cursor = 1_700_000_000_000_000_000i128;
+            for (loading, continuation, available, retry, expected) in [
+                (false, Some(cursor), true, false, true),
+                (false, None, true, true, true),
+                (true, Some(cursor), true, false, false),
+                (false, None, true, false, false),
+                (false, Some(cursor), false, false, false),
+            ] {
+                state.gateway_connected = true;
+                state.request_pins().unwrap();
+                let page = state.search.as_mut().unwrap();
+                page.loading = loading;
+                page.pin_before = retry.then_some(cursor);
+                page.error = retry.then_some("Synthetic pin request failed");
+                page.page = (!retry).then(|| model::SearchPage {
+                    hits: vec![model::SearchHit {
+                        id: Id(10),
+                        channel: Id(1),
+                        author: "Synthetic".into(),
+                        excerpt: "Synthetic pinned message".into(),
+                    }],
+                    total: 1,
+                    partial: continuation.is_some(),
+                    pin_cursor: continuation,
+                });
+                state.gateway_connected = available;
+                let ctx = egui::Context::default();
+                ctx.set_visuals(if dark {
+                    egui::Visuals::dark()
+                } else {
+                    egui::Visuals::light()
+                });
+                let mut view = SearchUi {
+                    channel: Some(Id(1)),
+                    pins: true,
+                    open: true,
+                    focus: true,
+                    ..SearchUi::default()
+                };
+                let mut commands = Vec::new();
+                // Focus starts on Reload; Tab reaches Older (or Retry older) when enabled.
+                // Disabled/exhausted states must not submit another pin-page request.
+                for key in [None, None, Some(egui::Key::Tab), Some(egui::Key::Enter)] {
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(420.0, 480.0),
+                            )),
+                            events: key
+                                .into_iter()
+                                .map(|key| egui::Event::Key {
+                                    key,
+                                    physical_key: None,
+                                    pressed: true,
+                                    repeat: false,
+                                    modifiers: egui::Modifiers::NONE,
+                                })
+                                .collect(),
+                            ..Default::default()
+                        },
+                        |_| view.show(&ctx, &mut state, &mut commands),
+                    );
+                    assert!(output.platform_output.commands.is_empty());
+                    output.drop_without_applying_deltas();
+                }
+                assert_eq!(
+                    commands
+                        .iter()
+                        .filter(|c| matches!(c, Command::Pins { .. }))
+                        .count(),
+                    usize::from(expected)
+                );
+                if expected {
+                    assert!(
+                        matches!(commands.last(), Some(Command::Pins { before: Some(value), .. }) if *value == cursor)
+                    );
+                    let page = state.search.as_ref().unwrap();
+                    assert_eq!(page.pin_before, Some(cursor));
+                    assert!(page.loading && page.page.is_none());
+                }
+            }
         }
     }
     #[test]

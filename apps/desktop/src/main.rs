@@ -478,30 +478,99 @@ impl Desktop {
                     })
                 }
                 Command::Voice(_) | Command::CancelProfile | Command::CancelSearch => return,
-                Command::Pins { channel, request } => {
-                    // Explicit synthetic pins, independent of message creation order.
-                    let hits = [480, 499, 470]
+                Command::Archives {
+                    parent,
+                    guild,
+                    kind,
+                    before,
+                    request,
+                } => {
+                    use model::archives::{Cursor, Kind, Page};
+                    let offset = parent.0.saturating_mul(10_000).saturating_add(match kind {
+                        Kind::Public => 0,
+                        Kind::Private => 1_000,
+                        Kind::JoinedPrivate => 2_000,
+                    });
+                    let ids = (if before.is_none() {
+                        [900, 850, 800]
+                    } else {
+                        [700, 650, 600]
+                    })
+                    .map(|id| offset.saturating_add(id));
+                    let public_kind = if self
+                        .state
+                        .channels
+                        .iter()
+                        .any(|c| c.id == parent && c.kind == 5)
+                    {
+                        10
+                    } else {
+                        11
+                    };
+                    let threads = ids
                         .into_iter()
-                        .map(|id| {
-                            let message = test_support::message(id, channel);
-                            model::SearchHit {
-                                id: message.id,
-                                channel,
-                                author: message.author.name,
-                                excerpt: format!(
-                                    "Synthetic pinned message: {}",
-                                    message.content.chars().take(200).collect::<String>()
-                                ),
-                            }
+                        .map(|id| model::Channel {
+                            id: model::Id(id),
+                            guild: Some(guild),
+                            parent_id: Some(parent),
+                            position: 0,
+                            name: format!("Synthetic archived thread {id}"),
+                            kind: if kind == Kind::Public {
+                                public_kind
+                            } else {
+                                12
+                            },
+                            recipients: vec![],
+                            last_message: None,
+                            member_list_id: None,
                         })
                         .collect();
+                    Event::Archives {
+                        parent,
+                        request,
+                        result: Ok(Page {
+                            threads,
+                            next: before.is_none().then_some(if kind == Kind::JoinedPrivate {
+                                Cursor::Id(model::Id(ids[2]))
+                            } else {
+                                Cursor::Time(1_788_998_400_000_000_000)
+                            }),
+                        }),
+                    }
+                }
+                Command::Pins {
+                    channel,
+                    before,
+                    request,
+                } => {
+                    // Explicit synthetic pins, independent of message creation order.
+                    let hits = if before.is_none() {
+                        [480, 499, 470]
+                    } else {
+                        [420, 455, 430]
+                    }
+                    .into_iter()
+                    .map(|id| {
+                        let message = test_support::message(id, channel);
+                        model::SearchHit {
+                            id: message.id,
+                            channel,
+                            author: message.author.name,
+                            excerpt: format!(
+                                "Synthetic pinned message: {}",
+                                message.content.chars().take(200).collect::<String>()
+                            ),
+                        }
+                    })
+                    .collect();
                     Event::Search {
                         channel,
                         request,
                         result: Ok(client_core::search::Outcome::Pins(model::SearchPage {
                             hits,
                             total: 0,
-                            partial: false,
+                            partial: before.is_none(),
+                            pin_cursor: before.is_none().then_some(1_788_998_400_000_000_000),
                         })),
                     }
                 }
@@ -542,6 +611,7 @@ impl Desktop {
                             hits,
                             total,
                             partial: false,
+                            pin_cursor: None,
                         })),
                     }
                 }
@@ -995,6 +1065,19 @@ impl Desktop {
             let ready = matches!(event.event, Event::Ready { .. });
             let resumed = matches!(event.event, Event::Resumed);
             let confirmed_channel = confirmed_recovery_channel(&self.state, &event.event);
+            let mut removed_threads: std::collections::BTreeSet<_> = if matches!(
+                &event.event,
+                Event::ThreadsSync { .. } | Event::ThreadRemoved { .. }
+            ) {
+                self.state
+                    .channels
+                    .iter()
+                    .filter(|channel| matches!(channel.kind, 10..=12))
+                    .map(|channel| channel.id)
+                    .collect()
+            } else {
+                Default::default()
+            };
             let invalidate = matches!(
                 event.event,
                 Event::Resync | Event::PermissionsChanged | Event::Unavailable(_)
@@ -1004,13 +1087,20 @@ impl Desktop {
                 if self.state.selected == Some(*channel) && self.state.request == *request && self.state.history_pending);
             let history_changed = changes_active_history(&self.state, &event.event);
             self.state.apply(event);
+            if !removed_threads.is_empty() {
+                for channel in &self.state.channels {
+                    removed_threads.remove(&channel.id);
+                }
+            }
             #[cfg(feature = "voice")]
             if let Some(error) = voice_failure
                 && let Some(command) = self.voice.fail(&mut self.state, error)
             {
                 self.command(command);
             }
-            if invalidate {
+            // ponytail: accepted thread removals clear account-wide history;
+            // add scoped disk deletion if thread churn makes refetch cost significant.
+            if invalidate || !removed_threads.is_empty() {
                 self.queue_cache(cache::Operation::ClearHistory);
             }
             persist_timeline |= history_changed;
