@@ -1,65 +1,65 @@
 use client_core::{
-    COMMAND_SLOTS, Command, EVENT_SLOTS, Envelope, Event, MAX_EVENT_BYTES,
-    auth::{AuthProvider, Failure, SessionSecret},
+	COMMAND_SLOTS, Command, EVENT_SLOTS, Envelope, Event, MAX_EVENT_BYTES,
+	auth::{AuthProvider, Failure, SessionSecret},
 };
 use discord_api::DiscordApi;
 use eframe::egui;
 use std::{
-    collections::BTreeSet,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::{Duration, Instant},
+	collections::BTreeSet,
+	sync::{
+		Arc, Mutex,
+		atomic::{AtomicU64, Ordering},
+	},
+	time::{Duration, Instant},
 };
 use tokio::{
-    runtime::Handle,
-    sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch},
-    task::JoinHandle,
+	runtime::Handle,
+	sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch},
+	task::JoinHandle,
 };
 
 pub struct Connection {
-    pub commands: mpsc::Sender<Command>,
-    pub uploads: mpsc::Sender<crate::uploads::UploadRequest>,
-    pub events: ReliableEvents,
-    pub typing: mpsc::Receiver<Envelope>,
-    pub terminal: watch::Receiver<Option<Failure>>,
-    typing_channel: Arc<AtomicU64>,
-    task: JoinHandle<()>,
+	pub commands: mpsc::Sender<Command>,
+	pub uploads: mpsc::Sender<crate::uploads::UploadRequest>,
+	pub events: ReliableEvents,
+	pub typing: mpsc::Receiver<Envelope>,
+	pub terminal: watch::Receiver<Option<Failure>>,
+	typing_channel: Arc<AtomicU64>,
+	task: JoinHandle<()>,
 }
 impl Drop for Connection {
-    fn drop(&mut self) {
-        self.task.abort();
-    }
+	fn drop(&mut self) {
+		self.task.abort();
+	}
 }
 struct AbortTask(JoinHandle<()>);
 impl Drop for AbortTask {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
+	fn drop(&mut self) {
+		self.0.abort();
+	}
 }
 impl Connection {
-    pub fn set_typing_channel(&self, channel: Option<model::Id>) {
-        self.typing_channel
-            .store(channel.map_or(0, |id| id.0), Ordering::Relaxed);
-    }
-    pub fn start(
-        runtime: &Handle,
-        secret: Arc<SessionSecret>,
-        generation: u64,
-        expected_user: Option<model::Id>,
-        ctx: egui::Context,
-    ) -> Self {
-        let (commands, mut receive) = mpsc::channel(COMMAND_SLOTS);
-        let (uploads, mut upload_receive) = mpsc::channel::<crate::uploads::UploadRequest>(1);
-        let (send, events) = reliable_events(ctx.clone());
-        let (typing_send, typing) = mpsc::channel(8);
-        let (finished, terminal) = watch::channel(None);
-        let wake = ctx.clone();
-        let typing_channel = Arc::new(AtomicU64::new(0));
-        let active_typing = typing_channel.clone();
-        let typing_gate = Mutex::new(TypingGate::default());
-        let task=runtime.spawn(async move {
+	pub fn set_typing_channel(&self, channel: Option<model::Id>) {
+		self.typing_channel
+			.store(channel.map_or(0, |id| id.0), Ordering::Relaxed);
+	}
+	pub fn start(
+		runtime: &Handle,
+		secret: Arc<SessionSecret>,
+		generation: u64,
+		expected_user: Option<model::Id>,
+		ctx: egui::Context,
+	) -> Self {
+		let (commands, mut receive) = mpsc::channel(COMMAND_SLOTS);
+		let (uploads, mut upload_receive) = mpsc::channel::<crate::uploads::UploadRequest>(1);
+		let (send, events) = reliable_events(ctx.clone());
+		let (typing_send, typing) = mpsc::channel(8);
+		let (finished, terminal) = watch::channel(None);
+		let wake = ctx.clone();
+		let typing_channel = Arc::new(AtomicU64::new(0));
+		let active_typing = typing_channel.clone();
+		let typing_gate = Mutex::new(TypingGate::default());
+		let task=runtime.spawn(async move {
             let emit=move |event:Event| -> Result<(),Failure> {
                 if let Event::Typing(signal) = &event {
                     let active = active_typing.load(Ordering::Relaxed);
@@ -246,16 +246,16 @@ impl Connection {
             }.await;
             if let Err(f)=result {let _=finished.send(Some(f));wake.request_repaint();}
         });
-        Self {
-            commands,
-            uploads,
-            events,
-            typing,
-            terminal,
-            typing_channel,
-            task,
-        }
-    }
+		Self {
+			commands,
+			uploads,
+			events,
+			typing,
+			terminal,
+			typing_channel,
+			task,
+		}
+	}
 }
 
 // One bounded GUILD_CREATE can fan out into MAX_NAV channel events synchronously.
@@ -263,524 +263,524 @@ impl Connection {
 const RELIABLE_ITEMS: usize = client_core::MAX_NAV + EVENT_SLOTS;
 const RELIABLE_BYTES: usize = EVENT_SLOTS * MAX_EVENT_BYTES;
 struct ReliableSender {
-    send: mpsc::Sender<(Envelope, OwnedSemaphorePermit)>,
-    bytes: Arc<Semaphore>,
+	send: mpsc::Sender<(Envelope, OwnedSemaphorePermit)>,
+	bytes: Arc<Semaphore>,
 }
 pub struct ReliableEvents {
-    receive: mpsc::Receiver<(Envelope, OwnedSemaphorePermit)>,
-    wake: egui::Context,
+	receive: mpsc::Receiver<(Envelope, OwnedSemaphorePermit)>,
+	wake: egui::Context,
 }
 impl ReliableEvents {
-    pub fn try_recv(&mut self) -> Result<Envelope, mpsc::error::TryRecvError> {
-        let (envelope, _permit) = self.receive.try_recv()?;
-        // The UI consumes a fixed batch each frame. Schedule another only for remaining work.
-        if !self.receive.is_empty() {
-            self.wake.request_repaint();
-        }
-        Ok(envelope)
-    }
+	pub fn try_recv(&mut self) -> Result<Envelope, mpsc::error::TryRecvError> {
+		let (envelope, _permit) = self.receive.try_recv()?;
+		// The UI consumes a fixed batch each frame. Schedule another only for remaining work.
+		if !self.receive.is_empty() {
+			self.wake.request_repaint();
+		}
+		Ok(envelope)
+	}
 }
 fn reliable_events(wake: egui::Context) -> (ReliableSender, ReliableEvents) {
-    let (send, receive) = mpsc::channel(RELIABLE_ITEMS);
-    (
-        ReliableSender {
-            send,
-            bytes: Arc::new(Semaphore::new(RELIABLE_BYTES)),
-        },
-        ReliableEvents { receive, wake },
-    )
+	let (send, receive) = mpsc::channel(RELIABLE_ITEMS);
+	(
+		ReliableSender {
+			send,
+			bytes: Arc::new(Semaphore::new(RELIABLE_BYTES)),
+		},
+		ReliableEvents { receive, wake },
+	)
 }
 
 fn emit_event(
-    reliable: &ReliableSender,
-    typing: &mpsc::Sender<Envelope>,
-    envelope: Envelope,
-    ctx: &egui::Context,
+	reliable: &ReliableSender,
+	typing: &mpsc::Sender<Envelope>,
+	envelope: Envelope,
+	ctx: &egui::Context,
 ) -> Result<(), Failure> {
-    if matches!(envelope.event, Event::Typing(_)) {
-        // Ephemeral signals have separate fixed slots and may be dropped under pressure.
-        if typing.try_send(envelope).is_ok() {
-            ctx.request_repaint();
-        }
-        return Ok(());
-    }
-    let bytes = envelope.event.bytes();
-    if bytes > MAX_EVENT_BYTES {
-        return Err(Failure::Capacity);
-    }
-    // Event::bytes includes Event itself; also charge envelope padding and the owned permit.
-    let bytes = bytes + size_of::<(Envelope, OwnedSemaphorePermit)>() - size_of::<Event>();
-    let permit = reliable
-        .bytes
-        .clone()
-        .try_acquire_many_owned(bytes as u32)
-        .map_err(|_| Failure::Capacity)?;
-    reliable
-        .send
-        .try_send((envelope, permit))
-        .map_err(|error| match error {
-            mpsc::error::TrySendError::Full(_) => Failure::Capacity,
-            mpsc::error::TrySendError::Closed(_) => Failure::Network,
-        })?;
-    ctx.request_repaint();
-    Ok(())
+	if matches!(envelope.event, Event::Typing(_)) {
+		// Ephemeral signals have separate fixed slots and may be dropped under pressure.
+		if typing.try_send(envelope).is_ok() {
+			ctx.request_repaint();
+		}
+		return Ok(());
+	}
+	let bytes = envelope.event.bytes();
+	if bytes > MAX_EVENT_BYTES {
+		return Err(Failure::Capacity);
+	}
+	// Event::bytes includes Event itself; also charge envelope padding and the owned permit.
+	let bytes = bytes + size_of::<(Envelope, OwnedSemaphorePermit)>() - size_of::<Event>();
+	let permit = reliable
+		.bytes
+		.clone()
+		.try_acquire_many_owned(bytes as u32)
+		.map_err(|_| Failure::Capacity)?;
+	reliable
+		.send
+		.try_send((envelope, permit))
+		.map_err(|error| match error {
+			mpsc::error::TrySendError::Full(_) => Failure::Capacity,
+			mpsc::error::TrySendError::Closed(_) => Failure::Network,
+		})?;
+	ctx.request_repaint();
+	Ok(())
 }
 
 /// At most eight typing wakeups per two seconds in the selected conversation.
 #[derive(Default)]
 struct TypingGate {
-    channel: u64,
-    users: [Option<(model::Id, Instant)>; 8],
+	channel: u64,
+	users: [Option<(model::Id, Instant)>; 8],
 }
 impl TypingGate {
-    fn accept(&mut self, signal: client_core::typing::Signal, active: u64, now: Instant) -> bool {
-        if active == 0 || signal.channel.0 != active || signal.user.0 == 0 {
-            return false;
-        }
-        if self.channel != active {
-            self.channel = active;
-            self.users.fill(None);
-        }
-        for slot in &mut self.users {
-            if slot.is_some_and(|(_, time)| {
-                now.saturating_duration_since(time) >= Duration::from_secs(2)
-            }) {
-                *slot = None;
-            }
-        }
-        if self
-            .users
-            .iter()
-            .flatten()
-            .any(|(user, _)| *user == signal.user)
-        {
-            return false;
-        }
-        let Some(slot) = self.users.iter_mut().find(|slot| slot.is_none()) else {
-            return false;
-        };
-        *slot = Some((signal.user, now));
-        true
-    }
+	fn accept(&mut self, signal: client_core::typing::Signal, active: u64, now: Instant) -> bool {
+		if active == 0 || signal.channel.0 != active || signal.user.0 == 0 {
+			return false;
+		}
+		if self.channel != active {
+			self.channel = active;
+			self.users.fill(None);
+		}
+		for slot in &mut self.users {
+			if slot.is_some_and(|(_, time)| {
+				now.saturating_duration_since(time) >= Duration::from_secs(2)
+			}) {
+				*slot = None;
+			}
+		}
+		if self
+			.users
+			.iter()
+			.flatten()
+			.any(|(user, _)| *user == signal.user)
+		{
+			return false;
+		}
+		let Some(slot) = self.users.iter_mut().find(|slot| slot.is_none()) else {
+			return false;
+		};
+		*slot = Some((signal.user, now));
+		true
+	}
 }
 
 // Ring only after the media adapter confirms transport allocation, and only once per current call.
 fn ring_action(
-    control: client_core::voice::Command,
-    owner: model::Id,
-    active: &mut Option<(model::Id, u64, bool)>,
-    dm: bool,
+	control: client_core::voice::Command,
+	owner: model::Id,
+	active: &mut Option<(model::Id, u64, bool)>,
+	dm: bool,
 ) -> Result<Option<(Option<model::Id>, bool)>, ()> {
-    use client_core::voice::Command as V;
-    if !dm {
-        return match control {
-            V::Ring { .. } | V::Decline { .. } | V::Join { ring: true, .. } => Err(()),
-            V::Join { .. } | V::Leave { .. } | V::SetMute { .. } => Ok(None),
-        };
-    }
-    match control {
-        V::Join {
-            channel,
-            request,
-            ring,
-        } => {
-            *active = Some((channel, request, !ring));
-            Ok(None)
-        }
-        V::Ring { channel, request } => {
-            let Some((current, current_request, rang)) = active else {
-                return Err(());
-            };
-            if *current != channel || *current_request != request || *rang {
-                return Err(());
-            }
-            *rang = true;
-            Ok(Some((None, false)))
-        }
-        V::Leave { channel, request } => {
-            if active.is_some_and(|(id, r, _)| id == channel && r == request) {
-                *active = None;
-                Ok(Some((None, true)))
-            } else {
-                Ok(None)
-            }
-        }
-        V::Decline { .. } => Ok(Some((Some(owner), true))),
-        V::SetMute { .. } => Ok(None),
-    }
+	use client_core::voice::Command as V;
+	if !dm {
+		return match control {
+			V::Ring { .. } | V::Decline { .. } | V::Join { ring: true, .. } => Err(()),
+			V::Join { .. } | V::Leave { .. } | V::SetMute { .. } => Ok(None),
+		};
+	}
+	match control {
+		V::Join {
+			channel,
+			request,
+			ring,
+		} => {
+			*active = Some((channel, request, !ring));
+			Ok(None)
+		}
+		V::Ring { channel, request } => {
+			let Some((current, current_request, rang)) = active else {
+				return Err(());
+			};
+			if *current != channel || *current_request != request || *rang {
+				return Err(());
+			}
+			*rang = true;
+			Ok(Some((None, false)))
+		}
+		V::Leave { channel, request } => {
+			if active.is_some_and(|(id, r, _)| id == channel && r == request) {
+				*active = None;
+				Ok(Some((None, true)))
+			} else {
+				Ok(None)
+			}
+		}
+		V::Decline { .. } => Ok(Some((Some(owner), true))),
+		V::SetMute { .. } => Ok(None),
+	}
 }
 
 // Reads can finish after navigation/cancellation. Only a session-ending failure is global.
 fn scope_history_failure(event: Event, channel: model::Id, request: u64) -> Event {
-    let failure = match event {
-        Event::Failure(failure) if !failure.ends_session() => failure,
-        Event::Unavailable(_) => Failure::Forbidden,
-        event => return event,
-    };
-    Event::HistoryFailed {
-        channel,
-        request,
-        failure,
-    }
+	let failure = match event {
+		Event::Failure(failure) if !failure.ends_session() => failure,
+		Event::Unavailable(_) => Failure::Forbidden,
+		event => return event,
+	};
+	Event::HistoryFailed {
+		channel,
+		request,
+		failure,
+	}
 }
 
 #[cfg(test)]
 mod tests {
-    fn queued_channel(id: u64) -> client_core::Envelope {
-        client_core::Envelope {
-            generation: 1,
-            event: client_core::Event::ChannelCreated(model::Channel {
-                id: model::Id(id),
-                guild: Some(model::Id(1)),
-                parent_id: None,
-                position: 0,
-                name: "Synthetic channel".into(),
-                kind: 0,
-                recipients: vec![],
-                member_list_id: None,
-                last_message: None,
-            }),
-        }
-    }
+	fn queued_channel(id: u64) -> client_core::Envelope {
+		client_core::Envelope {
+			generation: 1,
+			event: client_core::Event::ChannelCreated(model::Channel {
+				id: model::Id(id),
+				guild: Some(model::Id(1)),
+				parent_id: None,
+				position: 0,
+				name: "Synthetic channel".into(),
+				kind: 0,
+				recipients: vec![],
+				member_list_id: None,
+				last_message: None,
+			}),
+		}
+	}
 
-    #[test]
-    fn reliable_navigation_burst_is_fifo_and_item_bounded() {
-        let ctx = egui::Context::default();
-        let (send, mut events) = reliable_events(ctx.clone());
-        let (typing, _) = mpsc::channel(8);
-        // One entire navigation fanout plus ordinary event slots fits without a UI drain.
-        for id in 1..=RELIABLE_ITEMS as u64 {
-            emit_event(&send, &typing, queued_channel(id), &ctx).unwrap();
-        }
-        let retained = send.bytes.available_permits();
-        assert_eq!(
-            emit_event(&send, &typing, queued_channel(0), &ctx),
-            Err(Failure::Capacity)
-        );
-        assert_eq!(send.bytes.available_permits(), retained);
-        for id in 1..=RELIABLE_ITEMS as u64 {
-            let envelope = events.try_recv().unwrap();
-            assert_eq!(envelope.generation, 1);
-            let Event::ChannelCreated(channel) = envelope.event else {
-                panic!("Reliable events must be retained in order");
-            };
-            assert_eq!(channel.id, model::Id(id));
-        }
-        assert!(events.try_recv().is_err());
-        assert_eq!(send.bytes.available_permits(), RELIABLE_BYTES);
-    }
+	#[test]
+	fn reliable_navigation_burst_is_fifo_and_item_bounded() {
+		let ctx = egui::Context::default();
+		let (send, mut events) = reliable_events(ctx.clone());
+		let (typing, _) = mpsc::channel(8);
+		// One entire navigation fanout plus ordinary event slots fits without a UI drain.
+		for id in 1..=RELIABLE_ITEMS as u64 {
+			emit_event(&send, &typing, queued_channel(id), &ctx).unwrap();
+		}
+		let retained = send.bytes.available_permits();
+		assert_eq!(
+			emit_event(&send, &typing, queued_channel(0), &ctx),
+			Err(Failure::Capacity)
+		);
+		assert_eq!(send.bytes.available_permits(), retained);
+		for id in 1..=RELIABLE_ITEMS as u64 {
+			let envelope = events.try_recv().unwrap();
+			assert_eq!(envelope.generation, 1);
+			let Event::ChannelCreated(channel) = envelope.event else {
+				panic!("Reliable events must be retained in order");
+			};
+			assert_eq!(channel.id, model::Id(id));
+		}
+		assert!(events.try_recv().is_err());
+		assert_eq!(send.bytes.available_permits(), RELIABLE_BYTES);
+	}
 
-    #[test]
-    fn reliable_byte_budget_releases_on_receive_rejection_and_drop() {
-        let ctx = egui::Context::default();
-        let (send, mut events) = reliable_events(ctx.clone());
-        let (typing, _) = mpsc::channel(8);
-        let envelope = queued_channel(2);
-        let charge = envelope.event.bytes() + size_of::<(Envelope, OwnedSemaphorePermit)>()
-            - size_of::<Event>();
-        let held = send
-            .bytes
-            .clone()
-            .try_acquire_many_owned((RELIABLE_BYTES - charge) as u32)
-            .unwrap();
-        emit_event(&send, &typing, envelope, &ctx).unwrap();
-        assert_eq!(send.bytes.available_permits(), 0);
-        assert_eq!(
-            emit_event(&send, &typing, queued_channel(3), &ctx),
-            Err(Failure::Capacity)
-        );
-        assert_eq!(events.receive.len(), 1);
-        events.try_recv().unwrap();
-        assert_eq!(send.bytes.available_permits(), charge);
-        emit_event(&send, &typing, queued_channel(3), &ctx).unwrap();
-        drop(held);
-        let before = send.bytes.available_permits();
-        let mut oversized = queued_channel(4);
-        if let Event::ChannelCreated(channel) = &mut oversized.event {
-            channel.name = "x".repeat(MAX_EVENT_BYTES);
-        }
-        assert_eq!(
-            emit_event(&send, &typing, oversized, &ctx),
-            Err(Failure::Capacity)
-        );
-        assert_eq!(send.bytes.available_permits(), before);
-        drop(events);
-        assert_eq!(send.bytes.available_permits(), RELIABLE_BYTES);
-        assert_eq!(
-            emit_event(&send, &typing, queued_channel(5), &ctx),
-            Err(Failure::Network)
-        );
-        assert_eq!(send.bytes.available_permits(), RELIABLE_BYTES);
-    }
+	#[test]
+	fn reliable_byte_budget_releases_on_receive_rejection_and_drop() {
+		let ctx = egui::Context::default();
+		let (send, mut events) = reliable_events(ctx.clone());
+		let (typing, _) = mpsc::channel(8);
+		let envelope = queued_channel(2);
+		let charge = envelope.event.bytes() + size_of::<(Envelope, OwnedSemaphorePermit)>()
+			- size_of::<Event>();
+		let held = send
+			.bytes
+			.clone()
+			.try_acquire_many_owned((RELIABLE_BYTES - charge) as u32)
+			.unwrap();
+		emit_event(&send, &typing, envelope, &ctx).unwrap();
+		assert_eq!(send.bytes.available_permits(), 0);
+		assert_eq!(
+			emit_event(&send, &typing, queued_channel(3), &ctx),
+			Err(Failure::Capacity)
+		);
+		assert_eq!(events.receive.len(), 1);
+		events.try_recv().unwrap();
+		assert_eq!(send.bytes.available_permits(), charge);
+		emit_event(&send, &typing, queued_channel(3), &ctx).unwrap();
+		drop(held);
+		let before = send.bytes.available_permits();
+		let mut oversized = queued_channel(4);
+		if let Event::ChannelCreated(channel) = &mut oversized.event {
+			channel.name = "x".repeat(MAX_EVENT_BYTES);
+		}
+		assert_eq!(
+			emit_event(&send, &typing, oversized, &ctx),
+			Err(Failure::Capacity)
+		);
+		assert_eq!(send.bytes.available_permits(), before);
+		drop(events);
+		assert_eq!(send.bytes.available_permits(), RELIABLE_BYTES);
+		assert_eq!(
+			emit_event(&send, &typing, queued_channel(5), &ctx),
+			Err(Failure::Network)
+		);
+		assert_eq!(send.bytes.available_permits(), RELIABLE_BYTES);
+	}
 
-    #[test]
-    fn typing_burst_cannot_consume_reliable_message_slots() {
-        let ctx = eframe::egui::Context::default();
-        let (send, mut events) = super::reliable_events(ctx.clone());
-        let (typing_send, mut typing) = tokio::sync::mpsc::channel(8);
-        for user in 1..=100 {
-            super::emit_event(
-                &send,
-                &typing_send,
-                client_core::Envelope {
-                    generation: 1,
-                    event: client_core::Event::Typing(client_core::typing::Signal {
-                        channel: model::Id(10),
-                        user: model::Id(user),
-                        timestamp: 1,
-                    }),
-                },
-                &ctx,
-            )
-            .unwrap();
-        }
-        assert_eq!(typing.len(), 8);
-        assert!(events.receive.is_empty());
-        super::emit_event(
-            &send,
-            &typing_send,
-            client_core::Envelope {
-                generation: 1,
-                event: client_core::Event::Delete {
-                    channel: model::Id(10),
-                    id: model::Id(20),
-                },
-            },
-            &ctx,
-        )
-        .unwrap();
-        assert!(matches!(
-            events.try_recv().unwrap().event,
-            client_core::Event::Delete { .. }
-        ));
-        for _ in 0..8 {
-            typing.try_recv().unwrap();
-        }
-    }
-    #[test]
-    fn typing_wakeups_are_selected_bounded_and_coalesced() {
-        use client_core::typing::Signal;
-        use model::Id;
-        use std::time::{Duration, Instant};
-        let mut gate = super::TypingGate::default();
-        let now = Instant::now();
-        let signal = Signal {
-            channel: Id(10),
-            user: Id(1),
-            timestamp: 1,
-        };
-        assert!(!gate.accept(signal, 0, now));
-        assert!(!gate.accept(signal, 11, now));
-        for user in 1..=8 {
-            let signal = Signal {
-                user: Id(user),
-                ..signal
-            };
-            assert!(gate.accept(signal, 10, now));
-            assert!(!gate.accept(signal, 10, now));
-        }
-        for user in 9..=1_000 {
-            assert!(!gate.accept(
-                Signal {
-                    user: Id(user),
-                    ..signal
-                },
-                10,
-                now
-            ));
-        }
-        assert!(!gate.accept(signal, 10, now + Duration::from_millis(1_999)));
-        assert!(gate.accept(signal, 10, now + Duration::from_secs(2)));
-        assert!(gate.accept(
-            Signal {
-                channel: Id(11),
-                ..signal
-            },
-            11,
-            now
-        ));
-        assert!(!gate.accept(signal, 11, now));
-    }
-    use super::*;
-    #[test]
-    fn ringing_waits_for_transport_confirmation_and_rejects_old_requests() {
-        use client_core::voice::Command as V;
-        let mut active = None;
-        let channel = model::Id(2);
-        let owner = model::Id(1);
-        assert_eq!(
-            ring_action(
-                V::Join {
-                    channel,
-                    request: 7,
-                    ring: true
-                },
-                owner,
-                &mut active,
-                true
-            ),
-            Ok(None)
-        );
-        assert!(
-            ring_action(
-                V::Ring {
-                    channel,
-                    request: 6
-                },
-                owner,
-                &mut active,
-                true
-            )
-            .is_err()
-        );
-        assert_eq!(
-            ring_action(
-                V::Ring {
-                    channel,
-                    request: 7
-                },
-                owner,
-                &mut active,
-                true
-            ),
-            Ok(Some((None, false)))
-        );
-        assert!(
-            ring_action(
-                V::Ring {
-                    channel,
-                    request: 7
-                },
-                owner,
-                &mut active,
-                true
-            )
-            .is_err()
-        );
-        assert_eq!(
-            ring_action(
-                V::Leave {
-                    channel,
-                    request: 7
-                },
-                owner,
-                &mut active,
-                true
-            ),
-            Ok(Some((None, true)))
-        );
-        assert!(
-            ring_action(
-                V::Ring {
-                    channel,
-                    request: 7
-                },
-                owner,
-                &mut active,
-                true
-            )
-            .is_err()
-        );
-        assert_eq!(
-            ring_action(
-                V::Join {
-                    channel,
-                    request: 8,
-                    ring: false
-                },
-                owner,
-                &mut active,
-                true
-            ),
-            Ok(None)
-        );
-        assert_eq!(
-            ring_action(
-                V::Leave {
-                    channel,
-                    request: 7
-                },
-                owner,
-                &mut active,
-                true
-            ),
-            Ok(None)
-        );
-        assert_eq!(active, Some((channel, 8, true)));
-        assert!(
-            ring_action(
-                V::Ring {
-                    channel,
-                    request: 8
-                },
-                owner,
-                &mut active,
-                true
-            )
-            .is_err()
-        );
-    }
-    #[test]
-    fn guild_join_mute_leave_never_ring_a_dm() {
-        use client_core::voice::Command as V;
-        let mut active = None;
-        let channel = model::Id(20);
-        let owner = model::Id(1);
-        for control in [
-            V::Join {
-                channel,
-                request: 1,
-                ring: false,
-            },
-            V::SetMute {
-                channel,
-                request: 1,
-                mute: true,
-                deaf: false,
-            },
-            V::Leave {
-                channel,
-                request: 1,
-            },
-        ] {
-            assert_eq!(ring_action(control, owner, &mut active, false), Ok(None));
-        }
-        assert!(
-            ring_action(
-                V::Ring {
-                    channel,
-                    request: 1
-                },
-                owner,
-                &mut active,
-                false
-            )
-            .is_err()
-        );
-        assert!(ring_action(V::Decline { channel }, owner, &mut active, false).is_err());
-        assert!(active.is_none());
-    }
-    #[test]
-    fn reads_scope_permission_errors_but_expiry_stays_global() {
-        assert!(matches!(
-            scope_history_failure(Event::Unavailable(model::Id(1)), model::Id(1), 9),
-            Event::HistoryFailed {
-                channel: model::Id(1),
-                request: 9,
-                failure: Failure::Forbidden
-            }
-        ));
-        assert!(matches!(
-            scope_history_failure(Event::Failure(Failure::Network), model::Id(1), 9),
-            Event::HistoryFailed {
-                request: 9,
-                failure: Failure::Network,
-                ..
-            }
-        ));
-        assert!(matches!(
-            scope_history_failure(Event::Failure(Failure::Expired), model::Id(1), 9),
-            Event::Failure(Failure::Expired)
-        ));
-    }
+	#[test]
+	fn typing_burst_cannot_consume_reliable_message_slots() {
+		let ctx = eframe::egui::Context::default();
+		let (send, mut events) = super::reliable_events(ctx.clone());
+		let (typing_send, mut typing) = tokio::sync::mpsc::channel(8);
+		for user in 1..=100 {
+			super::emit_event(
+				&send,
+				&typing_send,
+				client_core::Envelope {
+					generation: 1,
+					event: client_core::Event::Typing(client_core::typing::Signal {
+						channel: model::Id(10),
+						user: model::Id(user),
+						timestamp: 1,
+					}),
+				},
+				&ctx,
+			)
+			.unwrap();
+		}
+		assert_eq!(typing.len(), 8);
+		assert!(events.receive.is_empty());
+		super::emit_event(
+			&send,
+			&typing_send,
+			client_core::Envelope {
+				generation: 1,
+				event: client_core::Event::Delete {
+					channel: model::Id(10),
+					id: model::Id(20),
+				},
+			},
+			&ctx,
+		)
+		.unwrap();
+		assert!(matches!(
+			events.try_recv().unwrap().event,
+			client_core::Event::Delete { .. }
+		));
+		for _ in 0..8 {
+			typing.try_recv().unwrap();
+		}
+	}
+	#[test]
+	fn typing_wakeups_are_selected_bounded_and_coalesced() {
+		use client_core::typing::Signal;
+		use model::Id;
+		use std::time::{Duration, Instant};
+		let mut gate = super::TypingGate::default();
+		let now = Instant::now();
+		let signal = Signal {
+			channel: Id(10),
+			user: Id(1),
+			timestamp: 1,
+		};
+		assert!(!gate.accept(signal, 0, now));
+		assert!(!gate.accept(signal, 11, now));
+		for user in 1..=8 {
+			let signal = Signal {
+				user: Id(user),
+				..signal
+			};
+			assert!(gate.accept(signal, 10, now));
+			assert!(!gate.accept(signal, 10, now));
+		}
+		for user in 9..=1_000 {
+			assert!(!gate.accept(
+				Signal {
+					user: Id(user),
+					..signal
+				},
+				10,
+				now
+			));
+		}
+		assert!(!gate.accept(signal, 10, now + Duration::from_millis(1_999)));
+		assert!(gate.accept(signal, 10, now + Duration::from_secs(2)));
+		assert!(gate.accept(
+			Signal {
+				channel: Id(11),
+				..signal
+			},
+			11,
+			now
+		));
+		assert!(!gate.accept(signal, 11, now));
+	}
+	use super::*;
+	#[test]
+	fn ringing_waits_for_transport_confirmation_and_rejects_old_requests() {
+		use client_core::voice::Command as V;
+		let mut active = None;
+		let channel = model::Id(2);
+		let owner = model::Id(1);
+		assert_eq!(
+			ring_action(
+				V::Join {
+					channel,
+					request: 7,
+					ring: true
+				},
+				owner,
+				&mut active,
+				true
+			),
+			Ok(None)
+		);
+		assert!(
+			ring_action(
+				V::Ring {
+					channel,
+					request: 6
+				},
+				owner,
+				&mut active,
+				true
+			)
+			.is_err()
+		);
+		assert_eq!(
+			ring_action(
+				V::Ring {
+					channel,
+					request: 7
+				},
+				owner,
+				&mut active,
+				true
+			),
+			Ok(Some((None, false)))
+		);
+		assert!(
+			ring_action(
+				V::Ring {
+					channel,
+					request: 7
+				},
+				owner,
+				&mut active,
+				true
+			)
+			.is_err()
+		);
+		assert_eq!(
+			ring_action(
+				V::Leave {
+					channel,
+					request: 7
+				},
+				owner,
+				&mut active,
+				true
+			),
+			Ok(Some((None, true)))
+		);
+		assert!(
+			ring_action(
+				V::Ring {
+					channel,
+					request: 7
+				},
+				owner,
+				&mut active,
+				true
+			)
+			.is_err()
+		);
+		assert_eq!(
+			ring_action(
+				V::Join {
+					channel,
+					request: 8,
+					ring: false
+				},
+				owner,
+				&mut active,
+				true
+			),
+			Ok(None)
+		);
+		assert_eq!(
+			ring_action(
+				V::Leave {
+					channel,
+					request: 7
+				},
+				owner,
+				&mut active,
+				true
+			),
+			Ok(None)
+		);
+		assert_eq!(active, Some((channel, 8, true)));
+		assert!(
+			ring_action(
+				V::Ring {
+					channel,
+					request: 8
+				},
+				owner,
+				&mut active,
+				true
+			)
+			.is_err()
+		);
+	}
+	#[test]
+	fn guild_join_mute_leave_never_ring_a_dm() {
+		use client_core::voice::Command as V;
+		let mut active = None;
+		let channel = model::Id(20);
+		let owner = model::Id(1);
+		for control in [
+			V::Join {
+				channel,
+				request: 1,
+				ring: false,
+			},
+			V::SetMute {
+				channel,
+				request: 1,
+				mute: true,
+				deaf: false,
+			},
+			V::Leave {
+				channel,
+				request: 1,
+			},
+		] {
+			assert_eq!(ring_action(control, owner, &mut active, false), Ok(None));
+		}
+		assert!(
+			ring_action(
+				V::Ring {
+					channel,
+					request: 1
+				},
+				owner,
+				&mut active,
+				false
+			)
+			.is_err()
+		);
+		assert!(ring_action(V::Decline { channel }, owner, &mut active, false).is_err());
+		assert!(active.is_none());
+	}
+	#[test]
+	fn reads_scope_permission_errors_but_expiry_stays_global() {
+		assert!(matches!(
+			scope_history_failure(Event::Unavailable(model::Id(1)), model::Id(1), 9),
+			Event::HistoryFailed {
+				channel: model::Id(1),
+				request: 9,
+				failure: Failure::Forbidden
+			}
+		));
+		assert!(matches!(
+			scope_history_failure(Event::Failure(Failure::Network), model::Id(1), 9),
+			Event::HistoryFailed {
+				request: 9,
+				failure: Failure::Network,
+				..
+			}
+		));
+		assert!(matches!(
+			scope_history_failure(Event::Failure(Failure::Expired), model::Id(1), 9),
+			Event::Failure(Failure::Expired)
+		));
+	}
 }

@@ -4,81 +4,81 @@ use egui::{Align2, Color32, FontId};
 use model::Id;
 
 pub(super) fn badge(ui: &egui::Ui, center: egui::Pos2, count: u32, ring: Color32) {
-    let label = if count > 99 {
-        "99+".into()
-    } else {
-        count.to_string()
-    };
-    let width = if count > 99 {
-        30.0
-    } else if count > 9 {
-        24.0
-    } else {
-        19.0
-    };
-    let rect = egui::Rect::from_center_size(center, egui::vec2(width, 19.0));
-    let colors = design::palette(ui);
-    ui.painter().rect_filled(rect.expand(3.0), 12, ring);
-    ui.painter().rect_filled(rect, 10, colors.danger);
-    ui.painter().text(
-        center,
-        Align2::CENTER_CENTER,
-        label,
-        FontId::new(12.0, crate::design::semibold_family(ui.ctx())),
-        Color32::WHITE,
-    );
+	let label = if count > 99 {
+		"99+".into()
+	} else {
+		count.to_string()
+	};
+	let width = if count > 99 {
+		30.0
+	} else if count > 9 {
+		24.0
+	} else {
+		19.0
+	};
+	let rect = egui::Rect::from_center_size(center, egui::vec2(width, 19.0));
+	let colors = design::palette(ui);
+	ui.painter().rect_filled(rect.expand(3.0), 12, ring);
+	ui.painter().rect_filled(rect, 10, colors.danger);
+	ui.painter().text(
+		center,
+		Align2::CENTER_CENTER,
+		label,
+		FontId::new(12.0, crate::design::semibold_family(ui.ctx())),
+		Color32::WHITE,
+	);
 }
 /// Discord's rail pill on the window edge: short for unread, taller on hover, full when selected.
 fn rail_pill(ui: &egui::Ui, rect: egui::Rect, selected: bool, hovered: bool, unread: bool) {
-    let height = if selected {
-        40.0
-    } else if hovered {
-        20.0
-    } else if unread {
-        8.0
-    } else {
-        return;
-    };
-    let pill = egui::Rect::from_center_size(
-        egui::pos2(rect.left() - 10.0, rect.center().y),
-        egui::vec2(8.0, height),
-    );
-    ui.painter()
-        .rect_filled(pill, 4, design::palette(ui).text_strong);
+	let height = if selected {
+		40.0
+	} else if hovered {
+		20.0
+	} else if unread {
+		8.0
+	} else {
+		return;
+	};
+	let pill = egui::Rect::from_center_size(
+		egui::pos2(rect.left() - 10.0, rect.center().y),
+		egui::vec2(8.0, height),
+	);
+	ui.painter()
+		.rect_filled(pill, 4, design::palette(ui).text_strong);
 }
 fn indicator(ui: &egui::Ui, rect: egui::Rect, unread: bool, count: u32) {
-    rail_pill(ui, rect, false, false, unread);
-    if count > 0 {
-        badge(
-            ui,
-            rect.right_bottom() - egui::vec2(8.0, 8.0),
-            count,
-            design::palette(ui).base,
-        );
-    }
+	rail_pill(ui, rect, false, false, unread);
+	if count > 0 {
+		badge(
+			ui,
+			rect.right_bottom() - egui::vec2(8.0, 8.0),
+			count,
+			design::palette(ui).base,
+		);
+	}
 }
 impl MessagingUi {
-    pub fn viewing_latest(&self, channel: Id) -> bool {
-        self.timeline.viewing_latest(channel)
-    }
-    pub(super) fn notification_rail(
-        &mut self,
-        ui: &mut egui::Ui,
-        state: &mut State,
-        commands: &mut Vec<Command>,
-    ) {
-        let colors = design::palette(ui);
-        let mut selected = None;
-        let mut guild_badges = std::collections::BTreeMap::<Id, (bool, u32)>::new();
-        for channel in &state.channels {
-            if let Some(guild) = channel.guild {
-                let entry = guild_badges.entry(guild).or_default();
-                entry.0 |= state.channel_unread(channel) == Some(true)
-                    || state.unread_count(channel.id) > 0;
-                entry.1 = entry.1.saturating_add(state.mention_count(channel.id));
-            }
-        }
-        egui::Panel::left("guilds")
+	pub fn viewing_latest(&self, channel: Id) -> bool {
+		self.timeline.viewing_latest(channel)
+	}
+	pub(super) fn notification_rail(
+		&mut self,
+		ui: &mut egui::Ui,
+		state: &mut State,
+		commands: &mut Vec<Command>,
+	) {
+		let colors = design::palette(ui);
+		let mut selected = None;
+		let mut guild_badges = std::collections::BTreeMap::<Id, (bool, u32)>::new();
+		for channel in &state.channels {
+			if let Some(guild) = channel.guild {
+				let entry = guild_badges.entry(guild).or_default();
+				entry.0 |= state.channel_unread(channel) == Some(true)
+					|| state.unread_count(channel.id) > 0;
+				entry.1 = entry.1.saturating_add(state.mention_count(channel.id));
+			}
+		}
+		egui::Panel::left("guilds")
             .resizable(false)
             .exact_size(72.0)
             .show_separator_line(false)
@@ -196,10 +196,10 @@ impl MessagingUi {
                         }
                     });
             });
-        if let Some(id) = selected
-            && let Some(command) = state.select(id)
-        {
-            commands.push(command);
-        }
-    }
+		if let Some(id) = selected
+			&& let Some(command) = state.select(id)
+		{
+			commands.push(command);
+		}
+	}
 }

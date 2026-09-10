@@ -1,65 +1,65 @@
 use crate::{DiscordApi, Failure};
 use model::{
-    Id,
-    archives::{Cursor, Kind, Page},
+	Id,
+	archives::{Cursor, Kind, Page},
 };
 use reqwest::Method;
 
 impl DiscordApi {
-    pub(super) async fn archives(
-        &self,
-        parent: Id,
-        guild: Id,
-        kind: Kind,
-        before: Option<Cursor>,
-    ) -> Result<Page, Failure> {
-        if parent.0 == 0 || guild.0 == 0 {
-            return Err(Failure::Protocol);
-        }
-        let route = match kind {
-            Kind::Public => "threads/archived/public",
-            Kind::Private => "threads/archived/private",
-            Kind::JoinedPrivate => "users/@me/threads/archived/private",
-        };
-        let mut path = format!("/channels/{parent}/{route}?limit=25");
-        if let Some(before) = before {
-            let cursor = match (kind, before) {
-                (Kind::Public | Kind::Private, Cursor::Time(value)) => {
-                    discord_protocol::pins::format_cursor(value).map_err(|_| Failure::Protocol)?
-                }
-                (Kind::JoinedPrivate, Cursor::Id(id)) if id.0 > 0 => id.to_string(),
-                _ => return Err(Failure::Protocol),
-            };
-            let encoded: String = cursor.bytes().map(|byte| format!("%{byte:02X}")).collect();
-            path.push_str(&format!("&before={encoded}"));
-        }
-        let bytes = self
-            .request_limited(
-                Method::GET,
-                &path,
-                None,
-                discord_protocol::archives::MAX_WIRE,
-            )
-            .await?;
-        discord_protocol::decode::<discord_protocol::archives::Reply>(&bytes)
-            .map_err(|_| Failure::Protocol)?
-            .into_page(parent, guild, kind, before)
-            .map_err(|_| Failure::Protocol)
-    }
+	pub(super) async fn archives(
+		&self,
+		parent: Id,
+		guild: Id,
+		kind: Kind,
+		before: Option<Cursor>,
+	) -> Result<Page, Failure> {
+		if parent.0 == 0 || guild.0 == 0 {
+			return Err(Failure::Protocol);
+		}
+		let route = match kind {
+			Kind::Public => "threads/archived/public",
+			Kind::Private => "threads/archived/private",
+			Kind::JoinedPrivate => "users/@me/threads/archived/private",
+		};
+		let mut path = format!("/channels/{parent}/{route}?limit=25");
+		if let Some(before) = before {
+			let cursor = match (kind, before) {
+				(Kind::Public | Kind::Private, Cursor::Time(value)) => {
+					discord_protocol::pins::format_cursor(value).map_err(|_| Failure::Protocol)?
+				}
+				(Kind::JoinedPrivate, Cursor::Id(id)) if id.0 > 0 => id.to_string(),
+				_ => return Err(Failure::Protocol),
+			};
+			let encoded: String = cursor.bytes().map(|byte| format!("%{byte:02X}")).collect();
+			path.push_str(&format!("&before={encoded}"));
+		}
+		let bytes = self
+			.request_limited(
+				Method::GET,
+				&path,
+				None,
+				discord_protocol::archives::MAX_WIRE,
+			)
+			.await?;
+		discord_protocol::decode::<discord_protocol::archives::Reply>(&bytes)
+			.map_err(|_| Failure::Protocol)?
+			.into_page(parent, guild, kind, before)
+			.map_err(|_| Failure::Protocol)
+	}
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use client_core::{Command, Event, auth::SessionSecret};
-    use std::{sync::Arc, time::Duration};
-    use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
-        net::TcpListener,
-    };
-    #[tokio::test]
-    async fn archive_routes_are_read_only_scoped_and_encode_the_correct_cursor() {
-        tokio::time::timeout(Duration::from_secs(10),async {
+	use super::*;
+	use client_core::{Command, Event, auth::SessionSecret};
+	use std::{sync::Arc, time::Duration};
+	use tokio::{
+		io::{AsyncReadExt, AsyncWriteExt},
+		net::TcpListener,
+	};
+	#[tokio::test]
+	async fn archive_routes_are_read_only_scoped_and_encode_the_correct_cursor() {
+		tokio::time::timeout(Duration::from_secs(10),async {
             let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();
             let mut api=DiscordApi::new(Arc::new(SessionSecret::from_owner_input("SYNTHETIC_ARCHIVE_TOKEN".into()).unwrap())).unwrap();
             api.base=format!("http://{}",listener.local_addr().unwrap());
@@ -94,5 +94,5 @@ mod tests {
             }
             server.await.unwrap();
         }).await.unwrap();
-    }
+	}
 }

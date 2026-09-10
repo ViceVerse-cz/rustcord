@@ -15,295 +15,295 @@ const TEXTURE_KEY: &str = "phosphor-icons";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Icon {
-    ChevronDown,
-    ChevronRight,
-    Gear,
-    Microphone,
-    MicrophoneSlash,
-    Headphones,
-    HeadphonesSlash,
-    Pin,
-    People,
-    AddPeople,
-    Profile,
-    Search,
-    Plus,
-    Smile,
-    Bell,
-    Phone,
-    InCall,
-    HangUp,
-    Video,
-    VideoSlash,
-    ScreenShare,
-    Activities,
-    Soundboard,
-    Reply,
-    Pencil,
-    More,
-    Inbox,
-    Help,
-    Reload,
-    Threads,
-    Speaker,
-    Hash,
-    Forum,
-    Send,
-    Attach,
-    Close,
-    External,
+	ChevronDown,
+	ChevronRight,
+	Gear,
+	Microphone,
+	MicrophoneSlash,
+	Headphones,
+	HeadphonesSlash,
+	Pin,
+	People,
+	AddPeople,
+	Profile,
+	Search,
+	Plus,
+	Smile,
+	Bell,
+	Phone,
+	InCall,
+	HangUp,
+	Video,
+	VideoSlash,
+	ScreenShare,
+	Activities,
+	Soundboard,
+	Reply,
+	Pencil,
+	More,
+	Inbox,
+	Help,
+	Reload,
+	Threads,
+	Speaker,
+	Hash,
+	Forum,
+	Send,
+	Attach,
+	Close,
+	External,
 }
 
 impl Icon {
-    pub const ALL: [Icon; 37] = [
-        Icon::ChevronDown,
-        Icon::ChevronRight,
-        Icon::Gear,
-        Icon::Microphone,
-        Icon::MicrophoneSlash,
-        Icon::Headphones,
-        Icon::HeadphonesSlash,
-        Icon::Pin,
-        Icon::People,
-        Icon::AddPeople,
-        Icon::Profile,
-        Icon::Search,
-        Icon::Plus,
-        Icon::Smile,
-        Icon::Bell,
-        Icon::Phone,
-        Icon::InCall,
-        Icon::HangUp,
-        Icon::Video,
-        Icon::VideoSlash,
-        Icon::ScreenShare,
-        Icon::Activities,
-        Icon::Soundboard,
-        Icon::Reply,
-        Icon::Pencil,
-        Icon::More,
-        Icon::Inbox,
-        Icon::Help,
-        Icon::Reload,
-        Icon::Threads,
-        Icon::Speaker,
-        Icon::Hash,
-        Icon::Forum,
-        Icon::Send,
-        Icon::Attach,
-        Icon::Close,
-        Icon::External,
-    ];
-    /// Upstream Phosphor name recorded in `index.tsv`.
-    fn asset(self) -> &'static str {
-        match self {
-            Icon::ChevronDown => "caret-down",
-            Icon::ChevronRight => "caret-right",
-            Icon::Gear => "gear",
-            Icon::Microphone => "microphone",
-            Icon::MicrophoneSlash => "microphone-slash",
-            Icon::Headphones => "headphones",
-            Icon::HeadphonesSlash => "headphones-slash",
-            Icon::Pin => "push-pin",
-            Icon::People => "users",
-            Icon::AddPeople => "user-plus",
-            Icon::Profile => "user-circle",
-            Icon::Search => "magnifying-glass",
-            Icon::Plus => "plus",
-            Icon::Smile => "smiley",
-            Icon::Bell => "bell",
-            Icon::Phone => "phone",
-            Icon::InCall => "phone-call",
-            Icon::HangUp => "phone-disconnect",
-            Icon::Video => "video-camera",
-            Icon::VideoSlash => "video-camera-slash",
-            Icon::ScreenShare => "monitor-arrow-up",
-            Icon::Activities => "rocket-launch",
-            Icon::Soundboard => "waveform",
-            Icon::Reply => "arrow-bend-up-left",
-            Icon::Pencil => "pencil-simple",
-            Icon::More => "dots-three",
-            Icon::Inbox => "tray",
-            Icon::Help => "question",
-            Icon::Reload => "arrow-clockwise",
-            Icon::Threads => "chats",
-            Icon::Speaker => "speaker-high",
-            Icon::Hash => "hash",
-            Icon::Forum => "chat-centered-text",
-            Icon::Send => "paper-plane-right",
-            Icon::Attach => "plus-circle",
-            Icon::Close => "x",
-            Icon::External => "arrow-square-out",
-        }
-    }
-    fn cell(self) -> usize {
-        static CELLS: OnceLock<Vec<(&'static str, usize)>> = OnceLock::new();
-        let cells = CELLS.get_or_init(|| {
-            INDEX
-                .lines()
-                .map(|line| {
-                    let (name, cell) = line.split_once('\t').expect("bundled icon index");
-                    (name, cell.parse().expect("bundled icon cell"))
-                })
-                .collect()
-        });
-        cells
-            .iter()
-            .find(|(name, _)| *name == self.asset())
-            .map(|(_, cell)| *cell)
-            .expect("every icon is in the bundled atlas")
-    }
+	pub const ALL: [Icon; 37] = [
+		Icon::ChevronDown,
+		Icon::ChevronRight,
+		Icon::Gear,
+		Icon::Microphone,
+		Icon::MicrophoneSlash,
+		Icon::Headphones,
+		Icon::HeadphonesSlash,
+		Icon::Pin,
+		Icon::People,
+		Icon::AddPeople,
+		Icon::Profile,
+		Icon::Search,
+		Icon::Plus,
+		Icon::Smile,
+		Icon::Bell,
+		Icon::Phone,
+		Icon::InCall,
+		Icon::HangUp,
+		Icon::Video,
+		Icon::VideoSlash,
+		Icon::ScreenShare,
+		Icon::Activities,
+		Icon::Soundboard,
+		Icon::Reply,
+		Icon::Pencil,
+		Icon::More,
+		Icon::Inbox,
+		Icon::Help,
+		Icon::Reload,
+		Icon::Threads,
+		Icon::Speaker,
+		Icon::Hash,
+		Icon::Forum,
+		Icon::Send,
+		Icon::Attach,
+		Icon::Close,
+		Icon::External,
+	];
+	/// Upstream Phosphor name recorded in `index.tsv`.
+	fn asset(self) -> &'static str {
+		match self {
+			Icon::ChevronDown => "caret-down",
+			Icon::ChevronRight => "caret-right",
+			Icon::Gear => "gear",
+			Icon::Microphone => "microphone",
+			Icon::MicrophoneSlash => "microphone-slash",
+			Icon::Headphones => "headphones",
+			Icon::HeadphonesSlash => "headphones-slash",
+			Icon::Pin => "push-pin",
+			Icon::People => "users",
+			Icon::AddPeople => "user-plus",
+			Icon::Profile => "user-circle",
+			Icon::Search => "magnifying-glass",
+			Icon::Plus => "plus",
+			Icon::Smile => "smiley",
+			Icon::Bell => "bell",
+			Icon::Phone => "phone",
+			Icon::InCall => "phone-call",
+			Icon::HangUp => "phone-disconnect",
+			Icon::Video => "video-camera",
+			Icon::VideoSlash => "video-camera-slash",
+			Icon::ScreenShare => "monitor-arrow-up",
+			Icon::Activities => "rocket-launch",
+			Icon::Soundboard => "waveform",
+			Icon::Reply => "arrow-bend-up-left",
+			Icon::Pencil => "pencil-simple",
+			Icon::More => "dots-three",
+			Icon::Inbox => "tray",
+			Icon::Help => "question",
+			Icon::Reload => "arrow-clockwise",
+			Icon::Threads => "chats",
+			Icon::Speaker => "speaker-high",
+			Icon::Hash => "hash",
+			Icon::Forum => "chat-centered-text",
+			Icon::Send => "paper-plane-right",
+			Icon::Attach => "plus-circle",
+			Icon::Close => "x",
+			Icon::External => "arrow-square-out",
+		}
+	}
+	fn cell(self) -> usize {
+		static CELLS: OnceLock<Vec<(&'static str, usize)>> = OnceLock::new();
+		let cells = CELLS.get_or_init(|| {
+			INDEX
+				.lines()
+				.map(|line| {
+					let (name, cell) = line.split_once('\t').expect("bundled icon index");
+					(name, cell.parse().expect("bundled icon cell"))
+				})
+				.collect()
+		});
+		cells
+			.iter()
+			.find(|(name, _)| *name == self.asset())
+			.map(|(_, cell)| *cell)
+			.expect("every icon is in the bundled atlas")
+	}
 }
 
 fn decoded() -> &'static egui::ColorImage {
-    static IMAGE: OnceLock<egui::ColorImage> = OnceLock::new();
-    IMAGE.get_or_init(|| {
-        let image = image::load_from_memory_with_format(ATLAS, image::ImageFormat::Png)
-            .expect("bundled icon atlas")
-            .into_rgba8();
-        let size = [image.width() as usize, image.height() as usize];
-        egui::ColorImage::from_rgba_unmultiplied(size, &image)
-    })
+	static IMAGE: OnceLock<egui::ColorImage> = OnceLock::new();
+	IMAGE.get_or_init(|| {
+		let image = image::load_from_memory_with_format(ATLAS, image::ImageFormat::Png)
+			.expect("bundled icon atlas")
+			.into_rgba8();
+		let size = [image.width() as usize, image.height() as usize];
+		egui::ColorImage::from_rgba_unmultiplied(size, &image)
+	})
 }
 
 /// Upload the atlas for `ctx` during application creation, outside the render callback.
 pub fn install(ctx: &egui::Context) {
-    let _ = texture(ctx);
+	let _ = texture(ctx);
 }
 
 fn texture(ctx: &egui::Context) -> TextureHandle {
-    let id = egui::Id::unique(TEXTURE_KEY);
-    if let Some(texture) = ctx.data(|data| data.get_temp::<TextureHandle>(id)) {
-        return texture;
-    }
-    let texture = ctx.load_texture(
-        "Phosphor Icons 2.1.1",
-        decoded().clone(),
-        egui::TextureOptions {
-            mipmap_mode: Some(egui::TextureFilter::Linear),
-            ..egui::TextureOptions::LINEAR
-        },
-    );
-    ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
-    texture
+	let id = egui::Id::unique(TEXTURE_KEY);
+	if let Some(texture) = ctx.data(|data| data.get_temp::<TextureHandle>(id)) {
+		return texture;
+	}
+	let texture = ctx.load_texture(
+		"Phosphor Icons 2.1.1",
+		decoded().clone(),
+		egui::TextureOptions {
+			mipmap_mode: Some(egui::TextureFilter::Linear),
+			..egui::TextureOptions::LINEAR
+		},
+	);
+	ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
+	texture
 }
 
 /// Paint `icon` centred in `rect` with `color`.
 pub fn paint(painter: &egui::Painter, icon: Icon, rect: Rect, color: Color32) {
-    let size = rect.width().min(rect.height());
-    let rect = Rect::from_center_size(rect.center(), Vec2::splat(size))
-        .round_to_pixels(painter.pixels_per_point());
-    let texture = texture(painter.ctx());
-    let [width, height] = texture.size();
-    let cell = icon.cell();
-    let x = (cell % COLUMNS) as f32 * CELL;
-    let y = (cell / COLUMNS) as f32 * CELL;
-    let uv = Rect::from_min_max(
-        egui::pos2(x / width as f32, y / height as f32),
-        egui::pos2((x + CELL) / width as f32, (y + CELL) / height as f32),
-    );
-    // Glyphs occupy 56 of every 64 cell pixels; draw the cell slightly larger so the visible
-    // glyph fills `rect` like the previous painted icons did.
-    painter.image(texture.id(), rect.expand(size * 4.0 / 56.0), uv, color);
+	let size = rect.width().min(rect.height());
+	let rect = Rect::from_center_size(rect.center(), Vec2::splat(size))
+		.round_to_pixels(painter.pixels_per_point());
+	let texture = texture(painter.ctx());
+	let [width, height] = texture.size();
+	let cell = icon.cell();
+	let x = (cell % COLUMNS) as f32 * CELL;
+	let y = (cell / COLUMNS) as f32 * CELL;
+	let uv = Rect::from_min_max(
+		egui::pos2(x / width as f32, y / height as f32),
+		egui::pos2((x + CELL) / width as f32, (y + CELL) / height as f32),
+	);
+	// Glyphs occupy 56 of every 64 cell pixels; draw the cell slightly larger so the visible
+	// glyph fills `rect` like the previous painted icons did.
+	painter.image(texture.id(), rect.expand(size * 4.0 / 56.0), uv, color);
 }
 
 /// Square icon button that highlights on hover and exposes `label` to accessibility.
 pub fn button(ui: &mut egui::Ui, icon: Icon, size: f32, label: &str) -> Response {
-    let colors = design::palette(ui);
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
-    if response.hovered() || response.has_focus() {
-        ui.painter().rect_filled(rect, 6, colors.hover);
-    }
-    let color = if !ui.is_enabled() {
-        colors.muted.gamma_multiply(0.5)
-    } else if response.hovered() || response.has_focus() {
-        colors.text_strong
-    } else {
-        colors.muted
-    };
-    paint(ui.painter(), icon, rect.shrink(size * 0.2), color);
-    response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
-    });
-    response.on_hover_text(label)
+	let colors = design::palette(ui);
+	let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+	if response.hovered() || response.has_focus() {
+		ui.painter().rect_filled(rect, 6, colors.hover);
+	}
+	let color = if !ui.is_enabled() {
+		colors.muted.gamma_multiply(0.5)
+	} else if response.hovered() || response.has_focus() {
+		colors.text_strong
+	} else {
+		colors.muted
+	};
+	paint(ui.painter(), icon, rect.shrink(size * 0.2), color);
+	response.widget_info(|| {
+		egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+	});
+	response.on_hover_text(label)
 }
 
 /// Toggleable variant: `active` keeps the icon in the strong text colour.
 pub fn toggle(ui: &mut egui::Ui, icon: Icon, size: f32, active: bool, label: &str) -> Response {
-    let colors = design::palette(ui);
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
-    if response.hovered() || response.has_focus() {
-        ui.painter().rect_filled(rect, 6, colors.hover);
-    }
-    let color = if active || response.hovered() || response.has_focus() {
-        colors.text_strong
-    } else {
-        colors.muted
-    };
-    paint(ui.painter(), icon, rect.shrink(size * 0.2), color);
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), active, label)
-    });
-    response.on_hover_text(label)
+	let colors = design::palette(ui);
+	let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+	if response.hovered() || response.has_focus() {
+		ui.painter().rect_filled(rect, 6, colors.hover);
+	}
+	let color = if active || response.hovered() || response.has_focus() {
+		colors.text_strong
+	} else {
+		colors.muted
+	};
+	paint(ui.painter(), icon, rect.shrink(size * 0.2), color);
+	response.widget_info(|| {
+		egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), active, label)
+	});
+	response.on_hover_text(label)
 }
 
 /// Inline glyph used beside labels (channel kinds, section headers).
 pub fn inline(ui: &mut egui::Ui, icon: Icon, size: f32, color: Color32) -> Rect {
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
-    paint(ui.painter(), icon, rect, color);
-    rect
+	let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
+	paint(ui.painter(), icon, rect, color);
+	rect
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    #[test]
-    fn atlas_covers_every_icon_once_and_paints_inside_its_rect() {
-        let image = decoded();
-        let rows = Icon::ALL.len().div_ceil(COLUMNS);
-        assert_eq!(image.size, [COLUMNS * CELL as usize, rows * CELL as usize]);
-        assert!(
-            ATLAS.len() < 256 * 1024,
-            "atlas stays a small bundled asset"
-        );
-        let mut cells: Vec<usize> = Icon::ALL.iter().map(|icon| icon.cell()).collect();
-        cells.sort_unstable();
-        cells.dedup();
-        assert_eq!(cells.len(), Icon::ALL.len(), "icons map to distinct cells");
-        assert_eq!(
-            INDEX.lines().count(),
-            Icon::ALL.len(),
-            "index has no unused cells"
-        );
-        for icon in Icon::ALL {
-            // Every cell holds visible glyph pixels.
-            let cell = icon.cell();
-            let (x0, y0) = (
-                (cell % COLUMNS) * CELL as usize,
-                (cell / COLUMNS) * CELL as usize,
-            );
-            let opaque = (0..CELL as usize)
-                .flat_map(|dy| (0..CELL as usize).map(move |dx| (dx, dy)))
-                .filter(|(dx, dy)| image[(x0 + dx, y0 + dy)].a() > 128)
-                .count();
-            assert!(opaque > 40, "{icon:?} cell is blank");
-        }
-        let ctx = egui::Context::default();
-        let output = ctx.run_ui(Default::default(), |ui| {
-            for icon in Icon::ALL {
-                let rect = Rect::from_min_size(egui::pos2(10.0, 10.0), Vec2::splat(24.0));
-                paint(ui.painter(), icon, rect, Color32::WHITE);
-                assert!(button(ui, icon, 32.0, "icon").rect.width() == 32.0);
-            }
-        });
-        assert!(
-            output.textures_delta.set.len() <= 2,
-            "fonts plus one atlas upload"
-        );
-        for shape in &output.shapes {
-            let bounds = shape.shape.visual_bounding_rect();
-            assert!(bounds.is_negative() || bounds.min.x >= -1.0, "{:?}", bounds);
-        }
-        output.drop_without_applying_deltas();
-    }
+	use super::*;
+	#[test]
+	fn atlas_covers_every_icon_once_and_paints_inside_its_rect() {
+		let image = decoded();
+		let rows = Icon::ALL.len().div_ceil(COLUMNS);
+		assert_eq!(image.size, [COLUMNS * CELL as usize, rows * CELL as usize]);
+		assert!(
+			ATLAS.len() < 256 * 1024,
+			"atlas stays a small bundled asset"
+		);
+		let mut cells: Vec<usize> = Icon::ALL.iter().map(|icon| icon.cell()).collect();
+		cells.sort_unstable();
+		cells.dedup();
+		assert_eq!(cells.len(), Icon::ALL.len(), "icons map to distinct cells");
+		assert_eq!(
+			INDEX.lines().count(),
+			Icon::ALL.len(),
+			"index has no unused cells"
+		);
+		for icon in Icon::ALL {
+			// Every cell holds visible glyph pixels.
+			let cell = icon.cell();
+			let (x0, y0) = (
+				(cell % COLUMNS) * CELL as usize,
+				(cell / COLUMNS) * CELL as usize,
+			);
+			let opaque = (0..CELL as usize)
+				.flat_map(|dy| (0..CELL as usize).map(move |dx| (dx, dy)))
+				.filter(|(dx, dy)| image[(x0 + dx, y0 + dy)].a() > 128)
+				.count();
+			assert!(opaque > 40, "{icon:?} cell is blank");
+		}
+		let ctx = egui::Context::default();
+		let output = ctx.run_ui(Default::default(), |ui| {
+			for icon in Icon::ALL {
+				let rect = Rect::from_min_size(egui::pos2(10.0, 10.0), Vec2::splat(24.0));
+				paint(ui.painter(), icon, rect, Color32::WHITE);
+				assert!(button(ui, icon, 32.0, "icon").rect.width() == 32.0);
+			}
+		});
+		assert!(
+			output.textures_delta.set.len() <= 2,
+			"fonts plus one atlas upload"
+		);
+		for shape in &output.shapes {
+			let bounds = shape.shape.visual_bounding_rect();
+			assert!(bounds.is_negative() || bounds.min.x >= -1.0, "{:?}", bounds);
+		}
+		output.drop_without_applying_deltas();
+	}
 }
