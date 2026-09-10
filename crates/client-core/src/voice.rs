@@ -690,6 +690,7 @@ mod tests {
             nick: None,
             status: None,
             custom_status: None,
+            activities: vec![],
         });
         state.apply_voice(Event::Snapshot {
             guild: None,

@@ -1,6 +1,206 @@
 use crate::{Freshness, Id, State};
+use model::{MemberPresence, Patch, RichActivity};
+
+pub const MAX_DIRECT_PRESENCES: usize = 256;
+pub const MAX_DIRECT_PRESENCE_BYTES: usize = 512 * 1024;
+
+#[derive(Clone)]
+pub struct Update {
+    pub user: Id,
+    pub status: Patch<String>,
+    pub custom_status: Patch<String>,
+    pub activities: Patch<Vec<RichActivity>>,
+}
+impl Update {
+    pub fn heap_bytes(&self) -> usize {
+        let text = |patch: &Patch<String>| match patch {
+            Patch::Value(text) => text.capacity(),
+            _ => 0,
+        };
+        text(&self.status)
+            + text(&self.custom_status)
+            + match &self.activities {
+                Patch::Value(activities) => activity_bytes(activities),
+                _ => 0,
+            }
+    }
+    pub fn merge(&mut self, mut newer: Self) {
+        if matches!(&newer.status, Patch::Null)
+            || matches!(&newer.status, Patch::Value(status) if status == "offline")
+        {
+            newer.activities = Patch::Null;
+            newer.custom_status = Patch::Null;
+        }
+        if !matches!(newer.status, Patch::Absent) {
+            self.status = newer.status;
+        }
+        if !matches!(newer.custom_status, Patch::Absent) {
+            self.custom_status = newer.custom_status;
+        }
+        if !matches!(newer.activities, Patch::Absent) {
+            self.activities = newer.activities;
+        }
+    }
+    pub fn resolve(&self, previous: Option<&MemberPresence>) -> MemberPresence {
+        let text = |patch: &Patch<String>, old: Option<&String>| match patch {
+            Patch::Absent => old.cloned(),
+            Patch::Null => None,
+            Patch::Value(value) => Some(value.clone()),
+        };
+        let status = text(&self.status, previous.and_then(|p| p.status.as_ref()));
+        let offline = matches!(self.status, Patch::Null) || status.as_deref() == Some("offline");
+        MemberPresence {
+            user: self.user,
+            custom_status: if offline {
+                None
+            } else {
+                text(
+                    &self.custom_status,
+                    previous.and_then(|p| p.custom_status.as_ref()),
+                )
+            },
+            activities: if offline {
+                vec![]
+            } else {
+                match &self.activities {
+                    Patch::Absent => previous.map_or_else(Vec::new, |p| p.activities.clone()),
+                    Patch::Null => vec![],
+                    Patch::Value(activities) => activities.clone(),
+                }
+            },
+            status,
+        }
+    }
+}
+
+fn activity_bytes(activities: &Vec<RichActivity>) -> usize {
+    activities.capacity() * size_of::<RichActivity>()
+        + activities
+            .iter()
+            .map(RichActivity::heap_bytes)
+            .sum::<usize>()
+}
+
+pub fn projected_row_bytes(row: &model::Member, update: &MemberPresence) -> usize {
+    if row.status == update.status
+        && row.custom_status == update.custom_status
+        && row.activities == update.activities
+    {
+        return row.bytes();
+    }
+    row.bytes()
+        - row.status.as_ref().map_or(0, String::capacity)
+        - row.custom_status.as_ref().map_or(0, String::capacity)
+        - activity_bytes(&row.activities)
+        + update.status.as_ref().map_or(0, String::len)
+        + update.custom_status.as_ref().map_or(0, String::len)
+        + update.activities.len() * size_of::<RichActivity>()
+        + update
+            .activities
+            .iter()
+            .map(|a| {
+                a.name.len()
+                    + a.details.as_ref().map_or(0, String::len)
+                    + a.state.as_ref().map_or(0, String::len)
+            })
+            .sum::<usize>()
+}
 
 impl State {
+    fn known_direct_recipient(&self, user: Id) -> bool {
+        self.channels.iter().any(|c| {
+            c.guild.is_none()
+                && matches!(c.kind, 1 | 3)
+                && self.can_view(c.id)
+                && c.recipients.iter().any(|recipient| recipient.id == user)
+        })
+    }
+    pub fn presence_for(&self, user: Id) -> Option<&MemberPresence> {
+        if !self.gateway_connected || !self.known_direct_recipient(user) {
+            return None;
+        }
+        self.direct_presences.iter().find(|p| p.user == user)
+    }
+    pub(crate) fn apply_direct_presence(&mut self, updates: &[Update]) {
+        if !self.gateway_connected || updates.len() > 100 {
+            return;
+        }
+        for update in updates {
+            if !self.known_direct_recipient(update.user) {
+                continue;
+            }
+            let index = self
+                .direct_presences
+                .iter()
+                .position(|p| p.user == update.user);
+            let resolved = update.resolve(index.map(|i| &self.direct_presences[i]));
+            if !resolved.valid() || resolved.heap_bytes() > MAX_DIRECT_PRESENCE_BYTES {
+                continue;
+            }
+            if index.is_some_and(|i| self.direct_presences[i] == resolved) {
+                continue;
+            }
+            if let Some(index) = index {
+                self.direct_presences.remove(index);
+            }
+            // ponytail: at most 256 records; FIFO eviction avoids a second cache index.
+            while !self.direct_presences.is_empty()
+                && (self.direct_presences.len() >= MAX_DIRECT_PRESENCES
+                    || self
+                        .direct_presences
+                        .iter()
+                        .map(MemberPresence::heap_bytes)
+                        .sum::<usize>()
+                        + resolved.heap_bytes()
+                        + MAX_DIRECT_PRESENCES * size_of::<MemberPresence>()
+                        > MAX_DIRECT_PRESENCE_BYTES)
+            {
+                self.direct_presences.remove(0);
+            }
+            self.direct_presences.push(resolved);
+        }
+        if let Some(list) = &mut self.members
+            && list.guild.is_none()
+            && list.freshness == Freshness::Fresh
+        {
+            let mut bytes = list
+                .rows
+                .iter()
+                .flatten()
+                .map(model::Member::bytes)
+                .sum::<usize>();
+            for row in list.rows.iter_mut().flatten() {
+                let presence = self.direct_presences.iter().find(|p| p.user == row.user.id);
+                if let Some(presence) = presence {
+                    if row.status == presence.status
+                        && row.custom_status == presence.custom_status
+                        && row.activities == presence.activities
+                    {
+                        continue;
+                    }
+                    let projected = projected_row_bytes(row, presence);
+                    if bytes - row.bytes() + projected > 128 * 1024 {
+                        continue;
+                    }
+                    bytes = bytes - row.bytes() + projected;
+                } else {
+                    bytes -= row.status.as_ref().map_or(0, String::capacity)
+                        + row.custom_status.as_ref().map_or(0, String::capacity)
+                        + activity_bytes(&row.activities);
+                }
+                row.status = presence.and_then(|p| p.status.clone());
+                row.custom_status = presence.and_then(|p| p.custom_status.clone());
+                row.activities = presence.map_or_else(Vec::new, |p| p.activities.clone());
+            }
+        }
+    }
+    pub(crate) fn prune_direct_presence(&mut self) {
+        let old = std::mem::take(&mut self.direct_presences);
+        self.direct_presences = old
+            .into_iter()
+            .filter(|p| self.known_direct_recipient(p.user))
+            .collect();
+    }
     pub(crate) fn apply_member_presence(
         &mut self,
         guild: Id,
@@ -41,14 +241,7 @@ impl State {
                 let Some(update) = updates.iter().find(|update| update.user == row.user.id) else {
                     return row.bytes();
                 };
-                if row.status == update.status && row.custom_status == update.custom_status {
-                    return row.bytes();
-                }
-                row.bytes()
-                    - row.status.as_ref().map_or(0, String::capacity)
-                    - row.custom_status.as_ref().map_or(0, String::capacity)
-                    + update.status.as_ref().map_or(0, String::len)
-                    + update.custom_status.as_ref().map_or(0, String::len)
+                projected_row_bytes(row, update)
             })
             .sum::<usize>();
         if projected_bytes > 128 * 1024 {
@@ -56,10 +249,13 @@ impl State {
         }
         for row in list.rows.iter_mut().flatten() {
             if let Some(update) = updates.iter().find(|update| update.user == row.user.id)
-                && (row.status != update.status || row.custom_status != update.custom_status)
+                && (row.status != update.status
+                    || row.custom_status != update.custom_status
+                    || row.activities != update.activities)
             {
                 row.status = update.status.clone();
                 row.custom_status = update.custom_status.clone();
+                row.activities = update.activities.clone();
             }
         }
     }
@@ -111,6 +307,7 @@ mod tests {
                         nick: None,
                         status: Some("online".into()),
                         custom_status: None,
+                        activities: vec![],
                     }),
                     None,
                 ],
@@ -144,6 +341,7 @@ mod tests {
             user: Id(user),
             status: status.map(str::to_owned),
             custom_status: custom.map(str::to_owned),
+            activities: vec![],
         }
     }
 
@@ -238,6 +436,7 @@ mod tests {
                     user: Id(2),
                     status: Some(status),
                     custom_status: None,
+                    activities: vec![],
                 }]
             },
             {
@@ -247,6 +446,7 @@ mod tests {
                     user: Id(2),
                     status: None,
                     custom_status: Some(custom),
+                    activities: vec![],
                 }]
             },
             {
@@ -387,5 +587,180 @@ mod tests {
                 assert!(row(&state).custom_status.is_none());
             }
         }
+    }
+
+    fn direct_state() -> State {
+        let mut state = state();
+        state.user.as_mut().unwrap().id = Id(50);
+        state.channels[0].guild = None;
+        state.channels[0].kind = 1;
+        state.channels[0].recipients = vec![row(&state).user.clone()];
+        state.members = None;
+        state
+    }
+    fn direct_update(
+        user: u64,
+        status: Patch<String>,
+        activities: Patch<Vec<RichActivity>>,
+    ) -> Update {
+        Update {
+            user: Id(user),
+            status,
+            activities,
+            custom_status: Patch::Absent,
+        }
+    }
+    fn activity() -> RichActivity {
+        RichActivity {
+            kind: 0,
+            name: "Synthetic game".into(),
+            details: Some("In a match".into()),
+            state: None,
+        }
+    }
+    #[test]
+    fn direct_activity_patches_are_scoped_clearable_and_do_not_churn_timeline() {
+        let mut state = direct_state();
+        let revision = state.revision;
+        let playing = || {
+            direct_update(
+                2,
+                Patch::Value("online".into()),
+                Patch::Value(vec![activity()]),
+            )
+        };
+        apply(&mut state, Event::DirectPresence(vec![playing()]));
+        let presence = state.presence_for(Id(2)).unwrap();
+        assert_eq!(presence.activities, vec![activity()]);
+        let allocation = presence.activities.as_ptr();
+        apply(&mut state, Event::DirectPresence(vec![playing()]));
+        assert_eq!(
+            state.presence_for(Id(2)).unwrap().activities.as_ptr(),
+            allocation
+        );
+        apply(
+            &mut state,
+            Event::DirectPresence(vec![direct_update(
+                2,
+                Patch::Value("idle".into()),
+                Patch::Absent,
+            )]),
+        );
+        assert_eq!(
+            state.presence_for(Id(2)).unwrap().activities,
+            vec![activity()]
+        );
+        apply(
+            &mut state,
+            Event::DirectPresence(vec![direct_update(
+                999,
+                Patch::Value("online".into()),
+                Patch::Value(vec![activity()]),
+            )]),
+        );
+        assert_eq!(state.direct_presences.len(), 1);
+        assert_eq!(state.revision, revision);
+        state.request_members();
+        assert_eq!(row(&state).activities, vec![activity()]);
+        for clear in [Patch::Null, Patch::Value(vec![])] {
+            apply(
+                &mut state,
+                Event::DirectPresence(vec![direct_update(2, Patch::Absent, clear)]),
+            );
+            assert!(state.presence_for(Id(2)).unwrap().activities.is_empty());
+            assert!(row(&state).activities.is_empty());
+            apply(&mut state, Event::DirectPresence(vec![playing()]));
+        }
+        for status in [Patch::Value("offline".into()), Patch::Null] {
+            apply(
+                &mut state,
+                Event::DirectPresence(vec![direct_update(2, status, Patch::Absent)]),
+            );
+            assert!(state.presence_for(Id(2)).unwrap().activities.is_empty());
+            apply(
+                &mut state,
+                Event::DirectPresence(vec![direct_update(
+                    2,
+                    Patch::Value("online".into()),
+                    Patch::Absent,
+                )]),
+            );
+            assert!(state.presence_for(Id(2)).unwrap().activities.is_empty());
+            apply(&mut state, Event::DirectPresence(vec![playing()]));
+        }
+        apply(&mut state, Event::Disconnected);
+        assert!(state.presence_for(Id(2)).is_none());
+        assert_eq!(state.direct_presences[0].activities, vec![activity()]);
+        apply(&mut state, Event::Resumed);
+        assert_eq!(
+            state.presence_for(Id(2)).unwrap().activities,
+            vec![activity()]
+        );
+        apply(
+            &mut state,
+            Event::DirectPresence(vec![direct_update(
+                2,
+                Patch::Value("idle".into()),
+                Patch::Absent,
+            )]),
+        );
+        assert_eq!(
+            state.presence_for(Id(2)).unwrap().activities,
+            vec![activity()]
+        );
+        for transition in [Event::Resync, Event::Failure(crate::auth::Failure::Expired)] {
+            let mut state = direct_state();
+            apply(&mut state, Event::DirectPresence(vec![playing()]));
+            apply(&mut state, transition);
+            assert!(state.direct_presences.is_empty());
+        }
+        state.logout();
+        state.apply(crate::Envelope {
+            generation: state.generation - 1,
+            event: Event::DirectPresence(vec![playing()]),
+        });
+        assert!(state.direct_presences.is_empty());
+    }
+
+    #[test]
+    fn direct_presence_capacity_and_recipient_removal_retire_cached_activity() {
+        let mut state = direct_state();
+        let channel = state.channels[0].clone();
+        for id in 3..=300 {
+            let mut channel = channel.clone();
+            channel.id = Id(1000 + id);
+            channel.recipients[0].id = Id(id);
+            state.channels.push(channel);
+        }
+        for id in 2..=300 {
+            apply(
+                &mut state,
+                Event::DirectPresence(vec![direct_update(
+                    id,
+                    Patch::Value("online".into()),
+                    Patch::Value(vec![activity()]),
+                )]),
+            );
+        }
+        assert_eq!(state.direct_presences.len(), MAX_DIRECT_PRESENCES);
+        assert!(
+            state
+                .direct_presences
+                .iter()
+                .map(MemberPresence::heap_bytes)
+                .sum::<usize>()
+                + state.direct_presences.capacity() * size_of::<MemberPresence>()
+                <= MAX_DIRECT_PRESENCE_BYTES
+        );
+        assert!(state.presence_for(Id(2)).is_none());
+        apply(
+            &mut state,
+            Event::RecipientRemoved {
+                channel: Id(1300),
+                user: Id(300),
+            },
+        );
+        assert!(state.presence_for(Id(300)).is_none());
+        assert!(!state.direct_presences.iter().any(|p| p.user == Id(300)));
     }
 }

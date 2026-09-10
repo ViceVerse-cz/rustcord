@@ -911,10 +911,19 @@ impl MemberItem {
     pub fn into_model(self) -> Option<model::Member> {
         match self {
             Self::Group { .. } => None,
-            Self::Member { member: m } => Some(model::Member {
+            Self::Member { member: mut m } => Some(model::Member {
                 user: m.user.into_model(),
                 nick: m.nick.map(|n| n.chars().take(128).collect()),
-                custom_status: m.presence.as_ref().and_then(PresenceDto::custom_status),
+                custom_status: m
+                    .presence
+                    .as_ref()
+                    .filter(|p| p.status != "offline")
+                    .and_then(PresenceDto::custom_status),
+                activities: m
+                    .presence
+                    .as_mut()
+                    .filter(|p| p.status != "offline")
+                    .map_or_else(Vec::new, |p| std::mem::take(&mut p.activities.1)),
                 status: m.presence.and_then(|p| match p.status.as_str() {
                     "online" | "idle" | "dnd" | "offline" => Some(p.status),
                     _ => None,

@@ -1423,3 +1423,45 @@ workspace tests, the text-only build and policy checks.
 - Both unsigned Windows packages passed. Text/voice executables grow 8,704/10,752 bytes.
   Package/ZIP deltas and one-warmup/five-run replay results are in docs/performance.md;
   retained 500-message data remains 228,992..229,477 estimated bytes. No speedup claim.
+
+
+## Rich presence in members, DMs and profiles (September 10, 2026)
+
+Implemented from clean main `5f11cb92644d06e2302678211ac21d9445fad692` on
+`feat/rich-presence`. The original checkout was clean and safely fast-forwarded after fetching
+origin; default branch remains main. Member rows and DM sidebar/header display a received
+activity summary. Profiles keep custom status and show activity names, details and states even
+if profile metadata is loading/unavailable. All activity content is synthetic in default tests
+and `--demo --demo-profile`. No dependency, live account action or persistence was added.
+
+The shared parser bounds rich activity count and field sizes. Guild snapshot/delta propagation
+uses the existing member subscription and 128 KiB pane. Known DM recipients receive a bounded
+RAM cache and coalesced global updates plus unofficial READY/SUPPLEMENTAL friend snapshots.
+Offline/null/empty changes clear correctly; omitted fields remain unchanged. Disconnect hides
+DM data; successful resume applies replayed updates while preserving unchanged activity. Fresh
+READY/resync/logout discard it. Unknown/removed recipients and stale account generations do not
+populate the cache. Profile changes do not refetch metadata or churn timeline revisions.
+
+Verification: `cargo xtask check` passed (formatting, strict all-feature Clippy, all-feature
+workspace tests: 327 passed, text-only compilation, policy checks). The first full attempt exhausted C:
+space; this task's temporary cache was moved to E: and the check passed using
+`CARGO_TARGET_DIR=E:/codex-builds/rustcord-rich-target`. A policy block prevented deleting that
+temporary cache; the safe move preserved it instead. Existing unrelated files/caches were kept.
+Focused UI tests include render-and-clear on member/profile and all four DM surfaces, separate
+server/global presence, and no external platform commands. Core/Gateway regressions include
+bounded batching, omission/clearing, rejected unknown users, stable no-op allocation, cache
+budgets, recipient removal and presence replay before RESUMED.
+
+Baseline native dark screenshots were captured and inspected using the unchanged release
+`--demo --demo-profile` process. Computer Use then reported owner physical Escape and was
+stopped. After screenshots, native light/narrow/long-content/keyboard/scroll inspection, and
+comparable after native memory/CPU measurement are blocked by that owner stop. No further
+Computer Use or after executable launch was attempted. Keep the PR draft until this evidence is
+completed. See `docs/pr-evidence/rich-presence/README.md` and the dated performance entry.
+
+Text-only scope: artwork, elapsed/progress timers, party counters and activity actions are not
+implemented. No Windows after-render, macOS/Linux native or live Discord interoperability claim.
+
+Both release package variants and `cargo replay` passed. Text executable +86,016 bytes; voice
++84,992 bytes. Paired replay medians37.6737 ->37.5833ms with unchanged retained range; no speedup
+claim. Exact installed/ZIP sizes, raw samples and method are recorded in performance.md.

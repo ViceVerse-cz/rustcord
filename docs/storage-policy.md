@@ -220,3 +220,16 @@ cursor fields and a full-page flag are session-only. Forward-target pages are no
 from the SQLite latest-page cache or parked in the resident recent-window cache. Accepted
 message metadata remains subject to ordinary account history persistence; no new cache,
 queue, directory fetch or background pagination is introduced.
+
+
+### Received activity metadata (September 10, 2026)
+
+Rich presence stays in RAM: up to four activities per user, each name/details/state field
+128 characters / 512 bytes. Custom status retains its separate 128-character / 512-byte limit.
+Active member rows share the existing 128 KiB pane budget. Known DM recipients additionally
+use a FIFO cache of at most 256 records / 512 KiB including vector storage and owned strings.
+Gateway updates coalesce for 100 ms, at most 100 users / 128 KiB per batch. Initial friends are
+filtered to the first 256 known DM recipient IDs and emitted in bounded batches. Unknown users
+are never retained in the core cache. Disconnect hides cached DM presence until successful
+resume; fresh READY, resync, failure and logout discard it. Removed recipients are pruned.
+No activity assets, URLs, secrets, buttons or raw event payloads are persisted or retained.

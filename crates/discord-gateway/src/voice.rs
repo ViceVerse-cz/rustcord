@@ -87,6 +87,7 @@ impl Calls {
             nick: member.nick.map(|n| n.chars().take(128).collect()),
             status: None,
             custom_status: None,
+            activities: vec![],
         })
     }
     pub(super) fn snapshot(&self, guild: &mut GuildDto, partial: bool) -> Result<Event, Failure> {

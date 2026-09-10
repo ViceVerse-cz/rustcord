@@ -1,5 +1,6 @@
 //! Bounded, uncompressed JSON Gateway. Normal-user Identify remains live-unverified.
 mod channel_events;
+mod presence;
 mod thread_events;
 mod voice;
 use client_core::{
@@ -231,6 +232,8 @@ impl ActiveMembers {
         else {
             return;
         };
+        let explicit_unknown = matches!(&update.status, model::Patch::Null)
+            || matches!(&update.status, model::Patch::Value(status) if !matches!(status.as_str(), "online" | "idle" | "dnd" | "offline"));
         let status = match update.status {
             model::Patch::Absent => previous.status.clone(),
             model::Patch::Null => None,
@@ -239,13 +242,26 @@ impl ActiveMembers {
                 _ => None,
             },
         };
-        let custom_status = match update.custom_status {
+        let activities = match update.activities {
+            model::Patch::Absent => previous.activities.clone(),
+            model::Patch::Null => vec![],
+            model::Patch::Value(activities) => activities,
+        };
+        let mut custom_status = match update.custom_status {
             model::Patch::Absent => previous.custom_status.clone(),
             model::Patch::Null => None,
             model::Patch::Value(text) => Some(text.as_str().to_owned()),
         };
+        if explicit_unknown || status.as_deref() == Some("offline") {
+            custom_status = None;
+        }
         let resolved = model::MemberPresence {
             user: update.user,
+            activities: if explicit_unknown || status.as_deref() == Some("offline") {
+                vec![]
+            } else {
+                activities
+            },
             status,
             custom_status,
         };
@@ -260,15 +276,8 @@ impl ActiveMembers {
             .iter()
             .flatten()
             .map(|row| {
-                if row.user.id == update.user
-                    && (row.status != resolved.status
-                        || row.custom_status != resolved.custom_status)
-                {
-                    row.bytes()
-                        - row.status.as_ref().map_or(0, String::capacity)
-                        - row.custom_status.as_ref().map_or(0, String::capacity)
-                        + resolved.status.as_ref().map_or(0, String::len)
-                        + resolved.custom_status.as_ref().map_or(0, String::len)
+                if row.user.id == update.user {
+                    client_core::presence::projected_row_bytes(row, &resolved)
                 } else {
                     row.bytes()
                 }
@@ -284,14 +293,18 @@ impl ActiveMembers {
             .flatten()
             .filter(|row| row.user.id == update.user)
         {
-            if row.status != resolved.status || row.custom_status != resolved.custom_status {
+            if row.status != resolved.status
+                || row.custom_status != resolved.custom_status
+                || row.activities != resolved.activities
+            {
                 row.status = resolved.status.clone();
                 row.custom_status = resolved.custom_status.clone();
+                row.activities = resolved.activities.clone();
                 changed = true;
             }
         }
         if changed {
-            // <=100 entries, each with at most 7 status and 512 custom-text bytes. The
+            // <=100 entries within the member-row byte budget. The
             // deadline belongs to the first change, never to the latest packet.
             self.pending_presence.insert(update.user, resolved);
             self.presence_deadline
@@ -431,6 +444,7 @@ async fn run_inner(
         let mut ready_at: Option<Instant> = None;
         let ready_deadline = Instant::now() + Duration::from_secs(30);
         let mut active_members: Option<ActiveMembers> = None;
+        let mut direct_presence = presence::Pending::default();
         let mut sent_members = false;
         let mut members_deadline: Option<Instant> = None;
         let mut subscriptions_open = true;
@@ -463,6 +477,9 @@ async fn run_inner(
                 .as_ref()
                 .and_then(|active| active.presence_deadline);
             tokio::select! {
+                _=tokio::time::sleep_until(direct_presence.deadline.unwrap_or(ready_deadline)), if direct_presence.deadline.is_some() && ready_at.is_some() => {
+                    if let Some(event)=direct_presence.take() { emit(event)?; }
+                }
                 command=voice_controls.recv(), if voice_open && ready_at.is_some() => {
                     let Some(command)=command else {voice_open=false;continue;};
                     let connect=if let client_core::voice::Command::Join{channel,..}=command {Some(channel)}else{None};
@@ -523,6 +540,7 @@ async fn run_inner(
                                 }
                                 0 => match packet.t.as_deref().unwrap_or("") {
                                     "READY" => {
+                                        direct_presence=presence::Pending::default();
                                         active_members=None;members_deadline=None;sent_members = !subscriptions_open;
                                         let mut ready: Ready = decode(packet.d.get().as_bytes()).map_err(|_| Failure::ProtocolAt("Gateway login: unsupported READY payload"))?;
                                         owner_id=Some(ready.user.id);
@@ -546,9 +564,11 @@ async fn run_inner(
                                         let (guilds, channels) = ready.navigation().map_err(|_| Failure::ProtocolAt("Gateway login: invalid or oversized channel/thread navigation"))?;
                                         let (read_entries,read_version,partial)=ready.read_state.take().map_or((None,None,false),|snapshot|(Some(snapshot.entries.into_iter().filter(|e|e.kind==0).map(|e|(e.id,e.last_message_id,e.mention_count)).collect()),snapshot.version,snapshot.partial));
                                         if guilds.len() + channels.len() > MAX_NAV { return Err(Failure::Capacity); }
+                                        direct_presence.bootstrap_users=channels.iter().filter(|c|c.guild.is_none() && matches!(c.kind,1|3)).flat_map(|c|c.recipients.iter().map(|u|u.id)).take(client_core::presence::MAX_DIRECT_PRESENCES).collect();
                                         calls.allowed=channels.iter().filter(|c|(c.guild.is_none() && c.kind==1 && c.recipients.len()==1) || (c.guild.is_some() && c.kind==2)).map(|c|(c.id,c.guild)).collect();
                                         if was_ready { emit(Event::Resync)?; }
                                         emit(Event::Ready { user: ready.user.into_model(), guilds, channels, permissions })?; was_ready = true;
+                                        direct_presence.supplemental(packet.d.get().as_bytes(),Instant::now(),&emit)?;
                                         emit(Event::ReadState(client_core::read_state::Event::Snapshot{entries:read_entries,version:read_version,partial}))?;
                                         if let Some(snapshot) = ready.user_guild_settings.take() {
                                             let (entries,replace)=snapshot.entries();
@@ -559,6 +579,8 @@ async fn run_inner(
                                         ready_at = Some(Instant::now());
                                     }
                                     "READY_SUPPLEMENTAL" => {
+                                        direct_presence.supplemental(packet.d.get().as_bytes(),Instant::now(),&emit)?;
+                                        direct_presence.bootstrap_users.clear();
                                         if let Some(owner)=owner_id {
                                             let updates=permissions::supplemental(packet.d.get().as_bytes(),owner).map_err(|_|Failure::Protocol)?;
                                             if !updates.is_empty() {emit(Event::Permissions(client_core::permissions::Event::Members(updates)))?;}
@@ -590,9 +612,9 @@ async fn run_inner(
                                         }
                                     }
                                     "PRESENCE_UPDATE" => {
-                                        if let Some(active)=&mut active_members && active.synced {
-                                            let update=discord_protocol::presence::decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
-                                            active.presence(update,Instant::now());
+                                        if let Ok(update)=discord_protocol::presence::decode(packet.d.get().as_bytes()) {
+                                            if update.guild.is_none() { direct_presence.push(update,Instant::now()); }
+                                            else if let Some(active)=&mut active_members && active.synced { active.presence(update,Instant::now()); }
                                         }
                                     }
                                     "TYPING_START" => {
@@ -991,6 +1013,8 @@ mod tests {
             let (invalid_session_consumed, mut invalid_session_observed) =
                 tokio::sync::oneshot::channel();
             let invalid_session_consumed = std::sync::Mutex::new(Some(invalid_session_consumed));
+            let (presence_consumed, mut presence_observed) = tokio::sync::oneshot::channel();
+            let presence_consumed = std::sync::Mutex::new(Some(presence_consumed));
             let server = async {
                 for connection in 0..3 {
                     let (stream, _) = listener.accept().await.unwrap();
@@ -1006,8 +1030,12 @@ mod tests {
                         assert_eq!(handshake["op"], 6);
                         assert_eq!(handshake["d"]["seq"], 41);
                         assert_eq!(handshake["d"]["session_id"], "synthetic-first-session");
-                        send(&mut socket, json!({"op":0,"t":"RESUMED","s":42,"d":{}})).await;
-                        acknowledge(&mut socket, 42).await;
+                        send(&mut socket, json!({"op":0,"t":"PRESENCE_UPDATE","s":42,"d":{"user":{"id":"3"},"status":"idle"}})).await;
+                        // Replayed presence may precede RESUMED by longer than its batch deadline.
+                        sleep(Duration::from_millis(150)).await;
+                        send(&mut socket, json!({"op":0,"t":"RESUMED","s":43,"d":{}})).await;
+                        (&mut presence_observed).await.unwrap();
+                        acknowledge(&mut socket, 43).await;
                         // Leave a heartbeat reply unread to exercise the TCP-reset race.
                         send(&mut socket, json!({"op":1,"d":null})).await;
                         send(&mut socket, json!({"op":9,"d":false})).await;
@@ -1062,6 +1090,7 @@ mod tests {
                     let label = match event {
                         Event::Ready { .. } => "ready",
                         Event::Resumed => "resumed",
+                        Event::DirectPresence(_) => "presence",
                         Event::Resync => "resync",
                         Event::Disconnected => "disconnected",
                         Event::ReadState(client_core::read_state::Event::Snapshot { .. }) => {
@@ -1071,6 +1100,10 @@ mod tests {
                     };
                     let mut events = events.lock().unwrap();
                     assert!(events.len() < 16);
+                    if label == "presence" {
+                        assert!(events.contains(&"resumed"), "Replay presence must wait until the reducer is connected");
+                        presence_consumed.lock().unwrap().take().unwrap().send(()).unwrap();
+                    }
                     // Emission is synchronous: the first connection's Disconnected
                     // precedes Resumed, so it cannot release the second socket.
                     if label == "disconnected"
@@ -1104,7 +1137,7 @@ mod tests {
                     .into_iter()
                     .filter(|event| *event != "disconnected")
                     .collect::<Vec<_>>(),
-                ["ready", "resumed", "resync", "ready"]
+                ["ready", "resumed", "presence", "resync", "ready"]
             );
         })
         .await
@@ -1191,11 +1224,44 @@ mod tests {
 mod member_tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn rich_activity_patches_preserve_absence_and_clear_on_status_loss() {
+        let mut list = ActiveMembers::new(MemberSubscription {
+            guild: Id(1),
+            channel: Id(2),
+            request: 7,
+            list_id: "everyone".into(),
+        });
+        list.update(decode(br#"{"guild_id":"1","id":"everyone","member_count":1,"ops":[{"op":"SYNC","range":[0,99],"items":[{"member":{"user":{"id":"3","username":"Synthetic"},"presence":{"status":"online","activities":[{"type":0,"name":"Synthetic","details":"In a match"},{"type":4,"state":"Custom"}]}}}]}]}"#).unwrap()).unwrap();
+        let now = Instant::now();
+        for (patch, active) in [
+            (json!({"status":"idle"}), true),
+            (json!({"status":null}), false),
+            (json!({"status":"online"}), false),
+            (json!({"activities":[{"type":0,"name":"Updated"}]}), true),
+            (json!({"activities":[]}), false),
+        ] {
+            let mut wire = patch;
+            wire["guild_id"] = json!("1");
+            wire["user"] = json!({"id":"3"});
+            list.presence(
+                discord_protocol::presence::decode(&serde_json::to_vec(&wire).unwrap()).unwrap(),
+                now,
+            );
+            assert_eq!(
+                !list.rows[0].as_ref().unwrap().activities.is_empty(),
+                active
+            );
+        }
+        let event = list.take_presence().unwrap();
+        assert!(event.bytes() <= client_core::MAX_MEMBER_PRESENCE_BYTES);
+    }
     fn record(user: u64, status: Option<&str>, custom: Option<&str>) -> model::MemberPresence {
         model::MemberPresence {
             user: Id(user),
             status: status.map(str::to_owned),
             custom_status: custom.map(str::to_owned),
+            activities: vec![],
         }
     }
     #[test]
@@ -1263,6 +1329,7 @@ mod member_tests {
             user,
             status,
             custom_status: model::Patch::Absent,
+            activities: model::Patch::Absent,
         };
         list.presence(
             presence(Some(Id(1)), Id(3), model::Patch::Value("online".into())),
@@ -1372,6 +1439,7 @@ mod member_tests {
                     user: Id(id),
                     status: model::Patch::Value("online".into()),
                     custom_status: model::Patch::Value("\u{1f680}".repeat(128)),
+                    activities: model::Patch::Absent,
                 },
                 now,
             );
@@ -1412,6 +1480,7 @@ mod member_tests {
             user: Id(3),
             status: model::Patch::Value(status.into()),
             custom_status: model::Patch::Absent,
+            activities: model::Patch::Absent,
         };
         list.presence(update("idle"), now);
         assert!(list.rows[0].as_ref().unwrap().status.is_none());
@@ -1437,6 +1506,7 @@ mod member_tests {
                 user: Id(3),
                 status: model::Patch::Null,
                 custom_status: model::Patch::Absent,
+                activities: model::Patch::Absent,
             },
             now,
         );

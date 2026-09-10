@@ -366,6 +366,7 @@ pub fn voice_demo_state() -> State {
             nick: None,
             status: None,
             custom_status: None,
+            activities: vec![],
         }),
     })
     .collect();

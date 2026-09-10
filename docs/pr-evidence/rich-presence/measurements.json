@@ -1,0 +1,151 @@
+{
+  "baseline_commit": "5f11cb92644d06e2302678211ac21d9445fad692",
+  "baseline_packages": {
+    "text": {
+      "executable_bytes": 50833408,
+      "executable_sha256": "d7776606abbb53a21d232556ed4de85ee93b249cf060be943e74f0b510dc059a",
+      "installed_bytes": 51440341,
+      "zip_bytes": 31765742,
+      "installed_file_count": 51
+    },
+    "voice": {
+      "executable_bytes": 54187520,
+      "executable_sha256": "8bd8565757f938599452f6f7a015a06d4649c9a95416b2688c6f2767bdcff558",
+      "installed_bytes": 55017226,
+      "zip_bytes": 33138688,
+      "installed_file_count": 97
+    }
+  },
+  "after_packages": {
+    "text": {
+      "executable_bytes": 50919424,
+      "executable_sha256": "cebbbcd898b95763d1f646b1cb855deddf408ada5849b4565cff78b82c566a1b",
+      "installed_bytes": 51532519,
+      "zip_bytes": 31801677,
+      "installed_file_count": 51
+    },
+    "voice": {
+      "executable_bytes": 54272512,
+      "executable_sha256": "7e79624edfe88a0de6b590cd44b2b468836e4026275e2d11ed0848c17775ea21",
+      "installed_bytes": 55108428,
+      "zip_bytes": 33179757,
+      "installed_file_count": 97
+    }
+  },
+  "initial_baseline_replay": {
+    "warmup": "Synthetic reducer replay: 100000 events in 36.706ms; retained timeline 228992..229477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+    "measured": [
+      "Synthetic reducer replay: 100000 events in 36.4381ms; retained timeline 228992..229477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 37.9115ms; retained timeline 228992..229477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 36.199ms; retained timeline 228992..229477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 37.2963ms; retained timeline 228992..229477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 36.5291ms; retained timeline 228992..229477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility."
+    ]
+  },
+  "initial_after_replay": {
+    "measured": [
+      "Synthetic reducer replay: 100000 events in 53.5493ms; retained timeline 228992..229477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 58.1348ms; retained timeline 228992..229477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 42.8005ms; retained timeline 228992..229477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 45.9004ms; retained timeline 228992..229477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 40.7552ms; retained timeline 228992..229477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility."
+    ],
+    "warmup": "Synthetic reducer replay: 100000 events in 69.2858ms; retained timeline 228992..229477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility."
+  },
+  "paired_replay": {
+    "after_warmup": "Synthetic reducer replay: 100000 events in 42.8857ms; retained timeline 228992..229477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+    "baseline_warmup": "Synthetic reducer replay: 100000 events in 37.3529ms; retained timeline 228992..229477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+    "pairs": [
+      {
+        "after": "Synthetic reducer replay: 100000 events in 40.1363ms; retained timeline 228992..229477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+        "baseline": "Synthetic reducer replay: 100000 events in 37.6737ms; retained timeline 228992..229477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility."
+      },
+      {
+        "after": "Synthetic reducer replay: 100000 events in 37.5833ms; retained timeline 228992..229477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+        "baseline": "Synthetic reducer replay: 100000 events in 38.8068ms; retained timeline 228992..229477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility."
+      },
+      {
+        "after": "Synthetic reducer replay: 100000 events in 36.3363ms; retained timeline 228992..229477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+        "baseline": "Synthetic reducer replay: 100000 events in 36.2288ms; retained timeline 228992..229477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility."
+      },
+      {
+        "after": "Synthetic reducer replay: 100000 events in 37.1873ms; retained timeline 228992..229477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+        "baseline": "Synthetic reducer replay: 100000 events in 39.4286ms; retained timeline 228992..229477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility."
+      },
+      {
+        "after": "Synthetic reducer replay: 100000 events in 39.1904ms; retained timeline 228992..229477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+        "baseline": "Synthetic reducer replay: 100000 events in 37.3134ms; retained timeline 228992..229477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility."
+      }
+    ]
+  },
+  "baseline_idle": {
+    "pid": 20936,
+    "executable": "E:/codex-builds/rustcord-rich-baseline/dist/serein.exe",
+    "arguments": "--demo --demo-profile",
+    "warmup_seconds": 10,
+    "samples": [
+      {
+        "utc": "2026-09-10T20:23:07.9274295Z",
+        "working_set_bytes": 160661504,
+        "private_bytes": 392220672,
+        "cpu_percent_one_core": 0
+      },
+      {
+        "utc": "2026-09-10T20:23:08.9515591Z",
+        "working_set_bytes": 160661504,
+        "private_bytes": 392220672,
+        "cpu_percent_one_core": 0
+      },
+      {
+        "utc": "2026-09-10T20:23:09.9667360Z",
+        "working_set_bytes": 160661504,
+        "private_bytes": 392220672,
+        "cpu_percent_one_core": 0
+      },
+      {
+        "utc": "2026-09-10T20:23:10.9800021Z",
+        "working_set_bytes": 160661504,
+        "private_bytes": 392220672,
+        "cpu_percent_one_core": 0
+      },
+      {
+        "utc": "2026-09-10T20:23:11.9899335Z",
+        "working_set_bytes": 160661504,
+        "private_bytes": 392220672,
+        "cpu_percent_one_core": 0
+      },
+      {
+        "utc": "2026-09-10T20:23:12.9996022Z",
+        "working_set_bytes": 163033088,
+        "private_bytes": 394321920,
+        "cpu_percent_one_core": 13.927835932717336
+      },
+      {
+        "utc": "2026-09-10T20:23:14.0111241Z",
+        "working_set_bytes": 163045376,
+        "private_bytes": 394321920,
+        "cpu_percent_one_core": 0
+      },
+      {
+        "utc": "2026-09-10T20:23:15.0207737Z",
+        "working_set_bytes": 163385344,
+        "private_bytes": 394592256,
+        "cpu_percent_one_core": 6.1902664052954615
+      },
+      {
+        "utc": "2026-09-10T20:23:16.0343122Z",
+        "working_set_bytes": 163385344,
+        "private_bytes": 394592256,
+        "cpu_percent_one_core": 0
+      },
+      {
+        "utc": "2026-09-10T20:23:17.0412543Z",
+        "working_set_bytes": 163385344,
+        "private_bytes": 394592256,
+        "cpu_percent_one_core": 0
+      }
+    ],
+    "children": []
+  },
+  "after_native": "Blocked by owner Computer Use Escape stop"
+}

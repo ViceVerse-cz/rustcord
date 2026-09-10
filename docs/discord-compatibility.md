@@ -334,3 +334,19 @@ bounded object visitor rather than recursively hydrated. One existing history pa
 target+1 retrieves an unloaded original; there is no bulk search or background traversal.
 This is public protocol evidence, not proof of normal-user endpoint acceptance. Live validation
 is unperformed; offline regressions cover reference shape, missing/null data and deletion races.
+
+
+## Received rich presence (September 10, 2026)
+
+Activity types and text fields follow the [documented Gateway activity object](https://docs.discord.com/developers/events/gateway-events#activity-object).
+The existing member-list snapshot and PRESENCE_UPDATE path now retains bounded rich text alongside
+custom status. DM presence is admitted only for already-known accessible DM recipients; initial
+friend presence from READY/READY_SUPPLEMENTAL and guild-less updates use unofficial normal-user
+shapes observed in [discord.py-self's state implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/state.py).
+These sources were checked September 10; developer documentation is not proof of normal-user
+support. No additional subscription, endpoint, account action or live validation was performed.
+The existing guild subscription's `activities` flag stays unchanged: the public implementation's
+[subscription reference](https://github.com/dolfies/discord.py-self/blob/master/discord/guild.py)
+labels its meaning unknown. Only received activity metadata is displayed; missing events remain
+unavailable. Offline status clears activity. Disconnect hides cached DM presence; a successful resume restores it and applies replayed changes. Fresh READY, resync and session reset discard the cache. Rendering is text-only;
+asset fetching, activity actions and elapsed/progress timers remain unsupported.
