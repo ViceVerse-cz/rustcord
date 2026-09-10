@@ -1210,6 +1210,8 @@ impl MessagingUi {
 		if !editing_here && let Some((filename, bytes)) = &self.attachment {
 			if state.demo {
 				ui.label("Uploads are disabled in offline preview");
+			} else {
+				ui.weak("Not uploaded · Send uploads this file");
 			}
 			ui.horizontal_wrapped(|ui| {
 				ui.label(format!("{filename} · {bytes} bytes"));
@@ -1326,7 +1328,15 @@ impl MessagingUi {
 			&& !self.ime_active
 			&& !ime_this_frame
 			&& ctx.memory(|m| m.has_focus(composer_id))
-			&& ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+			&& ctx.input_mut(|i| {
+				// consume_key matches Shift/Alt too; only a deliberate plain Enter sends.
+				let send = i.events.iter().any(|event| {
+					matches!(event, egui::Event::Key {
+						key: egui::Key::Enter, pressed: true, repeat: false, modifiers, ..
+					} if *modifiers == egui::Modifiers::NONE)
+				});
+				send && i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+			});
 		let placeholder = state.channels.iter().find(|c| c.id == channel).map_or_else(
 			|| "Message".to_owned(),
 			|c| {
@@ -1538,6 +1548,11 @@ impl MessagingUi {
                                 }
                             } else if !self.upload_busy && !(state.demo && self.attachment.is_some())
                                 && let Some(command) = state.prepare_send_with_attachment(self.attachment.as_ref().map(|(name, _)| name.as_str())) {
+                                // Consume the selection in this UI pass, before desktop dispatch.
+                                // A second render or Send gesture must not enqueue it again.
+                                if self.attachment.take().is_some() {
+                                    self.upload_busy = true;
+                                }
                                 commands.push(command);
                             }
                             edit.request_focus();
@@ -2093,6 +2108,8 @@ mod composer_tests {
 			},
 		);
 		output.drop_without_applying_deltas();
+		// This helper simulates key taps; raw-input tests explicitly model held keys.
+		ctx.input_mut(|i| i.keys_down.clear());
 		commands
 	}
 
@@ -3795,7 +3812,14 @@ mod composer_tests {
 
 	#[test]
 	fn attachment_only_enter_sends_once_and_busy_upload_blocks_resending() {
-		for (busy, allowed) in [(true, true), (false, true), (false, false)] {
+		for (busy, allowed, modifiers, repeat) in [
+			(true, true, egui::Modifiers::NONE, false),
+			(false, true, egui::Modifiers::NONE, false),
+			(false, false, egui::Modifiers::NONE, false),
+			(false, true, egui::Modifiers::SHIFT, false),
+			(false, true, egui::Modifiers::ALT, false),
+			(false, true, egui::Modifiers::NONE, true),
+		] {
 			let ctx = egui::Context::default();
 			let mut state = test_support::demo_state();
 			state.demo = false;
@@ -3816,29 +3840,54 @@ mod composer_tests {
 				messaging.composer(ui, &mut state, channel, &ctx, &mut commands);
 			})
 			.drop_without_applying_deltas();
+			assert!(commands.is_empty(), "Selecting a file must not send it");
 			ctx.memory_mut(|m| m.request_focus(editor));
+			if repeat {
+				// egui derives repeat from held keys, overriding the raw event flag.
+				ctx.input_mut(|i| i.keys_down.insert(egui::Key::Enter));
+			}
 			ctx.run_ui(
 				egui::RawInput {
 					events: vec![egui::Event::Key {
 						key: egui::Key::Enter,
 						physical_key: None,
 						pressed: true,
-						repeat: false,
-						modifiers: egui::Modifiers::NONE,
+						repeat,
+						modifiers,
 					}],
 					..Default::default()
 				},
 				|ui| messaging.composer(ui, &mut state, channel, &ctx, &mut commands),
 			)
 			.drop_without_applying_deltas();
-			assert_eq!(commands.len(), usize::from(!busy && allowed));
-			if !busy && allowed {
+			let sends = !busy && allowed && modifiers == egui::Modifiers::NONE && !repeat;
+			assert_eq!(commands.len(), usize::from(sends));
+			if modifiers == egui::Modifiers::SHIFT {
+				assert_eq!(state.drafts[&channel], "\n");
+			}
+			if sends {
 				assert!(
 					matches!(&commands[0], Command::Send { content, .. } if content.is_empty())
 				);
 				assert_eq!(
 					state.pending[0].attachment.as_deref(),
 					Some("synthetic.txt")
+				);
+				assert!(messaging.attachment.is_none());
+				assert!(messaging.upload_busy);
+				let mut release = edit_key(egui::Key::Enter);
+				if let egui::Event::Key { pressed, .. } = &mut release {
+					*pressed = false;
+				}
+				assert!(
+					edit_frame(
+						&ctx,
+						&mut messaging,
+						&mut state,
+						vec![release, edit_key(egui::Key::Enter)],
+					)
+					.is_empty(),
+					"Another Send before desktop dispatch must not enqueue the attachment again"
 				);
 			} else {
 				assert!(

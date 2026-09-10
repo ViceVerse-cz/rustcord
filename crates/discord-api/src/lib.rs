@@ -39,6 +39,8 @@ impl DiscordApi {
 	pub fn new(secret: Arc<SessionSecret>) -> Result<Self, Failure> {
 		let client = Client::builder()
 			.redirect(reqwest::redirect::Policy::none())
+			// Keep writes single-attempt, including attachment slot allocation.
+			.retry(reqwest::retry::never())
 			.no_proxy()
 			.timeout(Duration::from_secs(20))
 			.connect_timeout(Duration::from_secs(10))

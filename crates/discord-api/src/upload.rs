@@ -222,6 +222,7 @@ impl DiscordApi {
 		}
 		let client = reqwest::Client::builder()
 			.redirect(reqwest::redirect::Policy::none())
+			.retry(reqwest::retry::never())
 			.no_proxy()
 			.connect_timeout(Duration::from_secs(10))
 			.read_timeout(Duration::from_secs(30))
