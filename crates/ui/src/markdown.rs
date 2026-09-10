@@ -1,7 +1,7 @@
 //! Bounded native text formatting. No HTML renderer, image loader, or automatic URL access.
 use egui::{FontId, Stroke, TextFormat, text::LayoutJob};
 use model::Id;
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, TextMergeWithOffset};
+use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use std::collections::VecDeque;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -19,6 +19,7 @@ struct Style {
     quote: bool,
     link: Option<usize>,
     mention: Option<Id>,
+    channel: Option<Id>,
     no_autolink: bool,
 }
 pub struct Formatted {
@@ -104,11 +105,41 @@ impl Formatted {
         };
         let mut stack = Vec::new();
         let mut style = Style::default();
-        for (count, (event, range)) in TextMergeWithOffset::new(
-            Parser::new_ext(input, Options::ENABLE_STRIKETHROUGH).into_offset_iter(),
-        )
-        .enumerate()
-        {
+        let literal = |text: &str, range: &std::ops::Range<usize>| {
+            text == &input[range.clone()]
+                && input[..range.start]
+                    .bytes()
+                    .rev()
+                    .take_while(|b| *b == b'\\')
+                    .count()
+                    % 2
+                    == 0
+        };
+        let mut events = Parser::new_ext(input, Options::ENABLE_STRIKETHROUGH)
+            .into_offset_iter()
+            .peekable();
+        // Merge only unchanged source text. Entity/escape expansions stay separate and inert,
+        // even when followed by an identical literal reference.
+        let events = std::iter::from_fn(|| {
+            let (event, mut range) = events.next()?;
+            let event = match event {
+                Event::Text(text) if literal(&text, &range) => {
+                    let mut joined = text.into_string();
+                    while let Some((Event::Text(next), next_range)) = events.peek() {
+                        if range.end != next_range.start || !literal(next, next_range) {
+                            break;
+                        }
+                        joined.push_str(next);
+                        range.end = next_range.end;
+                        events.next();
+                    }
+                    Event::Text(joined.into())
+                }
+                event => event,
+            };
+            Some((event, range))
+        });
+        for (count, (event, range)) in events.enumerate() {
             if count >= MAX_EVENTS || stack.len() > MAX_DEPTH {
                 // Complexity overflow displays bounded literal text, never a partial misleading parse.
                 output.spans = vec![(input.to_owned(), Style::default())];
@@ -153,7 +184,7 @@ impl Formatted {
                     style = stack.pop().unwrap_or_default();
                 }
                 Event::Text(text) => {
-                    if style.code || style.no_autolink {
+                    if style.code || style.no_autolink || !literal(&text, &range) {
                         output.push(&text, style);
                     } else {
                         output.push_mentions(&text, style, &input[range]);
@@ -219,8 +250,14 @@ impl Formatted {
     fn push_mentions(&mut self, text: &str, style: Style, source: &str) {
         let mut consumed = 0;
         let mut raw_cursor = 0;
-        for (start, _) in text.match_indices("<@") {
-            let Some((id, len)) = model::user_mention_prefix(&text[start..]) else {
+        for (start, _) in text.match_indices('<') {
+            let reference = &text[start..];
+            let is_channel = reference.starts_with("<#");
+            let Some((id, len)) = (if is_channel {
+                model::channel_mention_prefix(reference)
+            } else {
+                model::user_mention_prefix(reference)
+            }) else {
                 continue;
             };
             if self.mention_count >= model::MAX_MENTIONS {
@@ -246,7 +283,8 @@ impl Formatted {
             self.push(
                 token,
                 Style {
-                    mention: Some(id),
+                    mention: (!is_channel).then_some(id),
+                    channel: is_channel.then_some(id),
                     ..style
                 },
             );
@@ -285,6 +323,26 @@ impl Formatted {
         images: &mut crate::avatars::Avatars,
         demo: bool,
     ) {
+        self.show_references(
+            ui,
+            opening,
+            users,
+            profile,
+            (&[], &mut None),
+            (images, demo),
+        );
+    }
+    pub fn show_references(
+        &self,
+        ui: &mut egui::Ui,
+        opening: &mut Option<String>,
+        users: &[model::User],
+        profile: &mut Option<model::User>,
+        references: (&[model::Channel], &mut Option<Id>),
+        media: (&mut crate::avatars::Avatars, bool),
+    ) {
+        let (channels, channel) = references;
+        let (images, demo) = media;
         ui.allocate_ui_with_layout(
             egui::vec2(ui.available_width(), 0.0),
             egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true),
@@ -293,6 +351,33 @@ impl Formatted {
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
                 let mut start = 0;
                 while start < self.spans.len() {
+                    if let Some(id) = self.spans[start].1.channel {
+                        if let Some(target) = channels.iter().find(|target| {
+                            target.id == id && target.guild.is_some() && target.supports_text()
+                        }) {
+                            let label = format!("#{}", target.name);
+                            let response = ui
+                                .add(egui::Link::new(egui::RichText::new(&label).strong()))
+                                .on_hover_text("Open channel");
+                            response.widget_info(|| {
+                                egui::WidgetInfo::labeled(
+                                    egui::WidgetType::Link,
+                                    ui.is_enabled(),
+                                    format!("{label}, open channel"),
+                                )
+                            });
+                            if response.clicked() {
+                                *channel = Some(id);
+                            }
+                        } else {
+                            ui.add(egui::Label::new(&self.spans[start].0).selectable(true))
+                                .on_hover_text(
+                                    "Channel unavailable or unsupported in this session",
+                                );
+                        }
+                        start += 1;
+                        continue;
+                    }
                     if let Some(id) = self.spans[start].1.mention {
                         let user = users.iter().find(|user| user.id == id);
                         let label = format!(
@@ -323,7 +408,11 @@ impl Formatted {
                     let target = self.spans[start].1.link;
                     let count = self.spans[start..]
                         .iter()
-                        .take_while(|(_, style)| style.link == target && style.mention.is_none())
+                        .take_while(|(_, style)| {
+                            style.link == target
+                                && style.mention.is_none()
+                                && style.channel.is_none()
+                        })
                         .count();
                     let spans = &self.spans[start..start + count];
                     if let Some(index) = target {
@@ -492,6 +581,111 @@ impl Formatted {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn channel_references_keep_literals_bounded_and_activate_only_loaded_text_channels() {
+        let parsed = Formatted::parse(
+            "**<#42>** `<#43>` \\<#44> &lt;#45&gt; [<#46>](https://example.com) <#0>\n\n```\n<#47>\n```",
+        );
+        assert_eq!(
+            parsed
+                .spans
+                .iter()
+                .filter_map(|(_, style)| style.channel)
+                .collect::<Vec<_>>(),
+            vec![Id(42)]
+        );
+        assert!(
+            parsed
+                .spans
+                .iter()
+                .any(|(_, style)| style.channel == Some(Id(42)) && style.strong)
+        );
+        for source in ["&lt;#42&gt; <#42>", "&#60;#42&#62; <#42>", "\\<#42> <#42>"] {
+            let parsed = Formatted::parse(source);
+            assert_eq!(
+                parsed
+                    .spans
+                    .iter()
+                    .take_while(|(_, style)| style.channel.is_none())
+                    .map(|(text, _)| text.as_str())
+                    .collect::<String>(),
+                "<#42> "
+            );
+            assert_eq!(
+                parsed
+                    .spans
+                    .iter()
+                    .filter_map(|(_, style)| style.channel)
+                    .collect::<Vec<_>>(),
+                vec![Id(42)]
+            );
+        }
+        let bounded = Formatted::parse(&"<#42> <@43> ".repeat(60));
+        assert_eq!(bounded.mention_count, model::MAX_MENTIONS);
+        assert!(bounded.limited);
+        assert_eq!(
+            bounded
+                .spans
+                .iter()
+                .filter(|(_, style)| style.mention.is_some() || style.channel.is_some())
+                .count(),
+            model::MAX_MENTIONS
+        );
+        let channels: Vec<_> = [
+            (1, 2, Some(Id(9))),
+            (2, 4, Some(Id(9))),
+            (3, 1, None),
+            (4, 0, Some(Id(9))),
+        ]
+        .into_iter()
+        .map(|(id, kind, guild)| model::Channel {
+            id: Id(id),
+            kind,
+            guild,
+            name: "synthetic-text".into(),
+            last_message: None,
+            parent_id: None,
+            position: 0,
+            recipients: vec![],
+            member_list_id: None,
+        })
+        .collect();
+        for id in [1, 2, 3, 4, 5] {
+            let parsed = Formatted::parse(&format!("<#{}>", id));
+            let ctx = egui::Context::default();
+            let mut opening = None;
+            let mut profile = None;
+            let mut channel = None;
+            for key in [egui::Key::Tab, egui::Key::Enter] {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        events: vec![egui::Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: egui::Modifiers::NONE,
+                        }],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        parsed.show_references(
+                            ui,
+                            &mut opening,
+                            &[],
+                            &mut profile,
+                            (&channels, &mut channel),
+                            (&mut crate::avatars::Avatars::default(), true),
+                        )
+                    },
+                );
+                assert!(output.platform_output.commands.is_empty());
+                output.textures_delta.clear();
+            }
+            assert_eq!(channel, (id == 4).then_some(Id(4)));
+            assert!(opening.is_none() && profile.is_none());
+        }
+    }
     #[test]
     fn selecting_across_images_copies_unicode_and_custom_markup() {
         let ctx = egui::Context::default();

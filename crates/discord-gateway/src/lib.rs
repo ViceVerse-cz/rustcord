@@ -1,4 +1,5 @@
 //! Bounded, uncompressed JSON Gateway. Normal-user Identify remains live-unverified.
+mod thread_events;
 mod voice;
 use client_core::{
     Event, MAX_NAV,
@@ -427,7 +428,7 @@ async fn run_inner(
                                                 participants.append(&mut rows);
                                             }
                                         }
-                                        let (guilds, channels) = ready.navigation();
+                                        let (guilds, channels) = ready.navigation().map_err(|_| Failure::ProtocolAt("Gateway login: invalid or oversized channel/thread navigation"))?;
                                         let (read_entries,read_version,partial)=ready.read_state.take().map_or((None,None,false),|snapshot|(Some(snapshot.entries.into_iter().filter(|e|e.kind==0).map(|e|(e.id,e.last_message_id)).collect()),snapshot.version,snapshot.partial));
                                         if guilds.len() + channels.len() > MAX_NAV { return Err(Failure::Capacity); }
                                         calls.allowed=channels.iter().filter(|c|(c.guild.is_none() && c.kind==1 && c.recipients.len()==1) || (c.guild.is_some() && c.kind==2)).map(|c|(c.id,c.guild)).collect();
@@ -492,6 +493,9 @@ async fn run_inner(
                                         let permissions=!matches!(patch.permission_overwrites,model::Patch::Absent) || !matches!(patch.flags,model::Patch::Absent);
                                         emit(Event::ChannelChanged(patch.into_model()))?;
                                         if permissions {emit(Event::PermissionsChanged)?;}
+                                    }
+                                    "THREAD_CREATE" | "THREAD_UPDATE" | "THREAD_DELETE" | "THREAD_LIST_SYNC" | "THREAD_MEMBERS_UPDATE" => {
+                                        if let Some(event) = thread_events::decode_event(packet.t.as_deref().unwrap_or(""), packet.d.get().as_bytes(), owner_id)? { emit(event)?; }
                                     }
                                     "GUILD_EMOJIS_UPDATE" => {
                                         let update: GuildEmojisUpdate = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?;
@@ -604,7 +608,7 @@ mod tests {
                 assert_eq!(packet(&mut socket).await["op"],2);
                 let mut initial=ready(1,"synthetic-session");
                 initial["d"]["read_state"]=json!([]);
-                initial["d"]["guilds"]=json!([{"id":"2","name":"Synthetic"}]);
+                initial["d"]["guilds"]=json!([{"id":"2","name":"Synthetic guild","threads":[{"id":"5","parent_id":"4","type":11,"name":"Initial thread"}]}]);
                 send(&mut socket,initial).await;
                 for (sequence,name,data) in [
                     (2,"CHANNEL_CREATE",json!({"id":"3","guild_id":"2","type":4,"name":"Synthetic category","position":0})),
@@ -618,11 +622,20 @@ mod tests {
                     (10,"MESSAGE_REACTION_REMOVE_EMOJI",json!({"channel_id":"4","message_id":"9","emoji":{"id":null,"name":"x"}})),
                     (11,"MESSAGE_ACK",json!({"channel_id":"4","message_id":"8","version":2})),
                     (12,"PASSIVE_UPDATE_V2",json!({"updated_channels":[{"id":"4","last_message_id":"9"}]})),
-                    (13,"GUILD_CREATE",json!({"id":"2","emojis":[{"id":"20","name":"wave","roles":[],"available":true}]})),
-                    (14,"GUILD_EMOJIS_UPDATE",json!({"guild_id":"2","emojis":[{"id":"21","name":"party","animated":true,"roles":[],"available":true}]})),
-                    (15,"GUILD_DELETE",json!({"id":"2"})),
+                    (13,"THREAD_CREATE",json!({"id":"6","guild_id":"2","parent_id":"4","type":12,"name":"Private thread"})),
+                    (14,"THREAD_UPDATE",json!({"id":"6","guild_id":"2","name":"Renamed thread"})),
+                    (15,"THREAD_LIST_SYNC",json!({"guild_id":"2","channel_ids":["4"],"threads":[{"id":"6","parent_id":"4","type":12,"name":"Synced thread"}]})),
+                    (16,"THREAD_MEMBERS_UPDATE",json!({"id":"6","guild_id":"2","removed_member_ids":["99"]})),
+                    (17,"THREAD_MEMBERS_UPDATE",json!({"id":"6","guild_id":"2","removed_member_ids":["1"]})),
+                    (18,"THREAD_CREATE",json!({"id":"7","guild_id":"2","parent_id":"4","type":11,"name":"Archive me"})),
+                    (19,"THREAD_UPDATE",json!({"id":"7","guild_id":"2","thread_metadata":{"archived":true}})),
+                    (20,"THREAD_CREATE",json!({"id":"8","guild_id":"2","parent_id":"4","type":10,"name":"Delete me"})),
+                    (21,"THREAD_DELETE",json!({"id":"8","guild_id":"2","parent_id":"4","type":10})),
+                    (22,"GUILD_CREATE",json!({"id":"2","emojis":[{"id":"20","name":"wave","roles":[],"available":true}]})),
+                    (23,"GUILD_EMOJIS_UPDATE",json!({"guild_id":"2","emojis":[{"id":"21","name":"party","animated":true,"roles":[],"available":true}]})),
+                    (24,"GUILD_DELETE",json!({"id":"2"})),
                 ] {send(&mut socket,json!({"op":0,"t":name,"s":sequence,"d":data})).await;}
-                acknowledge(&mut socket,15).await;
+                acknowledge(&mut socket,24).await;
                 // Force a heartbeat reply to race the following terminal close.
                 send(&mut socket,json!({"op":1,"d":null})).await;
                 socket.send(Frame::Close(Some(CloseFrame {code:CloseCode::from(4004),reason:"synthetic expiration".into()}))).await.unwrap();
@@ -633,11 +646,15 @@ mod tests {
             let state=std::sync::Mutex::new(client_core::State::default());
             let permission_changes=std::sync::atomic::AtomicUsize::new(0);
             let reaction_changes=std::sync::atomic::AtomicUsize::new(0);
+            let thread_events=std::sync::atomic::AtomicUsize::new(0);
             let emoji_changes=std::sync::atomic::AtomicUsize::new(0);
             let client=run_inner(
                 Arc::new(SessionSecret::from_owner_input("synthetic-owner-session".into()).unwrap()),
                 "wss://gateway.discord.gg/".into(),watch::channel(None).1,mpsc::channel(1).1,
                 |event| {
+                    if let Event::Ready { channels, .. } = &event {
+                        assert!(channels.iter().any(|c| c.id == Id(5) && c.guild == Some(Id(2))));
+                    }
                     if let Event::ReadState(client_core::read_state::Event::Snapshot {entries,version,partial})=&event {
                         assert!(entries.as_ref().is_some_and(Vec::is_empty));
                         assert_eq!(*version,None);
@@ -659,8 +676,16 @@ mod tests {
                         }
                     }
                     let mut state=state.lock().unwrap();
+                    let thread_change=matches!(&event, Event::ThreadChanged{..}|Event::ThreadsSync{..}|Event::ThreadRemoved{..})
+                        || matches!(&event,Event::ChannelCreated(c) if matches!(c.kind,10..=12));
+                    let sync=matches!(&event,Event::ThreadsSync{..});
                     let generation=state.generation;
                     state.apply(client_core::Envelope {generation,event});
+                    if thread_change {thread_events.fetch_add(1,std::sync::atomic::Ordering::Relaxed);}
+                    if sync {
+                        assert!(!state.channels.iter().any(|c|c.id==Id(5)));
+                        assert_eq!(state.channels.iter().find(|c|c.id==Id(6)).unwrap().name,"Synced thread");
+                    }
                     Ok(())
                 },Some(&endpoint)
             );
@@ -683,6 +708,7 @@ mod tests {
             assert_eq!(emoji_changes.load(std::sync::atomic::Ordering::Relaxed),3);
             assert!(state.guilds[0].emojis.as_ref().unwrap().is_empty());
             assert_eq!(reaction_changes.load(std::sync::atomic::Ordering::Relaxed),4);
+            assert_eq!(thread_events.load(std::sync::atomic::Ordering::Relaxed),8);
         }).await.unwrap();
     }
 
