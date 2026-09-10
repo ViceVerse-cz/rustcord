@@ -331,6 +331,7 @@ impl MessagingUi {
             device_combo(ui, "voice-input", &self.voice_inputs, &mut self.voice_input);
             ui.label("Speakers");
             device_combo(ui, "voice-output", &self.voice_outputs, &mut self.voice_output);
+            gain_controls(ui, &mut self.voice_gain);
             if ui.button("Refresh audio devices").clicked() {
                 self.voice_refresh_devices = true;
             }
@@ -340,7 +341,7 @@ impl MessagingUi {
             ui.separator();
             ui.checkbox(&mut self.voice_push_to_talk, "Push to talk");
             ui.label(RichText::new("Hold V while this window is focused and you are not typing. Mute and deafen always take priority.").small());
-            ui.label(RichText::new("Device choices apply to this session. Microphone capture begins only after you join a secured call.").small());
+            ui.label(RichText::new("Device choices and levels apply to this session. Microphone capture begins only after you join a secured call.").small());
         });
     }
 
@@ -540,6 +541,30 @@ impl MessagingUi {
     }
 }
 
+fn gain_controls(ui: &mut egui::Ui, gain: &mut crate::VoiceGain) -> [egui::Response; 2] {
+    let label = ui.label("Microphone gain");
+    let input = ui
+        .add(
+            egui::Slider::new(&mut gain.input_percent, 0..=200)
+                .suffix("%")
+                .step_by(1.0),
+        )
+        .labelled_by(label.id);
+    let label = ui.label("Speaker volume");
+    let output = ui
+        .add(
+            egui::Slider::new(&mut gain.output_percent, 0..=200)
+                .suffix("%")
+                .step_by(1.0),
+        )
+        .labelled_by(label.id);
+    ui.label(RichText::new("100% keeps the original level. Boosting above 100% can clip.").small());
+    if ui.small_button("Reset levels").clicked() {
+        *gain = crate::VoiceGain::default();
+    }
+    [input, output]
+}
+
 fn elapsed_label(call: &client_core::voice::Call) -> Option<String> {
     if !matches!(call.phase, Phase::Waiting | Phase::Connected) {
         return None;
@@ -658,6 +683,59 @@ mod tests {
     use super::*;
 
     #[test]
+    fn gain_sliders_accept_keyboard_input_and_reset_with_the_session() {
+        let mut messaging = MessagingUi::default();
+        assert_eq!(messaging.voice_gain.input_percent, 100);
+        assert_eq!(messaging.voice_gain.output_percent, 100);
+        let ctx = egui::Context::default();
+        let raw = || egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(240.0, 260.0),
+            )),
+            ..Default::default()
+        };
+        ctx.run_ui(raw(), |ui| {
+            gain_controls(ui, &mut messaging.voice_gain)[0].request_focus();
+        })
+        .drop_without_applying_deltas();
+        let mut input = raw();
+        input.events.push(egui::Event::Key {
+            key: egui::Key::ArrowRight,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        ctx.run_ui(input, |ui| {
+            let controls = gain_controls(ui, &mut messaging.voice_gain);
+            assert!(
+                controls
+                    .iter()
+                    .all(|r| r.rect.right() <= ui.max_rect().right() + 1.0)
+            );
+        })
+        .drop_without_applying_deltas();
+        assert_eq!(messaging.voice_gain.input_percent, 101);
+        assert_eq!(messaging.voice_gain.output_percent, 100);
+        assert!(
+            !messaging.voice_refresh_devices,
+            "Gain does not enumerate devices"
+        );
+        messaging.voice_gain.input_percent = u16::MAX;
+        messaging.voice_gain.output_percent = 0;
+        ctx.run_ui(raw(), |ui| {
+            gain_controls(ui, &mut messaging.voice_gain);
+        })
+        .drop_without_applying_deltas();
+        assert_eq!(messaging.voice_gain.input_percent, 200);
+        assert_eq!(messaging.voice_gain.output_percent, 0);
+        messaging.clear();
+        assert_eq!(messaging.voice_gain.input_percent, 100);
+        assert_eq!(messaging.voice_gain.output_percent, 100);
+    }
+
+    #[test]
     fn guild_voice_requires_explicit_keyboard_join_and_demo_never_emits_media() {
         let mut state = test_support::demo_state();
         state.demo = false;
@@ -772,6 +850,7 @@ mod tests {
                     },
                     nick: None,
                     status: None,
+                    custom_status: None,
                 }),
             })
             .collect();

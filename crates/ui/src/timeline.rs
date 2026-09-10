@@ -1,4 +1,4 @@
-use crate::markdown::{FormatCache, external_url};
+use crate::markdown::{FormatCache, discord_url};
 use client_core::State;
 use egui::RichText;
 use model::{Id, Message};
@@ -9,6 +9,7 @@ use std::{
 
 #[derive(Default)]
 pub struct TimelineView {
+    pub(super) edit_started: bool,
     pub(super) channel_reference: Option<Id>,
     channel_labels: u64,
     pub(super) mark_read: Option<Id>,
@@ -29,7 +30,7 @@ pub struct TimelineView {
     revealed: BTreeMap<Id, (String, Vec<model::Embed>, Vec<model::Attachment>)>,
     viewing: Option<(Id, Id)>,
     pub(super) download: crate::attachments::DownloadUi,
-    opening: Option<String>,
+    pub(super) opening: Option<String>,
     text_size: f32,
     scale: f32,
     pub(super) load_older: bool,
@@ -80,11 +81,14 @@ fn layout_key(message: &Message) -> u64 {
     message.edited.hash(&mut key);
     message.reply_to.hash(&mut key);
     message.unsupported.hash(&mut key);
+    message.extra_content.hash(&mut key);
+    message.kind.hash(&mut key);
     message.attachments.hash(&mut key);
     message.embeds.hash(&mut key);
     message.embeds_suppressed.hash(&mut key);
     key.finish()
 }
+const DELETED_ROW_KEY: u64 = u64::MAX;
 // Discord snowflakes carry milliseconds since 2015-01-01. All u64 IDs fit time's range.
 fn timestamp(id: Id) -> time::OffsetDateTime {
     time::OffsetDateTime::from_unix_timestamp(((id.0 >> 22) / 1000) as i64 + 1_420_070_400)
@@ -96,6 +100,8 @@ fn grouped(previous: Option<&Message>, message: &Message, boundary: Option<Id>) 
             && message.reply_to.is_none()
             && !message.unsupported
             && !previous.unsupported
+            && !message.extra_content.any()
+            && !previous.extra_content.any()
             && boundary != Some(message.id)
             && timestamp(previous.id).date() == timestamp(message.id).date()
             && (timestamp(message.id) - timestamp(previous.id)).whole_seconds() < 300
@@ -179,9 +185,10 @@ fn message_actions(
     actions: (bool, bool, bool, bool),
     mark_read: Option<&mut Option<Id>>,
     reply: &mut Option<Id>,
-    editing: &mut Option<(Id, Id, String)>,
+    editing: (&mut Option<(Id, Id, String)>, &mut bool),
     deleting: &mut Option<(Id, Id)>,
 ) {
+    let (editing, edit_started) = editing;
     let (own, can_reply, can_edit, can_delete) = actions;
     let (menu, _) = egui::containers::menu::MenuButton::from_button(
         egui::Button::new(RichText::new("…").color(crate::design::palette(ui).muted))
@@ -192,7 +199,7 @@ fn message_actions(
     .ui(ui, |ui| {
         ui.set_min_width(140.0);
         if ui.button("Copy message").clicked() {
-            ui.ctx().copy_text(message.content.clone());
+            ui.ctx().copy_text(message.display_text().into_owned());
             ui.close();
         }
         if ui
@@ -221,6 +228,7 @@ fn message_actions(
                 .clicked()
             {
                 *editing = Some((message.channel, message.id, message.content.clone()));
+                *edit_started = true;
                 ui.close();
             }
             if ui
@@ -266,6 +274,7 @@ impl TimelineView {
                 channel: state.selected,
                 following: true,
                 download: std::mem::take(&mut self.download),
+                opening: self.opening.take(),
                 jump: true,
                 ..Self::default()
             };
@@ -317,19 +326,31 @@ impl TimelineView {
             self.width = width;
             self.text_size = text_size;
             self.scale = scale;
+            let row_ids: Vec<_> = state.timeline.row_ids().collect();
             self.heights
-                .retain(|id, _| state.timeline.get(*id).is_some());
+                .retain(|id, _| row_ids.binary_search(id).is_ok());
             self.formatted.retain(|id| state.timeline.get(id).is_some());
+            self.toolbar = self
+                .toolbar
+                .filter(|(id, _)| state.timeline.get(*id).is_some());
             self.revealed.retain(|id, content| {
                 state.timeline.get(*id).is_some_and(|m| {
                     m.content == content.0 && m.embeds == content.1 && m.attachments == content.2
                 })
             });
             let mut previous = None;
-            self.rows = state
-                .timeline
-                .iter()
-                .map(|m| {
+            self.rows = row_ids
+                .into_iter()
+                .map(|id| {
+                    let Some(m) = state.timeline.get(id) else {
+                        previous = None;
+                        let height = self
+                            .heights
+                            .get(&id)
+                            .filter(|(key, _)| *key == DELETED_ROW_KEY)
+                            .map_or(text_size + 16.0, |(_, height)| *height);
+                        return (id, height);
+                    };
                     let key = row_key(m, previous, self.unread_boundary);
                     previous = Some(m);
                     let estimate = (if m.embeds_suppressed {
@@ -369,7 +390,7 @@ impl TimelineView {
         if !history_available {
             ui.weak("Message history is unavailable with current permission information.");
         }
-        if state.timeline.is_empty() && history_available {
+        if state.timeline.row_count() == 0 && history_available {
             ui.label(match state.freshness {
                 model::Freshness::Loading => "Loading messages…",
                 model::Freshness::Unavailable => "You cannot view this conversation.",
@@ -422,6 +443,14 @@ impl TimelineView {
                 let (id, _) = &self.rows[index];
                 let can_mark_read = state.can_mark_read(*id);
                 let Some(message) = state.timeline.get(*id) else {
+                    let row = ui.push_id(id.0, |ui| {
+                        egui::Frame::NONE.inner_margin(egui::Margin::symmetric(8, 8)).show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.add(egui::Label::new(RichText::new("Message deleted")
+                                .color(crate::design::palette(ui).muted)).truncate());
+                        });
+                    });
+                    measurements.push((*id, DELETED_ROW_KEY, row.response.rect.height()));
                     continue;
                 };
                 let previous = index.checked_sub(1).and_then(|i| state.timeline.get(self.rows[i].0));
@@ -459,9 +488,12 @@ impl TimelineView {
                                         // Reuse only loaded content; never fetch a thread while painting.
                                         let preview = state.timeline.get(reply).map_or_else(
                                             || "↳ Earlier message · outside loaded history".into(),
-                                            |m| if crate::embeds::has_spoilers(m) { format!("↳ {} · Spoiler", m.author.name) } else { format!("↳ {}: {}", m.author.name, m.content.chars().take(120).collect::<String>().replace('\n', " ")) },
+                                            |m| if crate::embeds::has_spoilers(m) { format!("↳ {} · Spoiler", m.author.name) } else { format!("↳ {}: {}", m.author.name, m.display_text().chars().take(120).collect::<String>().replace('\n', " ")) },
                                         );
                                         ui.add(egui::Label::new(RichText::new(preview).small().color(colors.muted)).truncate());
+                                    }
+                                    if let Some(summary) = message.system_summary() {
+                                        ui.label(RichText::new(summary).color(colors.muted));
                                     }
                                     let formatted = self.formatted.get(*id, &message.content);
                                     let spoilers = formatted.spoilers || crate::embeds::has_spoilers(message);
@@ -485,8 +517,21 @@ impl TimelineView {
                                     if message.edited {
                                         ui.label(RichText::new("(edited)").small().color(colors.muted));
                                     }
-                                    if message.unsupported {
-                                        ui.label(RichText::new("System content · Preview unavailable").small().color(colors.muted));
+                                    let unknown_system = message.unsupported && message.system_summary().is_none();
+                                    if unknown_system || message.extra_content.any() {
+                                        if unknown_system {
+                                            ui.label(RichText::new(format!("Unsupported message type {} · Preview unavailable", message.kind)).small().color(colors.muted));
+                                        }
+                                        for (present, label) in [
+                                            (message.extra_content.poll, "Poll · Preview unavailable"),
+                                            (message.extra_content.sticker_items || message.extra_content.stickers, "Sticker · Preview unavailable"),
+                                            (message.extra_content.components || message.extra_content.components_v2, "Components · Preview unavailable"),
+                                        ] {
+                                            if present { ui.label(RichText::new(label).small().color(colors.muted)); }
+                                        }
+                                        let target = state.channels.iter().find(|c| c.id == message.channel && state.can_view(c.id))
+                                            .and_then(|c| discord_url(c, Some(message.id)));
+                                        if ui.add_enabled(target.is_some(), egui::Button::new("Open in Discord")).clicked() { self.opening = target; }
                                     }
                                     if let Some(action)=crate::reactions::show(ui,message.reactions.as_deref(),
                                         state.gateway_connected && state.freshness==model::Freshness::Fresh && state.can_read_history(message.channel),
@@ -522,11 +567,11 @@ impl TimelineView {
                             self.reaction = Some((*id, action));
                         }
                         let can_reply = state.can_send(message.channel);
-                        let can_edit = state.can_edit(message.channel, *id);
+                        let can_edit = !message.unsupported && state.can_edit(message.channel, *id);
                         let can_delete = state.can_delete(message.channel, *id);
                         if toolbar.add_enabled_ui(can_reply, |ui| action_button(ui, "↩", "Reply")).inner.clicked() { selected_reply = Some(*id); }
-                        if own && toolbar.add_enabled_ui(can_edit, |ui| action_button(ui, "✎", "Edit message")).inner.clicked() { *editing = Some((message.channel, *id, message.content.clone())); }
-                        message_actions(&mut toolbar, message, (own, can_reply, can_edit, can_delete), can_mark_read.then_some(&mut self.mark_read), &mut selected_reply, editing, deleting);
+                        if own && toolbar.add_enabled_ui(can_edit, |ui| action_button(ui, "✎", "Edit message")).inner.clicked() { *editing = Some((message.channel, *id, message.content.clone())); self.edit_started = true; }
+                        message_actions(&mut toolbar, message, (own, can_reply, can_edit, can_delete), can_mark_read.then_some(&mut self.mark_read), &mut selected_reply, (editing, &mut self.edit_started), deleting);
                         self.toolbar = Some((*id, toolbar_rect));
                     }
                 });
@@ -625,29 +670,6 @@ impl TimelineView {
                 self.viewing = None;
             }
         }
-        if let Some(url) = &self.opening {
-            let mut close = false;
-            egui::Window::new("Open external link?")
-                .collapsible(false)
-                .show(ui.ctx(), |ui| {
-                    ui.label("Open this destination in your default browser:");
-                    ui.add(egui::Label::new(url).wrap().selectable(true));
-                    ui.horizontal(|ui| {
-                        if ui.button("Open in browser").clicked() {
-                            if let Some(url) = external_url(url) {
-                                ui.ctx().open_url(egui::OpenUrl::new_tab(url));
-                            }
-                            close = true;
-                        }
-                        if ui.button("Cancel").clicked() {
-                            close = true;
-                        }
-                    });
-                });
-            if close {
-                self.opening = None;
-            }
-        }
     }
 }
 #[cfg(test)]
@@ -669,12 +691,100 @@ mod tests {
             revision: 0,
             nonce: None,
             reply_to: None,
+            kind: 0,
             unsupported: false,
+            extra_content: Default::default(),
             embeds: vec![],
             attachments: vec![],
             mentions: vec![],
             reactions: Some(vec![]),
             embeds_suppressed: false,
+        }
+    }
+    #[test]
+    fn system_events_render_wrap_and_keep_unknown_fallbacks() {
+        fn text(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(t) => out.push(t.galley.job.text.clone()),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| text(s, out)),
+                _ => {}
+            }
+        }
+        for (width, dark) in [(900.0, true), (280.0, false)] {
+            let ctx = egui::Context::default();
+            crate::design::apply(&ctx);
+            ctx.set_visuals(if dark {
+                egui::Visuals::dark()
+            } else {
+                egui::Visuals::light()
+            });
+            let mut state = State {
+                selected: Some(Id(20)),
+                demo: true,
+                ..Default::default()
+            };
+            for (id, kind, content) in [(1, 7, ""), (2, 4, "new channel name"), (3, 222, "")] {
+                let mut message = text_message(id);
+                let old_key = layout_key(&message);
+                message.kind = kind;
+                assert_ne!(old_key, layout_key(&message));
+                message.unsupported = true;
+                message.content = content.into();
+                assert!(!grouped(Some(&message), &message, None));
+                state.timeline.insert(message, false, false).unwrap();
+            }
+            let mut view = TimelineView::default();
+            let mut avatars = crate::avatars::Avatars::default();
+            let mut painted = vec![];
+            for _ in 0..5 {
+                painted.clear();
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 800.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        view.show(
+                            ui,
+                            &mut state,
+                            &mut None,
+                            &mut None,
+                            &mut avatars,
+                            &mut None,
+                        )
+                    },
+                );
+                for shape in &output.shapes {
+                    text(&shape.shape, &mut painted);
+                }
+                output.drop_without_applying_deltas();
+            }
+            assert!(
+                painted
+                    .iter()
+                    .any(|s| s == "Welcome, Robin! Joined the server.")
+            );
+            assert!(
+                painted
+                    .iter()
+                    .any(|s| s == "Robin changed the channel name.")
+            );
+            assert!(painted.iter().any(|s| s.contains("new channel name")));
+            assert_eq!(
+                painted
+                    .iter()
+                    .filter(|s| s.contains("Preview unavailable"))
+                    .count(),
+                1
+            );
+            assert!(
+                painted
+                    .iter()
+                    .any(|s| s.contains("Unsupported message type 222"))
+            );
         }
     }
     #[test]
@@ -701,6 +811,251 @@ mod tests {
         assert!(!grouped(Some(&first), &next, None));
         assert_eq!(timestamp(Id(u64::MAX)).year(), 2154);
     }
+    #[test]
+    fn unsupported_message_fallback_only_requests_confirmation() {
+        fn button(shape: &egui::Shape) -> Option<egui::Rect> {
+            match shape {
+                egui::Shape::Text(t) if t.galley.job.text == "Open in Discord" => {
+                    Some(t.galley.rect.translate(t.pos.to_vec2()))
+                }
+                egui::Shape::Vec(shapes) => shapes.iter().find_map(button),
+                _ => None,
+            }
+        }
+        let mut state = test_support::demo_state();
+        let channel = state
+            .channels
+            .iter()
+            .find(|c| Some(c.id) == state.selected)
+            .unwrap()
+            .clone();
+        let mut message = text_message(42);
+        message.channel = channel.id;
+        message.unsupported = true;
+        state.timeline.clear();
+        state.timeline.insert(message, false, false).unwrap();
+        for allowed in [true, false] {
+            if !allowed {
+                state.channels.clear();
+            }
+            let ctx = egui::Context::default();
+            let mut view = TimelineView::default();
+            let mut avatars = crate::avatars::Avatars::default();
+            let mut render = |view: &mut TimelineView, events| {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(360.0, 600.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        view.show(
+                            ui,
+                            &mut state,
+                            &mut None,
+                            &mut None,
+                            &mut avatars,
+                            &mut None,
+                        )
+                    },
+                );
+                assert!(output.platform_output.commands.is_empty());
+                let rect = output.shapes.iter().find_map(|s| button(&s.shape));
+                output.drop_without_applying_deltas();
+                rect
+            };
+            for _ in 0..3 {
+                render(&mut view, vec![]);
+            }
+            let point = render(&mut view, vec![])
+                .expect("Unsupported message has a fallback")
+                .center();
+            assert!(view.opening.is_none());
+            for pressed in [true, false] {
+                render(
+                    &mut view,
+                    vec![
+                        egui::Event::PointerMoved(point),
+                        egui::Event::PointerButton {
+                            pos: point,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+            assert_eq!(
+                view.opening,
+                if allowed {
+                    discord_url(&channel, Some(Id(42)))
+                } else {
+                    None
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn extra_content_markers_update_layout_and_keep_supported_text() {
+        fn collect(shape: &egui::Shape, texts: &mut Vec<(String, egui::Rect)>) {
+            match shape {
+                egui::Shape::Text(t) => texts.push((
+                    t.galley.job.text.clone(),
+                    t.galley.rect.translate(t.pos.to_vec2()),
+                )),
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        collect(shape, texts);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut state = test_support::demo_state();
+        state.read_state.reset();
+        let channel = state
+            .channels
+            .iter()
+            .find(|c| Some(c.id) == state.selected)
+            .unwrap()
+            .clone();
+        let mut message = text_message(42);
+        message.channel = channel.id;
+        message.content = "Supported text remains".into();
+        let plain_key = layout_key(&message);
+        let ctx = egui::Context::default();
+        let mut view = TimelineView::default();
+        let mut avatars = crate::avatars::Avatars::default();
+        let mut render = |view: &mut TimelineView, state: &mut State, events| {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(380.0, 650.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| view.show(ui, state, &mut None, &mut None, &mut avatars, &mut None),
+            );
+            assert!(
+                output.platform_output.commands.is_empty(),
+                "Markers only offer explicit external confirmation"
+            );
+            let mut texts = vec![];
+            for shape in &output.shapes {
+                collect(&shape.shape, &mut texts);
+            }
+            output.drop_without_applying_deltas();
+            texts
+        };
+        let all = model::ExtraContent {
+            poll: true,
+            sticker_items: true,
+            stickers: true,
+            components: true,
+            components_v2: true,
+        };
+        let mut full_height = None;
+        for extra in [
+            all,
+            model::ExtraContent {
+                sticker_items: true,
+                ..Default::default()
+            },
+            model::ExtraContent {
+                stickers: true,
+                ..Default::default()
+            },
+            model::ExtraContent {
+                components_v2: true,
+                ..Default::default()
+            },
+            model::ExtraContent::default(),
+        ] {
+            message.extra_content = extra;
+            assert_eq!(layout_key(&message) == plain_key, !extra.any());
+            let mut previous = message.clone();
+            previous.id = Id(41);
+            assert_eq!(grouped(Some(&previous), &message, None), !extra.any());
+            state.timeline.clear();
+            state
+                .timeline
+                .insert(message.clone(), false, false)
+                .unwrap();
+            state.revision += 1;
+            for _ in 0..3 {
+                render(&mut view, &mut state, vec![]);
+            }
+            let texts = render(&mut view, &mut state, vec![]);
+            assert!(
+                texts
+                    .iter()
+                    .any(|(text, _)| text.trim_end() == "Supported text remains")
+            );
+            for (label, present) in [
+                ("Poll · Preview unavailable", extra.poll),
+                (
+                    "Sticker · Preview unavailable",
+                    extra.sticker_items || extra.stickers,
+                ),
+                (
+                    "Components · Preview unavailable",
+                    extra.components || extra.components_v2,
+                ),
+                ("Open in Discord", extra.any()),
+            ] {
+                assert_eq!(
+                    texts.iter().filter(|(text, _)| text == label).count(),
+                    usize::from(present),
+                    "{label}"
+                );
+            }
+            assert!(
+                !texts
+                    .iter()
+                    .any(|(text, _)| text == "System content · Preview unavailable")
+            );
+            assert!(view.opening.is_none());
+            if extra == all {
+                full_height = Some(view.heights[&message.id].1);
+                let point = texts
+                    .iter()
+                    .find(|(text, _)| text == "Open in Discord")
+                    .unwrap()
+                    .1
+                    .center();
+                for pressed in [true, false] {
+                    render(
+                        &mut view,
+                        &mut state,
+                        vec![
+                            egui::Event::PointerMoved(point),
+                            egui::Event::PointerButton {
+                                pos: point,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                    );
+                }
+                assert_eq!(view.opening, discord_url(&channel, Some(message.id)));
+                view.opening = None;
+            }
+            if !extra.any() {
+                assert!(
+                    view.heights[&message.id].1 < full_height.unwrap(),
+                    "Removing marker-only metadata must shrink the row"
+                );
+            }
+        }
+    }
+
     #[test]
     fn hover_actions_keep_layout_stable_and_support_keyboard_reply() {
         fn texts(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
@@ -947,12 +1302,38 @@ mod tests {
             assert!(!view.following);
             let anchor = view.anchor.unwrap();
             assert_eq!(anchor.0, Id(200));
+            crate::MessagingUi::default().apply_reading_preferences(
+                &ctx,
+                model::ReadingPreferences {
+                    zoom_percent: 125,
+                    ..Default::default()
+                },
+            );
+            for _ in 0..8 {
+                render(&mut view, &mut state);
+            }
+            assert_eq!(
+                view.anchor.unwrap().0,
+                anchor.0,
+                "Reading zoom preserves the anchored message"
+            );
             state.timeline.insert(text_message(0), false, true).unwrap();
             state.revision += 1;
             for _ in 0..4 {
                 render(&mut view, &mut state);
             }
             assert_eq!(view.anchor.unwrap().0, anchor.0);
+            state.timeline.delete(anchor.0).unwrap();
+            state.revision += 1;
+            for _ in 0..4 {
+                render(&mut view, &mut state);
+            }
+            assert_eq!(
+                view.anchor.unwrap().0,
+                anchor.0,
+                "Deleting the anchored row retains its ID"
+            );
+            assert!(view.anchor.unwrap().1 <= view.heights[&anchor.0].1);
             view.jump = true;
             view.following = true;
             for _ in 0..8 {
@@ -964,6 +1345,161 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn resident_preview_renders_only_selected_rows_while_revalidating() {
+        fn collect(shape: &egui::Shape, labels: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(text) => labels.push(text.galley.job.text.clone()),
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        collect(shape, labels);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for (width, dark) in [(900.0, true), (360.0, false)] {
+            for deleted_only in [false, true] {
+                let mut state = test_support::demo_state();
+                state.timeline.clear();
+                state.history(None);
+                let messages = (500..550)
+                    .map(|id| {
+                        let mut message = text_message(id);
+                        message.content = format!("Resident alpha row {id}");
+                        message
+                    })
+                    .collect();
+                state.apply(client_core::Envelope {
+                    generation: state.generation,
+                    event: client_core::Event::History {
+                        channel: Id(20),
+                        request: state.request,
+                        older: false,
+                        messages,
+                    },
+                });
+                if deleted_only {
+                    state.apply(client_core::Envelope {
+                        generation: state.generation,
+                        event: client_core::Event::DeleteBulk {
+                            channel: Id(20),
+                            ids: (500..550).map(Id).collect(),
+                        },
+                    });
+                }
+                let expected: Vec<_> = state.timeline.row_ids().collect();
+                assert_eq!(expected.len(), 50);
+                let ctx = egui::Context::default();
+                crate::design::apply(&ctx);
+                ctx.set_visuals(if dark {
+                    egui::Visuals::dark()
+                } else {
+                    egui::Visuals::light()
+                });
+                let mut view = TimelineView::default();
+                let mut avatars = crate::avatars::Avatars::default();
+                let mut render = |view: &mut TimelineView, state: &mut State| {
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 480.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            view.show(ui, state, &mut None, &mut None, &mut avatars, &mut None);
+                            assert!(ui.min_rect().right() <= ui.max_rect().right() + 1.0);
+                        },
+                    );
+                    assert!(output.platform_output.commands.is_empty());
+                    let mut labels = vec![];
+                    for shape in &output.shapes {
+                        collect(&shape.shape, &mut labels);
+                    }
+                    output.drop_without_applying_deltas();
+                    labels
+                };
+                for _ in 0..6 {
+                    render(&mut view, &mut state);
+                }
+                assert!(matches!(
+                    state.select(Id(21)),
+                    Some(client_core::Command::History {
+                        channel: Id(21),
+                        before: None,
+                        ..
+                    })
+                ));
+                let labels = render(&mut view, &mut state);
+                assert!(view.rows.is_empty());
+                assert!(!labels.iter().any(|text| text.contains("Resident alpha")));
+                let mut beta = text_message(900);
+                beta.channel = Id(21);
+                beta.content = "Resident beta content".into();
+                state.apply(client_core::Envelope {
+                    generation: state.generation,
+                    event: client_core::Event::History {
+                        channel: Id(21),
+                        request: state.request,
+                        older: false,
+                        messages: vec![beta],
+                    },
+                });
+                for _ in 0..3 {
+                    render(&mut view, &mut state);
+                }
+                assert_eq!(
+                    view.rows.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+                    vec![Id(900)]
+                );
+                assert!(matches!(
+                    state.select(Id(20)),
+                    Some(client_core::Command::History {
+                        channel: Id(20),
+                        before: None,
+                        ..
+                    })
+                ));
+                assert_eq!(state.freshness, model::Freshness::Loading);
+                assert!(state.history_pending);
+                assert_eq!(state.timeline.row_ids().collect::<Vec<_>>(), expected);
+                for _ in 0..6 {
+                    render(&mut view, &mut state);
+                }
+                let labels = render(&mut view, &mut state);
+                assert!(!labels.iter().any(|text| text.contains("Resident beta")));
+                assert_eq!(
+                    view.rows.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+                    expected
+                );
+                assert!(
+                    view.rows
+                        .iter()
+                        .all(|(_, height)| height.is_finite() && *height > 0.0)
+                );
+                assert!(
+                    view.following,
+                    "Resident navigation starts at the latest loaded row"
+                );
+                assert!(
+                    view.mark_read.is_none(),
+                    "Unrevalidated resident rows must not acknowledge read state"
+                );
+                if deleted_only {
+                    assert!(state.timeline.is_empty());
+                    assert!(labels.iter().any(|text| text == "Message deleted"));
+                    assert!(!labels.iter().any(|text| text.contains("Resident alpha")
+                        || text == "Loading messages?"
+                        || text.contains("No messages yet")));
+                } else {
+                    assert!(labels.iter().any(|text| text.contains("Resident alpha")));
+                }
+            }
+        }
+    }
+
     #[test]
     fn mixed_height_virtualization_visits_only_viewport() {
         let rows: Vec<_> = (1..=500)
@@ -980,6 +1516,111 @@ mod tests {
         assert_eq!(anchor_offset(&neighbors, Id(3), 25.0), 65.0);
         assert_eq!(anchor_offset(&neighbors, Id(3), 200.0), 140.0);
         assert_eq!(anchor_offset(&[], Id(2), 25.0), 0.0);
+    }
+
+    #[test]
+    fn deleted_only_timeline_discards_content_and_has_no_message_actions() {
+        fn texts(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(text) => out.push(text.galley.job.text.clone()),
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        texts(shape, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for (width, dark) in [(240.0, false), (600.0, true)] {
+            let mut state = test_support::demo_state();
+            state.read_state.reset();
+            state.timeline.clear();
+            let mut message = text_message(42);
+            message.channel = state.selected.unwrap();
+            message.author.name = "Deleted synthetic author".into();
+            message.content = "||Deleted synthetic body||".into();
+            state
+                .timeline
+                .insert(message.clone(), false, false)
+                .unwrap();
+            let ctx = egui::Context::default();
+            ctx.set_visuals(if dark {
+                egui::Visuals::dark()
+            } else {
+                egui::Visuals::light()
+            });
+            let mut view = TimelineView::default();
+            let mut avatars = crate::avatars::Avatars::default();
+            let mut render = |view: &mut TimelineView, state: &mut State| {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 480.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        view.show(ui, state, &mut None, &mut None, &mut avatars, &mut None);
+                        assert!(ui.min_rect().right() <= ui.max_rect().right() + 1.0);
+                    },
+                );
+                assert!(output.platform_output.commands.is_empty());
+                let mut labels = vec![];
+                for shape in &output.shapes {
+                    texts(&shape.shape, &mut labels);
+                }
+                output.drop_without_applying_deltas();
+                labels
+            };
+            for _ in 0..3 {
+                render(&mut view, &mut state);
+            }
+            view.revealed.insert(
+                message.id,
+                (
+                    message.content.clone(),
+                    message.embeds.clone(),
+                    message.attachments.clone(),
+                ),
+            );
+            view.viewing = Some((message.id, Id(9)));
+            view.toolbar = Some((message.id, egui::Rect::EVERYTHING));
+            state.timeline.delete(message.id).unwrap();
+            state.revision += 1;
+            for _ in 0..3 {
+                render(&mut view, &mut state);
+            }
+            let labels = render(&mut view, &mut state);
+            assert!(state.timeline.is_empty());
+            assert_eq!(state.timeline.row_count(), 1);
+            assert_eq!(
+                view.rows.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+                vec![message.id]
+            );
+            assert_eq!(
+                labels
+                    .iter()
+                    .filter(|text| text.as_str() == "Message deleted")
+                    .count(),
+                1
+            );
+            for text in [
+                "Deleted synthetic author",
+                "Deleted synthetic body",
+                "Reveal spoiler",
+                "Reply",
+                "Open in Discord",
+                "No messages yet. Start the conversation below.",
+            ] {
+                assert!(
+                    !labels.iter().any(|label| label.contains(text)),
+                    "Deleted row exposed {text}"
+                );
+            }
+            assert!(view.revealed.is_empty() && view.viewing.is_none() && view.toolbar.is_none());
+            assert!(view.reaction.is_none() && view.mark_read.is_none());
+        }
     }
     #[test]
     fn channel_rename_invalidates_offscreen_reference_heights() {
@@ -1000,7 +1641,9 @@ mod tests {
             revision: 0,
             nonce: None,
             reply_to: None,
+            kind: 0,
             unsupported: false,
+            extra_content: Default::default(),
             embeds: vec![],
             embeds_suppressed: false,
             attachments: vec![],
@@ -1135,7 +1778,9 @@ mod tests {
             revision: 0,
             nonce: None,
             reply_to: None,
+            kind: 0,
             unsupported: false,
+            extra_content: Default::default(),
             embeds: vec![],
             attachments: vec![],
             mentions: Vec::new(),
@@ -1220,7 +1865,9 @@ mod tests {
             revision: 0,
             nonce: None,
             reply_to: None,
+            kind: 0,
             unsupported: false,
+            extra_content: Default::default(),
             attachments: vec![],
             mentions: Vec::new(),
             embeds_suppressed: false,

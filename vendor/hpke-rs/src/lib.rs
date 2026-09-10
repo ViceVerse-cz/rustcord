@@ -5,11 +5,11 @@
 //!
 //! ```
 //! use hpke_rs::{*, hpke_types::*};
-//! use hpke_rs_libcrux::HpkeLibcrux;
+//! use hpke_rs_rust_crypto::HpkeRustCrypto;
 //! use hpke_rs_crypto::{HpkeCrypto, RngCore};
 //!
 //! // Set up hpke mode.
-//! let mut hpke = Hpke::<HpkeLibcrux>::new(Mode::Base, KemAlgorithm::DhKem25519,
+//! let mut hpke = Hpke::<HpkeRustCrypto>::new(Mode::Base, KemAlgorithm::DhKem25519,
 //!    KdfAlgorithm::HkdfSha256, AeadAlgorithm::ChaCha20Poly1305);
 //!
 //! // Generate keys. The other parties public key must be received in some way.
@@ -45,11 +45,11 @@
 //!
 //! ```
 //! use hpke_rs::{*, hpke_types::*};
-//! use hpke_rs_libcrux::HpkeLibcrux;
+//! use hpke_rs_rust_crypto::HpkeRustCrypto;
 //! use hpke_rs_crypto::{HpkeCrypto, RngCore};
 //!
 //! // Set up hpke mode.
-//! let mut hpke = Hpke::<HpkeLibcrux>::new(Mode::Base, KemAlgorithm::DhKem25519,
+//! let mut hpke = Hpke::<HpkeRustCrypto>::new(Mode::Base, KemAlgorithm::DhKem25519,
 //!    KdfAlgorithm::HkdfSha256, AeadAlgorithm::ChaCha20Poly1305);
 //!
 //! // Generate keys. The other parties public key must be received in some way.
@@ -123,10 +123,6 @@ pub use hpke_rs_crypto::types as hpke_types;
 /// Re-export of the RustCrypto crate.
 #[cfg(feature = "rustcrypto")]
 pub use hpke_rs_rust_crypto as rustcrypto;
-
-/// Re-export of the libcrux crate.
-#[cfg(feature = "libcrux")]
-pub use hpke_rs_libcrux as libcrux;
 
 #[cfg(not(feature = "hpke-test-prng"))]
 use rand_core::TryRngCore;

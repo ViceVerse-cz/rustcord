@@ -84,6 +84,52 @@ pub fn external_url(input: &str) -> Option<String> {
     .then(|| url.to_string())
 }
 
+pub(super) fn discord_url(channel: &model::Channel, message: Option<Id>) -> Option<String> {
+    if channel.id.0 == 0 || message.is_some_and(|id| id.0 == 0) {
+        return None;
+    }
+    let scope = match channel.guild {
+        Some(guild) if guild.0 != 0 && !matches!(channel.kind, 1 | 3) => guild.to_string(),
+        None if matches!(channel.kind, 1 | 3) => "@me".into(),
+        _ => return None,
+    };
+    let mut url = format!("https://discord.com/channels/{scope}/{}", channel.id);
+    if let Some(message) = message {
+        url.push('/');
+        url.push_str(&message.to_string());
+    }
+    Some(url)
+}
+
+pub(super) fn confirm_external_link(ctx: &egui::Context, opening: &mut Option<String>) {
+    let Some(target) = opening.as_deref().and_then(external_url) else {
+        *opening = None;
+        return;
+    };
+    let mut confirm = false;
+    let mut cancel = false;
+    let modal = egui::Modal::new(egui::Id::new("confirm-external-link")).show(ctx, |ui| {
+        ui.set_width((ctx.content_rect().width() - 48.0).clamp(180.0, 440.0));
+        ui.heading("Open external link?");
+        ui.label("Open this destination in your default browser:");
+        ui.add(egui::Label::new(&target).wrap().selectable(true));
+        ui.horizontal_wrapped(|ui| {
+            confirm = ui.button("Open in browser").clicked();
+            cancel = ui.button("Cancel").clicked();
+        });
+    });
+    cancel |= modal.should_close();
+    if confirm && !cancel {
+        // Revalidate the exact normalized destination shown above before emitting an OS action.
+        if let Some(url) = external_url(&target) {
+            ctx.open_url(egui::OpenUrl::new_tab(url));
+        }
+    }
+    if confirm || cancel {
+        *opening = None;
+    }
+}
+
 impl Formatted {
     pub fn parse(source: &str) -> Self {
         let mut end = source.len().min(MAX_INPUT);
@@ -581,6 +627,169 @@ impl Formatted {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn discord_routes_use_only_valid_typed_ids() {
+        let mut channel = model::Channel {
+            id: Id(10),
+            guild: Some(Id(20)),
+            kind: 0,
+            name: "https://malicious.invalid/secret".into(),
+            parent_id: None,
+            position: 0,
+            recipients: vec![],
+            member_list_id: None,
+            last_message: None,
+        };
+        assert_eq!(
+            discord_url(&channel, None).as_deref(),
+            Some("https://discord.com/channels/20/10")
+        );
+        for kind in [10, 11, 12, 13, 14, 15, 16, 255] {
+            channel.kind = kind;
+            assert_eq!(
+                discord_url(&channel, Some(Id(30))).as_deref(),
+                Some("https://discord.com/channels/20/10/30")
+            );
+        }
+        for kind in [1, 3] {
+            channel.kind = kind;
+            assert!(
+                discord_url(&channel, None).is_none(),
+                "DMs cannot have a guild route"
+            );
+            channel.guild = None;
+            assert_eq!(
+                discord_url(&channel, Some(Id(30))).as_deref(),
+                Some("https://discord.com/channels/@me/10/30")
+            );
+            channel.guild = Some(Id(20));
+        }
+        channel.kind = 0;
+        channel.guild = None;
+        assert!(discord_url(&channel, None).is_none());
+        channel.guild = Some(Id(0));
+        assert!(discord_url(&channel, None).is_none());
+        channel.guild = Some(Id(u64::MAX));
+        channel.id = Id(u64::MAX);
+        assert_eq!(
+            discord_url(&channel, Some(Id(u64::MAX))).unwrap(),
+            format!("https://discord.com/channels/{0}/{0}/{0}", u64::MAX)
+        );
+        assert!(discord_url(&channel, Some(Id(0))).is_none());
+        channel.id = Id(0);
+        assert!(discord_url(&channel, None).is_none());
+    }
+
+    #[test]
+    fn external_confirmation_requires_explicit_action_and_displays_emitted_target() {
+        fn text_position(shape: &egui::Shape, label: &str) -> Option<egui::Pos2> {
+            match shape {
+                egui::Shape::Text(text) if text.galley.job.text == label => {
+                    Some(text.pos + text.galley.size() / 2.0)
+                }
+                egui::Shape::Vec(shapes) => {
+                    shapes.iter().find_map(|shape| text_position(shape, label))
+                }
+                _ => None,
+            }
+        }
+        for action in ["Cancel", "Escape", "Open in browser"] {
+            let ctx = egui::Context::default();
+            let normalized = "https://example.com/b%20c";
+            let mut opening = Some("HTTPS://EXAMPLE.COM:443/a/../b c".into());
+            let frame = |opening: &mut Option<String>, events| {
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(340.0, 420.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |_| confirm_external_link(&ctx, opening),
+                )
+            };
+            let mut position = None;
+            for pass in 0..3 {
+                let mut output = frame(&mut opening, vec![]);
+                output.textures_delta.clear();
+                assert!(output.platform_output.commands.is_empty());
+                assert!(opening.is_some());
+                assert!(
+                    pass == 0
+                        || output.shapes.iter().any(|shape| text_position(
+                            &shape.shape,
+                            normalized
+                        )
+                        .is_some())
+                );
+                position = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| text_position(&shape.shape, action));
+                output.drop_without_applying_deltas();
+            }
+            let events = if action == "Escape" {
+                vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }]
+            } else {
+                let pos = position.expect("Visible confirmation control");
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]
+            };
+            let output = frame(&mut opening, events);
+            let opened: Vec<_> = output
+                .platform_output
+                .commands
+                .iter()
+                .filter_map(|command| match command {
+                    egui::OutputCommand::OpenUrl(url) => Some(url.url.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                opened,
+                if action == "Open in browser" {
+                    vec![normalized]
+                } else {
+                    vec![]
+                }
+            );
+            assert!(opening.is_none());
+            output.drop_without_applying_deltas();
+            let output = frame(&mut opening, vec![]);
+            assert!(output.platform_output.commands.is_empty());
+            output.drop_without_applying_deltas();
+        }
+        let ctx = egui::Context::default();
+        let mut invalid = Some("javascript:alert(1)".into());
+        let output = ctx.run_ui(Default::default(), |_| {
+            confirm_external_link(&ctx, &mut invalid)
+        });
+        assert!(invalid.is_none());
+        assert!(output.platform_output.commands.is_empty());
+        output.drop_without_applying_deltas();
+    }
+
     #[test]
     fn channel_references_keep_literals_bounded_and_activate_only_loaded_text_channels() {
         let parsed = Formatted::parse(
