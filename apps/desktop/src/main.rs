@@ -1480,6 +1480,12 @@ impl Desktop {
             });
         }
         if let Some(failure) = terminal {
+            if std::env::var_os("SEREIN_MEMBER_DIAGNOSTICS").as_deref()
+                == Some(std::ffi::OsStr::new("1"))
+            {
+                // One additional fixed-label diagnostic when the session terminates.
+                eprintln!("[Serein members] Session stopped: {}", failure.label());
+            }
             self.connection = None;
             self.pending_save = None;
             self.state.apply(Envelope {

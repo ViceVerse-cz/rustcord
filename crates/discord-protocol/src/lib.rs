@@ -894,7 +894,6 @@ pub enum MemberItem {
 #[derive(Deserialize)]
 pub struct MemberGroup {
     pub id: String,
-    pub count: u64,
 }
 impl MemberItem {
     pub fn into_model(self) -> Option<model::Member> {

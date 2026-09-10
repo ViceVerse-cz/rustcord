@@ -25,7 +25,7 @@ pub const MAX_DRAFT_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_CONTENT: usize = 2000;
 pub const MAX_NAV: usize = 4000;
 pub const MAX_EVENT_BYTES: usize = 4 * 1024 * 1024;
-pub const EVENT_SLOTS: usize = 8; // <= 32 MiB wire-derived data, not including one decoder
+pub const EVENT_SLOTS: usize = 8; // UI drain batch; reliable events share a 32 MiB byte budget.
 pub const COMMAND_SLOTS: usize = 16; // each admitted command <= 16 KiB
 
 pub enum Command {

@@ -14,14 +14,14 @@ use std::{
 };
 use tokio::{
     runtime::Handle,
-    sync::{mpsc, watch},
+    sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch},
     task::JoinHandle,
 };
 
 pub struct Connection {
     pub commands: mpsc::Sender<Command>,
     pub uploads: mpsc::Sender<crate::uploads::UploadRequest>,
-    pub events: mpsc::Receiver<Envelope>,
+    pub events: ReliableEvents,
     pub typing: mpsc::Receiver<Envelope>,
     pub terminal: watch::Receiver<Option<Failure>>,
     typing_channel: Arc<AtomicU64>,
@@ -52,7 +52,7 @@ impl Connection {
     ) -> Self {
         let (commands, mut receive) = mpsc::channel(COMMAND_SLOTS);
         let (uploads, mut upload_receive) = mpsc::channel::<crate::uploads::UploadRequest>(1);
-        let (send, events) = mpsc::channel(EVENT_SLOTS);
+        let (send, events) = reliable_events(ctx.clone());
         let (typing_send, typing) = mpsc::channel(8);
         let (finished, terminal) = watch::channel(None);
         let wake = ctx.clone();
@@ -258,8 +258,41 @@ impl Connection {
     }
 }
 
+// One bounded GUILD_CREATE can fan out into MAX_NAV channel events synchronously.
+// Many small events share the original eight-snapshot aggregate byte budget.
+const RELIABLE_ITEMS: usize = client_core::MAX_NAV + EVENT_SLOTS;
+const RELIABLE_BYTES: usize = EVENT_SLOTS * MAX_EVENT_BYTES;
+struct ReliableSender {
+    send: mpsc::Sender<(Envelope, OwnedSemaphorePermit)>,
+    bytes: Arc<Semaphore>,
+}
+pub struct ReliableEvents {
+    receive: mpsc::Receiver<(Envelope, OwnedSemaphorePermit)>,
+    wake: egui::Context,
+}
+impl ReliableEvents {
+    pub fn try_recv(&mut self) -> Result<Envelope, mpsc::error::TryRecvError> {
+        let (envelope, _permit) = self.receive.try_recv()?;
+        // The UI consumes a fixed batch each frame. Schedule another only for remaining work.
+        if !self.receive.is_empty() {
+            self.wake.request_repaint();
+        }
+        Ok(envelope)
+    }
+}
+fn reliable_events(wake: egui::Context) -> (ReliableSender, ReliableEvents) {
+    let (send, receive) = mpsc::channel(RELIABLE_ITEMS);
+    (
+        ReliableSender {
+            send,
+            bytes: Arc::new(Semaphore::new(RELIABLE_BYTES)),
+        },
+        ReliableEvents { receive, wake },
+    )
+}
+
 fn emit_event(
-    reliable: &mpsc::Sender<Envelope>,
+    reliable: &ReliableSender,
     typing: &mpsc::Sender<Envelope>,
     envelope: Envelope,
     ctx: &egui::Context,
@@ -271,10 +304,24 @@ fn emit_event(
         }
         return Ok(());
     }
-    if envelope.event.bytes() > MAX_EVENT_BYTES {
+    let bytes = envelope.event.bytes();
+    if bytes > MAX_EVENT_BYTES {
         return Err(Failure::Capacity);
     }
-    reliable.try_send(envelope).map_err(|_| Failure::Capacity)?;
+    // Event::bytes includes Event itself; also charge envelope padding and the owned permit.
+    let bytes = bytes + size_of::<(Envelope, OwnedSemaphorePermit)>() - size_of::<Event>();
+    let permit = reliable
+        .bytes
+        .clone()
+        .try_acquire_many_owned(bytes as u32)
+        .map_err(|_| Failure::Capacity)?;
+    reliable
+        .send
+        .try_send((envelope, permit))
+        .map_err(|error| match error {
+            mpsc::error::TrySendError::Full(_) => Failure::Capacity,
+            mpsc::error::TrySendError::Closed(_) => Failure::Network,
+        })?;
     ctx.request_repaint();
     Ok(())
 }
@@ -379,11 +426,98 @@ fn scope_history_failure(event: Event, channel: model::Id, request: u64) -> Even
 
 #[cfg(test)]
 mod tests {
+    fn queued_channel(id: u64) -> client_core::Envelope {
+        client_core::Envelope {
+            generation: 1,
+            event: client_core::Event::ChannelCreated(model::Channel {
+                id: model::Id(id),
+                guild: Some(model::Id(1)),
+                parent_id: None,
+                position: 0,
+                name: "Synthetic channel".into(),
+                kind: 0,
+                recipients: vec![],
+                member_list_id: None,
+                last_message: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn reliable_navigation_burst_is_fifo_and_item_bounded() {
+        let ctx = egui::Context::default();
+        let (send, mut events) = reliable_events(ctx.clone());
+        let (typing, _) = mpsc::channel(8);
+        // One entire navigation fanout plus ordinary event slots fits without a UI drain.
+        for id in 1..=RELIABLE_ITEMS as u64 {
+            emit_event(&send, &typing, queued_channel(id), &ctx).unwrap();
+        }
+        let retained = send.bytes.available_permits();
+        assert_eq!(
+            emit_event(&send, &typing, queued_channel(0), &ctx),
+            Err(Failure::Capacity)
+        );
+        assert_eq!(send.bytes.available_permits(), retained);
+        for id in 1..=RELIABLE_ITEMS as u64 {
+            let envelope = events.try_recv().unwrap();
+            assert_eq!(envelope.generation, 1);
+            let Event::ChannelCreated(channel) = envelope.event else {
+                panic!("Reliable events must be retained in order");
+            };
+            assert_eq!(channel.id, model::Id(id));
+        }
+        assert!(events.try_recv().is_err());
+        assert_eq!(send.bytes.available_permits(), RELIABLE_BYTES);
+    }
+
+    #[test]
+    fn reliable_byte_budget_releases_on_receive_rejection_and_drop() {
+        let ctx = egui::Context::default();
+        let (send, mut events) = reliable_events(ctx.clone());
+        let (typing, _) = mpsc::channel(8);
+        let envelope = queued_channel(2);
+        let charge = envelope.event.bytes() + size_of::<(Envelope, OwnedSemaphorePermit)>()
+            - size_of::<Event>();
+        let held = send
+            .bytes
+            .clone()
+            .try_acquire_many_owned((RELIABLE_BYTES - charge) as u32)
+            .unwrap();
+        emit_event(&send, &typing, envelope, &ctx).unwrap();
+        assert_eq!(send.bytes.available_permits(), 0);
+        assert_eq!(
+            emit_event(&send, &typing, queued_channel(3), &ctx),
+            Err(Failure::Capacity)
+        );
+        assert_eq!(events.receive.len(), 1);
+        events.try_recv().unwrap();
+        assert_eq!(send.bytes.available_permits(), charge);
+        emit_event(&send, &typing, queued_channel(3), &ctx).unwrap();
+        drop(held);
+        let before = send.bytes.available_permits();
+        let mut oversized = queued_channel(4);
+        if let Event::ChannelCreated(channel) = &mut oversized.event {
+            channel.name = "x".repeat(MAX_EVENT_BYTES);
+        }
+        assert_eq!(
+            emit_event(&send, &typing, oversized, &ctx),
+            Err(Failure::Capacity)
+        );
+        assert_eq!(send.bytes.available_permits(), before);
+        drop(events);
+        assert_eq!(send.bytes.available_permits(), RELIABLE_BYTES);
+        assert_eq!(
+            emit_event(&send, &typing, queued_channel(5), &ctx),
+            Err(Failure::Network)
+        );
+        assert_eq!(send.bytes.available_permits(), RELIABLE_BYTES);
+    }
+
     #[test]
     fn typing_burst_cannot_consume_reliable_message_slots() {
-        let (send, mut events) = tokio::sync::mpsc::channel(client_core::EVENT_SLOTS);
-        let (typing_send, mut typing) = tokio::sync::mpsc::channel(8);
         let ctx = eframe::egui::Context::default();
+        let (send, mut events) = super::reliable_events(ctx.clone());
+        let (typing_send, mut typing) = tokio::sync::mpsc::channel(8);
         for user in 1..=100 {
             super::emit_event(
                 &send,
@@ -401,7 +535,7 @@ mod tests {
             .unwrap();
         }
         assert_eq!(typing.len(), 8);
-        assert!(events.is_empty());
+        assert!(events.receive.is_empty());
         super::emit_event(
             &send,
             &typing_send,

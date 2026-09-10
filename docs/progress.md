@@ -1306,3 +1306,42 @@ Delivery: [draft PR #38](https://github.com/ViceVerse-cz/rustcord/pull/38), impl
 commit `c11b7ab`. macOS, Ubuntu, Windows and security checks were pending at initial
 inspection; no remote CI success is claimed. The reported server still needs the owner's
 live verification with the repaired build.
+
+
+### Member-list diagnostic follow-up — September 10, 2026
+
+The owner reports that the live member pane still becomes unavailable after the initial
+identity repair. Read-only inspection found the owner-launched `target/debug/serein`
+writing stdout/stderr to its terminal, with no member-sync logger in the implementation.
+The app lookup accidentally launched a separate packaged copy; that extra copy was closed,
+leaving the owner's debug process running. No credentials or private payloads were read
+from disk/process memory, and no messages, calls or microphone actions were taken.
+A visible server total with no member rows does not identify the remaining failure.
+
+Added explicitly enabled, fixed-label stderr diagnostics via
+`SEREIN_MEMBER_DIAGNOSTICS=1`: maximum 64 lines per Gateway run, disabled by default.
+These distinguish absent subscriptions, empty/populated SYNC, identity mismatch,
+decode/range/capacity failure and timeout without logging service identifiers or content.
+Focused Gateway tests (7) and `cargo xtask check` pass; a new debug build is ready.
+The owner must restart that build and reproduce once before a concrete live cause can be
+claimed. The prior synthetic hydration repair is not evidence that this remaining live
+failure has been fixed. The draft PR remains open for that diagnostic result.
+
+
+Further diagnosis: the owner-run fixed-label trace shows member reply decoding failures,
+followed by incremental-only updates and eventual timeout. The current primary protocol
+schema permits SYNC group headers containing only an ID; our unused required `count`
+field rejected those rows. Removed that field and added a regression preserving the group
+index and following member. No raw member payload or serde error text was recorded.
+
+The owner also reported intermittent Safe capacity exceeded. A single GUILD_CREATE can
+synchronously emit more channel events than the old eight-slot queue accepts. The reliable
+queue now fits one bounded navigation fanout (4,008 items) in the unchanged 32 MiB estimated
+byte budget, with nonblocking admission, FIFO order, permit release and repaint while
+backlogged. Seven focused connection tests pass, including full navigation burst, exact
+byte exhaustion, oversized rejection, cleanup and typing isolation. Debug build includes
+both repairs. Detailed temporary structural introspection used during debugging was
+removed; shipped diagnostics remain fixed labels only. The owner restarted the repaired
+build and confirmed the server member list is working. Long-running live capacity behavior
+has not been independently measured. Final `cargo xtask check`, debug build, text package
+and voice package passed. Final measurements are in docs/performance.md.

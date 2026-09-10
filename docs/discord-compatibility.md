@@ -347,3 +347,24 @@ and [list identity algorithm](https://github.com/dolfies/discord.py-self/blob/2b
 were rechecked. This changes local identity selection, not the opcode, requested ranges,
 permissions or account access. Synthetic regression tests establish the hydration bug
 and its repair, not acceptance by Discord; owner-operated live verification remains unrun.
+
+
+### Member list row headers and refresh bursts (September 10, 2026)
+
+The original [Gateway wire types](https://github.com/dolfies/discord.py-self/blob/2ba64a9a997e151a9c259984e0a179b1fdf4aff4/discord/types/gateway.py)
+distinguish top-level group summaries (ID plus count) from group items inside SYNC ranges
+(ID only). Serein incorrectly required a count in every group item, rejecting the complete
+member update. It now reads only the group ID needed to recognize an index placeholder;
+counts are not fabricated. An exact synthetic ID-only-header regression loads the following
+member at the correct position. The owner-run redacted trace confirms that member replies
+were rejected by the decoder; post-repair live validation is pending.
+
+GUILD_CREATE can emit a synchronous channel-navigation burst. The previous eight-item
+reliable queue could terminate the session before the UI drained it. Admission now shares
+the same 32 MiB estimated byte budget across up to 4,008 events, preserving FIFO order,
+per-item limits and failure on real exhaustion. Full-burst/byte-exhaustion/cleanup tests
+are synthetic; this does not promise every large account fits existing account budgets.
+
+The owner confirmed the affected server member list loads after restarting the repaired
+diagnostic build on September 10, 2026. This does not establish general live compatibility
+or long-running capacity behavior.

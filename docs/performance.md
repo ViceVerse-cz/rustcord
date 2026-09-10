@@ -1324,3 +1324,25 @@ is within observed run variation; no speed improvement is claimed. This message-
 workload does not measure member-list synchronization latency, process RSS, UI frame time
 or live service behavior. No protocol range, persistent cache or dependency was added;
 member snapshots remain bounded to 100 positions and 128 KiB.
+
+### Final member decoding and queue repair — September 10, 2026
+
+Same macOS 27.0 / M1 Pro / 16 GiB host and locked release text/voice packaging; baseline
+`9fcce51`, final working tree based on `702b2ed`. Byte measurements reuse verified packages.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable bytes | 47,431,712 | 47,435,472 | +3,760 |
+| Text installed bytes | 48,014,712 | 48,029,580 | +14,868 |
+| Text gzip distribution bytes | 30,590,560 | 30,599,671 | +9,111 |
+| Voice executable bytes | 50,251,296 | 50,254,960 | +3,664 |
+| Voice installed bytes | 51,064,507 | 51,079,279 | +14,772 |
+| Voice gzip distribution bytes | 31,901,498 | 31,909,408 | +7,910 |
+| Reducer median ms / 100,000 events | 37.244 | 51.645 | +14.401 (+38.7%) |
+
+One warmup, five measured reducer runs: 45.286, 48.421, 59.164, 53.595, 51.645 ms.
+Retained timeline bounds remain 228,992–229,477 estimated bytes / 500 records. This shared-host
+measurement is materially slower than the earlier baseline and has wide variation; no speed
+improvement is claimed. The changed queue and Gateway decoder are outside this reducer
+workload. This is not member latency, RSS or frame timing. Reliable queue admission is tested
+at 4,008 items and its unchanged 32 MiB estimated-byte ceiling; the UI still drains eight/frame.
