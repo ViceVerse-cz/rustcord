@@ -141,12 +141,12 @@ impl Connection {
                         command=receive.recv()=>{
                             let Some(command)=command else {break;};
                             if matches!(command,Command::CancelSearch) {drop(search.take());continue;}
-                            if matches!(command,Command::Search{..}|Command::Pins{..}) {
+                            if matches!(command,Command::Search{..}|Command::Pins{..}|Command::Archives{..}) {
                                 drop(search.take());
                                 let api=api.clone();let emit=emit.clone();let finished=finished.clone();let wake=wake.clone();
                                 search=Some(AbortTask(tokio::spawn(async move {
                                     let event=api.execute(command).await;
-                                    let failure=match &event {Event::Search{result:Err(f),..} if f.ends_session() && *f!=Failure::Capacity=>Some(*f),_=>None};
+                                    let failure=match &event {Event::Search{result:Err(f),..}|Event::Archives{result:Err(f),..} if f.ends_session() && *f!=Failure::Capacity=>Some(*f),_=>None};
                                     let error=emit(event).err().or(failure);
                                     if let Some(error)=error {api.stop();let _=finished.send(Some(error));}
                                     wake.request_repaint();
