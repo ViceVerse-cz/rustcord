@@ -17,6 +17,10 @@ pub const EVENT_SLOTS: usize = 8; // <= 32 MiB wire-derived data, not including 
 pub const COMMAND_SLOTS: usize = 16; // each admitted command <= 16 KiB
 
 pub enum Command {
+    Pins {
+        channel: Id,
+        request: u64,
+    },
     Search {
         channel: Id,
         guild: Option<Id>,
@@ -383,7 +387,8 @@ impl State {
     pub fn command_rejected(&mut self, command: Command) {
         if let Command::Search {
             channel, request, ..
-        } = command
+        }
+        | Command::Pins { channel, request } = command
         {
             self.apply_search(channel, request, Err(auth::Failure::Capacity));
             return;
@@ -972,7 +977,7 @@ impl Event {
         size_of::<Self>()
             + match self {
                 Self::Search {
-                    result: Ok(search::Outcome::Page(page)),
+                    result: Ok(search::Outcome::Page(page) | search::Outcome::Pins(page)),
                     ..
                 } => page.bytes(),
                 Self::ReadState(read_state::Event::Snapshot { entries, .. }) => entries
@@ -1147,6 +1152,43 @@ mod tests {
         state.command_rejected(command);
         assert!(state.reactions.writing.is_none());
         assert_eq!(state.freshness, Freshness::Fresh);
+        // Successful reaction removal/readback changes only reactions, not chat access.
+        let original_content = state.timeline.get(id).unwrap().content.clone();
+        let Command::Reactions(R::Set {
+            request,
+            add: false,
+            ..
+        }) = state.prepare_reaction(id, emoji.clone()).unwrap()
+        else {
+            panic!()
+        };
+        apply(
+            &mut state,
+            Event::Reactions(E::Written {
+                channel,
+                message: id,
+                request,
+                result: Ok(()),
+            }),
+        );
+        assert_eq!(state.timeline.get(id).unwrap().content, original_content);
+        let Command::Reactions(R::Read { request, .. }) = state.next_reaction_read().unwrap()
+        else {
+            panic!()
+        };
+        apply(
+            &mut state,
+            Event::Reactions(E::Read {
+                channel,
+                message: id,
+                request,
+                result: Ok(vec![]),
+            }),
+        );
+        assert_eq!(state.timeline.get(id).unwrap().content, original_content);
+        assert_eq!(state.timeline.get(id).unwrap().reactions, Some(vec![]));
+        assert_eq!(state.freshness, Freshness::Fresh);
+        assert!(state.next_reaction_read().is_none());
         // Reaction events during history loading cannot be overwritten by that page.
         let _ = state.history(None);
         apply(

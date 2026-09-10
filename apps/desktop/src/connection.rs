@@ -109,7 +109,7 @@ impl Connection {
                         command=receive.recv()=>{
                             let Some(command)=command else {break;};
                             if matches!(command,Command::CancelSearch) {drop(search.take());continue;}
-                            if matches!(command,Command::Search{..}) {
+                            if matches!(command,Command::Search{..}|Command::Pins{..}) {
                                 drop(search.take());
                                 let api=api.clone();let emit=emit.clone();let finished=finished.clone();let wake=wake.clone();
                                 search=Some(AbortTask(tokio::spawn(async move {

@@ -88,6 +88,10 @@ fn copy_directory(source: &std::path::Path, destination: &std::path::Path) -> Re
     std::fs::create_dir_all(destination).map_err(|e| e.to_string())?;
     for entry in std::fs::read_dir(source).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
+        // PR screenshots are development evidence, not installed application assets.
+        if entry.file_name() == "pr-evidence" {
+            continue;
+        }
         let target = destination.join(entry.file_name());
         if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
             copy_directory(&entry.path(), &target)?;

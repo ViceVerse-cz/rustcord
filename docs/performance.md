@@ -54,3 +54,22 @@ One profile retains at most 64 KiB metadata after a 256 KiB response cap. Banner
 Native macOS offline checks exercised mention insertion/profile activation, banner card layout and scrolling, and enlarged image controls. Native Save As interaction and live CDN requests were not exercised; localhost tests establish transfer/cancellation/file replacement behavior only. No whole-process RSS, idle CPU or frame-time benchmark was performed for these additions.
 
 Final staged executable sizes: text **38,374,272 bytes** (36.60 MiB), +344,208 bytes over the preceding attachment build; voice **41,248,800 bytes** (39.34 MiB), +346,720 bytes. Both variants passed strict local ad-hoc signature verification; these are development packages, not notarized releases.
+
+## September 10: reaction refresh and pinned-message browsing (Windows)
+
+Baseline 74c0d79 versus this reaction/pins change; both text and voice packages rebuilt with pinned Rust 1.98.1, the existing release profile and lockfile on Windows 11 Home 10.0.26200, AMD Ryzen 7 7800X3D (16 logical processors), approximately 31 GiB visible RAM. No dependencies changed. These are unsigned local packages, excluding the separate OS WebView2 runtime and drivers. Full package and ZIP sizes below were measured immediately after packaging, before this measurement note was added to repository documentation. Text packaging excludes the sibling voice directory; both exclude docs/pr-evidence. ZIP uses Python zipfile DEFLATE level 9 over the entire respective package.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable, bytes | 41,813,504 | 41,835,008 | +21,504 (+0.051%) |
+| Voice executable, bytes | 45,160,448 | 45,182,976 | +22,528 (+0.050%) |
+| Text installed package, bytes | 42,033,731 | 42,060,801 | +27,070 (+0.064%) |
+| Voice installed package, bytes | 45,604,233 | 45,632,327 | +28,094 (+0.062%) |
+| Text ZIP, bytes | 24,370,088 | 24,380,566 | +10,478 (+0.043%) |
+| Voice ZIP, bytes | 25,737,983 | 25,746,892 | +8,909 (+0.035%) |
+| Reducer replay median, milliseconds | 26.2139 | 26.3168 | +0.1029 (+0.39%) |
+| Retained timeline estimated bytes | 220,992-221,477 | 220,992-221,477 | Unchanged, 500 records |
+
+Replay method: `cargo build --release --locked -p replay-bench`, then run the produced executable once for warmup and five measured times on each revision. Baseline runs: 26.4021, 26.2139, 25.7050, 26.6599, 25.9837 ms; after: 26.1046, 28.5302, 26.8548, 26.3168, 26.2875 ms. Each run reduces 100,000 synthetic events and checks bounded state/logout. The small median difference is noise, not an optimization claim. This workload does not measure the pins endpoint, actual network latency, UI frame time, process RSS or voice audio.
+
+Native baseline only: rebuilt text --demo, default dark 1122x792 captured window, wgpu renderer; selected adapter and display scale were not independently measured. After more than 30 seconds settling and one synthetic reaction toggle, 16 Get-Process samples at one-second intervals covered 15.247 seconds. Working set stayed 198,946,816 bytes, private bytes 412,827,648; CPU delta was 0.046875 seconds (0.307% of one core). This baseline exceeds the initial 150 MiB active-text working-set target. Whole-system contention, GPU allocations, helper-process usage, startup/frame p95 and voice memory were not measured. The owner stopped Computer Use before after-build interaction; no comparable after native-memory/CPU sample or performance improvement is claimed.

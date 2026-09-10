@@ -220,6 +220,66 @@ pub fn load_page(state: &mut State, before: Option<Id>) {
 mod tests {
     use super::*;
     #[test]
+    fn pin_snapshots_are_scoped_cancellable_and_open_revalidated_history() {
+        use client_core::{Command, search::Outcome};
+        let mut state = demo_state();
+        let page = || SearchPage {
+            hits: [480, 499]
+                .into_iter()
+                .map(|id| SearchHit {
+                    id: Id(id),
+                    channel: Id(20),
+                    author: "Synthetic".into(),
+                    excerpt: "pin".into(),
+                })
+                .collect(),
+            total: 0,
+            partial: true,
+        };
+        let Command::Pins { request: old, .. } = state.request_pins().unwrap() else {
+            panic!()
+        };
+        let Command::Pins { request, .. } = state.request_pins().unwrap() else {
+            panic!()
+        };
+        state.apply_search(Id(20), old, Ok(Outcome::Pins(page())));
+        assert!(state.search.as_ref().unwrap().loading);
+        state.apply_search(Id(20), request, Ok(Outcome::Page(page())));
+        assert!(state.search.as_ref().unwrap().page.is_none());
+        let Command::Pins { request, .. } = state.request_pins().unwrap() else {
+            panic!()
+        };
+        state.apply_search(Id(21), request, Ok(Outcome::Pins(page())));
+        assert!(state.search.as_ref().unwrap().loading);
+        state.apply_search(Id(20), request, Ok(Outcome::Pins(page())));
+        assert_eq!(
+            state.search.as_ref().unwrap().page.as_ref().unwrap().hits[0].id,
+            Id(480)
+        );
+        assert!(state.open_search_hit(Id(478)).is_none());
+        assert!(matches!(
+            state.open_search_hit(Id(480)),
+            Some(Command::History {
+                before: Some(Id(481)),
+                ..
+            })
+        ));
+        load_page(&mut state, Some(Id(481)));
+        assert!(state.timeline.get(Id(480)).is_some());
+        let command = state.request_pins().unwrap();
+        state.command_rejected(command);
+        assert!(!state.search.as_ref().unwrap().loading);
+        assert!(state.search.as_ref().unwrap().error.is_some());
+        let Command::Pins { request, .. } = state.request_pins().unwrap() else {
+            panic!()
+        };
+        state.clear_search();
+        state.apply_search(Id(20), request, Ok(Outcome::Pins(page())));
+        assert!(state.search.is_none());
+        state.gateway_connected = false;
+        assert!(state.request_pins().is_none());
+    }
+    #[test]
     fn search_pages_reject_late_results_and_open_only_revalidated_history() {
         use client_core::{Command, auth::Failure, search::Outcome};
         let mut state = demo_state();

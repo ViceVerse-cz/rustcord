@@ -5,6 +5,7 @@ use crate::{
 use model::{Freshness, Id, SearchPage};
 
 pub struct SearchView {
+    pub pins: bool,
     pub channel: Id,
     pub query: String,
     pub before: Option<Id>,
@@ -15,6 +16,7 @@ pub struct SearchView {
 }
 pub enum Outcome {
     Page(SearchPage),
+    Pins(SearchPage),
     Indexing,
 }
 impl State {
@@ -35,7 +37,8 @@ impl State {
         let (channel, guild) = (channel.id, channel.guild);
         if before.is_some()
             && !self.search.as_ref().is_some_and(|s| {
-                s.channel == channel
+                !s.pins
+                    && s.channel == channel
                     && s.query == query
                     && !s.loading
                     && s.page.as_ref().and_then(|p| p.hits.last()).map(|h| h.id) == before
@@ -45,6 +48,7 @@ impl State {
         }
         self.search_request = self.search_request.wrapping_add(1);
         self.search = Some(SearchView {
+            pins: false,
             channel,
             query: query.clone(),
             before,
@@ -58,6 +62,27 @@ impl State {
             guild,
             query,
             before,
+            request: self.search_request,
+        })
+    }
+    pub fn request_pins(&mut self) -> Option<Command> {
+        if !self.can_search() {
+            return None;
+        }
+        let channel = self.selected?;
+        self.search_request = self.search_request.wrapping_add(1);
+        self.search = Some(SearchView {
+            pins: true,
+            channel,
+            query: String::new(),
+            before: None,
+            request: self.search_request,
+            loading: true,
+            error: None,
+            page: None,
+        });
+        Some(Command::Pins {
+            channel,
             request: self.search_request,
         })
     }
@@ -87,14 +112,18 @@ impl State {
         };
         view.loading = false;
         match result {
-            Ok(Outcome::Page(page)) if page.valid(channel, view.before) => {
+            Ok(Outcome::Page(page)) if !view.pins && page.valid(channel, view.before) => {
                 view.page = Some(page);
                 view.error = None;
             }
-            Ok(Outcome::Indexing) => {
+            Ok(Outcome::Pins(page)) if view.pins && page.valid_pins(channel) => {
+                view.page = Some(page);
+                view.error = None;
+            }
+            Ok(Outcome::Indexing) if !view.pins => {
                 view.error = Some("Discord is indexing this conversation. Try Search again later.")
             }
-            Ok(_) => view.error = Some("Search response was invalid or too large"),
+            Ok(_) => view.error = Some("Message results were invalid or too large"),
             Err(f) => view.error = Some(f.label()),
         }
     }

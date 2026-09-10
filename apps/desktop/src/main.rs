@@ -420,6 +420,33 @@ impl Desktop {
                     })
                 }
                 Command::Voice(_) | Command::CancelProfile | Command::CancelSearch => return,
+                Command::Pins { channel, request } => {
+                    // Explicit synthetic pins, independent of message creation order.
+                    let hits = [480, 499, 470]
+                        .into_iter()
+                        .map(|id| {
+                            let message = test_support::message(id, channel);
+                            model::SearchHit {
+                                id: message.id,
+                                channel,
+                                author: message.author.name,
+                                excerpt: format!(
+                                    "Synthetic pinned message: {}",
+                                    message.content.chars().take(200).collect::<String>()
+                                ),
+                            }
+                        })
+                        .collect();
+                    Event::Search {
+                        channel,
+                        request,
+                        result: Ok(client_core::search::Outcome::Pins(model::SearchPage {
+                            hits,
+                            total: 0,
+                            partial: false,
+                        })),
+                    }
+                }
                 Command::Search {
                     channel,
                     query,

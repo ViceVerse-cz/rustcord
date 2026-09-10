@@ -803,7 +803,18 @@ impl MessagingUi {
                                         )
                                         .clicked()
                                     {
-                                        self.search.toggle();
+                                        self.search.toggle(false);
+                                    }
+                                    if ui
+                                        .add_enabled(
+                                            state.can_search(),
+                                            egui::Button::new("Pins").small().frame(false),
+                                        )
+                                        .clicked()
+                                        && self.search.toggle(true)
+                                        && let Some(command) = state.request_pins()
+                                    {
+                                        commands.push(command);
                                     }
                                     if ui
                                         .add_enabled(
