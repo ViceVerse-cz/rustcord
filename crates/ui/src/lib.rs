@@ -211,17 +211,28 @@ impl MessagingUi {
                 if drag.drag_started() {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
                 }
-                ui.painter().text(
+                let title_rect = egui::Rect::from_center_size(
                     rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    title,
-                    egui::FontId::new(13.0, crate::design::semibold_family(ui.ctx())),
-                    colors.text,
+                    egui::vec2(rect.width() * 0.3, rect.height()),
+                );
+                ui.scope_builder(
+                    egui::UiBuilder::new().max_rect(title_rect).layout(
+                        egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+                    ),
+                    |ui| {
+                        ui.add(
+                            egui::Label::new(design::semibold(ui, title, 13.0).color(colors.text))
+                                .truncate(),
+                        );
+                    },
                 );
 
                 ui.scope_builder(
                     egui::UiBuilder::new()
-                        .max_rect(rect.shrink2(egui::vec2(12.0, 0.0)))
+                        .max_rect(egui::Rect::from_min_max(
+                            egui::pos2(title_rect.right() + 10.0, rect.top()),
+                            rect.right_bottom() - egui::vec2(12.0, 0.0),
+                        ))
                         .layout(egui::Layout::right_to_left(egui::Align::Center)),
                     |ui| {
                         ui.spacing_mut().item_spacing.x = 10.0;
@@ -258,7 +269,8 @@ impl MessagingUi {
                                 RichText::new(state.status).size(11.0).color(colors.muted),
                             )
                             .truncate(),
-                        );
+                        )
+                        .on_hover_text(state.status);
                     },
                 );
             });
@@ -387,6 +399,9 @@ impl MessagingUi {
                             inner.spacing_mut().item_spacing.x = 12.0;
                             inner.push_id(member.user.id.0, |ui| {
                                 let avatar = self.avatars.show(ui, &member.user, 32.0, state.demo);
+                                if avatar.clicked() {
+                                    self.profile = Some(member.user.clone());
+                                }
                                 if let Some(status) = member.status.as_deref() {
                                     design::presence_dot(
                                         ui,
@@ -782,26 +797,6 @@ impl MessagingUi {
                         }
                         None => {}
                     }
-                    let tools = if dm { 210.0 } else { 300.0 };
-                    ui.allocate_ui_with_layout(
-                        egui::vec2((ui.available_width() - tools).max(40.0), 28.0),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            ui.add(
-                                egui::Label::new(
-                                    design::semibold(
-                                        ui,
-                                        channel
-                                            .as_ref()
-                                            .map_or("Direct Messages", |c| c.name.as_str()),
-                                        16.0,
-                                    )
-                                    .color(colors.text_strong),
-                                )
-                                .truncate(),
-                            );
-                        },
-                    );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
                         if state.selected.is_some() && !selected_voice {
@@ -914,6 +909,21 @@ impl MessagingUi {
                             self.voice_settings(ui, state.demo, state.voice.active.is_some());
                             self.call_button(ui, state, channel, commands);
                         }
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            ui.add(
+                                egui::Label::new(
+                                    design::semibold(
+                                        ui,
+                                        channel
+                                            .as_ref()
+                                            .map_or("Direct Messages", |c| c.name.as_str()),
+                                        16.0,
+                                    )
+                                    .color(colors.text_strong),
+                                )
+                                .truncate(),
+                            );
+                        });
                     });
                 });
             });
@@ -945,6 +955,15 @@ impl MessagingUi {
             ctx.request_repaint();
             return;
         }
+        ui.label(
+            RichText::new(if state.demo {
+                "Preview only · drafts stay in memory"
+            } else {
+                self.storage_status
+            })
+            .size(10.0)
+            .color(design::palette(ui).muted),
+        );
         typing::show(ui, state, channel, std::time::Instant::now());
         let colors = crate::design::palette(ui);
         let editing_key = self
@@ -1575,6 +1594,7 @@ impl MessagingUi {
                     &mut commands,
                 );
                 self.call_bar(ui, state, &mut commands);
+                self.timeline.download.show_status(ui);
                 let Some(channel) = state.selected else {
                     ui.add_space((ui.available_height() * 0.32).max(24.0));
                     ui.vertical_centered(|ui| {
@@ -1607,7 +1627,6 @@ impl MessagingUi {
                             }),
                     )
                     .show(ui, |ui| {
-                        self.timeline.download.show_status(ui);
                         self.composer(ui, state, channel, &ctx, &mut commands);
                     });
                 let notices: Vec<String> = [
@@ -1856,6 +1875,27 @@ impl MessagingUi {
 #[cfg(test)]
 mod composer_tests {
     use super::*;
+
+    #[test]
+    fn download_cancel_remains_visible_without_a_text_composer() {
+        for selection in [None, Some(Id(10))] {
+            let mut state = edit_state();
+            state.demo = true;
+            state.selected = selection;
+            state.channels[0].kind = 2;
+            let mut messaging = MessagingUi::default();
+            messaging.downloads().active = true;
+            messaging.downloads().status = "Saving synthetic attachment".into();
+            let ctx = egui::Context::default();
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                messaging.show(ui, &mut state);
+            });
+            assert!(output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == "Cancel download")
+            }));
+            output.drop_without_applying_deltas();
+        }
+    }
 
     fn edit_state() -> State {
         let user = model::User {
