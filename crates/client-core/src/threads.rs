@@ -21,9 +21,12 @@ impl State {
         if parents.as_ref().is_some_and(|p| p.len() != parent_count) {
             return Err("Thread snapshot has duplicate parents");
         }
+        let incoming: BTreeSet<_> = threads.iter().map(|c| c.id).collect();
+        let transient = self.archived_thread;
         let in_scope = |c: &Channel| {
             c.guild == Some(guild)
                 && matches!(c.kind, 10..=12)
+                && (Some(c.id) != transient || incoming.contains(&c.id))
                 && parents
                     .as_ref()
                     .is_none_or(|p| c.parent_id.is_some_and(|id| p.contains(&id)))
@@ -35,7 +38,11 @@ impl State {
                 || c.parent_id.is_none()
                 || c.parent_id == Some(c.id)
                 || !ids.insert(c.id)
-                || previous.get(&c.id).is_some_and(|old| !in_scope(old))
+                || previous.get(&c.id).is_some_and(|old| {
+                    !in_scope(old)
+                        || (Some(c.id) == transient
+                            && (old.parent_id != c.parent_id || old.kind != c.kind))
+                })
         }) {
             return Err("Thread snapshot has invalid channel scope");
         }
@@ -53,6 +60,17 @@ impl State {
             }
         }
         drop(previous);
+        if transient.is_some_and(|id| ids.contains(&id)) {
+            self.archived_thread = None;
+        }
+        if self.archives.as_ref().is_some_and(|view| {
+            view.guild == guild
+                && parents
+                    .as_ref()
+                    .is_none_or(|ids| ids.contains(&view.parent))
+        }) {
+            self.clear_archives();
+        }
         let removed = self
             .channels
             .iter()
