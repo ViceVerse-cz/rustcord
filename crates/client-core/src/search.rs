@@ -48,6 +48,7 @@ impl State {
             return None;
         }
         self.search_request = self.search_request.wrapping_add(1);
+        self.archives = None;
         self.search = Some(SearchView {
             pins: false,
             channel,
@@ -88,6 +89,7 @@ impl State {
         }
         let channel = self.selected?;
         self.search_request = self.search_request.wrapping_add(1);
+        self.archives = None;
         self.search = Some(SearchView {
             pins: true,
             channel,
@@ -108,6 +110,7 @@ impl State {
     pub fn clear_search(&mut self) -> Command {
         self.search_request = self.search_request.wrapping_add(1);
         self.search = None;
+        self.archives = None;
         Command::CancelSearch
     }
     pub fn apply_search(&mut self, channel: Id, request: u64, result: Result<Outcome, Failure>) {

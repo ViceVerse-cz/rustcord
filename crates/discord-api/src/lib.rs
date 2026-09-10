@@ -1,4 +1,5 @@
 // Direct, origin-fixed REST adapter. No cookies, redirects, logging, persistence or bot SDK.
+mod archives;
 pub mod upload;
 use client_core::{
     Command, Event,
@@ -236,6 +237,20 @@ impl DiscordApi {
     }
     pub async fn execute(&self, command: Command) -> Event {
         match command {
+            Command::Archives {
+                parent,
+                guild,
+                kind,
+                before,
+                request,
+            } => {
+                let result = self.archives(parent, guild, kind, before).await;
+                Event::Archives {
+                    parent,
+                    request,
+                    result,
+                }
+            }
             Command::Pins {
                 channel,
                 before,

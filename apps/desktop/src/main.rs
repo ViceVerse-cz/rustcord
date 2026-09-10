@@ -478,6 +478,66 @@ impl Desktop {
                     })
                 }
                 Command::Voice(_) | Command::CancelProfile | Command::CancelSearch => return,
+                Command::Archives {
+                    parent,
+                    guild,
+                    kind,
+                    before,
+                    request,
+                } => {
+                    use model::archives::{Cursor, Kind, Page};
+                    let offset = parent.0.saturating_mul(10_000).saturating_add(match kind {
+                        Kind::Public => 0,
+                        Kind::Private => 1_000,
+                        Kind::JoinedPrivate => 2_000,
+                    });
+                    let ids = (if before.is_none() {
+                        [900, 850, 800]
+                    } else {
+                        [700, 650, 600]
+                    })
+                    .map(|id| offset.saturating_add(id));
+                    let public_kind = if self
+                        .state
+                        .channels
+                        .iter()
+                        .any(|c| c.id == parent && c.kind == 5)
+                    {
+                        10
+                    } else {
+                        11
+                    };
+                    let threads = ids
+                        .into_iter()
+                        .map(|id| model::Channel {
+                            id: model::Id(id),
+                            guild: Some(guild),
+                            parent_id: Some(parent),
+                            position: 0,
+                            name: format!("Synthetic archived thread {id}"),
+                            kind: if kind == Kind::Public {
+                                public_kind
+                            } else {
+                                12
+                            },
+                            recipients: vec![],
+                            last_message: None,
+                            member_list_id: None,
+                        })
+                        .collect();
+                    Event::Archives {
+                        parent,
+                        request,
+                        result: Ok(Page {
+                            threads,
+                            next: before.is_none().then_some(if kind == Kind::JoinedPrivate {
+                                Cursor::Id(model::Id(ids[2]))
+                            } else {
+                                Cursor::Time(1_788_998_400_000_000_000)
+                            }),
+                        }),
+                    }
+                }
                 Command::Pins {
                     channel,
                     before,

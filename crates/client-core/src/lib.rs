@@ -1,4 +1,5 @@
 //! Single UI-thread state owner. Adapters deliver generation-tagged typed events.
+pub mod archives;
 pub mod auth;
 pub mod profile;
 pub mod reactions;
@@ -18,6 +19,13 @@ pub const EVENT_SLOTS: usize = 8; // <= 32 MiB wire-derived data, not including 
 pub const COMMAND_SLOTS: usize = 16; // each admitted command <= 16 KiB
 
 pub enum Command {
+    Archives {
+        parent: Id,
+        guild: Id,
+        kind: model::archives::Kind,
+        before: Option<model::archives::Cursor>,
+        request: u64,
+    },
     Pins {
         channel: Id,
         before: Option<i128>,
@@ -72,6 +80,11 @@ pub enum Command {
     },
 }
 pub enum Event {
+    Archives {
+        parent: Id,
+        request: u64,
+        result: Result<model::archives::Page, auth::Failure>,
+    },
     Search {
         channel: Id,
         request: u64,
@@ -161,6 +174,8 @@ pub struct Pending {
     pub confirmed: Option<Id>,
 }
 pub struct State {
+    pub archives: Option<archives::View>,
+    pub archived_thread: Option<Id>,
     pub search: Option<search::SearchView>,
     pub search_request: u64,
     pub search_target: Option<Id>,
@@ -195,6 +210,8 @@ pub struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
+            archives: None,
+            archived_thread: None,
             search: None,
             search_request: 0,
             search_target: None,
@@ -265,6 +282,7 @@ impl State {
             self.status = "This channel kind is unsupported";
             return None;
         }
+        self.retire_archived_thread(Some(channel));
         self.members = None;
         self.selected = Some(channel);
         self.clear_search();
@@ -336,7 +354,9 @@ impl State {
         }
     }
     pub fn history(&mut self, before: Option<Id>) -> Command {
-        if self.search.as_ref().is_some_and(|s| s.loading) {
+        if self.search.as_ref().is_some_and(|s| s.loading)
+            || self.archives.as_ref().is_some_and(|s| s.loading)
+        {
             self.clear_search();
         }
         if before.is_none() {
@@ -426,6 +446,13 @@ impl State {
         })
     }
     pub fn command_rejected(&mut self, command: Command) {
+        if let Command::Archives {
+            parent, request, ..
+        } = command
+        {
+            self.apply_archives(parent, request, Err(auth::Failure::Capacity));
+            return;
+        }
         if let Command::Search {
             channel, request, ..
         }
@@ -537,6 +564,23 @@ impl State {
         if envelope.generation != self.generation {
             return;
         }
+        let archive_mutation = match &envelope.event {
+            Event::ThreadRemoved { guild, id } => Some((*guild, *id)),
+            Event::ThreadChanged { guild, patch } => Some((*guild, patch.id)),
+            _ => None,
+        };
+        if archive_mutation.is_some_and(|(guild, id)| {
+            self.archives.as_ref().is_some_and(|view| {
+                view.guild == guild
+                    && (view.loading
+                        || view
+                            .page
+                            .as_ref()
+                            .is_some_and(|page| page.threads.iter().any(|thread| thread.id == id)))
+            })
+        }) {
+            self.clear_archives();
+        }
         if let Event::ThreadChanged { guild, patch } = &envelope.event
             && !self
                 .channels
@@ -572,6 +616,14 @@ impl State {
             self.clear_search();
         }
         let result = match envelope.event {
+            Event::Archives {
+                parent,
+                request,
+                result,
+            } => {
+                self.apply_archives(parent, request, result);
+                Ok(())
+            }
             Event::Search {
                 channel,
                 request,
@@ -613,6 +665,16 @@ impl State {
                 Ok(())
             }
             Event::ChannelCreated(channel) => {
+                if self.archived_thread == Some(channel.id)
+                    && self.channels.iter().any(|old| {
+                        old.id == channel.id
+                            && (old.guild != channel.guild
+                                || old.parent_id != channel.parent_id
+                                || old.kind != channel.kind)
+                    })
+                {
+                    return;
+                }
                 if matches!(channel.kind, 10..=12)
                     && (!self.guilds.iter().any(|g| Some(g.id) == channel.guild)
                         || self.channels.iter().any(|old| {
@@ -637,7 +699,21 @@ impl State {
                     self.fail(auth::Failure::Capacity);
                     return;
                 }
+                if self
+                    .archives
+                    .as_ref()
+                    .is_some_and(|view| view.parent == channel.id)
+                {
+                    self.clear_archives();
+                }
                 if let Some(index) = old {
+                    if self.archived_thread == Some(channel.id)
+                        && self.channels[index].guild == channel.guild
+                        && self.channels[index].parent_id == channel.parent_id
+                        && self.channels[index].kind == channel.kind
+                    {
+                        self.archived_thread = None;
+                    }
                     self.channels[index] = channel;
                 } else {
                     self.channels.push(channel);
@@ -645,6 +721,13 @@ impl State {
                 Ok(())
             }
             Event::ChannelChanged(patch) | Event::ThreadChanged { patch, .. } => {
+                if self
+                    .archives
+                    .as_ref()
+                    .is_some_and(|view| view.parent == patch.id)
+                {
+                    self.clear_archives();
+                }
                 if let Some(channel) = self.channels.iter_mut().find(|c| c.id == patch.id) {
                     match patch.last_message {
                         Patch::Value(id) => channel.last_message = Some(id),
@@ -773,6 +856,7 @@ impl State {
                 self.user = Some(user);
                 self.guilds = guilds;
                 self.channels = channels;
+                self.archived_thread = None;
                 self.auth = auth::AuthState::Authenticated;
                 self.gateway_connected = true;
                 self.status = "Connected · unofficial session";
@@ -1001,6 +1085,13 @@ impl State {
         if !self.can_search() && self.search.is_some() {
             self.clear_search();
         }
+        if self
+            .archives
+            .as_ref()
+            .is_some_and(|view| !self.can_archive(view.parent, view.kind))
+        {
+            self.clear_archives();
+        }
     }
     fn invalidate_members(&mut self) {
         self.member_request = self.member_request.wrapping_add(1);
@@ -1011,6 +1102,16 @@ impl State {
         }
     }
     fn remove_channels(&mut self, removed: &BTreeSet<Id>) {
+        if self
+            .archives
+            .as_ref()
+            .is_some_and(|view| removed.contains(&view.parent))
+        {
+            self.clear_archives();
+        }
+        if self.archived_thread.is_some_and(|id| removed.contains(&id)) {
+            self.archived_thread = None;
+        }
         self.channels.retain(|c| !removed.contains(&c.id));
         for id in removed {
             self.read_state.forget(*id);
@@ -1077,6 +1178,9 @@ impl Event {
     pub fn bytes(&self) -> usize {
         size_of::<Self>()
             + match self {
+                Self::Archives { result, .. } => {
+                    result.as_ref().map_or(0, model::archives::Page::bytes)
+                }
                 Self::Search {
                     result: Ok(search::Outcome::Page(page) | search::Outcome::Pins(page)),
                     ..

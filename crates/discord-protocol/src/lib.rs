@@ -1,4 +1,5 @@
 //! Discord wire DTOs. JSON values never become application state.
+pub mod archives;
 mod attachments;
 mod embeds;
 pub mod pins;

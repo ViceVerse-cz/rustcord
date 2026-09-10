@@ -206,7 +206,9 @@ impl MessagingUi {
                                         {
                                             self.profile = Some(user.clone());
                                         }
-                                        ui.add_enabled(
+                                        let archives = channel.guild.is_some() && matches!(channel.kind, 0 | 5 | 15 | 16);
+                                        let width = (ui.available_width() - if archives { 68.0 } else { 0.0 }).max(0.0);
+                                        let response = ui.allocate_ui(egui::vec2(width, 36.0), |ui| ui.add_enabled(
                                             channel.supports_text(),
                                             egui::Button::selectable(
                                                 active,
@@ -217,10 +219,21 @@ impl MessagingUi {
                                                 }),
                                             )
                                             .right_text(if unread { "Unread" } else { "" })
-                                            .min_size(egui::vec2(ui.available_width(), 36.0))
+                                            .min_size(egui::vec2(width, 36.0))
                                             .corner_radius(7)
                                             .truncate(),
-                                        )
+                                        )).inner;
+                                        if archives {
+                                            let allowed = state.can_archive(channel.id, model::archives::Kind::Public);
+                                            let archive = ui.add_enabled(
+                                                allowed,
+                                                egui::Button::new("Archive").min_size(egui::vec2(60.0, 32.0)),
+                                            ).on_hover_text("Browse archived threads; opening only loads their messages");
+                                            archive.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button,
+                                                allowed && ui.is_enabled(), format!("Archive for {}", channel.name)));
+                                            if archive.clicked() { self.archive_parent = Some(channel.id); }
+                                        }
+                                        response
                                     })
                                     .inner
                                 })
