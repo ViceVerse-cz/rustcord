@@ -26,10 +26,7 @@ requests as authorization to implement, test, build locally, capture synthetic n
 measure relevant performance, create a task branch, commit task files, push to the existing `origin`
 and open/update its PR. Do not stop at a plan or ask again for those routine steps.
 
-Read [the delivery skill](.agents/skills/serein-delivery/SKILL.md) and
-[the orchestration skill](.agents/skills/serein-orchestration/SKILL.md) for implementation tasks.
-Use orchestration for multi-agent reviews too. Project-local Codex and Claude Code defaults
-route work to a strong lead and bounded workers; see [usage](docs/agent-orchestration.md).
+Read [the delivery skill](.agents/skills/serein-delivery/SKILL.md) for implementation tasks.
 This is a workflow for an active coding session, not a background daemon or a fixed delivery-time
 promise. Build times, platform access, credentials and CI can delay completion.
 
