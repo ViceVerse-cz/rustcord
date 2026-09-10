@@ -2,6 +2,29 @@
 
 ## Current scope and gates
 
+Current work: saved reading and layout preferences (SPEC 2.2 / 9.1). Add application-wide
+display scale (80..150%), sidebar width (190..360 points) and wide-layout People visibility,
+with reset/retry controls in sign-in and messaging settings. SQLite schema 8 adds one fixed
+singleton; account logout preserves these non-account preferences, like the existing theme.
+Native notification opt-in and narrow People overlays remain session-only. Delayed hydration
+cannot replace user changes; saves coalesce for 300 ms with one write in flight and one latest
+value. Failures remain visible and require deliberate retry; pending changes participate in
+close confirmation. Entering the in-app preview finishes earlier real changes without saving
+preview edits. A standalone --demo still opens no database or account session.
+
+Baseline dfe9e3f (PR #31) text/voice executables were separately copied and hash-verified
+before edits; baseline package size reports were preserved. Independent review identified
+and fixed the preview-transition pending-save gap. The initial full check exposed sidebar
+contents shrinking to the panel minimum; explicitly filling the panel fixed the real geometry
+and its regression. Focused reading UI tests and the subsequent cargo xtask check passed,
+including 237 offline Rust tests, doctests, formatting, strict all-feature Clippy and text-only
+policy checks. Both unsigned Windows packages passed; measured executable/installed/ZIP sizes
+and SHA256 hashes are in performance.md. Original seven dirty files remain hash-identical.
+Native before/after screenshots, resource measurements and live compatibility remain owner-paused.
+
+Next remaining implementation work includes reply-target navigation; native accessibility,
+storage tracing, long-running resource measurements and owner-controlled live gates remain open.
+
 Current work: the SPEC 8.1 in-memory MRU of recently visited conversations. The baseline
 State::select drops the sole timeline, so returning to a channel waits for SQLite or the service.
 The new slice retains at most two dormant windows, moves them back without cloning, and always
@@ -178,7 +201,7 @@ Read the original SPEC.md completely before implementation. Repository initially
 | 0 — native shell / feasibility | Native egui/eframe/wgpu app, Cargo workspace, pinned Rust, lockfile, synthetic fixture, real composition/variable-height timeline, compatibility evidence and initial tests implemented. macOS native launch verified. OS credential-store and login-method round trips remain unverified |
 | 1 — real normal-user message exchange | **BLOCKED: no owner-controlled authenticated session/private live conversation was supplied or exercised.** Direct REST/Gateway adapters and own-webview credential handoff are implemented, but normal-user acceptance is not established. No real message/reply exchange with an official client is claimed |
 | 2 — reliable text | Partial: bounded cache/queues, partial patches, timestamps, deletes/tombstones, late-history reconciliation, session generations, ambiguous-send state, back-pagination, cancellation, heartbeat/finite reconnect/resume, SQLite history/drafts and bounded resident conversation previews. Scoped history failures, page validation/exhaustion, authoritative refresh and a local WebSocket lifecycle test added September 10. Full failure matrix, long process soak and live freshness recovery remain open |
-| 3 — everyday messaging | Partial native text UI, server categories/icons, loaded thread/forum-post navigation and archived-thread browsing, bundled Unicode emoji and server emoji picker, grouped timeline and hover actions, native embeds/static images, bounded CommonMark formatting, spoiler concealment, explicit link confirmation, CJK/Arabic fallback fonts, copy/reply/edit/delete controls, clickable user/channel mentions and autocomplete, service profiles, reaction counts/add/remove controls, image viewing and general attachment downloads, single-file picker/drop uploads, conversation search, explicit remote read markers, paginated pinned-message browsing, history clear/logout, saved theme, loaded-user presence, in-app alerts and opt-in native notification adapters. Saved reading/layout preferences, reply-target navigation and actual native IME/screen-reader/notification validation remain open; richer unsupported behaviors are tracked in the capability docs |
+| 3 — everyday messaging | Partial native text UI, server categories/icons, loaded thread/forum-post navigation and archived-thread browsing, bundled Unicode emoji and server emoji picker, grouped timeline and hover actions, native embeds/static images, bounded CommonMark formatting, spoiler concealment, explicit link confirmation, CJK/Arabic fallback fonts, copy/reply/edit/delete controls, clickable user/channel mentions and autocomplete, service profiles, reaction counts/add/remove controls, image viewing and general attachment downloads, single-file picker/drop uploads, conversation search, explicit remote read markers, paginated pinned-message browsing, history clear/logout, saved theme, loaded-user presence, in-app alerts and opt-in native notification adapters. Saved reading/layout preferences passed offline validation; reply-target navigation and actual native IME/screen-reader/notification validation remain open; richer unsupported behaviors are tracked in the capability docs |
 | 4 — voice | **Partial; live gate blocked.** Optional one-to-one DM and guild voice UI/signaling, bounded participant rosters, native CPAL/Opus mixed playback and DAVE group encryption implemented. Synthetic crypto/transport/mixer tests pass. No real Discord call, physical microphone/speaker, device-permission or cross-platform audio validation |
 | 5 — release | Partial: docs, dual licenses, dependency inventory, xtask, CI matrix and locally ad-hoc-signed macOS package. Inherited dependency graph passed strict security CI on PR #29. Native platform execution, signing/installer work, complete transitive license-text review, storage tracing and performance/platform gates remain open |
 

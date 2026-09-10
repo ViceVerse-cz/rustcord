@@ -1,5 +1,19 @@
 # Local storage policy and audit
 
+Reading/layout settings use one application-wide schema 8 SQLite singleton: integer display
+scale 80..150 percent, sidebar width 190..360 logical points, and wide-layout People visibility.
+Missing row means 100 percent / 236 points / visible. Reset removes just this override in an
+atomic statement; neither theme nor account drafts/history are reset. Logout retains these
+non-account settings. Startup reads them on the existing worker; delayed results never override
+an explicit user choice. No account identifiers or message content enter this record.
+
+Interactive changes coalesce for 300 ms into at most one queued write and one fixed-size latest
+value. A full or failed worker reports an unsaved change without an automatic retry loop;
+Retry saving is deliberate. Closing with pending/failed writes prompts before discarding.
+In-app preview edits are not saved; a write already requested outside preview still completes.
+The standalone --demo does not start the SQLite worker. Category collapse, native-notification
+opt-in, narrow People overlays, audio preferences and outer window geometry remain session-local.
+
 Recently visited conversations now keep at most two dormant RAM timelines in the current
 account session, moved rather than cloned. Only readable Fresh ordinary text windows are parked;
 search-target ranges and transient archived threads are excluded. Promotion rechecks identity
@@ -50,7 +64,7 @@ resetting the preview clears them with the existing UI state. No audio or new qu
 
 Loaded thread navigation shares the 4,000-entry account navigation and 4 MiB normalized navigation budgets. Incoming thread syncs additionally cap combined parent/thread entries at 4,000 and normalized snapshot metadata at 2 MiB; wire JSON remains capped at 4 MiB. Removed-member arrays are capped at 4,000 and are discarded after checking the owner. Navigation/member lists are session-only; selected thread messages/drafts reuse existing account history/draft storage. Actual accepted thread removals enqueue the existing account-wide history clear, preserving drafts; ignored, empty-scope and rename-only events do not clear disk history. This coarse invalidation trades refetch cost for simpler deletion, without new tables or workers.
 
-The owner explicitly withdrew the no-storage policy on 2026-09-09. Local files, SQLite, saved drafts, settings and caches are permitted. The implementation persists **history with embeds, attachments and mentioned users; avatar/server-icon/banner/preview images; drafts; appearance; and the login token**. Window geometry remains session-local.
+The owner explicitly withdrew the no-storage policy on 2026-09-09. Local files, SQLite, saved drafts, settings and caches are permitted. The implementation persists **history with embeds, attachments and mentioned users; avatar/server-icon/banner/preview images; drafts; appearance; reading/layout preferences; and the login token**. Outer window geometry remains session-local.
 
 | Data | Location / bound | Removal |
 |---|---|---|
@@ -63,6 +77,7 @@ The owner explicitly withdrew the no-storage policy on 2026-09-09. Local files, 
 | Selected upload source | One session-only path (4096 encoded bytes), filename (256 UTF-8 bytes) and size/modified metadata; file at most 20,000,000 bytes, read in 64 KiB chunks | Removal, send completion/failure, cancellation or session teardown; source is never copied to a recovery/cache file or deleted |
 | Drafts | 64 globally, at most 2 MiB content; each draft at most 8192 UTF-8 bytes | Clear draft, confirmed send, or account logout |
 | Appearance | One application-wide SQLite row: Light or Dark; absent means System | Select System to remove the override; retained across account logout |
+| Reading/layout | One application-wide SQLite row with three bounded scalar fields | Reset reading and layout removes only this override; retained across account logout |
 | SQLite working files | DELETE journal mode, in-memory temporary tables, 2 MiB page cache; transaction journal may temporarily add disk usage | SQLite transaction completion; normal SQLite crash recovery |
 | Voice credentials, DAVE identities/keys and PCM/Opus audio | Session memory only; one call, bounded media queues; no recording or audio cache | Hangup, failure, logout and application teardown; no forensic-erasure claim |
 | Audio devices and push-to-talk preferences | Session memory only | Application exit / UI reset; not saved in SQLite |
@@ -72,7 +87,7 @@ Typical database directories: macOS `~/Library/Application Support/serein`, Wind
 
 The app writes no background log, analytics, crash upload, saved password, MFA ticket, or plaintext credential file. A separate credential-free CDN downloader loads visible avatars, server icons, profile banners and validated service-proxied message images. Build outputs, this documentation, synthetic test databases and package files are development artifacts.
 
-SQLite work is serialized on a worker. Normal startup opens the database to load appearance before authentication; `--demo` does not open the database, credential store or network. Schema version 7 preserves author metadata, embeds/suppression, attachments and mentioned users while adding unsupported-content presence bits; older history and drafts remain readable. Embed and attachment JSON are each capped at 256 KiB per message; mentioned users are capped at 100 entries and 128 KiB JSON. All three contribute to eviction accounting. Signed original/preview URLs and mention names/avatar hashes may be retained in unencrypted cached message metadata. Draft save status is visible; a full queue or disk failure is reported and must not be described as saved. An interrupted send may leave a saved draft for content Discord already accepted: recovered text never automatically sends. Normal close waits for queued store work if necessary; logout orders one transactional account deletion after earlier writes. Deletion is not a forensic erasure guarantee.
+SQLite work is serialized on a worker. Normal startup opens the database to load appearance and reading/layout preferences before authentication; `--demo` does not open the database, credential store or network. Schema version 8 adds the bounded reading/layout singleton while preserving author metadata, embeds/suppression, attachments, mentioned users and unsupported-content presence bits; older history and drafts remain readable. Embed and attachment JSON are each capped at 256 KiB per message; mentioned users are capped at 100 entries and 128 KiB JSON. All three contribute to eviction accounting. Signed original/preview URLs and mention names/avatar hashes may be retained in unencrypted cached message metadata. Draft save status is visible; a full queue or disk failure is reported and must not be described as saved. An interrupted send may leave a saved draft for content Discord already accepted: recovered text never automatically sends. Normal close waits for queued store work if necessary; logout orders one transactional account deletion after earlier writes. Deletion is not a forensic erasure guarantee.
 
 Saved recovery text prefers the current nonempty draft, otherwise the most recent unresolved send in that channel. Only a matching own-author/channel/nonce confirmation updates this recovery record. This is one recovery draft per channel, not a durable multi-message outbox; additional unresolved sends remain in RAM and the close prompt warns before discarding them. Incoming hidden-channel events do not rewrite the active cache; accepted active-view changes are coalesced into at most one snapshot per event-drain pass.
 

@@ -1,5 +1,5 @@
 //! Account-isolated bounded SQLite cache. This is not Discord's authoritative state.
-use model::{Id, Message, User};
+use model::{Id, Message, ReadingPreferences, User};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::{collections::BTreeMap, path::Path};
 
@@ -79,7 +79,7 @@ impl LocalStore {
     fn initialize(connection: Connection) -> Result<Self> {
         connection.busy_timeout(std::time::Duration::from_secs(2))?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 7 {
+        if version > 8 {
             return Err(StoreError::Incompatible);
         }
         connection.execute_batch("PRAGMA page_size=4096; PRAGMA max_page_count=16384; PRAGMA cache_size=-2048; PRAGMA temp_store=MEMORY; PRAGMA journal_mode=DELETE; PRAGMA secure_delete=ON; PRAGMA auto_vacuum=FULL;
@@ -111,7 +111,7 @@ impl LocalStore {
         )?;
         if !has_attachments {
             connection.execute_batch("BEGIN; ALTER TABLE messages ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'; PRAGMA user_version=5; COMMIT;")?;
-        } else {
+        } else if version < 5 {
             connection.pragma_update(None, "user_version", 5)?;
         }
         let has_mentions: bool = connection.query_row(
@@ -121,7 +121,7 @@ impl LocalStore {
         )?;
         if !has_mentions {
             connection.execute_batch("BEGIN; ALTER TABLE messages ADD COLUMN mentions TEXT NOT NULL DEFAULT '[]'; PRAGMA user_version=6; COMMIT;")?;
-        } else {
+        } else if version < 6 {
             connection.pragma_update(None, "user_version", 6)?;
         }
         let has_extra_content: bool = connection.query_row(
@@ -131,10 +131,57 @@ impl LocalStore {
         )?;
         if !has_extra_content {
             connection.execute_batch("BEGIN; ALTER TABLE messages ADD COLUMN extra_content INTEGER NOT NULL DEFAULT 0 CHECK(typeof(extra_content)='integer' AND extra_content BETWEEN 0 AND 31); PRAGMA user_version=7; COMMIT;")?;
-        } else {
+        } else if version < 7 {
             connection.pragma_update(None, "user_version", 7)?;
         }
+        connection.execute_batch("BEGIN;
+            CREATE TABLE IF NOT EXISTS reading_preferences(
+                singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                zoom_percent INTEGER NOT NULL CHECK(typeof(zoom_percent)='integer' AND zoom_percent BETWEEN 80 AND 150),
+                sidebar_width INTEGER NOT NULL CHECK(typeof(sidebar_width)='integer' AND sidebar_width BETWEEN 190 AND 360),
+                show_members INTEGER NOT NULL CHECK(typeof(show_members)='integer' AND show_members IN (0,1))
+            );
+            PRAGMA user_version=8; COMMIT;")?;
         Ok(Self(connection))
+    }
+    /// Application-wide settings survive account logout; missing override means defaults.
+    pub fn reading_preferences(&self) -> Result<ReadingPreferences> {
+        use rusqlite::types::ValueRef;
+        let stored = self.0.query_row(
+            "SELECT zoom_percent,sidebar_width,show_members FROM reading_preferences WHERE singleton=1",
+            [],
+            |row| {
+                Ok(match (row.get_ref(0)?, row.get_ref(1)?, row.get_ref(2)?) {
+                    (ValueRef::Integer(zoom @ 80..=150), ValueRef::Integer(width @ 190..=360), ValueRef::Integer(members @ 0..=1)) => Some(ReadingPreferences {
+                        zoom_percent: zoom as u16,
+                        sidebar_width: width as u16,
+                        show_members: members == 1,
+                    }),
+                    _ => None,
+                })
+            },
+        ).optional()?;
+        match stored {
+            None => Ok(ReadingPreferences::default()),
+            Some(Some(preferences)) => Ok(preferences),
+            Some(None) => Err(StoreError::Incompatible),
+        }
+    }
+    pub fn save_reading_preferences(&self, preferences: ReadingPreferences) -> Result<()> {
+        if !preferences.is_valid() {
+            return Err(StoreError::Capacity);
+        }
+        // Each statement is one SQLite transaction; reset only removes this override.
+        if preferences == ReadingPreferences::default() {
+            self.0
+                .execute("DELETE FROM reading_preferences WHERE singleton=1", [])?;
+        } else {
+            self.0.execute("INSERT INTO reading_preferences(singleton,zoom_percent,sidebar_width,show_members)
+                VALUES(1,?1,?2,?3) ON CONFLICT(singleton) DO UPDATE SET
+                zoom_percent=excluded.zoom_percent,sidebar_width=excluded.sidebar_width,show_members=excluded.show_members",
+                params![preferences.zoom_percent, preferences.sidebar_width, preferences.show_members])?;
+        }
+        Ok(())
     }
     /// One account-independent application preference. System deletes the override.
     pub fn appearance(&self) -> Result<Appearance> {
@@ -444,6 +491,193 @@ impl LocalStore {
 mod tests {
     use super::*;
     #[test]
+    fn schema_seven_reading_preferences_migrate_reopen_reset_and_survive_logout() {
+        let root = std::env::temp_dir().join(format!(
+            "serein-synthetic-reading-preferences-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("test.sqlite3");
+        let mut store = LocalStore::open(&path).unwrap();
+        store.save_draft(Id(1), Id(2), "preserved draft").unwrap();
+        store.save_appearance(Appearance::Dark).unwrap();
+        store.0.execute("INSERT INTO messages(account,channel,id,author,name,content,edited,unsupported) VALUES('1','2','3','4','Synthetic','preserved body',0,0)", []).unwrap();
+        store
+            .0
+            .execute_batch("DROP TABLE reading_preferences; PRAGMA user_version=7;")
+            .unwrap();
+        drop(store);
+
+        let store = LocalStore::open(&path).unwrap();
+        let version: u32 = store
+            .0
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 8);
+        assert_eq!(
+            store.reading_preferences().unwrap(),
+            ReadingPreferences::default()
+        );
+        let preferences = ReadingPreferences {
+            zoom_percent: 125,
+            sidebar_width: 300,
+            show_members: false,
+        };
+        store.save_reading_preferences(preferences).unwrap();
+        drop(store);
+
+        let store = LocalStore::open(&path).unwrap();
+        assert_eq!(store.reading_preferences().unwrap(), preferences);
+        store.0.execute_batch("PRAGMA query_only=ON;").unwrap();
+        for replacement in [
+            ReadingPreferences::default(),
+            ReadingPreferences {
+                zoom_percent: 150,
+                sidebar_width: 360,
+                show_members: true,
+            },
+        ] {
+            assert_eq!(
+                store.save_reading_preferences(replacement),
+                Err(StoreError::Unavailable)
+            );
+            assert_eq!(store.reading_preferences().unwrap(), preferences);
+        }
+        drop(store);
+
+        let store = LocalStore::open(&path).unwrap();
+        assert_eq!(store.reading_preferences().unwrap(), preferences);
+        store
+            .save_reading_preferences(ReadingPreferences::default())
+            .unwrap();
+        let count: u32 = store
+            .0
+            .query_row("SELECT count(*) FROM reading_preferences", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0);
+        drop(store);
+
+        let mut store = LocalStore::open(&path).unwrap();
+        assert_eq!(
+            store.reading_preferences().unwrap(),
+            ReadingPreferences::default()
+        );
+        assert_eq!(store.appearance().unwrap(), Appearance::Dark);
+        assert_eq!(store.load_drafts(Id(1)).unwrap()[&Id(2)], "preserved draft");
+        assert_eq!(
+            store.load_channel(Id(1), Id(2)).unwrap()[0].content,
+            "preserved body"
+        );
+        store.save_reading_preferences(preferences).unwrap();
+        store.forget_account(Id(1)).unwrap();
+        drop(store);
+
+        let store = LocalStore::open(&path).unwrap();
+        assert_eq!(store.reading_preferences().unwrap(), preferences);
+        assert_eq!(store.appearance().unwrap(), Appearance::Dark);
+        assert!(store.load_drafts(Id(1)).unwrap().is_empty());
+        assert!(store.load_channel(Id(1), Id(2)).unwrap().is_empty());
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reading_preferences_validate_storage_types_bounds_and_atomic_replacement() {
+        let store = LocalStore::initialize(Connection::open_in_memory().unwrap()).unwrap();
+        for (zoom_percent, sidebar_width) in [(80, 190), (150, 360)] {
+            for show_members in [false, true] {
+                let preferences = ReadingPreferences {
+                    zoom_percent,
+                    sidebar_width,
+                    show_members,
+                };
+                store.save_reading_preferences(preferences).unwrap();
+                assert_eq!(store.reading_preferences().unwrap(), preferences);
+            }
+        }
+        let previous = store.reading_preferences().unwrap();
+        for (zoom_percent, sidebar_width) in [
+            (0, 236),
+            (79, 236),
+            (151, 236),
+            (u16::MAX, 236),
+            (100, 189),
+            (100, 361),
+            (100, u16::MAX),
+        ] {
+            assert_eq!(
+                store.save_reading_preferences(ReadingPreferences {
+                    zoom_percent,
+                    sidebar_width,
+                    show_members: false
+                }),
+                Err(StoreError::Capacity)
+            );
+            assert_eq!(store.reading_preferences().unwrap(), previous);
+        }
+        store.0.execute_batch("CREATE TRIGGER reject_reading_update AFTER UPDATE ON reading_preferences BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END;").unwrap();
+        assert_eq!(
+            store.save_reading_preferences(ReadingPreferences {
+                zoom_percent: 90,
+                sidebar_width: 200,
+                show_members: false
+            }),
+            Err(StoreError::Unavailable)
+        );
+        assert_eq!(store.reading_preferences().unwrap(), previous);
+        store
+            .0
+            .execute_batch("DROP TRIGGER reject_reading_update;")
+            .unwrap();
+        assert!(
+            store
+                .0
+                .execute("INSERT INTO reading_preferences VALUES(2,100,236,1)", [])
+                .is_err()
+        );
+        assert!(
+            store
+                .0
+                .execute("UPDATE reading_preferences SET show_members=2", [])
+                .is_err()
+        );
+        store
+            .0
+            .execute_batch("PRAGMA ignore_check_constraints=ON;")
+            .unwrap();
+        for invalid in [
+            "zoom_percent=79",
+            "zoom_percent=151",
+            "zoom_percent=-1",
+            "zoom_percent=65536",
+            "zoom_percent=80.5",
+            "zoom_percent='invalid'",
+            "sidebar_width=189",
+            "sidebar_width=361",
+            "sidebar_width=x'00'",
+            "show_members=2",
+            "show_members=-1",
+            "show_members='invalid'",
+        ] {
+            store.save_reading_preferences(previous).unwrap();
+            store
+                .0
+                .execute(&format!("UPDATE reading_preferences SET {invalid}"), [])
+                .unwrap();
+            assert_eq!(store.reading_preferences(), Err(StoreError::Incompatible));
+        }
+        store
+            .save_reading_preferences(ReadingPreferences::default())
+            .unwrap();
+        assert_eq!(
+            store.reading_preferences().unwrap(),
+            ReadingPreferences::default()
+        );
+    }
+
+    #[test]
     fn known_deletions_survive_reopen_and_preserve_other_channels_accounts_and_drafts() {
         let root =
             std::env::temp_dir().join(format!("serein-synthetic-deletions-{}", std::process::id()));
@@ -512,7 +746,7 @@ mod tests {
             .0
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 7);
+        assert_eq!(version, 8);
         let messages: Vec<_> = (0..32_u8)
             .map(|bits| {
                 let mut message = legacy[0].clone();
@@ -700,7 +934,7 @@ mod tests {
             .0
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 7);
+        assert_eq!(version, 8);
         for (json, error) in [
             ("broken JSON".to_owned(), StoreError::Incompatible),
             (

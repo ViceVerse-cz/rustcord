@@ -15,6 +15,7 @@ mod mentions;
 mod notifications;
 mod profiles;
 mod reactions;
+mod reading;
 mod search;
 mod switcher;
 mod timeline;
@@ -52,7 +53,12 @@ pub struct MessagingUi {
     avatars: avatars::Avatars,
     profile: Option<model::User>,
     profile_link: Option<String>,
-    members_hidden: bool,
+    pub reading_preferences: model::ReadingPreferences,
+    pub reading_status: &'static str,
+    pub reading_save_requested: bool,
+    reading_sidebar_applied: Option<u16>,
+    reading_sidebar_constrained: bool,
+    reading_zoom_pending: bool,
     members_narrow_open: bool,
     member_reload_requested: bool,
     guild: Option<Id>,
@@ -825,12 +831,14 @@ impl MessagingUi {
             });
         }
         self.notification_rail(ui, state, &mut commands);
-        egui::Panel::left("channels")
+        let sidebar_max = self.prepare_reading_sidebar(ui);
+        let sidebar = egui::Panel::left("channels")
             .resizable(true)
-            .default_size(236.0)
-            .size_range(190.0..=360.0)
+            .default_size(f32::from(self.reading_preferences.sidebar_width).min(sidebar_max))
+            .size_range(190.0..=sidebar_max)
             .frame(egui::Frame::new().fill(colors.surface).inner_margin(12))
             .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
                 ui.add_space(7.0);
                 ui.add(
                     egui::Label::new(
@@ -906,6 +914,8 @@ impl MessagingUi {
                                         ui.set_min_width(240.0);
                                         ui.strong("Appearance");
                                         egui::widgets::global_theme_preference_buttons(ui);
+                                        ui.separator();
+                                        self.reading_settings(ui, state.demo);
                                         ui.add_space(8.0);
                                         ui.separator();
                                         ui.strong("Notifications");
@@ -994,6 +1004,7 @@ impl MessagingUi {
                     commands.push(command);
                 }
             });
+        self.record_reading_sidebar(sidebar.response.rect.width());
         let selected_voice = state
             .channels
             .iter()
@@ -1002,7 +1013,7 @@ impl MessagingUi {
         let show_members = !selected_voice
             && state.selected.is_some()
             && if wide_members {
-                !self.members_hidden
+                self.reading_preferences.show_members
             } else {
                 self.members_narrow_open
             };
@@ -1116,7 +1127,8 @@ impl MessagingUi {
                                         .clicked()
                                     {
                                         if wide_members {
-                                            self.members_hidden = !self.members_hidden;
+                                            self.reading_preferences.show_members =
+                                                !self.reading_preferences.show_members;
                                         } else {
                                             self.members_narrow_open = !self.members_narrow_open;
                                         }

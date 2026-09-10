@@ -1208,6 +1208,21 @@ mod tests {
             assert!(!view.following);
             let anchor = view.anchor.unwrap();
             assert_eq!(anchor.0, Id(200));
+            crate::MessagingUi::default().apply_reading_preferences(
+                &ctx,
+                model::ReadingPreferences {
+                    zoom_percent: 125,
+                    ..Default::default()
+                },
+            );
+            for _ in 0..8 {
+                render(&mut view, &mut state);
+            }
+            assert_eq!(
+                view.anchor.unwrap().0,
+                anchor.0,
+                "Reading zoom preserves the anchored message"
+            );
             state.timeline.insert(text_message(0), false, true).unwrap();
             state.revision += 1;
             for _ in 0..4 {

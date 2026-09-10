@@ -1,5 +1,42 @@
 # Initial performance evidence
 
+## Saved reading and layout preferences - September 10, 2026
+
+Baseline dfe9e3f8a657665009ac89bfadb5e1be7cb3f064 (PR #31) unsigned Windows text/voice
+executables were copied and hash-verified before edits; their installed/ZIP size reports
+were retained. Same Windows 11 Home 10.0.26200 / Ryzen 7 7800X3D (16 logical CPUs) /
+about 31 GiB RAM / Rust 1.98.1 / release thin LTO, one codegen unit, wgpu.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| text executable bytes | 49,840,128 | 49,855,488 | +15,360 (+0.031%) |
+| text installed bytes | 50,349,976 | 50,370,977 | +21,001 (+0.042%) |
+| text ZIP bytes | 31,194,530 | 31,205,377 | +10,847 (+0.035%) |
+| voice executable bytes | 53,196,800 | 53,213,184 | +16,384 (+0.031%) |
+| voice installed bytes | 53,929,436 | 53,951,446 | +22,010 (+0.041%) |
+| voice ZIP bytes | 32,570,631 | 32,576,903 | +6,272 (+0.019%) |
+
+Both unsigned Windows packages passed. One size measurement each; ZIP DEFLATE level 9;
+text excludes the voice folder. File counts remain 50/96; no dependencies or notices added.
+Installed totals describe staged docs before this measurement addendum; no PR evidence is bundled.
+
+SHA256 of measured executables:
+
+- text: 4BC461415BC3814CD206194BBAC3D5C40E60DB7B0D64540FAF74C861A2FD3D72
+- voice: 357F7BED34136B24174BC91EB0DCE675DC975C4225BB734E5F96461AF1DAED57
+
+Settings add one fixed-size model record, one latest pending snapshot, and at most one
+queued write on the existing 16-command / 16-result worker. The 300 ms debounce runs only
+while a user change is pending; a failed/full queue stops retrying until another edit or
+explicit Retry saving. No new worker, dependency, service request or periodic idle repaint.
+SQLite schema 8 adds one scalar singleton within the existing 64 MiB database ceiling.
+
+This changes settings persistence and native layout, not the message reducer workload.
+No reducer speed claim is made. Native before/after screenshots, CPU/RSS/GPU use, frame
+timing and scale-change latency remain unmeasured because desktop automation is owner-paused.
+Headless geometry/control/anchor tests are synthetic and cannot establish native accessibility
+or runtime performance. No native resource-performance improvement is claimed.
+
 ## Recently visited conversation windows - September 10, 2026
 
 Baseline b4c66ac0c8f226bdfdc22d904fbde8a239975dcb (PR #29) packages were copied and hash-verified.

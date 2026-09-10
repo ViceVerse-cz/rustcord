@@ -1,6 +1,8 @@
 //! UI-neutral session entities. No filesystem or network dependencies.
 pub mod archives;
 pub mod permissions;
+mod reading_preferences;
+pub use reading_preferences::ReadingPreferences;
 mod profile;
 pub use profile::*;
 mod attachments;
