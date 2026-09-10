@@ -418,12 +418,13 @@ custom status. DM presence is admitted only for already-known accessible DM reci
 friend presence from READY/READY_SUPPLEMENTAL and guild-less updates use unofficial normal-user
 shapes observed in [discord.py-self's state implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/state.py).
 These sources were checked September 10; developer documentation is not proof of normal-user
-support. No additional subscription, endpoint, account action or live validation was performed.
+support. The initial text implementation added no subscription or endpoint; artwork lookup is
+described below. No agent-operated account action or live session validation was performed.
 The existing guild subscription's `activities` flag stays unchanged: the public implementation's
 [subscription reference](https://github.com/dolfies/discord.py-self/blob/master/discord/guild.py)
 labels its meaning unknown. Only received activity metadata is displayed; missing events remain
-unavailable. Offline status clears activity. Disconnect hides cached DM presence; a successful resume restores it and applies replayed changes. Fresh READY, resync and session reset discard the cache. Rendering is text-only;
-asset fetching, activity actions and elapsed/progress timers remain unsupported.
+unavailable. Offline status clears activity. Disconnect hides cached DM presence; a successful resume restores it and applies replayed changes. Fresh READY, resync and session reset discard the cache.
+Activity actions and elapsed/progress timers remain unsupported.
 
 Startup correction: Identify does not enable `DEDUPE_USER_OBJECTS`, so initial friend presence
 arrives in `READY.presences` with `user.id`. The bootstrap now accepts that format as well as
@@ -432,6 +433,20 @@ The [unofficial READY capability description](https://docs.discord.food/gateway/
 documents this format distinction. A synthetic already-running Genshin Impact activity exercises
 the missing startup path. This does not verify the owner's reported live payload, change activity
 subscriptions, or promote guild-scoped presence into globally authoritative DM presence.
+
+Activity artwork: profile cards show a static image to the left of the text. The decoder prefers
+`assets.large_image`, then `small_image` when large is absent, then the application icon. Numeric
+assets and `mp:` references follow the [documented activity asset formats](https://docs.discord.com/developers/events/gateway-events#activity-object-activity-asset-image)
+and [CDN paths](https://docs.discord.com/developers/reference#image-formatting). Media-proxy
+references must also pass the existing safe image-loader path restrictions; direct external
+URLs and unsupported asset schemes are never fetched. A missing/failed image keeps the text.
+Application-only activities use the unauthenticated
+[`GET /applications/{id}/rpc` endpoint](https://docs.discord.food/resources/application#get-rpc-application-unauthenticated)
+to obtain an icon hash, then the fixed Discord CDN app-icons path. This metadata route is
+unofficial; a public sample application returned HTTP 200 without credentials on September 10.
+Synthetic decoder, local HTTP, cache and egui tests cover the implementation, not normal-user
+artwork interoperability. The owner confirmed presence text after launching the prior build;
+new artwork has not been tested against the owner's live session.
 
 
 ### Unknown Gateway variants (September 10, 2026)

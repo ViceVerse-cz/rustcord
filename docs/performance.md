@@ -1746,6 +1746,34 @@ window frontmost and the fixture's one-second elapsed-time repaint active. They 
 frame or startup latency, which remain unmeasured. The atlas texture is 655,360 decoded bytes.
 Replay, mixer and codec workloads are unchanged and were not rerun; no dependency changed.
 
+### Activity artwork in profile cards - September 10, 2026
+
+Baseline3307396 runtime packages and reducer executable were verified in the preceding merge,
+then copied into a separate E: directory before edits. After packages are from the isolated
+feat/activity-artwork worktree. Same Windows/Rust1.98.1 release thin-LTO configuration; no new
+dependency. The running baseline client was left open during the task.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable bytes | 51,126,272 | 51,143,680 | +17,408 (+0.034%) |
+| Text installed bytes | 51,791,116 | 51,818,514 | +27,398 (+0.053%) |
+| Text ZIP bytes | 31,902,903 | 31,915,284 | +12,381 (+0.039%) |
+| Voice executable bytes | 54,479,360 | 54,496,768 | +17,408 (+0.032%) |
+| Voice installed bytes | 55,366,977 | 55,394,375 | +27,398 (+0.049%) |
+| Voice ZIP bytes | 33,284,503 | 33,292,893 | +8,390 (+0.025%) |
+| Reducer replay median ms | 40.3052 | 40.4948 | +0.1896 (+0.47%; noise) |
+| Retained estimated timeline bytes / records | 236,992..237,477 / 500 | Same | 0 |
+| Native idle CPU / process memory | Owner-paused | Owner-paused | Unmeasured |
+
+Installed/ZIP sums exclude PR evidence and nested voice files from text; Python ZIP DEFLATE9.
+Packages include docs at each build, before this addendum. Baseline package docs/notices predate
+main's fuzz tooling integration, whose application runtime was unchanged. One direct warmup each
+then five alternating100,000-event runs. Baseline ms:40.3052,41.6879,39.7121,40.2579,40.8136;
+after ms:40.8011,40.4193,40.3958,40.4948,41.0937. The message reducer does not exercise artwork
+download/decode, and this variation does not establish a regression or speedup. Image rendering,
+RSS, startup and frame latency remain unmeasured because native automation remains owner-paused.
+Image storage/decoding/texture caps are unchanged; activity metadata has explicit byte accounting.
+
 
 ## Debian/Ubuntu packages - September 10, 2026
 

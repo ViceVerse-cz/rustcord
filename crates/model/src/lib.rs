@@ -272,13 +272,57 @@ pub enum Delivery {
 
 pub const MAX_RICH_ACTIVITIES: usize = 4;
 
-/// Text-only activity metadata. Assets, secrets and actions are never retained.
+/// A service image reference, never permission to fetch an arbitrary external URL.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ActivityImage {
+    Asset { application: Id, asset: Id },
+    Proxy(String),
+    Application(Id),
+}
+impl ActivityImage {
+    pub fn valid(&self) -> bool {
+        match self {
+            Self::Asset { application, asset } => application.0 != 0 && asset.0 != 0,
+            Self::Application(id) => id.0 != 0,
+            Self::Proxy(path) => {
+                !path.is_empty()
+                    && path.len() <= 1024
+                    && !path.starts_with('/')
+                    && !path
+                        .chars()
+                        .any(|c| c.is_control() || c.is_whitespace() || c == '\\')
+                    && !path.split('/').any(|part| matches!(part, "." | ".."))
+                    && !path.as_bytes().windows(3).any(|part| {
+                        part.eq_ignore_ascii_case(b"%2e")
+                            || part.eq_ignore_ascii_case(b"%2f")
+                            || part.eq_ignore_ascii_case(b"%5c")
+                    })
+            }
+        }
+    }
+    pub fn heap_bytes(&self) -> usize {
+        match self {
+            Self::Proxy(path) => path.capacity(),
+            _ => 0,
+        }
+    }
+    pub fn key(&self) -> String {
+        match self {
+            Self::Asset { application, asset } => format!("activity-{application}-{asset}"),
+            Self::Proxy(path) => format!("embed:https://media.discordapp.net/{path}"),
+            Self::Application(id) => format!("app-icon-{id}"),
+        }
+    }
+}
+
+/// Bounded activity metadata. Secrets and actions are never retained.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RichActivity {
     pub kind: u8,
     pub name: String,
     pub details: Option<String>,
     pub state: Option<String>,
+    pub image: Option<ActivityImage>,
 }
 impl RichActivity {
     pub fn valid(&self) -> bool {
@@ -286,11 +330,13 @@ impl RichActivity {
             && valid_presence_text(&self.name)
             && self.details.as_deref().is_none_or(valid_presence_text)
             && self.state.as_deref().is_none_or(valid_presence_text)
+            && self.image.as_ref().is_none_or(ActivityImage::valid)
     }
     pub fn heap_bytes(&self) -> usize {
         self.name.capacity()
             + self.details.as_ref().map_or(0, String::capacity)
             + self.state.as_ref().map_or(0, String::capacity)
+            + self.image.as_ref().map_or(0, ActivityImage::heap_bytes)
     }
     pub fn summary(&self) -> String {
         let verb = match self.kind {
@@ -409,6 +455,7 @@ mod presence_tests {
             name: "Synthetic".into(),
             details: Some("Level 2".into()),
             state: Some("In a party".into()),
+            image: None,
         };
         let mut presence = MemberPresence {
             user: Id(2),
@@ -456,12 +503,48 @@ mod presence_tests {
         }
         let mut allocated = activity;
         allocated.name.reserve(100);
+        let mut path = String::from("external/synthetic-hash-01/https/example.com/art.png");
+        path.reserve(2048);
+        allocated.image = Some(ActivityImage::Proxy(path));
+        assert!(allocated.valid());
         assert_eq!(
             allocated.heap_bytes(),
             allocated.name.capacity()
                 + allocated.details.as_ref().unwrap().capacity()
                 + allocated.state.as_ref().unwrap().capacity()
+                + allocated.image.as_ref().unwrap().heap_bytes()
         );
+    }
+
+    #[test]
+    fn activity_image_keys_preserve_only_bounded_service_references() {
+        for (image, key) in [
+            (
+                ActivityImage::Asset {
+                    application: Id(10),
+                    asset: Id(20),
+                },
+                "activity-10-20",
+            ),
+            (ActivityImage::Application(Id(10)), "app-icon-10"),
+            (
+                ActivityImage::Proxy("external/synthetic-hash-01/https/example.com/art.png".into()),
+                "embed:https://media.discordapp.net/external/synthetic-hash-01/https/example.com/art.png",
+            ),
+        ] {
+            assert!(image.valid());
+            assert_eq!(image.key(), key);
+        }
+        assert!(!ActivityImage::Application(Id(0)).valid());
+        assert!(
+            !ActivityImage::Asset {
+                application: Id(1),
+                asset: Id(0)
+            }
+            .valid()
+        );
+        assert!(!ActivityImage::Proxy("external/../secret".into()).valid());
+        assert!(!ActivityImage::Proxy("x".repeat(1025)).valid());
     }
 }
 

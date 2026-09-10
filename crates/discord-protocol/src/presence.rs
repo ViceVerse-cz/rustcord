@@ -1,6 +1,6 @@
-//! Only identity, scope and bounded status/activity text survive presence decoding.
+//! Only identity, scope and bounded status/activity metadata survive presence decoding.
 use crate::DecodeError;
-use model::{Id, MAX_RICH_ACTIVITIES, Patch, RichActivity};
+use model::{ActivityImage, Id, MAX_RICH_ACTIVITIES, Patch, RichActivity};
 use serde::{
     Deserialize, Deserializer,
     de::{MapAccess, SeqAccess, Visitor},
@@ -15,7 +15,14 @@ pub struct PresenceUpdate {
     pub activities: Patch<Vec<RichActivity>>,
 }
 
-/// Activity payloads are consumed one at a time; only bounded normalized text survives.
+#[derive(Deserialize)]
+pub struct ApplicationIcon {
+    pub id: Id,
+    #[serde(default)]
+    pub icon: Option<String>,
+}
+
+/// Activity payloads are consumed one at a time; only bounded display metadata survives.
 #[derive(Default)]
 pub struct Activities(pub(crate) Option<String>, pub Vec<RichActivity>);
 
@@ -69,6 +76,17 @@ struct Activity {
     state: Option<Text<4096>>,
     #[serde(default)]
     emoji: Option<Object<Emoji>>,
+    #[serde(default)]
+    application_id: Option<Text<128>>,
+    #[serde(default)]
+    assets: Option<Object<Assets>>,
+}
+#[derive(Deserialize)]
+struct Assets {
+    #[serde(default)]
+    large_image: Option<Text<4096>>,
+    #[serde(default)]
+    small_image: Option<Text<4096>>,
 }
 #[derive(Deserialize)]
 struct Emoji {
@@ -78,6 +96,32 @@ struct Emoji {
     id: Option<Id>,
 }
 impl Activity {
+    fn image(&self) -> Option<ActivityImage> {
+        let application = self
+            .application_id
+            .as_ref()
+            .and_then(|id| id.0.parse::<Id>().ok());
+        let asset = self.assets.as_ref().and_then(|assets| {
+            assets
+                .0
+                .large_image
+                .as_ref()
+                .or(assets.0.small_image.as_ref())
+        });
+        let image = asset.and_then(|asset| {
+            if let Some(path) = asset.0.strip_prefix("mp:") {
+                Some(ActivityImage::Proxy(path.into()))
+            } else {
+                Some(ActivityImage::Asset {
+                    application: application?,
+                    asset: asset.0.parse().ok()?,
+                })
+            }
+        });
+        image
+            .filter(ActivityImage::valid)
+            .or_else(|| application.map(ActivityImage::Application))
+    }
     fn rich_activity(&self) -> Option<RichActivity> {
         if !matches!(self.kind, 0..=3 | 5) {
             return None;
@@ -98,6 +142,7 @@ impl Activity {
             name: self.name.as_ref().and_then(normalize)?,
             details: self.details.as_ref().and_then(normalize),
             state: self.state.as_ref().and_then(normalize),
+            image: self.image(),
         })
     }
     fn custom_status(&self) -> Option<String> {
@@ -208,6 +253,104 @@ mod tests {
     }
 
     #[test]
+    fn activity_artwork_selection_and_snapshot_updates_agree() {
+        for (fields, image) in [
+            (
+                r#""application_id":"10","assets":{"large_image":"20","small_image":"30"}"#,
+                Some(ActivityImage::Asset {
+                    application: Id(10),
+                    asset: Id(20),
+                }),
+            ),
+            (
+                r#""application_id":"10","assets":{"small_image":"30"}"#,
+                Some(ActivityImage::Asset {
+                    application: Id(10),
+                    asset: Id(30),
+                }),
+            ),
+            (
+                r#""application_id":"10""#,
+                Some(ActivityImage::Application(Id(10))),
+            ),
+            (
+                r#""assets":{"large_image":"mp:external/synthetic-hash-01/https/example.com/art.png"}"#,
+                Some(ActivityImage::Proxy(
+                    "external/synthetic-hash-01/https/example.com/art.png".into(),
+                )),
+            ),
+            (
+                r#""application_id":"10","assets":{"large_image":"https://example.com/raw.png","small_image":"30"}"#,
+                Some(ActivityImage::Application(Id(10))),
+            ),
+            (r#""assets":{"large_image":"20"}"#, None),
+            (
+                r#""assets":{"large_image":"https://example.com/raw.png"}"#,
+                None,
+            ),
+            (
+                r#""application_id":"0","assets":{"large_image":"20"}"#,
+                None,
+            ),
+            (
+                r#""application_id":"10","assets":{"large_image":"0"}"#,
+                Some(ActivityImage::Application(Id(10))),
+            ),
+            (r#""application_id":null,"assets":null"#, None),
+        ] {
+            let wire = format!(r#"[{{"type":0,"name":"Synthetic",{fields}}}]"#);
+            let Patch::Value(activities) = update(&wire).unwrap().activities else {
+                panic!()
+            };
+            assert_eq!(activities[0].image, image, "{fields}");
+            assert!(activities[0].valid());
+            let snapshot: crate::PresenceDto =
+                crate::decode(format!(r#"{{"status":"online","activities":{wire}}}"#).as_bytes())
+                    .unwrap();
+            assert_eq!(snapshot.activities.1, activities);
+        }
+    }
+
+    #[test]
+    fn invalid_activity_proxy_paths_fall_back_without_losing_text() {
+        for path in [
+            "",
+            "/external/a",
+            "../a",
+            "external/../a",
+            "external/./a",
+            "external/%2e%2E/a",
+            "external/%2fa",
+            "external/%5Ca",
+            "external/\\a",
+            "external/\na",
+            &"x".repeat(1025),
+        ] {
+            let wire = serde_json::json!([{"type":0,"name":"Synthetic","application_id":"10","assets":{"large_image":format!("mp:{path}")}}]).to_string();
+            let Patch::Value(activities) = update(&wire).unwrap().activities else {
+                panic!()
+            };
+            assert_eq!(
+                activities[0].image,
+                Some(ActivityImage::Application(Id(10))),
+                "{path}"
+            );
+            assert_eq!(activities[0].name, "Synthetic");
+        }
+        let wire = serde_json::json!([{"type":0,"name":"Synthetic","assets":{"large_image":format!("mp:{}", "x".repeat(1024))}}]).to_string();
+        let Patch::Value(activities) = update(&wire).unwrap().activities else {
+            panic!()
+        };
+        assert!(
+            matches!(&activities[0].image, Some(ActivityImage::Proxy(path)) if path.len() == 1024)
+        );
+        for field in ["large_image", "small_image"] {
+            let wire = serde_json::json!([{"type":0,"name":"Synthetic","assets":{field:"x".repeat(4097)}}]).to_string();
+            assert!(update(&wire).is_err());
+        }
+    }
+
+    #[test]
     fn rich_activities_share_snapshot_normalization_types_and_patch_semantics() {
         assert_eq!(
             decode(br#"{"user":{"id":"2"}}"#).unwrap().activities,
@@ -235,6 +378,7 @@ mod tests {
                     name: "Synthetic".into(),
                     details: Some("Level 2".into()),
                     state: None,
+                    image: None,
                 }]
             );
             assert!(activities[0].valid());
@@ -370,7 +514,7 @@ mod tests {
             crate::decode(format!(r#"{{"status":"online","activities":{activities}}}"#).as_bytes())
                 .unwrap();
         assert_eq!(snapshot.custom_status().as_deref(), Some(text.as_str()));
-        // Rich activity metadata is ignored instead of surviving in application state.
+        // Secrets and unsupported assets are ignored instead of surviving in application state.
         let rich = format!(
             r#"[{{"type":0,"secrets":{{"join":"{}"}},"assets":{{"large_image":"unused"}}}},{{"type":4,"state":"Visible"}}]"#,
             "synthetic".repeat(4096)
