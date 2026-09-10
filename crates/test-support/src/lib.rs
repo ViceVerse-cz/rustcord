@@ -12,7 +12,7 @@ pub fn message(id: u64, channel: Id) -> Message {
         _ => "**Synthetic history** — this is an offline fixture, never a Discord reply.".into(),
     };
     if id == 500 {
-        content = format!("Hey <@2> — {content}");
+        content = format!("Hey <@2> — see <#21>. {content}");
     }
     Message {
         reactions: Some(if id == 500 {

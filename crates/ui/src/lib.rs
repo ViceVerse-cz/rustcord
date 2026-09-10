@@ -329,6 +329,7 @@ impl MessagingUi {
             state.drafts.get(&channel).map_or("", String::as_str),
             cursor.filter(|_| mention_enabled),
             &mention_users,
+            &state.channels,
         );
         let mention_pick = if mention_enabled {
             self.mention_menu.keys(ctx)
@@ -367,7 +368,7 @@ impl MessagingUi {
                     .desired_rows(2)
                     .desired_width(f32::INFINITY)
                     .frame(egui::Frame::NONE)
-                    .hint_text("Write a message… @ to mention")
+                    .hint_text("Write a message… @ person or # channel")
                     .show(ui);
                 let mention_cursor = output
                     .cursor_range
@@ -375,7 +376,7 @@ impl MessagingUi {
                     .map(|r| r.primary.index.0)
                     .filter(|_| mention_enabled);
                 self.mention_menu
-                    .refresh(channel, draft, mention_cursor, &mention_users);
+                    .refresh(channel, draft, mention_cursor, &mention_users, &state.channels);
                 if let Some(pick) = self.mention_menu.show(ui)
                     && let Some(cursor) = mentions::insert(draft, pick)
                 {
@@ -920,6 +921,17 @@ impl MessagingUi {
                     });
             });
         self.search.show(&ctx, state, &mut commands);
+        if let Some(id) = self.timeline.channel_reference.take()
+            && let Some(target) = state
+                .channels
+                .iter()
+                .find(|c| c.id == id && c.guild.is_some() && c.supports_text())
+        {
+            self.guild = target.guild;
+            if let Some(command) = state.select(id) {
+                commands.push(command);
+            }
+        }
         if let Some(message) = self.timeline.mark_read.take()
             && let Some(command) = state.prepare_mark_read(message)
         {
