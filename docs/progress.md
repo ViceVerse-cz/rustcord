@@ -2051,13 +2051,11 @@ synthetic tests do not prove exact official-client ordering or live interoperabi
 
 September 11 owner-requested merge: integrated main 487069f (including scrolling/DM order); retained diagnostics and runtime xtask workspace resolution through formatting conflicts. Full `cargo xtask check` passed 361 tests, strict Clippy, text-only compilation and policy; `node tests/xtask-workspace.cjs` passed. Existing-head cross-platform CI was green. No native/live interaction performed.
 
-<<<<<<< HEAD
 September 11 owner-requested audio merge: integrated main 0c41a11, preserving gateway
 diagnostics, scroll stability and DM ordering. Full `cargo xtask check` passed 366
 tests, strict Clippy, formatting, text-only compilation and policy. A stale shared
 model artifact required a package-scoped generated-cache clean before the successful
 rerun. Native playback/screenshots and final release measurements remain unverified;
 the owner paused native automation and explicitly requested merging their PRs.
-=======
+
 September 11 owner-requested PR47 integration: preserved current main fast-local policy and all runtime changes. Four TOML files, settings JSON, three Claude frontmatters and both skills validated; no hooks or permission bypasses added. Runtime unchanged by this PR; no new native run needed.
->>>>>>> origin/main
