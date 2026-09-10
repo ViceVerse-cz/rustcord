@@ -303,6 +303,7 @@ mod tests {
                 request: 7,
                 rows: vec![
                     Some(Member {
+                        roles: vec![],
                         user,
                         nick: None,
                         status: Some("online".into()),

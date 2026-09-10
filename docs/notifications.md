@@ -21,7 +21,7 @@ contains only “Serein” and “You have a new message.” It includes no name
 channel identifiers, avatars or attachments. The focused latest conversation suppresses
 alerts. Mute, category/channel overrides, all-messages/mentions-only/nothing settings and
 DND are checked from available normal-user Gateway preferences. Unknown preferences fail
-closed. Role/everyone mentions, blocked relationships and complete protobuf user settings
+closed. Blocked relationships and complete protobuf user settings
 are not modeled; a protobuf settings update invalidates notification preferences until
 another READY snapshot. This is not complete Discord notification-setting parity.
 
@@ -100,3 +100,33 @@ documents exclusive before/after cursors. Normal-user after paging and zero as t
 are evidenced by the primary [history implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/abc.py)
 and [oldest object](https://github.com/dolfies/discord.py-self/blob/master/discord/object.py).
 These references and local socket fixtures do not prove this client's live account delivery.
+
+
+## Role, everyone/here, and silent message notifications
+
+Incoming messages now use service-supplied role IDs and the everyone/here boolean, together with
+the current self-member role mirror and guild suppress_roles/suppress_everyone preferences.
+Direct mentions and DM activity remain independent of those group controls. Multiple matching
+sources count once; textual lookalikes do not imply a mention. Unknown membership or group
+suppression cannot establish a group ping. Service badge counts remain authoritative, while
+locally observed group counts are conservative lower bounds; suppressed group-ping treatment
+is an inference from the normal-user settings, not a claim of exact cross-client badge parity.
+
+SUPPRESS_NOTIFICATIONS (4096) prevents alert enqueue while retaining unread/mention badges, as
+[Discord's message flag documentation](https://docs.discord.com/developers/resources/message#message-flags)
+specifies. Group suppression follows the primary normal-user
+[GuildSettings implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/settings.py).
+The existing conservative mute/DND and incomplete-settings gates remain. A partial setting with
+missing required preference metadata disables alerts until a complete usable setting arrives.
+
+Queued alerts retain only bounded mention provenance and recheck role membership and preferences
+at delivery. Removing one of several matching roles still permits another; removing them all
+prevents a mentions-only alert without rewriting historical/service badge counts. At most 32
+candidates and 16 KiB including reserved queue slots and role allocations are admitted; oldest
+candidates are discarded on saturation. No role/member directory is requested.
+
+These fields are arrival-time notification metadata: no alert is produced by edits or history
+loads, and the fields are neither saved to SQLite nor used to render message text. Up to 100
+positive unique role IDs/800 retained bytes are admitted per message; all payload/event/timeline
+byte accounting includes the allocation. Physical OS alert delivery and live account behavior
+remain unverified; default checks use only synthetic data.

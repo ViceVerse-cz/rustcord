@@ -316,18 +316,35 @@ impl MessagingUi {
             Member(&'a model::Member, bool),
         }
         let mut rows = Vec::with_capacity(members.len() + 2);
-        if list.guild.is_none() {
-            rows.push(Row::Header(format!("Members — {}", members.len())));
-            rows.extend(members.iter().map(|m| Row::Member(m, online(m))));
-        } else {
-            if !online_members.is_empty() || list.freshness == Freshness::Fresh {
-                rows.push(Row::Header(format!("Online — {}", online_members.len())));
-                rows.extend(online_members.iter().map(|m| Row::Member(m, true)));
+        if let Some(guild) = list.guild {
+            let mut online_members: Vec<_> = online_members
+                .into_iter()
+                .map(|member| (member, state.member_roles(guild, member).0))
+                .collect();
+            online_members.sort_by(|a, b| match (a.1, b.1) {
+                (Some(a), Some(b)) => b.cmp_hierarchy(a),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            });
+            for members in online_members.chunk_by(|a, b| a.1.map(|r| r.id) == b.1.map(|r| r.id)) {
+                let name = members[0].1.map_or("Online", |r| {
+                    if r.name.is_empty() {
+                        "Role"
+                    } else {
+                        r.name.as_str()
+                    }
+                });
+                rows.push(Row::Header(format!("{name} — {}", members.len())));
+                rows.extend(members.iter().map(|(m, _)| Row::Member(m, true)));
             }
             if !offline_members.is_empty() {
                 rows.push(Row::Header(format!("Offline — {}", offline_members.len())));
                 rows.extend(offline_members.iter().map(|m| Row::Member(m, false)));
             }
+        } else {
+            rows.push(Row::Header(format!("Members — {}", members.len())));
+            rows.extend(members.iter().map(|m| Row::Member(m, online(m))));
         }
         if members.is_empty() && list.freshness == Freshness::Fresh {
             ui.add_space(8.0);
@@ -358,13 +375,22 @@ impl MessagingUi {
                                 egui::vec2(ui.available_width(), 42.0),
                                 egui::Sense::hover(),
                             );
-                            ui.painter().text(
-                                egui::pos2(rect.left() + 8.0, rect.bottom() - 6.0),
-                                egui::Align2::LEFT_BOTTOM,
-                                text.to_uppercase(),
-                                egui::FontId::new(12.0, crate::design::semibold_family(ui.ctx())),
-                                colors.muted,
+                            let mut header = ui.new_child(
+                                egui::UiBuilder::new()
+                                    .max_rect(egui::Rect::from_min_max(
+                                        rect.left_top() + egui::vec2(8.0, 16.0),
+                                        rect.right_bottom() - egui::vec2(8.0, 0.0),
+                                    ))
+                                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
                             );
+                            header
+                                .add(
+                                    egui::Label::new(
+                                        design::medium(ui, text, 12.0).color(colors.muted),
+                                    )
+                                    .truncate(),
+                                )
+                                .on_hover_text(text);
                         }
                         Row::Member(member, online) => {
                             let name = member.nick.as_deref().unwrap_or(&member.user.name);
@@ -409,7 +435,21 @@ impl MessagingUi {
                                         colors.sidebar,
                                     );
                                 }
-                                let text_color = if *online { colors.text } else { colors.muted };
+                                let text_color = if *online {
+                                    let role_color = list.guild.and_then(|guild| {
+                                        state.member_roles(guild, member).1.map(|role| role.color)
+                                    });
+                                    let background = if response.hovered() || response.has_focus() {
+                                        colors.hover
+                                    } else {
+                                        colors.sidebar
+                                    };
+                                    role_color.map_or(colors.text, |rgb| {
+                                        design::role_name_color(rgb, background, colors.text)
+                                    })
+                                } else {
+                                    colors.muted
+                                };
                                 ui.vertical(|ui| {
                                     ui.spacing_mut().item_spacing.y = 1.0;
                                     ui.add(
@@ -1985,6 +2025,9 @@ mod composer_tests {
                     extra_content: Default::default(),
                     embeds: vec![],
                     attachments: vec![],
+                    mention_roles: vec![],
+                    mention_everyone: false,
+                    suppress_notifications: false,
                     mentions: vec![],
                     reactions: None,
                     embeds_suppressed: false,
@@ -3267,6 +3310,7 @@ mod composer_tests {
                                 discriminator: 0,
                             },
                             nick: None,
+                            roles: vec![],
                             status: match id {
                                 1 => Some("online"),
                                 2 => Some("idle"),
@@ -3284,6 +3328,33 @@ mod composer_tests {
             }),
             ..Default::default()
         };
+        state.permissions.guilds.insert(
+            Id(2),
+            model::permissions::Guild {
+                id: Id(2),
+                owner: None,
+                member: None,
+                roles: Some(vec![model::permissions::Role {
+                    id: Id(8),
+                    bits: 0,
+                    name: "Founders".into(),
+                    color: 0xe78284,
+                    position: 1,
+                    hoist: true,
+                }]),
+            },
+        );
+        for member in state
+            .members
+            .as_mut()
+            .unwrap()
+            .rows
+            .iter_mut()
+            .flatten()
+            .take(2)
+        {
+            member.roles.push(Id(8));
+        }
         let mut messaging = MessagingUi::default();
         let context = egui::Context::default();
         let output = context.run_ui(
@@ -3302,6 +3373,12 @@ mod composer_tests {
         let mut text = Vec::new();
         for shape in &output.shapes {
             collect_text(&shape.shape, &mut text);
+        }
+        for heading in ["Founders — 2", "Online — 1", "Offline — 97"] {
+            assert!(
+                text.iter().any(|label| label == heading),
+                "Missing {heading}"
+            );
         }
         for status in ["Online", "Away", "Do not disturb", "Offline"] {
             assert!(text.iter().any(|label| label == status), "Missing {status}");
@@ -3358,6 +3435,7 @@ mod composer_tests {
             rows: vec![Some(model::Member {
                 user: user.clone(),
                 nick: None,
+                roles: vec![],
                 status: Some("online".into()),
                 custom_status: Some("Initial synthetic status".into()),
                 activities: vec![],
@@ -3490,6 +3568,7 @@ mod composer_tests {
                 total: 1,
                 freshness: Freshness::Fresh,
                 rows: vec![Some(model::Member {
+                    roles: vec![],
                     user: user.clone(),
                     nick: None,
                     status: Some("online".into()),

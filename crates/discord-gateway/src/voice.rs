@@ -80,6 +80,7 @@ impl Calls {
     }
     fn member(&self, member: VoiceMemberDto) -> Option<Member> {
         Some(Member {
+            roles: vec![],
             user: member
                 .user
                 .map(UserDto::into_model)
@@ -259,7 +260,11 @@ impl Calls {
             channel: state.channel_id.filter(|_| allowed),
             user: state.user_id,
             session: secret,
-            member: state.member.and_then(|m| self.member(m)).or(member),
+            member: state
+                .member
+                .and_then(|m| self.member(m))
+                .or(member)
+                .map(Box::new),
             muted: participant.muted,
             deafened: participant.deafened,
             server_muted: participant.server_muted,

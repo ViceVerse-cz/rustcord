@@ -875,6 +875,7 @@ mod tests {
                         discriminator: 0,
                     },
                     nick: None,
+                    roles: vec![],
                     status: None,
                     custom_status: None,
                     activities: vec![],

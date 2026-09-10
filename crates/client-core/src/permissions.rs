@@ -62,6 +62,7 @@ impl Event {
             + match self {
                 Self::Snapshot(snapshot) => snapshot.bytes(),
                 Self::Guild(guild) => guild.bytes(),
+                Self::Role { role, .. } => role.bytes() - size_of::<p::Role>(),
                 Self::Members(members) => {
                     members.capacity() * size_of::<(Id, Patch<Vec<Id>>, Patch<i64>)>()
                         + members
@@ -146,7 +147,12 @@ impl Permissions {
                 <= 32_768
             && self.guilds.values().all(|g| {
                 g.id.0 != 0
-                    && g.roles.as_ref().is_none_or(|roles| roles.len() <= 512)
+                    && g.roles.as_ref().is_none_or(|roles| {
+                        roles.len() <= 512
+                            && roles.iter().all(|role| {
+                                role.name.chars().count() <= 100 && role.color <= 0xff_ffff
+                            })
+                    })
                     && g.member
                         .as_ref()
                         .is_none_or(|member| member.roles.len() <= 512)
@@ -314,6 +320,57 @@ impl Permissions {
 }
 
 impl State {
+    /// Highest separately displayed role, then highest role carrying a name color.
+    pub fn member_roles(
+        &self,
+        guild: Id,
+        member: &model::Member,
+    ) -> (Option<&p::Role>, Option<&p::Role>) {
+        let Some(roles) = self
+            .permissions
+            .guilds
+            .get(&guild)
+            .and_then(|guild| guild.roles.as_deref())
+        else {
+            return (None, None);
+        };
+        if member.roles.len() > p::MAX_MEMBER_ROLES {
+            return (None, None);
+        }
+        let assigned: BTreeSet<_> = member.roles.iter().copied().collect();
+        let assigned = roles
+            .iter()
+            .filter(|role| role.id != guild && assigned.contains(&role.id));
+        (
+            assigned
+                .clone()
+                .filter(|role| role.hoist)
+                .max_by(|a, b| a.cmp_hierarchy(b)),
+            assigned
+                .filter(|role| role.color != 0)
+                .max_by(|a, b| a.cmp_hierarchy(b)),
+        )
+    }
+
+    pub(crate) fn member_list_id(&self, channel: &model::Channel) -> Option<String> {
+        // Threads use a different member protocol; never borrow their parent's list.
+        if matches!(channel.kind, 10..=12) {
+            return None;
+        }
+        let guild_id = channel.guild?;
+        let guild = self.permissions.guilds.get(&guild_id)?;
+        let metadata = self.permissions.channels.get(&channel.id)?;
+        if metadata.guild != guild_id {
+            return None;
+        }
+        let everyone = guild
+            .roles
+            .as_ref()?
+            .iter()
+            .find(|role| role.id == guild_id)?;
+        p::member_list_id(everyone.bits, metadata.overwrites.as_deref()?)
+    }
+
     pub fn permission(&self, channel: Id, bits: u128) -> Option<bool> {
         let channel = self.channels.iter().find(|c| c.id == channel)?;
         let Some(guild) = channel.guild else {
@@ -440,7 +497,37 @@ impl State {
             })
     }
     pub fn can_delete(&self, channel: Id, message: Id) -> bool {
-        self.can_edit(channel, message)
+        if self.auth != AuthState::Authenticated
+            || !self.gateway_connected
+            || !self.can_view(channel)
+        {
+            return false;
+        }
+        let Some(user) = self.user.as_ref().filter(|user| user.id.0 != 0) else {
+            return false;
+        };
+        let Some(message) = self
+            .timeline
+            .get(message)
+            .filter(|message| message.channel == channel && message.id.0 != 0)
+        else {
+            return false;
+        };
+        let Some(target) = self
+            .channels
+            .iter()
+            .find(|target| target.id == channel && target.supports_text())
+        else {
+            return false;
+        };
+        // Discord's message-type table explicitly excludes several system messages.
+        if !matches!(message.kind, 0 | 6..=12 | 14..=20 | 22..=29 | 31 | 32 | 36..=39 | 44 | 46) {
+            return false;
+        }
+        (message.author.id == user.id && message.kind != 24)
+            || (target.guild.is_some()
+                && matches!(target.kind, 0 | 5 | 10..=12)
+                && self.permission(channel, p::MANAGE_MESSAGES) == Some(true))
     }
     pub fn prepare_edit(&mut self, channel: Id, message: Id, content: String) -> Option<Command> {
         if !self.can_edit(channel, message)
@@ -517,6 +604,10 @@ mod tests {
             id: Id(1),
             owner: Some(Id(9)),
             roles: Some(vec![p::Role {
+                name: String::new(),
+                color: 0,
+                position: 0,
+                hoist: false,
                 id: Id(1),
                 bits: p::VIEW_CHANNEL | p::READ_MESSAGE_HISTORY | p::SEND_MESSAGES,
             }]),

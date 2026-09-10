@@ -104,6 +104,9 @@ pub fn message(id: u64, channel: Id) -> Message {
         } else {
             vec![]
         },
+        mention_roles: vec![],
+        mention_everyone: false,
+        suppress_notifications: false,
         mentions: if id == 500 {
             vec![User {
                 id: Id(2),
@@ -357,6 +360,7 @@ pub fn voice_demo_state() -> State {
             server_deafened: false,
         },
         member: Some(Member {
+            roles: vec![],
             user: User {
                 id: Id(id),
                 name: name.into(),
@@ -489,7 +493,14 @@ pub fn permission_snapshot(state: &State) -> model::permissions::Snapshot {
             .map(|guild| p::Guild {
                 id: guild.id,
                 owner: Some(Id(u64::MAX)),
-                roles: Some(vec![p::Role { id: guild.id, bits }]),
+                roles: Some(vec![p::Role {
+                    name: String::new(),
+                    color: 0,
+                    position: 0,
+                    hoist: false,
+                    id: guild.id,
+                    bits,
+                }]),
                 member: Some(p::Member {
                     roles: vec![],
                     timeout_until: None,
@@ -637,6 +648,8 @@ mod tests {
                 entries: vec![n::Setting {
                     guild: None,
                     muted: Some(false),
+                    suppress_everyone: Some(false),
+                    suppress_roles: Some(false),
                     level: Some(0),
                     channels: vec![],
                 }],
@@ -748,6 +761,8 @@ mod tests {
         let setting = n::Setting {
             guild: channel.guild,
             muted: Some(false),
+            suppress_everyone: Some(false),
+            suppress_roles: Some(false),
             level: Some(1),
             channels: vec![],
         };
@@ -825,6 +840,8 @@ mod tests {
                 entries: vec![n::Setting {
                     guild: None,
                     muted: Some(false),
+                    suppress_everyone: Some(false),
+                    suppress_roles: Some(false),
                     level: Some(0),
                     channels: vec![],
                 }],
@@ -847,6 +864,8 @@ mod tests {
                 entries: vec![n::Setting {
                     guild: None,
                     muted: Some(false),
+                    suppress_everyone: Some(false),
+                    suppress_roles: Some(false),
                     level: Some(0),
                     channels: vec![(channel, Some(true), Some(0))],
                 }],
@@ -863,6 +882,8 @@ mod tests {
                 entries: vec![n::Setting {
                     guild: None,
                     muted: Some(false),
+                    suppress_everyone: Some(false),
+                    suppress_roles: Some(false),
                     level: Some(0),
                     channels: vec![],
                 }],

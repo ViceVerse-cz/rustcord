@@ -165,6 +165,10 @@ mod tests {
                         id: guild.id,
                         owner: Some(Id(999)),
                         roles: Some(vec![model::permissions::Role {
+                            name: String::new(),
+                            color: 0,
+                            position: 0,
+                            hoist: false,
                             id: guild.id,
                             bits: model::permissions::VIEW_CHANNEL
                                 | model::permissions::READ_MESSAGE_HISTORY
@@ -235,6 +239,9 @@ mod tests {
                 discriminator: 0,
             },
             content: "Synthetic thread history".into(),
+            mention_roles: vec![],
+            mention_everyone: false,
+            suppress_notifications: false,
             mentions: vec![],
             reactions: Some(vec![]),
             edited: false,

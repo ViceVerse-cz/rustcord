@@ -1296,6 +1296,87 @@ Clean baseline `dff0975` (existing isolated worktree) versus final theme code `7
 Fresh text processes use `--demo --demo-chat`, Default dark, ten-second warmup and ten one-second `ps -p PID -o %cpu=,rss=` samples, no scripted interaction. These short samples ran on a shared development host during builds; CPU varied and RSS differences are noise, not a performance improvement. No child processes were launched by these offline text fixtures. Long sessions, interactive p95 frame/startup timing, GPU allocations and live memory remain unmeasured. Gradient screenshots are visual checks, not equivalent performance comparisons. This addendum supersedes the original theme measurements for the rebased code.
 
 
+## Server member identity repair — September 10, 2026
+
+Baseline `9fcce51` versus `fix/server-member-sync`; macOS 27.0 (26A428), Apple M1 Pro,
+16 GiB RAM, Rust 1.98.1, locked release profile. Both text-only and optional voice packages
+were rebuilt and ad-hoc signature verification passed. Installed bytes sum all files in
+the app bundle, including required resources/notices; compressed bytes use Python tarfile
+`w:gz` with the bundle named `Serein.app`. Snapshot outputs were kept separately under
+`target/member-sync-baseline` and `target/member-sync-after`. Bundles include documentation
+at packaging time, before these final measurement notes were appended.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable bytes | 47,431,712 | 47,432,928 | +1,216 (+0.003%) |
+| Text installed bytes | 48,014,712 | 48,019,348 | +4,636 (+0.010%) |
+| Text compressed bytes | 30,590,560 | 30,593,122 | +2,562 (+0.008%) |
+| Voice executable bytes | 50,251,296 | 50,252,496 | +1,200 (+0.002%) |
+| Voice installed bytes | 51,064,507 | 51,069,127 | +4,620 (+0.009%) |
+| Voice compressed bytes | 31,901,498 | 31,904,374 | +2,876 (+0.009%) |
+| Reducer median ms | 37.244 | 37.569 | +0.325 (+0.87%) |
+
+`cargo replay` was built for each revision; the resulting binary ran one warmup followed
+by five measured executions. Both retained 228,992–229,477 estimated timeline bytes and
+500 records for 100,000 synthetic events. Baseline runs: 40.181, 37.590, 37.244, 36.541,
+36.311 ms; after: 37.830, 37.724, 36.808, 37.278, 37.569 ms. The 0.325-ms median difference
+is within observed run variation; no speed improvement is claimed. This message-reducer
+workload does not measure member-list synchronization latency, process RSS, UI frame time
+or live service behavior. No protocol range, persistent cache or dependency was added;
+member snapshots remain bounded to 100 positions and 128 KiB.
+
+### Final member decoding and queue repair — September 10, 2026
+
+Same macOS 27.0 / M1 Pro / 16 GiB host and locked release text/voice packaging; baseline
+`9fcce51`, final working tree based on `702b2ed`. Byte measurements reuse verified packages.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable bytes | 47,431,712 | 47,435,472 | +3,760 |
+| Text installed bytes | 48,014,712 | 48,029,580 | +14,868 |
+| Text gzip distribution bytes | 30,590,560 | 30,599,671 | +9,111 |
+| Voice executable bytes | 50,251,296 | 50,254,960 | +3,664 |
+| Voice installed bytes | 51,064,507 | 51,079,279 | +14,772 |
+| Voice gzip distribution bytes | 31,901,498 | 31,909,408 | +7,910 |
+| Reducer median ms / 100,000 events | 37.244 | 51.645 | +14.401 (+38.7%) |
+
+One warmup, five measured reducer runs: 45.286, 48.421, 59.164, 53.595, 51.645 ms.
+Retained timeline bounds remain 228,992–229,477 estimated bytes / 500 records. This shared-host
+measurement is materially slower than the earlier baseline and has wide variation; no speed
+improvement is claimed. The changed queue and Gateway decoder are outside this reducer
+workload. This is not member latency, RSS or frame timing. Reliable queue admission is tested
+at 4,008 items and its unchanged 32 MiB estimated-byte ceiling; the UI still drains eight/frame.
+
+### Member role display — September 10, 2026
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable bytes | 47,435,472 | 47,476,192 | +40,720 (+0.09%) |
+| Text installed bytes | 48,029,580 | 48,074,988 | +45,408 (+0.09%) |
+| Text gzip distribution bytes | 30,599,671 | 30,615,929 | +16,258 (+0.05%) |
+| Voice executable bytes | 50,254,960 | 50,295,552 | +40,592 (+0.08%) |
+| Voice installed bytes | 51,079,279 | 51,124,559 | +45,280 (+0.09%) |
+| Voice gzip distribution bytes | 31,909,408 | 31,926,452 | +17,044 (+0.05%) |
+| Reducer median ms / 100,000 events | 37.213 | 38.166 | +0.953 (+2.56%) |
+| Peak sampled RSS KiB | 141,072 | 154,672 | +13,600 |
+| Final sampled RSS KiB | 92,752 | 152,080 | +59,328 |
+| Median idle CPU % | 0.0 | 0.0 | +0.0 |
+
+Baseline `7221390`; final role-display working tree. macOS 27.0 (26A428), Apple M1 Pro,
+16 GiB RAM, Rust 1.98.1, locked text/voice release builds. Wgpu native demo at 1120×760
+logical pixels, 2× display scale. Packages are verified ad-hoc builds; gzip archives include
+the complete app. One warmup and five alternating baseline/after reducer runs; retained
+timeline stays 228,992–229,477 estimated bytes / 500 records. No member latency/frame-time claim.
+
+Native memory: fresh `--demo` process, automatically open member pane, 10-second warmup then
+10 one-second `ps rss,%cpu` samples, no helper processes. After fixture adds two roles and two
+member rows. A matched repeat followed an initial noisy comparison (peak 140,592→150,464 KiB;
+final 79,936→133,600 KiB). The table records the repeat, not a selected minimum. Baseline RSS
+fell sharply during sampling while the changed build stayed higher. Other worktrees were
+compiling on this shared host, so memory pressure and fixture differences prevent attributing
+this RSS increase solely to role code. The measured increase is material; no memory improvement
+or isolated regression estimate is claimed. Startup and p95 frame latency are unmeasured.
+
 ## Voice recovery and playback completion - September 10, 2026
 
 | Metric / method | Main 9fcce51 | Voice fixes | Delta |
@@ -1464,6 +1545,79 @@ Forward history adds fixed-size cursor/flag state and reuses the 50-message resp
 Pages replace the active window. No added dependency, migration, cache or queue.
 
 
+## Group mentions and silent notifications - September 10, 2026
+
+| Metric / method | Main 9ce22a9 | Notification mentions | Delta |
+| --- | ---: | ---: | ---: |
+| text executable, bytes | 50,814,464 | 50,827,776 | +13,312 (+0.026%) |
+| text installed, bytes | 51,413,035 | 51,433,272 | +20,237 (+0.039%) |
+| text zip, bytes | 31,758,083 | 31,768,372 | +10,289 (+0.032%) |
+| voice executable, bytes | 54,170,624 | 54,181,376 | +10,752 (+0.020%) |
+| voice installed, bytes | 54,991,968 | 55,009,645 | +17,677 (+0.032%) |
+| voice zip, bytes | 33,134,023 | 33,140,030 | +6,007 (+0.018%) |
+| 100,000-event replay median, ms | 36.6610 | 39.9284 | +3.2674 (+8.91%) |
+| Retained 500-message timeline, estimated bytes | 228,992..229,477 | 236,992..237,477 | +8,000 |
+
+Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical CPUs), approximately 31 GiB RAM,
+Rust 1.98.1, release thin LTO/one codegen unit. Both unsigned Windows packages passed.
+Baseline PR #41 executables were SHA256-verified against their original recorded artifacts.
+Text has no default features; voice explicitly enables voice. Installed sums and DEFLATE 9 ZIPs
+exclude PR screenshots; text excludes nested voice. Bundled documentation is its build-time
+snapshot before final measurement addenda; installed deltas include documentation updates.
+
+One warmup and five direct replay runs per revision. Baseline samples:
+36.0087,36.8362,36.0801,37.7125,36.661ms. New samples:
+39.9284,40.3984,40.9795,39.8744,39.1995ms. The measured median increased 8.91%; this shared-host sample
+cannot separate timing noise from regression and is not a native latency measurement.
+Retained timeline estimates grow by 8,000 bytes for 500 records because of the new message
+metadata. No process RSS, native CPU/frame/startup or OS alert measurements were made;
+desktop automation remains owner-paused. No live account or audio actions occurred.
+
+Mention roles are capped at 100 positive unique IDs and 800 retained allocation bytes per message.
+Notification delivery retains at most 32 items/16 KiB including reserved queue slots and role
+allocations; observed badge records remain 4,096/128 KiB. No dependency or migration was added.
+
+
+## Automated dependency license policy - September 10, 2026
+
+No application runtime or build-dependency change; Cargo.lock is unchanged. The pinned external
+cargo-deny tool runs only during development/CI. Release packages and replay were not rebuilt
+for this tooling-only slice. CI installation/check cost is separate from client runtime cost;
+no startup, memory or package-size improvement is claimed.
+
+
+## Authorized single-message deletion - September 10, 2026
+
+| Metric / method | Main 899fca7 | Authorized deletion | Delta |
+| --- | ---: | ---: | ---: |
+| text executable, bytes | 50,898,944 | 50,898,432 | -512 (-0.001%) |
+| text installed, bytes | 51,535,910 | 51,538,690 | +2,780 (+0.005%) |
+| text zip, bytes | 31,805,467 | 31,807,111 | +1,644 (+0.005%) |
+| voice executable, bytes | 54,253,568 | 54,253,056 | -512 (-0.001%) |
+| voice installed, bytes | 55,113,307 | 55,116,087 | +2,780 (+0.005%) |
+| voice zip, bytes | 33,177,815 | 33,178,418 | +603 (+0.002%) |
+| 100,000-event replay median, ms | 39.6040 | 39.5085 | -0.0955 (-0.24%) |
+| Retained 500-message timeline, estimated bytes | 236,992..237,477 | 236,992..237,477 | 0 |
+
+Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical CPUs), approximately 31 GiB RAM,
+Rust 1.98.1, release thin LTO/one codegen unit. Both unsigned Windows variants passed.
+Baseline packages were freshly built from clean main 899fca7 in a separate worktree before
+source edits. Text has no default features; voice explicitly enables voice. Installed sums and
+DEFLATE 9 ZIPs exclude PR screenshots and nested voice for text. Package documentation is its
+build-time snapshot before this measurement addendum; installed deltas include docs.
+
+Initial non-interleaved samples showed a large timing difference (baseline median 77.0567 ms),
+so both retained executables were remeasured under the same current host load: one warmup each,
+then five alternating before/after runs. Baseline samples:
+39.1752,41.5123,39.2129,39.604,39.9511ms. Changed samples:
+40.9527,40.2612,38.4499,39.5085,39.2426ms. Reported medians use this paired rerun. This common-path reducer
+workload does not measure deletion network latency or native confirmation rendering; small
+shared-host timing differences are noisy, with no speedup claim. Retained estimates are unchanged.
+No new cache, queue or dependency was added. Native RSS/CPU/frame/startup measurements and
+screenshots remain unavailable while desktop automation is owner-paused. No live account or
+audio action occurred.
+
+
 ## Rich presence - September 10, 2026
 
 Baseline `5f11cb92644d06e2302678211ac21d9445fad692`, clean disposable worktree;
@@ -1509,3 +1663,11 @@ strict all-feature Clippy, text-only compilation and policy. C: exhaustion was r
 moving this task's temporary cache and using an isolated E: build cache. A stale copied no-feature
 model artifact affected the first replay build; cleaning only that task cache's release model
 artifacts and rebuilding replay resolved it. Packaged variants compiled the new activity model.
+
+
+Rich-presence integration with main `dc49d64`: rebuilt text/voice executables are respectively
+50,987,520 / 54,337,024 bytes. One replay smoke run passed at 39.4606 ms and retained
+236,992..237,477 estimated bytes / 500 records. These include main's new message/role metadata;
+they are not a controlled feature delta against the earlier 5f11cb9 baseline. The original
+paired measurements above remain historical pre-integration evidence. Native after sampling
+remains owner-stopped; 351 integrated tests and both packages passed before the authorized merge.

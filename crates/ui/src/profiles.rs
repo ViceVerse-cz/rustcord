@@ -743,6 +743,7 @@ mod tests {
             total: 1,
             freshness: model::Freshness::Fresh,
             rows: vec![Some(model::Member {
+                roles: vec![],
                 user: user.clone(),
                 nick: None,
                 status: Some("idle".into()),

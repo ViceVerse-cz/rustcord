@@ -1,0 +1,71 @@
+# Development-only declared-license policy; not a redistribution compliance report.
+# No target filter: include the locked graph for every platform and optional voice.
+[graph]
+all-features = true
+
+[licenses]
+confidence-threshold = 0.95
+unused-allowed-license = "warn"
+include-dev = true
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib",
+]
+
+# Existing MPL components retain their source/notice obligations. The modified
+# hpke-rs source is shipped with voice packages; see THIRD_PARTY_NOTICES.md.
+# Exact versions require renewed review on upgrades, including vendored crates.
+[[licenses.exceptions]]
+name = "hpke-rs"
+version = "=0.6.1"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+name = "hpke-rs-crypto"
+version = "=0.6.1"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+name = "hpke-rs-rust-crypto"
+version = "=0.6.1"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+name = "option-ext"
+version = "=0.2.0"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+name = "dtoa-short"
+version = "=0.3.5"
+allow = ["MPL-2.0"]
+
+# Existing Wry HTML/CSS transitive dependencies (unmodified registry sources).
+[[licenses.exceptions]]
+name = "cssparser"
+version = "=0.37.0"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+name = "cssparser-macros"
+version = "=0.7.1"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+name = "selectors"
+version = "=0.38.0"
+allow = ["MPL-2.0"]
+
+# Embedded font licenses remain separate from the application's code license.
+[[licenses.exceptions]]
+name = "epaint_default_fonts"
+version = "=0.36.2"
+allow = ["MIT", "Apache-2.0", "OFL-1.1", "Ubuntu-font-1.0"]

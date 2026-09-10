@@ -53,6 +53,9 @@ fn message(id: u64, channel: Id) -> Message {
         extra_content: Default::default(),
         embeds: vec![],
         attachments: vec![],
+        mention_roles: vec![],
+        mention_everyone: false,
+        suppress_notifications: false,
         mentions: vec![],
         embeds_suppressed: false,
     }
@@ -64,10 +67,18 @@ fn snapshot() -> p::Snapshot {
             owner: Some(Id(999)),
             roles: Some(vec![
                 p::Role {
+                    name: String::new(),
+                    color: 0,
+                    position: 0,
+                    hoist: false,
                     id: Id(10),
                     bits: BITS,
                 },
                 p::Role {
+                    name: String::new(),
+                    color: 0,
+                    position: 0,
+                    hoist: false,
                     id: Id(11),
                     bits: 0,
                 },
@@ -171,6 +182,194 @@ fn state() -> State {
 }
 
 #[test]
+fn message_deletion_uses_manage_messages_without_granting_edit_or_requiring_send() {
+    let mut state = state();
+    let mut other = message(101, Id(20));
+    other.author.id = Id(3);
+    apply(&mut state, Event::Message(other));
+    assert!(state.can_delete(Id(20), Id(100)));
+    assert!(!state.can_delete(Id(20), Id(101)));
+    let mut role = snapshot().guilds[0].roles.as_ref().unwrap()[1].clone();
+    role.bits = p::MANAGE_MESSAGES;
+    permission(
+        &mut state,
+        PermissionEvent::Role {
+            guild: Id(10),
+            role,
+        },
+    );
+    permission(
+        &mut state,
+        PermissionEvent::Member {
+            guild: Id(10),
+            roles: Patch::Value(vec![Id(11)]),
+            timeout_until: Patch::Absent,
+        },
+    );
+    // The role's existing channel overwrite denies SEND_MESSAGES only.
+    assert!(!state.can_send(Id(20)));
+    assert!(!state.can_edit(Id(20), Id(101)));
+    assert!(matches!(
+        state.prepare_delete(Id(20), Id(101)),
+        Some(Command::Delete {
+            channel: Id(20),
+            message: Id(101)
+        })
+    ));
+    assert!(!state.can_delete(Id(21), Id(101)));
+    assert!(!state.can_delete(Id(20), Id(999)));
+    let user = state.user.take();
+    assert!(!state.can_delete(Id(20), Id(101)));
+    state.user = user;
+    state.gateway_connected = false;
+    assert!(!state.can_delete(Id(20), Id(101)));
+    state.gateway_connected = true;
+    state.auth = crate::auth::AuthState::Expired;
+    assert!(!state.can_delete(Id(20), Id(101)));
+    state.auth = crate::auth::AuthState::Unauthenticated;
+    assert!(!state.can_delete(Id(20), Id(101)));
+    state.auth = crate::auth::AuthState::Authenticated;
+    deny(&mut state, p::MANAGE_MESSAGES);
+    assert!(state.can_delete(Id(20), Id(100)));
+    assert!(state.prepare_delete(Id(20), Id(101)).is_none());
+    permission(
+        &mut state,
+        PermissionEvent::Channel {
+            channel: Id(20),
+            guild: Some(Id(10)),
+            overwrites: Patch::Null,
+        },
+    );
+    assert!(!state.can_delete(Id(20), Id(100)));
+    state.permissions.replace(snapshot()).unwrap();
+    state
+        .timeline
+        .insert(message(100, Id(20)), false, false)
+        .unwrap();
+    deny(&mut state, p::VIEW_CHANNEL);
+    assert!(!state.can_delete(Id(20), Id(100)));
+}
+
+#[test]
+fn thread_deletion_inherits_parent_overwrites_and_respects_timeout_and_admin() {
+    let mut state = state();
+    let Some(Command::History { request, .. }) = state.select(Id(30)) else {
+        panic!()
+    };
+    history(&mut state, Id(30), request, 100);
+    let mut other = message(101, Id(30));
+    other.author.id = Id(3);
+    apply(&mut state, Event::Message(other));
+    permission(
+        &mut state,
+        PermissionEvent::Channel {
+            channel: Id(20),
+            guild: Some(Id(10)),
+            overwrites: Patch::Value(vec![p::Overwrite {
+                id: Id(2),
+                kind: 1,
+                allow: p::MANAGE_MESSAGES,
+                deny: p::SEND_MESSAGES_IN_THREADS,
+            }]),
+        },
+    );
+    assert!(state.can_delete(Id(30), Id(101)));
+    assert!(!state.can_send(Id(30)));
+    permission(
+        &mut state,
+        PermissionEvent::Member {
+            guild: Id(10),
+            roles: Patch::Absent,
+            timeout_until: Patch::Value(i64::MAX),
+        },
+    );
+    assert!(!state.can_delete(Id(30), Id(101)));
+    assert!(state.can_delete(Id(30), Id(100)));
+    permission(
+        &mut state,
+        PermissionEvent::Member {
+            guild: Id(10),
+            roles: Patch::Absent,
+            timeout_until: Patch::Null,
+        },
+    );
+    deny(&mut state, p::MANAGE_MESSAGES);
+    assert!(!state.can_delete(Id(30), Id(101)));
+    let mut role = snapshot().guilds[0].roles.as_ref().unwrap()[0].clone();
+    role.bits = p::ADMINISTRATOR;
+    permission(
+        &mut state,
+        PermissionEvent::Role {
+            guild: Id(10),
+            role,
+        },
+    );
+    assert!(state.can_delete(Id(30), Id(101)));
+    assert!(!state.can_edit(Id(30), Id(101)));
+}
+
+#[test]
+fn deletion_never_uses_guild_privileges_for_other_private_channel_messages() {
+    for kind in [1, 3] {
+        let mut state = state();
+        let mut private = channel(40, kind, None);
+        private.guild = None;
+        state.channels.push(private);
+        let Some(Command::History { request, .. }) = state.select(Id(40)) else {
+            panic!()
+        };
+        history(&mut state, Id(40), request, 100);
+        let mut other = message(101, Id(40));
+        other.author.id = Id(3);
+        apply(&mut state, Event::Message(other));
+        // Generic private-channel permissions are permissive; ownership must still be required.
+        assert_eq!(state.permission(Id(40), p::MANAGE_MESSAGES), Some(true));
+        assert!(state.can_delete(Id(40), Id(100)));
+        assert!(!state.can_delete(Id(40), Id(101)));
+        assert!(!state.can_edit(Id(40), Id(101)));
+        let mut automod = message(102, Id(40));
+        automod.kind = 24;
+        state.timeline.insert(automod, false, false).unwrap();
+        assert!(!state.can_delete(Id(40), Id(102)));
+        state.channels.retain(|channel| channel.id != Id(40));
+        assert!(!state.can_delete(Id(40), Id(100)));
+    }
+}
+
+#[test]
+fn deletion_obeys_documented_message_types_including_automod_exception() {
+    let mut state = state();
+    for manage in [false, true] {
+        let mut metadata = snapshot();
+        if manage {
+            metadata.guilds[0].roles.as_mut().unwrap()[0].bits |= p::MANAGE_MESSAGES;
+        }
+        state.permissions.replace(metadata).unwrap();
+        for (kind, allowed) in [
+            (0, true),
+            (7, true),
+            (19, true),
+            (46, true),
+            (3, false),
+            (21, false),
+            (13, false),
+            (255, false),
+            (24, manage),
+        ] {
+            state.timeline.clear();
+            let mut message = message(100, Id(20));
+            message.kind = kind;
+            state.timeline.insert(message, false, false).unwrap();
+            assert_eq!(
+                state.can_delete(Id(20), Id(100)),
+                allowed,
+                "kind {kind}, manage {manage}"
+            );
+        }
+    }
+}
+
+#[test]
 fn revoked_view_cannot_return_through_stale_gateway_content_or_old_history() {
     for resync in [false, true] {
         let mut state = state();
@@ -253,6 +452,10 @@ fn send_only_access_accepts_new_live_messages_without_restoring_old_history() {
         PermissionEvent::Role {
             guild: Id(10),
             role: p::Role {
+                name: String::new(),
+                color: 0,
+                position: 0,
+                hoist: false,
                 id: Id(11),
                 bits: p::ATTACH_FILES,
             },
@@ -299,6 +502,10 @@ fn deleting_an_unassigned_role_prunes_its_overwrites_and_invalidates_cached_deci
         PermissionEvent::Role {
             guild: Id(10),
             role: p::Role {
+                name: String::new(),
+                color: 0,
+                position: 0,
+                hoist: false,
                 id: Id(10),
                 bits: BITS & !p::SEND_MESSAGES,
             },
@@ -367,6 +574,10 @@ fn malformed_snapshots_are_atomic_and_rejected_permission_events_fail_closed() {
     oversized.guilds[0].roles = Some(
         (1..=513)
             .map(|id| p::Role {
+                name: String::new(),
+                color: 0,
+                position: 0,
+                hoist: false,
                 id: Id(id),
                 bits: BITS,
             })
@@ -419,4 +630,197 @@ fn malformed_snapshots_are_atomic_and_rejected_permission_events_fail_closed() {
         state.timeline.is_empty(),
         "Rejected reducer updates cannot keep granting old access"
     );
+}
+
+#[test]
+fn member_requests_survive_guild_hydration_and_follow_current_permissions() {
+    let mut state = state();
+    state.channels[0].member_list_id = Some("everyone".into());
+    let request = |state: &mut State| {
+        let Some(Command::Members {
+            guild: Some(Id(10)),
+            list_id: Some(id),
+            request,
+            ..
+        }) = state.request_members()
+        else {
+            panic!("Known channel permissions must produce a member subscription")
+        };
+        (id, request)
+    };
+    let (id, first) = request(&mut state);
+    assert_eq!(id, "everyone");
+    // Subscribing can hydrate a guild: permission snapshot precedes recreated channels.
+    permission(&mut state, PermissionEvent::Snapshot(snapshot()));
+    apply(&mut state, Event::ChannelCreated(channel(20, 0, None)));
+    assert_eq!(state.members.as_ref().unwrap().request, first);
+    let mut loaded = model::MemberList {
+        guild: Some(Id(10)),
+        channel: Id(20),
+        request: first,
+        total: 1,
+        rows: vec![Some(model::Member {
+            activities: vec![],
+            roles: vec![],
+            user: user(),
+            nick: None,
+            status: None,
+            custom_status: None,
+        })],
+        freshness: Freshness::Fresh,
+    };
+    apply(&mut state, Event::Members(loaded.clone()));
+    assert_eq!(state.members.as_ref().unwrap().freshness, Freshness::Fresh);
+    let (id, reloaded) = request(&mut state);
+    assert_eq!(
+        id, "everyone",
+        "Reload after GUILD_CREATE must retain a usable identity"
+    );
+    loaded.request = reloaded;
+    apply(&mut state, Event::Members(loaded.clone()));
+
+    // Changing another role's VIEW overwrite changes the list, but not our access.
+    permission(
+        &mut state,
+        PermissionEvent::Channel {
+            channel: Id(20),
+            guild: Some(Id(10)),
+            overwrites: Patch::Value(vec![p::Overwrite {
+                id: Id(11),
+                kind: 0,
+                allow: 0,
+                deny: p::VIEW_CHANNEL,
+            }]),
+        },
+    );
+    assert!(state.can_view(Id(20)) && state.members.is_none());
+    apply(&mut state, Event::Members(loaded));
+    assert!(
+        state.members.is_none(),
+        "Late old-list rows must not return"
+    );
+    assert_ne!(request(&mut state).0, "everyone");
+    permission(
+        &mut state,
+        PermissionEvent::Channel {
+            channel: Id(20),
+            guild: Some(Id(10)),
+            overwrites: Patch::Null,
+        },
+    );
+    assert!(state.members.is_none());
+    // Owner access doesn't make missing list metadata known.
+    permission(
+        &mut state,
+        PermissionEvent::Owner {
+            guild: Id(10),
+            owner: Patch::Value(Id(2)),
+        },
+    );
+    assert!(matches!(
+        state.request_members(),
+        Some(Command::Members {
+            guild: None,
+            list_id: None,
+            ..
+        })
+    ));
+    assert_eq!(
+        state.members.as_ref().unwrap().freshness,
+        Freshness::Unavailable
+    );
+    permission(&mut state, PermissionEvent::Snapshot(snapshot()));
+    assert!(
+        state.members.is_none(),
+        "Hydration must wake an unavailable open pane"
+    );
+    state.history(None);
+    let current = state.request;
+    history(&mut state, Id(20), current, 100);
+    assert_eq!(request(&mut state).0, "everyone");
+    assert!(
+        state
+            .member_list_id(&channel(30, 11, Some(Id(20))))
+            .is_none()
+    );
+}
+
+#[test]
+fn member_role_display_tracks_live_role_metadata_and_membership() {
+    let mut state = state();
+    let mut member = model::Member {
+        activities: vec![],
+        roles: vec![Id(13), Id(12), Id(11), Id(10)],
+        user: user(),
+        nick: None,
+        status: Some("online".into()),
+        custom_status: None,
+    };
+    let role = |id, position, color, hoist| p::Role {
+        id: Id(id),
+        bits: 0,
+        name: format!("Role {id}"),
+        position,
+        color,
+        hoist,
+    };
+    for role in [
+        role(11, 2, 0x112233, true),
+        role(12, 2, 0x445566, true),
+        role(13, 3, 0, false),
+    ] {
+        permission(
+            &mut state,
+            PermissionEvent::Role {
+                guild: Id(10),
+                role,
+            },
+        );
+    }
+    let resolved = |state: &State, member: &model::Member| {
+        let (group, color) = state.member_roles(Id(10), member);
+        (group.map(|role| role.id), color.map(|role| role.color))
+    };
+    assert_eq!(resolved(&state, &member), (Some(Id(11)), Some(0x112233)));
+    permission(
+        &mut state,
+        PermissionEvent::Role {
+            guild: Id(10),
+            role: role(12, 4, 0x778899, false),
+        },
+    );
+    assert_eq!(resolved(&state, &member), (Some(Id(11)), Some(0x778899)));
+    permission(
+        &mut state,
+        PermissionEvent::RoleRemoved {
+            guild: Id(10),
+            id: Id(11),
+        },
+    );
+    assert_eq!(resolved(&state, &member), (None, Some(0x778899)));
+    member.roles = vec![Id(13), Id(999)];
+    assert_eq!(resolved(&state, &member), (None, None));
+    assert!(state.member_roles(Id(99), &member).0.is_none());
+    // The default role never gives an individual a group or color, even if malformed.
+    let mut everyone = role(10, 999, 0xff_ffff, true);
+    everyone.bits = BITS;
+    permission(
+        &mut state,
+        PermissionEvent::Role {
+            guild: Id(10),
+            role: everyone,
+        },
+    );
+    member.roles = vec![Id(10)];
+    assert_eq!(resolved(&state, &member), (None, None));
+    let before = state.permissions.bytes();
+    let mut named = role(14, 0, 0, false);
+    named.name.reserve(512);
+    let event = PermissionEvent::Role {
+        guild: Id(10),
+        role: named,
+    };
+    assert!(event.bytes() >= size_of::<PermissionEvent>() + 512);
+    permission(&mut state, event);
+    assert!(state.permissions.bytes() >= before + 512);
 }
