@@ -1,7 +1,10 @@
 //! UI-neutral session entities. No filesystem or network dependencies.
 pub mod archives;
 pub mod permissions;
+mod reading_preferences;
+pub use reading_preferences::ReadingPreferences;
 mod profile;
+mod system_messages;
 pub use profile::*;
 mod attachments;
 pub use attachments::*;
@@ -169,6 +172,8 @@ pub struct Message {
     pub revision: u64,
     pub nonce: Option<String>,
     pub reply_to: Option<Id>,
+    /// Discord message type; 255 denotes an unknown legacy cached type.
+    pub kind: u8,
     pub unsupported: bool,
     pub extra_content: ExtraContent,
     pub embeds: Vec<Embed>,
@@ -176,6 +181,19 @@ pub struct Message {
     pub attachments: Vec<Attachment>,
 }
 impl Message {
+    /// A plain-text description, separate from the original service content.
+    pub fn system_summary(&self) -> Option<String> {
+        system_messages::summary(self)
+    }
+
+    pub fn display_text(&self) -> std::borrow::Cow<'_, str> {
+        match self.system_summary() {
+            Some(summary) if self.content.is_empty() => summary.into(),
+            Some(summary) => format!("{summary}\n{}", self.content).into(),
+            None => self.content.as_str().into(),
+        }
+    }
+
     pub fn bytes(&self) -> usize {
         size_of::<Self>()
             + self.reactions.as_ref().map_or(0, |r| {
@@ -242,6 +260,8 @@ pub struct Member {
     pub user: User,
     pub nick: Option<String>,
     pub status: Option<String>,
+    /// Custom status text with any unicode emoji; bounded, never a rich activity.
+    pub custom_status: Option<String>,
 }
 impl Member {
     pub fn bytes(&self) -> usize {
@@ -249,6 +269,7 @@ impl Member {
             + self.user.heap_bytes()
             + self.nick.as_ref().map_or(0, String::capacity)
             + self.status.as_ref().map_or(0, String::capacity)
+            + self.custom_status.as_ref().map_or(0, String::capacity)
     }
 }
 #[derive(Clone)]

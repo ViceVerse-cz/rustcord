@@ -43,7 +43,9 @@ impl State {
                 else {
                     return row.bytes();
                 };
-                row.bytes() - row.status.as_ref().map_or(0, String::capacity)
+                row.bytes()
+                    - row.status.as_ref().map_or(0, String::capacity)
+                    - row.custom_status.as_ref().map_or(0, String::capacity)
                     + status.as_ref().map_or(0, String::len)
             })
             .sum::<usize>();
@@ -53,6 +55,9 @@ impl State {
         for row in list.rows.iter_mut().flatten() {
             if let Some((_, status)) = updates.iter().find(|(user, _)| *user == row.user.id) {
                 row.status = status.clone();
+                // Compact presence updates do not retain activities. A newer update
+                // invalidates the custom status from the last member-list snapshot.
+                row.custom_status = None;
             }
         }
     }
@@ -103,6 +108,7 @@ mod tests {
                         user,
                         nick: None,
                         status: Some("online".into()),
+                        custom_status: None,
                     }),
                     None,
                 ],
@@ -142,7 +148,21 @@ mod tests {
     #[test]
     fn presence_updates_only_loaded_rows_without_invalidating_timeline() {
         let mut state = state();
+        state.members.as_mut().unwrap().rows[0]
+            .as_mut()
+            .unwrap()
+            .custom_status = Some("Old custom status".into());
         let revision = state.revision;
+        // Activity-only gateway changes preserve online status but clear old activity text.
+        apply(&mut state, event(vec![(Id(2), Some("online".into()))]));
+        assert_eq!(status(&state), Some("online"));
+        assert!(
+            state.members.as_ref().unwrap().rows[0]
+                .as_ref()
+                .unwrap()
+                .custom_status
+                .is_none()
+        );
         apply(
             &mut state,
             event(vec![

@@ -12,6 +12,8 @@ use std::{
 pub enum Operation {
     LoadAppearance,
     SaveAppearance(Appearance),
+    LoadReadingPreferences,
+    SaveReadingPreferences(model::ReadingPreferences),
     LoadDrafts,
     LoadChannel { channel: Id, request: u64 },
     SaveDraft { channel: Id, content: String },
@@ -22,6 +24,8 @@ pub enum Operation {
 }
 pub enum Outcome {
     Appearance(Appearance),
+    ReadingPreferences(Result<model::ReadingPreferences, StoreError>),
+    ReadingPreferencesSaved(Result<(), StoreError>),
     Drafts(BTreeMap<Id, String>),
     Channel {
         channel: Id,
@@ -169,6 +173,22 @@ fn execute(
     epoch: u64,
     operation: Operation,
 ) -> Outcome {
+    // Settings completions are account-independent and have their own pending/error state.
+    match &operation {
+        Operation::LoadReadingPreferences => {
+            return Outcome::ReadingPreferences(match store {
+                Ok(store) => store.reading_preferences(),
+                Err(error) => Err(*error),
+            });
+        }
+        Operation::SaveReadingPreferences(value) => {
+            return Outcome::ReadingPreferencesSaved(match store {
+                Ok(store) => store.save_reading_preferences(*value),
+                Err(error) => Err(*error),
+            });
+        }
+        _ => {}
+    }
     if matches!(
         operation,
         Operation::LoadChannel { .. } | Operation::SaveChannel { .. }
@@ -202,9 +222,13 @@ fn execute(
         Operation::SaveChannel { .. } => "Could not save cached history",
         Operation::LoadDrafts => "Could not restore drafts from local storage",
         Operation::LoadChannel { .. } => "Could not read cached history",
+        Operation::LoadReadingPreferences | Operation::SaveReadingPreferences(_) => unreachable!(),
     };
     let result = match store {
         Ok(store) => match operation {
+            Operation::LoadReadingPreferences | Operation::SaveReadingPreferences(_) => {
+                unreachable!()
+            }
             Operation::LoadAppearance => store.appearance().map(Outcome::Appearance),
             Operation::SaveAppearance(appearance) => {
                 store.save_appearance(appearance).map(|_| Outcome::Saved)
@@ -250,6 +274,60 @@ fn execute(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reading_operations_report_their_own_results_without_touching_account_history() {
+        let safety = HistorySafety::default();
+        let mut store = Ok(LocalStore::open(std::path::Path::new(":memory:")).unwrap());
+        let value = model::ReadingPreferences {
+            zoom_percent: 125,
+            sidebar_width: 300,
+            show_members: false,
+        };
+        store
+            .as_mut()
+            .unwrap()
+            .save_draft(Id(1), Id(2), "Synthetic draft")
+            .unwrap();
+        safety.block(); // History cleanup does not prohibit application settings.
+        assert!(matches!(
+            execute(
+                &mut store,
+                &safety,
+                Id(0),
+                0,
+                Operation::SaveReadingPreferences(value)
+            ),
+            Outcome::ReadingPreferencesSaved(Ok(()))
+        ));
+        assert!(matches!(execute(&mut store, &safety, Id(9), 0,
+            Operation::LoadReadingPreferences), Outcome::ReadingPreferences(Ok(stored)) if stored == value));
+        assert_eq!(
+            store.as_ref().unwrap().load_drafts(Id(1)).unwrap()[&Id(2)],
+            "Synthetic draft"
+        );
+        let mut unavailable = Err(StoreError::Unavailable);
+        assert!(matches!(
+            execute(
+                &mut unavailable,
+                &safety,
+                Id(0),
+                0,
+                Operation::LoadReadingPreferences
+            ),
+            Outcome::ReadingPreferences(Err(StoreError::Unavailable))
+        ));
+        assert!(matches!(
+            execute(
+                &mut unavailable,
+                &safety,
+                Id(0),
+                0,
+                Operation::SaveReadingPreferences(value)
+            ),
+            Outcome::ReadingPreferencesSaved(Err(StoreError::Unavailable))
+        ));
+    }
 
     #[test]
     fn cleanup_acknowledgements_cross_generations_without_reopening_early() {

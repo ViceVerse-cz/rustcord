@@ -10,6 +10,7 @@ mod presence;
 pub mod profile;
 pub mod reactions;
 pub mod read_state;
+pub mod resident;
 pub mod search;
 mod threads;
 pub mod voice;
@@ -103,7 +104,7 @@ pub enum Event {
         user: Id,
         guild: Option<Id>,
         request: u64,
-        result: Result<UserProfile, auth::Failure>,
+        result: Result<Box<UserProfile>, auth::Failure>,
     },
     Voice(voice::Event),
     ChannelCreated(Channel),
@@ -206,6 +207,7 @@ pub struct State {
     pub reactions: reactions::Reactions,
     pub profile: Option<profile::ProfileView>,
     pub profile_request: u64,
+    pub profile_cache: profile::ProfileCache,
     pub voice: voice::State,
     pub generation: u64,
     pub auth: auth::AuthState,
@@ -216,6 +218,7 @@ pub struct State {
     pub channels: Vec<Channel>,
     pub selected: Option<Id>,
     pub timeline: Timeline,
+    pub resident: resident::Windows,
     pub freshness: Freshness,
     pub status: &'static str,
     pub drafts: BTreeMap<Id, String>,
@@ -244,6 +247,7 @@ impl Default for State {
             reactions: reactions::Reactions::default(),
             profile: None,
             profile_request: 0,
+            profile_cache: Default::default(),
             voice: voice::State::default(),
             generation: 1,
             auth: auth::AuthState::Unauthenticated,
@@ -254,6 +258,7 @@ impl Default for State {
             channels: vec![],
             selected: None,
             timeline: Timeline::default(),
+            resident: resident::Windows::default(),
             freshness: Freshness::Stale,
             status: "Disconnected",
             drafts: BTreeMap::new(),
@@ -312,12 +317,12 @@ impl State {
             return None;
         }
         self.retire_archived_thread(Some(channel));
+        self.select_resident(channel);
         self.members = None;
         self.selected = Some(channel);
         self.clear_search();
         self.search_target = None;
         self.reactions.reset();
-        self.timeline.clear();
         self.older_exhausted = false;
         self.reply = None;
         self.revision += 1;
@@ -326,7 +331,11 @@ impl State {
             self.freshness = Freshness::Fresh;
             return None;
         }
-        Some(self.history(None))
+        let command = self.history(None);
+        if self.freshness == Freshness::Loading && self.timeline.row_count() != 0 {
+            self.status = "Showing recent conversation · revalidating history";
+        }
+        Some(command)
     }
     pub fn request_members(&mut self) -> Option<Command> {
         let channel = self.channels.iter().find(|c| Some(c.id) == self.selected)?;
@@ -348,6 +357,7 @@ impl State {
                         user,
                         nick: None,
                         status: None,
+                        custom_status: None,
                     })
                 })
                 .collect()
@@ -687,6 +697,7 @@ impl State {
         {
             return;
         }
+        self.invalidate_resident_event(&envelope.event);
         self.revision += 1;
         if matches!(
             &envelope.event,
@@ -745,6 +756,10 @@ impl State {
                         *guild = actual;
                     }
                 }
+                // Typed updates replace the old PermissionsChanged fallback too.
+                // Retire both snapshots and in-flight profiles before applying them.
+                self.clear_profile();
+                self.profile_cache.clear();
                 let result = self.permissions.update(event);
                 if result.is_err() {
                     self.permissions = permissions::Permissions::default();
@@ -1064,6 +1079,7 @@ impl State {
                 self.voice.roster.clear();
                 self.members = None;
                 self.clear_profile();
+                self.profile_cache.clear();
                 self.read_state.reset();
                 self.notification_preferences = notifications::Preferences::default();
                 self.user = Some(user);
@@ -1301,6 +1317,7 @@ impl State {
                 self.permissions = permissions::Permissions::default();
                 self.read_state.cancel();
                 self.clear_profile();
+                self.profile_cache.clear();
                 self.disconnect_voice();
                 self.invalidate_members();
                 self.timeline.clear();
@@ -1323,6 +1340,7 @@ impl State {
             }
         };
         if let Err(status) = result {
+            self.clear_cached_history();
             self.status = status;
             self.freshness = Freshness::Stale;
             self.timeline.clear();
@@ -1331,6 +1349,7 @@ impl State {
         if access_changed {
             self.reconcile_permissions(previous_access);
             self.reconcile_notifications();
+            self.prune_resident();
         }
         if self.search.is_some() && !self.can_search() {
             self.clear_search();
@@ -1342,6 +1361,7 @@ impl State {
         {
             self.clear_archives();
         }
+        self.enforce_resident_budget();
     }
     fn invalidate_members(&mut self) {
         self.member_request = self.member_request.wrapping_add(1);
@@ -1352,6 +1372,9 @@ impl State {
         }
     }
     fn remove_channels(&mut self, removed: &BTreeSet<Id>) {
+        for id in removed {
+            self.resident.remove(*id);
+        }
         if self
             .archives
             .as_ref()
@@ -1373,6 +1396,7 @@ impl State {
         }
         if !removed.is_empty() {
             self.clear_profile();
+            self.profile_cache.clear();
         }
         if self.selected.is_some_and(|id| removed.contains(&id)) {
             self.clear_search();
@@ -1402,10 +1426,12 @@ impl State {
             _ => {}
         }
         if failure.ends_session() {
+            self.clear_cached_history();
             self.clear_search();
             self.search_target = None;
             self.read_state.cancel();
             self.clear_profile();
+            self.profile_cache.clear();
             self.disconnect_voice();
             self.gateway_connected = false;
             self.invalidate_members();
@@ -1463,7 +1489,7 @@ impl Event {
                 Self::Reactions(reactions::Event::Read { result, .. }) => {
                     result.as_ref().map_or(0, |r| model::reaction_bytes(r))
                 }
-                Self::Profile { result, .. } => result.as_ref().map_or(0, UserProfile::bytes),
+                Self::Profile { result, .. } => result.as_ref().map_or(0, |p| p.bytes()),
                 Self::Voice(event) => event.bytes(),
                 Self::Permissions(event) => event.bytes(),
                 Self::GuildEmojis { emojis, .. } => custom_emoji_bytes(emojis),
@@ -2239,6 +2265,7 @@ mod tests {
             revision: 0,
             nonce: None,
             reply_to: None,
+            kind: 0,
             unsupported: false,
             extra_content: Default::default(),
             embeds: vec![],

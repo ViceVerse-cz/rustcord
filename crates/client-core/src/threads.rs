@@ -242,6 +242,7 @@ mod tests {
             revision: 0,
             nonce: None,
             reply_to: None,
+            kind: 0,
             unsupported: false,
             extra_content: Default::default(),
             embeds: vec![],

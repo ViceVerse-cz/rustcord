@@ -41,9 +41,23 @@ impl Timeline {
     pub fn bytes(&self) -> usize {
         self.bytes
     }
-    fn retained_bytes(&self) -> usize {
+    fn row_bytes(&self) -> usize {
         self.bytes - self.live_count * size_of::<Message>()
             + self.row_count() * size_of::<Option<Message>>()
+    }
+    /// Conservative retained allocation estimate, including reconciliation state and
+    /// B-tree node slack. This is a budget charge, not an allocator/RSS measurement.
+    pub fn retained_bytes(&self) -> usize {
+        size_of::<Self>() + self.bytes - self.live_count * size_of::<Message>()
+            + tree_bytes::<(Id, Option<Message>)>(self.messages.len())
+            + tree_bytes::<Id>(self.changed.len())
+            + tree_bytes::<Id>(self.deleted.len())
+            + tree_bytes::<(Id, MessagePatch)>(self.patches.len())
+            + self
+                .patches
+                .values()
+                .map(|patch| patch_bytes(patch) - size_of::<MessagePatch>())
+                .sum::<usize>()
     }
     pub fn begin_page(&mut self, older: bool) {
         // Set eviction direction before live events can race the history response.
@@ -123,7 +137,7 @@ impl Timeline {
             Some(Some(old)) => self.bytes -= old.bytes(),
             _ => self.live_count += 1,
         }
-        while self.row_count() > MAX_MESSAGES || self.retained_bytes() > MAX_BYTES {
+        while self.row_count() > MAX_MESSAGES || self.row_bytes() > MAX_BYTES {
             let item = if older || self.retain_older {
                 self.messages.pop_last()
             } else {
@@ -249,7 +263,7 @@ impl Timeline {
             return Err("Reaction data exceeds safe capacity");
         }
         // Take the footprint before borrowing a live row mutably.
-        let retained = self.retained_bytes();
+        let retained = self.row_bytes();
         let Some(message) = self.messages.get_mut(&id).and_then(Option::as_mut) else {
             return Ok(());
         };
@@ -271,6 +285,14 @@ impl Timeline {
         Ok(())
     }
 }
+fn tree_bytes<T>(len: usize) -> usize {
+    if len == 0 {
+        0
+    } else {
+        // Charge node occupancy slack plus a root, with child/parent pointer space.
+        (len + 11) * 3 * (size_of::<T>() + 2 * size_of::<usize>())
+    }
+}
 fn patch_bytes(patch: &MessagePatch) -> usize {
     let content = match &patch.content {
         Patch::Value(value) => value.capacity(),
@@ -279,7 +301,10 @@ fn patch_bytes(patch: &MessagePatch) -> usize {
     size_of::<MessagePatch>()
         + content
         + match &patch.reactions {
-            Patch::Value(r) => model::reaction_bytes(r),
+            Patch::Value(r) => {
+                model::reaction_bytes(r)
+                    + r.capacity().saturating_sub(r.len()) * size_of::<model::Reaction>()
+            }
             _ => 0,
         }
         + match &patch.mentions {
@@ -287,11 +312,17 @@ fn patch_bytes(patch: &MessagePatch) -> usize {
             _ => 0,
         }
         + match &patch.embeds {
-            Patch::Value(value) => model::embed_bytes(value),
+            Patch::Value(value) => {
+                model::embed_bytes(value)
+                    + value.capacity().saturating_sub(value.len()) * size_of::<model::Embed>()
+            }
             _ => 0,
         }
         + match &patch.attachments {
-            Patch::Value(value) => model::attachment_bytes(value),
+            Patch::Value(value) => {
+                model::attachment_bytes(value)
+                    + value.capacity().saturating_sub(value.len()) * size_of::<model::Attachment>()
+            }
             _ => 0,
         }
 }
@@ -348,6 +379,41 @@ fn apply_patch(message: &mut Message, patch: &MessagePatch) {
 mod tests {
     use super::*;
     #[test]
+    fn retained_estimate_charges_rows_mutation_guards_and_pending_patch_capacity() {
+        let mut timeline = Timeline::default();
+        let empty = timeline.retained_bytes();
+        timeline.insert(message(1), false, false).unwrap();
+        assert!(timeline.retained_bytes() > empty + timeline.bytes());
+        timeline.begin_page(false);
+        timeline.delete(Id(2)).unwrap(); // A guard without a loaded row.
+        let guarded = timeline.retained_bytes();
+        assert_eq!(timeline.row_count(), 1);
+        let mut content = String::with_capacity(8192);
+        content.push_str("Pending patch");
+        timeline
+            .patch(MessagePatch {
+                id: Id(3),
+                channel: Id(1),
+                content: Patch::Value(content),
+                extra_content: Default::default(),
+                reactions: Patch::Absent,
+                mentions: Patch::Absent,
+                edited: Patch::Absent,
+                embeds: Patch::Absent,
+                attachments: Patch::Absent,
+                embeds_suppressed: Patch::Absent,
+            })
+            .unwrap();
+        assert!(timeline.retained_bytes() >= guarded + 8192);
+        let pending = timeline.retained_bytes();
+        timeline.cancel_page();
+        assert!(timeline.retained_bytes() < pending);
+        assert!(timeline.retained_bytes() > empty);
+        assert!(timeline.deleted.contains(&Id(2)));
+        timeline.clear();
+        assert_eq!(timeline.retained_bytes(), empty);
+    }
+    #[test]
     fn deleted_rows_release_payloads_keep_their_id_and_reject_late_content() {
         let mut timeline = Timeline::default();
         let mut loaded = message(10);
@@ -385,7 +451,8 @@ mod tests {
         assert!(timeline.is_empty());
         assert_eq!(timeline.iter().count(), 0);
         assert_eq!(timeline.bytes(), 0);
-        assert_eq!(timeline.retained_bytes(), size_of::<Option<Message>>());
+        assert_eq!(timeline.row_bytes(), size_of::<Option<Message>>());
+        assert!(timeline.retained_bytes() > timeline.row_bytes());
         timeline
             .patch(MessagePatch {
                 id: Id(10),
@@ -457,7 +524,7 @@ mod tests {
                 timeline.delete(Id(id)).unwrap();
             }
             assert!(timeline.row_count() <= MAX_MESSAGES);
-            assert!(timeline.retained_bytes() <= MAX_BYTES);
+            assert!(timeline.row_bytes() <= MAX_BYTES);
             assert_eq!(timeline.len(), timeline.iter().count());
         }
         assert!(timeline.row_count() < MAX_MESSAGES);
@@ -629,6 +696,7 @@ mod tests {
             revision: 0,
             nonce: None,
             reply_to: None,
+            kind: 0,
             unsupported: false,
             extra_content: Default::default(),
             attachments: Vec::new(),

@@ -15,12 +15,39 @@ pub struct UserProfile {
     pub connections: Vec<ProfileConnection>,
     pub mutual_guilds: Vec<ProfileGuild>,
     pub guild: Option<GuildProfile>,
+    /// Two profile theme colors (top, bottom) when the account configured them.
+    pub theme_colors: Option<[u32; 2]>,
+    /// Displayed server tag when the account enabled one.
+    pub clan: Option<ClanTag>,
     pub limited: bool,
 }
 #[derive(Clone)]
 pub struct ProfileBadge {
     pub id: String,
     pub description: String,
+    pub icon: Option<String>,
+}
+impl ProfileBadge {
+    pub fn icon_key(&self) -> Option<String> {
+        self.icon
+            .as_deref()
+            .filter(|hash| valid_avatar_hash(hash))
+            .map(|hash| format!("badge-{hash}"))
+    }
+}
+#[derive(Clone)]
+pub struct ClanTag {
+    pub guild: Id,
+    pub tag: String,
+    pub badge: Option<String>,
+}
+impl ClanTag {
+    pub fn badge_key(&self) -> Option<String> {
+        self.badge
+            .as_deref()
+            .filter(|hash| valid_avatar_hash(hash))
+            .map(|hash| format!("clan-{}-{hash}", self.guild))
+    }
 }
 #[derive(Clone)]
 pub struct ProfileConnection {
@@ -59,8 +86,12 @@ impl UserProfile {
             + self
                 .badges
                 .iter()
-                .map(|b| b.id.capacity() + b.description.capacity())
+                .map(|b| b.id.capacity() + b.description.capacity() + bytes(&b.icon))
                 .sum::<usize>()
+            + self
+                .clan
+                .as_ref()
+                .map_or(0, |c| c.tag.capacity() + bytes(&c.badge))
             + self.connections.capacity() * size_of::<ProfileConnection>()
             + self
                 .connections
@@ -92,16 +123,26 @@ impl UserProfile {
             && self.bio.len() <= 4096
             && self.pronouns.len() <= 256
             && self.accent_color.is_none_or(|c| c <= 0xff_ffff)
+            && self
+                .theme_colors
+                .is_none_or(|colors| colors.iter().all(|c| *c <= 0xff_ffff))
+            && self.clan.as_ref().is_none_or(|c| {
+                c.guild.0 != 0
+                    && !c.tag.is_empty()
+                    && c.tag.len() <= 32
+                    && c.badge.as_deref().is_none_or(valid_avatar_hash)
+            })
             && [&self.banner, &self.user.avatar]
                 .into_iter()
                 .all(|h| h.as_deref().is_none_or(valid_avatar_hash))
             && self.badges.len() <= 16
             && self.connections.len() <= 16
             && self.mutual_guilds.len() <= 50
-            && self
-                .badges
-                .iter()
-                .all(|b| b.id.len() <= 64 && b.description.len() <= 1024)
+            && self.badges.iter().all(|b| {
+                b.id.len() <= 64
+                    && b.description.len() <= 1024
+                    && b.icon.as_deref().is_none_or(valid_avatar_hash)
+            })
             && self
                 .connections
                 .iter()
