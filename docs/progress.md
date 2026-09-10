@@ -1322,3 +1322,9 @@ No live call, microphone, speaker, native automation or account action was perfo
 agent. The previous native pause remains respected; screenshots and physical audio remain
 unverified. Milestone 4 remains open. Both unsigned Windows packages pass; text executable size is
 unchanged and voice grows 4,096 bytes. Package/replay measurements are in docs/performance.md.
+
+
+After implementation, the owner explicitly requested running the build. Launched the new voice
+release executable from the isolated negotiation package; process 28944 exposed a responding
+Serein window. This confirms launch only. No call controls, microphone, account contents or
+native screenshots were accessed; the owner performs the live retry.
