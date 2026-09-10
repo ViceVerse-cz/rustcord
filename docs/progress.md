@@ -1679,3 +1679,24 @@ integration smoke run, not a performance comparison with the original PR baselin
 message metadata in the meantime. Native after evidence remains unavailable following owner
 Escape. The owner approved merging with this known limitation and pending remote CI; no branch
 protection bypass or renewed Computer Use was requested.
+
+### Already-running game presence at startup
+
+Follow-up to the missing Genshin Impact report, baseline clean main `ebad184` on branch
+`fix/ready-game-presence`, Rust 1.98.1. Identify requests no capabilities, but the previous
+bootstrap only consumed merged presence records. Accept legacy `READY.presences` / `user.id`
+alongside merged friend records through the same bounded decoder and existing DM recipient filter.
+No subscription or rendering change. Guild-scoped presence remains scoped to its guild.
+
+The synthetic regression failed before the fix and passed afterward. A loopback Gateway test
+sends only legacy READY with an already-running Genshin Impact activity and verifies that the
+core exposes `Playing Genshin Impact` for the known DM recipient without any PRESENCE_UPDATE.
+The pre-existing coalescing, recipient filtering and bounded multi-batch tests also pass.
+Workspace check passed 352 tests; the subsequently added loopback test passed separately.
+No owner account session was used, so this establishes a startup parsing defect rather than
+confirming the exact cause of every missing live activity. Native capture remains paused by
+the owner's earlier Escape stop; the follow-up PR stays draft without that evidence.
+Both release packages and replay passed; each executable grows 512 bytes. Five-pair replay
+medians were 40.5364 -> 39.6790 ms (noise), with unchanged retained bounds. Final formatting
+and strict all-feature Gateway Clippy passed after adding the loopback regression. Package and
+replay measurements are in performance.md. Unrelated `target-relocation-remainder/` was preserved.

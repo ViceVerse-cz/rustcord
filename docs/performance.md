@@ -1671,3 +1671,28 @@ Rich-presence integration with main `dc49d64`: rebuilt text/voice executables ar
 they are not a controlled feature delta against the earlier 5f11cb9 baseline. The original
 paired measurements above remain historical pre-integration evidence. Native after sampling
 remains owner-stopped; 351 integrated tests and both packages passed before the authorized merge.
+
+### Legacy READY game presence correction
+
+Baseline `ebad184` verified text/voice packages and replay executable were copied to a separate
+E: directory before edits. Same Windows/Rust/release environment as above; no dependency change.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable bytes | 50,987,520 | 50,988,032 | +512 (0.001%) |
+| Text installed bytes | 51,639,942 | 51,643,051 | +3,109 (0.006%) |
+| Text ZIP bytes | 31,844,323 | 31,845,218 | +895 (0.003%) |
+| Voice executable bytes | 54,337,024 | 54,337,536 | +512 (0.001%) |
+| Voice installed bytes | 55,212,219 | 55,216,565 | +4,346 (0.008%) |
+| Voice ZIP bytes | 33,223,263 | 33,224,694 | +1,431 (0.004%) |
+| Replay median ms | 40.5364 | 39.6790 | -0.8574 (-2.1%; noise) |
+| Retained timeline estimated bytes / records | 236,992..237,477 / 500 | Same | 0 |
+
+Packages include docs as of each build, before this final evidence addendum; exclude PR evidence
+and exclude nested voice files from text. ZIP uses Python zipfile DEFLATE level 9. Replay is one
+direct warmup per revision followed by five alternating baseline/after runs of 100,000 events.
+Baseline ms: 40.5364, 40.0639, 43.1171, 39.6161, 41.6839. After ms: 43.9627, 39.6790,
+38.8943, 40.7952, 39.6128. This unchanged message workload is a smoke comparison, not an activity
+throughput benchmark, RSS measurement or UI latency measurement; no speedup claim. Native capture
+and process sampling remain owner-paused. Both release variants and the focused Gateway Clippy
+check passed, including the subsequently added loopback test source.

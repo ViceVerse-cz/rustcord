@@ -424,3 +424,11 @@ The existing guild subscription's `activities` flag stays unchanged: the public 
 labels its meaning unknown. Only received activity metadata is displayed; missing events remain
 unavailable. Offline status clears activity. Disconnect hides cached DM presence; a successful resume restores it and applies replayed changes. Fresh READY, resync and session reset discard the cache. Rendering is text-only;
 asset fetching, activity actions and elapsed/progress timers remain unsupported.
+
+Startup correction: Identify does not enable `DEDUPE_USER_OBJECTS`, so initial friend presence
+arrives in `READY.presences` with `user.id`. The bootstrap now accepts that format as well as
+`merged_presences.friends` with `user_id`; both use the same recipient filter and byte/item limits.
+The [unofficial READY capability description](https://docs.discord.food/gateway/gateway-events#ready)
+documents this format distinction. A synthetic already-running Genshin Impact activity exercises
+the missing startup path. This does not verify the owner's reported live payload, change activity
+subscriptions, or promote guild-scoped presence into globally authoritative DM presence.
