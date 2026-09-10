@@ -888,46 +888,12 @@ pub struct MemberDto {
 pub struct PresenceDto {
     pub status: String,
     #[serde(default)]
-    pub activities: Vec<ActivityDto>,
-}
-/// Only the custom status (type 4) is retained; rich activities are ignored.
-#[derive(Deserialize)]
-pub struct ActivityDto {
-    #[serde(rename = "type")]
-    pub kind: u8,
-    #[serde(default)]
-    pub state: Option<String>,
-    #[serde(default)]
-    pub emoji: Option<ActivityEmojiDto>,
-}
-#[derive(Deserialize)]
-pub struct ActivityEmojiDto {
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub id: Option<Id>,
+    pub activities: presence::Activities,
 }
 impl PresenceDto {
-    /// Bounded custom status text; unicode emoji are kept, custom emoji are not fabricated.
+    /// The same bounded custom-status normalization is used for snapshots and updates.
     pub fn custom_status(&self) -> Option<String> {
-        let activity = self.activities.iter().take(16).find(|a| a.kind == 4)?;
-        let emoji = activity
-            .emoji
-            .as_ref()
-            .filter(|e| e.id.is_none())
-            .and_then(|e| e.name.as_deref())
-            .filter(|name| name.chars().count() <= 8);
-        let state = activity.state.as_deref().map(str::trim).unwrap_or_default();
-        let text: String = emoji
-            .into_iter()
-            .chain((!state.is_empty()).then_some(state))
-            .collect::<Vec<_>>()
-            .join(" ")
-            .chars()
-            .filter(|c| !c.is_control())
-            .take(128)
-            .collect();
-        (!text.is_empty()).then_some(text)
+        self.activities.0.clone()
     }
 }
 #[derive(Deserialize)]

@@ -1364,3 +1364,35 @@ startup/frame latency, call CPU/RSS, network negotiation latency or physical aud
 Mixer/codec/queue implementations are unchanged, so their workload was not rerun. Startup
 adds only bounded stage notices and a 20-second device-opening deadline. Native automation
 remains owner-paused; no screenshots, microphone/speaker access or live call test was run.
+
+
+## Incoming custom-status updates - September 10, 2026
+
+| Metric / method | Main 5b2cc9e | Custom-status updates | Delta |
+| --- | ---: | ---: | ---: |
+| text executable, bytes | 50,791,936 | 50,805,760 | +13,824 (+0.027%) |
+| text installed, bytes | 51,377,982 | 51,397,479 | +19,497 (+0.038%) |
+| text zip, bytes | 31,744,858 | 31,751,925 | +7,067 (+0.022%) |
+| voice executable, bytes | 54,146,560 | 54,159,872 | +13,312 (+0.025%) |
+| voice installed, bytes | 54,955,379 | 54,974,364 | +18,985 (+0.035%) |
+| voice zip, bytes | 33,124,934 | 33,129,218 | +4,284 (+0.013%) |
+| 100,000-event replay median, ms | 36.1368 | 37.6836 | +1.5468 (+4.28%; noise) |
+| Retained 500-message timeline, estimated bytes | 228,992..229,477 | 228,992..229,477 | 0 |
+
+Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical CPUs), approximately 31 GiB RAM,
+Rust 1.98.1, release thin LTO/one codegen unit. Both unsigned Windows packages passed.
+Baseline text/voice SHA256 hashes were rechecked against the PR #39 build whose source tree
+matches main 5b2cc9e. Text uses no default features; voice explicitly enables voice. Installed
+sums and DEFLATE 9 ZIPs exclude PR screenshots; text excludes nested voice. Package documentation
+is its build-time snapshot before this final measurement addendum; installed deltas include docs.
+
+Replay uses one warmup and five direct executable runs per revision. Baseline samples:
+37.9821,35.9626,36.8517,36.1368,35.8853ms. New samples: 37.0051,37.6836,38.9883,37.3383,38.0065ms.
+These noisy shared-host reducer timings are not a speedup claim or a direct custom-status
+throughput benchmark. Native RSS, idle CPU, frame/startup latency and screenshots remain
+unmeasured because desktop automation is owner-paused. No live account/audio actions occurred.
+
+Member storage remains 100 rows/128 KiB. Pending presence is at most 100 complete values with
+7 status bytes and 128 characters/512 custom-text bytes each plus bounded map overhead; emitted
+batches admit 64 KiB including allocated vector/string capacity. The existing global event queue
+budget is unchanged. There is no new dependency, cache, persistence or subscription flag.

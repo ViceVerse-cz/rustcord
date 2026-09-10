@@ -21,3 +21,13 @@ The profile payload additionally retains, when returned, `user_profile.theme_col
 Owner follow-up the same day: profiles must not reload on every click. Successful responses now enter an in-memory cache keyed by user and server scope, limited to 32 entries, 1 MiB of estimated model bytes and 15 minutes per entry; reopening within that window fills the card without a request, expired or evicted entries are requested again, and a Retry always fetches. The cache lives only in RAM inside `State` and is emptied on session start, resync/permission change, server removal, session failure and logout; nothing is persisted. The reducer test covers reuse, server scope, expiry, entry/byte bounds and invalidation.
 
 Offline evidence: the popout tests check anchor placement, right-edge flipping, Escape and outside-click closing, inside clicks staying open, and that no network request is queued in preview mode. Parser tests cover the theme color count/range, disabled tags, invalid badge hashes and the custom status activity. `--demo --demo-profile` opens the synthetic Robin card and People rows at startup so screenshots do not require pointer automation; it is disclosed fixture data. Light-mode rendering of the popout and live payload shapes remain unverified natively.
+
+
+## Incoming custom-status changes (September 10, 2026)
+
+The loaded People pane and an already-open profile now read updated custom text from the same
+member row. Status-only events preserve that text; supplied custom activities replace it and
+explicit empty/null activities clear it. No profile refetch, extra subscription or persistence
+is introduced. This only applies to already-loaded members in the selected guild conversation;
+DM/global presence and full rich activities remain outside this path. See the presence section
+of [compatibility](discord-compatibility.md) for protocol and live-validation limitations.

@@ -119,7 +119,7 @@ struct ActiveMembers {
     rows: Vec<Option<Member>>,
     synced: bool,
     total: u64,
-    pending_presence: BTreeMap<Id, Option<String>>,
+    pending_presence: BTreeMap<Id, model::MemberPresence>,
     presence_deadline: Option<Instant>,
 }
 impl ActiveMembers {
@@ -239,6 +239,19 @@ impl ActiveMembers {
                 _ => None,
             },
         };
+        let custom_status = match update.custom_status {
+            model::Patch::Absent => previous.custom_status.clone(),
+            model::Patch::Null => None,
+            model::Patch::Value(text) => Some(text.as_str().to_owned()),
+        };
+        let resolved = model::MemberPresence {
+            user: update.user,
+            status,
+            custom_status,
+        };
+        if !resolved.valid() {
+            return;
+        }
         if self.pending_presence.len() == 100 && !self.pending_presence.contains_key(&update.user) {
             return;
         }
@@ -247,11 +260,15 @@ impl ActiveMembers {
             .iter()
             .flatten()
             .map(|row| {
-                if row.user.id == update.user {
+                if row.user.id == update.user
+                    && (row.status != resolved.status
+                        || row.custom_status != resolved.custom_status)
+                {
                     row.bytes()
                         - row.status.as_ref().map_or(0, String::capacity)
                         - row.custom_status.as_ref().map_or(0, String::capacity)
-                        + status.as_ref().map_or(0, String::len)
+                        + resolved.status.as_ref().map_or(0, String::len)
+                        + resolved.custom_status.as_ref().map_or(0, String::len)
                 } else {
                     row.bytes()
                 }
@@ -267,18 +284,16 @@ impl ActiveMembers {
             .flatten()
             .filter(|row| row.user.id == update.user)
         {
-            if row.status != status || row.custom_status.is_some() {
-                row.status = status.clone();
-                // Activities are intentionally discarded by the compact presence DTO;
-                // stop showing a snapshot's custom text when newer presence arrives.
-                row.custom_status = None;
+            if row.status != resolved.status || row.custom_status != resolved.custom_status {
+                row.status = resolved.status.clone();
+                row.custom_status = resolved.custom_status.clone();
                 changed = true;
             }
         }
         if changed {
-            // <=100 entries, each with an ID and at most seven status bytes. The
+            // <=100 entries, each with at most 7 status and 512 custom-text bytes. The
             // deadline belongs to the first change, never to the latest packet.
-            self.pending_presence.insert(update.user, status);
+            self.pending_presence.insert(update.user, resolved);
             self.presence_deadline
                 .get_or_insert(now + Duration::from_millis(100));
         }
@@ -290,7 +305,7 @@ impl ActiveMembers {
             guild: self.subscription.guild,
             channel: self.subscription.channel,
             request: self.subscription.request,
-            updates: pending.into_iter().collect(),
+            updates: pending.into_values().collect(),
         })
     }
 }
@@ -1176,38 +1191,63 @@ mod tests {
 mod member_tests {
     use super::*;
     use serde_json::json;
+    fn record(user: u64, status: Option<&str>, custom: Option<&str>) -> model::MemberPresence {
+        model::MemberPresence {
+            user: Id(user),
+            status: status.map(str::to_owned),
+            custom_status: custom.map(str::to_owned),
+        }
+    }
     #[test]
-    fn newer_presence_clears_snapshot_custom_status_without_retaining_activities() {
-        for (patch, expected) in [
-            (json!({"activities":[]}), Some("online")),
-            (json!({"status":"online"}), Some("online")),
-            (json!({"status":"offline"}), Some("offline")),
+    fn custom_status_patches_preserve_replace_clear_and_coalesce() {
+        let mut list = ActiveMembers::new(MemberSubscription {
+            guild: Id(1),
+            channel: Id(2),
+            request: 7,
+            list_id: "everyone".into(),
+        });
+        list.update(decode(br#"{"guild_id":"1","id":"everyone","member_count":1,"ops":[{"op":"SYNC","range":[0,99],"items":[{"member":{"user":{"id":"3","username":"Synthetic"},"presence":{"status":"online","activities":[{"type":4,"state":"Old custom status"}]}}}]}]}"#).unwrap()).unwrap();
+        let now = Instant::now();
+        for (patch, status, custom) in [
+            (
+                json!({"status":"online"}),
+                "online",
+                Some("Old custom status"),
+            ),
+            (json!({"status":"idle"}), "idle", Some("Old custom status")),
+            (
+                json!({"activities":[{"type":4,"state":"New custom status"}]}),
+                "idle",
+                Some("New custom status"),
+            ),
+            (json!({"status":"dnd"}), "dnd", Some("New custom status")),
+            (json!({"activities":[]}), "dnd", None),
+            (
+                json!({"activities":[{"type":4,"state":"Again"}]}),
+                "dnd",
+                Some("Again"),
+            ),
+            (json!({"activities":null}), "dnd", None),
         ] {
-            let mut list = ActiveMembers::new(MemberSubscription {
-                guild: Id(1),
-                channel: Id(2),
-                request: 7,
-                list_id: "everyone".into(),
-            });
-            list.update(decode(br#"{"guild_id":"1","id":"everyone","member_count":1,"ops":[{"op":"SYNC","range":[0,99],"items":[{"member":{"user":{"id":"3","username":"Synthetic"},"presence":{"status":"online","activities":[{"type":4,"state":"Old custom status"}]}}}]}]}"#).unwrap()).unwrap();
-            assert!(list.rows[0].as_ref().unwrap().custom_status.is_some());
             let mut wire = patch;
             wire["guild_id"] = json!("1");
             wire["user"] = json!({"id":"3"});
             list.presence(
                 discord_protocol::presence::decode(&serde_json::to_vec(&wire).unwrap()).unwrap(),
-                Instant::now(),
+                now,
             );
             let row = list.rows[0].as_ref().unwrap();
-            assert_eq!(row.status.as_deref(), expected);
-            assert!(row.custom_status.is_none());
-            let Event::MemberPresence { updates, .. } = list.take_presence().unwrap() else {
-                panic!(
-                    "custom-status invalidation must reach the core even when status is unchanged"
-                );
-            };
-            assert_eq!(updates, vec![(Id(3), expected.map(str::to_owned))]);
+            assert_eq!(row.status.as_deref(), Some(status));
+            assert_eq!(row.custom_status.as_deref(), custom);
         }
+        assert_eq!(
+            list.presence_deadline,
+            Some(now + Duration::from_millis(100))
+        );
+        let Event::MemberPresence { updates, .. } = list.take_presence().unwrap() else {
+            panic!("presence");
+        };
+        assert_eq!(updates, vec![record(3, Some("dnd"), None)]);
     }
     #[test]
     fn presence_coalesces_loaded_rows_at_a_fixed_deadline_and_snapshots_supersede_it() {
@@ -1222,6 +1262,7 @@ mod member_tests {
             guild,
             user,
             status,
+            custom_status: model::Patch::Absent,
         };
         list.presence(
             presence(Some(Id(1)), Id(3), model::Patch::Value("online".into())),
@@ -1273,7 +1314,10 @@ mod member_tests {
             panic!("compact presence event");
         };
         assert_eq!((guild, channel, request), (Id(1), Id(2), 7));
-        assert_eq!(updates, vec![(Id(3), Some("dnd".into())), (Id(4), None)]);
+        assert_eq!(
+            updates,
+            vec![record(3, Some("dnd"), None), record(4, None, None)]
+        );
         assert!(list.take_presence().is_none() && list.presence_deadline.is_none());
         list.presence(
             presence(Some(Id(1)), Id(3), model::Patch::Value("idle".into())),
@@ -1327,6 +1371,7 @@ mod member_tests {
                     guild: Some(Id(1)),
                     user: Id(id),
                     status: model::Patch::Value("online".into()),
+                    custom_status: model::Patch::Value("\u{1f680}".repeat(128)),
                 },
                 now,
             );
@@ -1334,15 +1379,17 @@ mod member_tests {
         assert_eq!(list.pending_presence.len(), 100);
         assert_eq!(list.rows.len(), 100);
         let event = list.take_presence().unwrap();
-        assert!(event.bytes() <= 8 * 1024);
+        assert!(event.bytes() <= client_core::MAX_MEMBER_PRESENCE_BYTES);
         let Event::MemberPresence { updates, .. } = event else {
             panic!("presence");
         };
         assert_eq!(updates.len(), 100);
         assert!(
-            updates.iter().all(
-                |(id, status)| (10..110).contains(&id.0) && status.as_deref() == Some("online")
-            )
+            updates
+                .iter()
+                .all(|update| (10..110).contains(&update.user.0)
+                    && update.status.as_deref() == Some("online")
+                    && update.custom_status.as_deref() == Some("\u{1f680}".repeat(128).as_str()))
         );
         assert!(list.presence_deadline.is_none());
     }
@@ -1364,6 +1411,7 @@ mod member_tests {
             guild: Some(Id(1)),
             user: Id(3),
             status: model::Patch::Value(status.into()),
+            custom_status: model::Patch::Absent,
         };
         list.presence(update("idle"), now);
         assert!(list.rows[0].as_ref().unwrap().status.is_none());
@@ -1375,7 +1423,10 @@ mod member_tests {
             list.rows[0].as_ref().unwrap().status.as_deref(),
             Some("dnd")
         );
-        assert_eq!(list.pending_presence.get(&Id(3)), Some(&Some("dnd".into())));
+        assert_eq!(
+            list.pending_presence.get(&Id(3)),
+            Some(&record(3, Some("dnd"), None))
+        );
         assert_eq!(
             list.presence_deadline,
             Some(now + Duration::from_millis(100))
@@ -1385,6 +1436,7 @@ mod member_tests {
                 guild: Some(Id(1)),
                 user: Id(3),
                 status: model::Patch::Null,
+                custom_status: model::Patch::Absent,
             },
             now,
         );
@@ -1446,7 +1498,7 @@ mod member_tests {
                         for (sequence,data) in [
                             (3,json!({"guild_id":"9","user":{"id":"3"},"status":"dnd"})),
                             (4,json!({"guild_id":"1","user":{"id":"4"},"status":"online"})),
-                            (5,json!({"guild_id":"1","user":{"id":"3"},"status":"idle","activities":[{"name":"Ignored synthetic activity"}]})),
+                            (5,json!({"guild_id":"1","user":{"id":"3"},"status":"idle","activities":[{"type":4,"state":"Synthetic live update"}]})),
                             (6,json!({"guild_id":"1","user":{"id":"3"}})),
                         ] {socket.send(Frame::Text(json!({"op":0,"t":"PRESENCE_UPDATE","s":sequence,"d":data}).to_string().into())).await.unwrap();}
                     } else {assert_eq!(subscription["typing"],false);assert_eq!(subscription["channels"],json!({}));break;}
@@ -1457,7 +1509,7 @@ mod member_tests {
                 if let Event::Members(list)=&event { assert_eq!(list.request,7);assert_eq!(list.channel,Id(2));assert_eq!(list.rows[0].as_ref().unwrap().user.id,Id(3)); }
                 if let Event::MemberPresence {guild,channel,request,updates}=event {
                     assert_eq!((guild,channel,request),(Id(1),Id(2),7));
-                    assert_eq!(updates,vec![(Id(3),Some("idle".into()))]);
+                    assert_eq!(updates,vec![record(3,Some("idle"),Some("Synthetic live update"))]);
                     selection.send(None).unwrap();
                 }
                 Ok(())

@@ -2,7 +2,13 @@
 
 ## Current scope and gates
 
-Current work: inline message spoilers (SPEC 9.3), based on merged main b92a082 / typing PR #35.
+Current slice: incoming custom-status updates after voice PR #39, from main 5b2cc9e.
+Full SPEC completion remains active; native automation and live-account validation remain
+owner-controlled. See the final dated entry for this slice and its verification.
+
+## Inline message spoilers (merged PR #36)
+
+Historical slice: inline message spoilers (SPEC 9.3), based on merged main b92a082 / typing PR #35.
 Only marked text regions are concealed; normal surrounding text and ordinary media remain
 visible. Up to 32 regions have separate reveal bits, and spoiler-marked media has an independent
 explicit reveal. Hidden text is skipped before links, references, emoji and selection rendering.
@@ -1328,3 +1334,27 @@ After implementation, the owner explicitly requested running the build. Launched
 release executable from the isolated negotiation package; process 28944 exposed a responding
 Serein window. This confirms launch only. No call controls, microphone, account contents or
 native screenshots were accessed; the owner performs the live retry.
+
+
+## Incoming custom-status updates (September 10, 2026)
+
+- Baseline: main `5b2cc9e873f0040c9fdf85c37a456872b685000e`; resumed six paused task files
+  on `fix/custom-status-updates` and fast-forwarded without changing their hashes.
+- Complete presence values now carry custom text through protocol, the loaded Gateway mirror,
+  bounded event admission and reducer to People and an open profile. Status and custom-text
+  patches resolve independently; bursts retain the latest complete values at a fixed 100-ms
+  deadline. No additional profile requests, subscriptions, persistence or dependencies.
+- Shared snapshot/update activity parsing caps count/input strings and normalizes only first
+  custom activity text. Atomic member admission retains the existing 100-row/128-KiB ceiling;
+  compact events allow 64 KiB including vector/string capacities.
+- Native automation remains owner-paused; before/after screenshots, native resource sampling
+  and live account delivery are not verified. Headless synthetic UI assertions exercise both
+  displayed copies without a refetch, and localhost Gateway tests exercise wire/coalescing.
+- `cargo xtask check` passed: 304 offline Rust tests, doctests, formatting, strict all-feature
+  Clippy, text-only compilation and policy checks. The first focused run caught serde structs
+  accepting positional emoji arrays; a map-only visitor and update/snapshot regressions fixed
+  that shape validation. Independent code review found no remaining blocker.
+- `cargo xtask package` and `cargo xtask package-voice` passed. Text/voice executables grow
+  13,824/13,312 bytes; installed packages and ZIPs are measured in docs/performance.md.
+  `cargo replay` plus one warmup/five direct runs passed, retaining 500 messages within the
+  unchanged estimated 228,992..229,477-byte range. Timings are noisy; no speedup claim.
