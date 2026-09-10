@@ -84,6 +84,25 @@ fn policy() -> Result<(), String> {
     );
     Ok(())
 }
+fn licenses() -> Result<(), String> {
+    let version = Command::new("cargo-deny")
+        .arg("--version")
+        .output()
+        .map_err(|_| "Install the checker: cargo install cargo-deny --version 0.20.2 --locked")?;
+    if !version.status.success()
+        || String::from_utf8_lossy(&version.stdout).trim() != "cargo-deny 0.20.2"
+    {
+        return Err("License checks require cargo-deny 0.20.2; install the pinned version".into());
+    }
+    run(&[
+        "deny",
+        "--locked",
+        "--offline",
+        "--all-features",
+        "check",
+        "licenses",
+    ])
+}
 fn copy_directory(source: &std::path::Path, destination: &std::path::Path) -> Result<(), String> {
     std::fs::create_dir_all(destination).map_err(|e| e.to_string())?;
     for entry in std::fs::read_dir(source).map_err(|e| e.to_string())? {
@@ -272,9 +291,10 @@ fn main() -> ExitCode {
             .and_then(|_| run(&["check", "-p", "serein", "--no-default-features", "--locked"]))
             .and_then(|_| policy()),
         "policy" => policy(),
+        "licenses" => licenses(),
         "package" => package(false),
         "package-voice" => package(true),
-        _ => Err("Use cargo xtask [check|policy|package|package-voice]".into()),
+        _ => Err("Use cargo xtask [check|policy|licenses|package|package-voice]".into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

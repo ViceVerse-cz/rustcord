@@ -2,8 +2,8 @@
 
 ## Current scope and gates
 
-Current slice: role/everyone and silent-message notifications after unread navigation PR #41,
-from main 9ce22a9. Full SPEC completion remains active; native automation and live-account
+Current slice: automated dependency license policy after notification PR #45,
+from main 192b40c. Full SPEC completion remains active; native automation and live-account
 validation remain owner-controlled. See the final dated entry for verification.
 
 ## Inline message spoilers (merged PR #36)
@@ -1567,3 +1567,28 @@ tests, `cargo xtask check`, and `cargo build --locked -p serein` passed against 
   samples/package deltas are in docs/performance.md. Native screenshots,
   resource measurements, OS notification delivery and live account behavior remain unverified
   because native/live validation is owner-controlled. No account or audio actions occurred.
+
+
+## Automated dependency license policy (September 10, 2026)
+
+- Baseline main `192b40c69aafd7fcab9a10f0c10bf1a75e981fda`; isolated branch
+  `chore/dependency-license-checks`. The original checkout has unrelated rich-presence edits
+  and remains untouched. This baseline includes the separately merged gallery/spacing PR #43.
+- SPEC14.5 now has an automated declared-license check: pinned cargo-deny 0.20.2 checks the
+  locked all-feature/all-platform graph, including development and vendored path dependencies.
+  The new CI job fetches sources first; `cargo xtask licenses` itself runs offline.
+- Existing MPL components and egui font licenses have exact-version exceptions. No private/path
+  package exemption, custom SPDX parser, runtime dependency or lockfile change. Temporary local
+  dependency fixtures exercise accepted expressions, rejected AND/GPL/missing licenses and
+  exact versus mismatched vendored exception versions.
+- `cargo xtask licenses` and all six offline policy fixtures passed. The initial policy run
+  rejected existing Boost clipboard bindings and MPL CSS dependencies; source manifests/license
+  texts were inspected and the policy records these existing dependencies. `cargo xtask check`
+  passed 323 offline Rust tests, doctests, strict all-feature Clippy, formatting, text-only
+  compilation and the existing policy checks. This also checks the merged PR #43/#45 code.
+  Independent review found no blocker.
+  No application runtime changes or native screenshots are required.
+  Complete transitive notice/source assembly and external library redistribution review remain
+  separate gates; a passing declaration check does not complete them. Remaining implementation
+  candidates include fuzzing, Linux distribution packaging, authorized guild message deletion,
+  and bounded unknown-event diagnostics. Live/native evidence gates remain owner-controlled.

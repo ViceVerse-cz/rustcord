@@ -6,6 +6,14 @@ Run `cargo xtask check`, `node tests/login-handoff.cjs`, and `cargo replay`. Def
 
 Keep UI, model, protocol, storage and transport boundaries clear. Bound item counts and bytes, propagate explicit errors, preserve unrelated work, and document untested behavior. Changes to authentication, local storage or native dependencies must update the corresponding docs and risk notes. Original contributions use MIT OR Apache-2.0.
 
+For dependency changes, install `cargo-deny` with
+`cargo install cargo-deny --version 0.20.2 --locked`, fetch sources with `cargo fetch --locked`,
+then run `cargo xtask licenses` and `node tests/license-policy.cjs`. CI runs these separately
+from native builds. The offline check covers all features and platforms in the locked graph,
+including development and vendored dependencies. Unapproved licenses fail; version-specific
+exceptions in `deny.toml` require source/notice review when upgraded. This checks declared license
+policy, not complete per-artifact license-text assembly or external system-library obligations.
+
 Agent implementation requests follow the [idea-to-PR contract](AGENTS.md) and the
 [delivery skill](.agents/skills/serein-delivery/SKILL.md). Native UI changes include synthetic
 before/after screenshots; runtime changes include comparable release performance evidence.
