@@ -1,4 +1,4 @@
-//! Explicit original-image downloads. One job; no credentials, URL logs, or automatic saves.
+//! Explicit attachment downloads. One job; no credentials, URL logs, or automatic saves.
 use model::Attachment;
 use std::{
     fs::{self, File, OpenOptions},
@@ -50,8 +50,8 @@ impl Downloads {
             return Err("A download is already active");
         }
         let Some(url) = original_url(&attachment) else {
-            self.status = Status::Failed("Original image download unavailable");
-            return Err("Original image download unavailable");
+            self.status = Status::Failed("Attachment download unavailable");
+            return Err("Attachment download unavailable");
         };
         // Construct on the native UI thread; Cocoa reads its application/window here.
         let dialog = platform::save::attachment_destination(parent, &attachment.filename);
@@ -148,8 +148,7 @@ impl Drop for Downloads {
 }
 
 fn original_url(attachment: &Attachment) -> Option<url::Url> {
-    if !attachment.is_image()
-        || !model::valid_attachments(std::slice::from_ref(attachment))
+    if !model::valid_attachments(std::slice::from_ref(attachment))
         || attachment.size == 0
         || attachment.size > MAX_BYTES
     {
@@ -254,7 +253,7 @@ async fn download(
     publish: &impl Fn(Status),
 ) -> Result<(), &'static str> {
     if expected == 0 || expected > MAX_BYTES {
-        return Err("Image exceeds the 100 MiB download limit");
+        return Err("Attachment must be nonempty and at most 100 MiB");
     }
     let metadata = fs::symlink_metadata(destination);
     let existed = match metadata {
@@ -269,23 +268,23 @@ async fn download(
     let response = tokio::select! {
         biased;
         _ = wake_cancel.notified() => return Err("Cancelled"),
-        response = client.get(url).header(reqwest::header::ACCEPT_ENCODING, "identity").send() => response.map_err(|_| "Image download failed")?,
+        response = client.get(url).header(reqwest::header::ACCEPT_ENCODING, "identity").send() => response.map_err(|_| "Attachment download failed")?,
     };
     if response.status() != reqwest::StatusCode::OK {
-        return Err("Image unavailable; reload the conversation and try again");
+        return Err("Attachment unavailable; reload the conversation and try again");
     }
     if response
         .headers()
         .get(reqwest::header::CONTENT_ENCODING)
         .is_some_and(|encoding| encoding != "identity")
     {
-        return Err("Unexpected image encoding; reload the conversation");
+        return Err("Unexpected attachment encoding; reload the conversation");
     }
     if response
         .content_length()
         .is_some_and(|length| length != expected)
     {
-        return Err("Image size changed; reload the conversation");
+        return Err("Attachment size changed; reload the conversation");
     }
     let mut response = response;
     let cleanup_failed = AtomicBool::new(false);
@@ -304,18 +303,18 @@ async fn download(
             let chunk = tokio::select! {
                 biased;
                 _ = wake_cancel.notified() => return Err("Cancelled"),
-                chunk = response.chunk() => chunk.map_err(|_| "Image transfer interrupted")?,
+                chunk = response.chunk() => chunk.map_err(|_| "Attachment transfer interrupted")?,
             };
             let Some(chunk) = chunk else {
                 break;
             };
             received = received
                 .checked_add(chunk.len() as u64)
-                .ok_or("Image exceeds download limit")?;
+                .ok_or("Attachment exceeds download limit")?;
             if received > expected || received > MAX_BYTES {
-                return Err("Image exceeds download limit");
+                return Err("Attachment exceeds download limit");
             }
-            // reqwest supplies transport chunks; split disk writes without retaining an image buffer.
+            // reqwest supplies transport chunks; split disk writes without retaining a file buffer.
             for block in chunk.chunks(32 * 1024) {
                 if cancelled.load(Ordering::Acquire) {
                     return Err("Cancelled");
@@ -325,7 +324,7 @@ async fn download(
                     .as_mut()
                     .expect("partial file")
                     .write_all(block)
-                    .map_err(|_| "Could not write image; check available disk space")?;
+                    .map_err(|_| "Could not write attachment; check available disk space")?;
             }
             if repaint.elapsed() >= Duration::from_millis(100) {
                 publish(Status::Downloading {
@@ -336,7 +335,7 @@ async fn download(
             }
         }
         if received != expected {
-            return Err("Image transfer incomplete");
+            return Err("Attachment transfer incomplete");
         }
         if cancelled.load(Ordering::Acquire) {
             return Err("Cancelled");
@@ -346,7 +345,7 @@ async fn download(
     .await;
     if cleanup_failed.load(Ordering::Acquire) {
         Err(if result.is_ok() {
-            "Image saved, but its temporary file could not be removed"
+            "Attachment saved, but its temporary file could not be removed"
         } else {
             "Download stopped, but its temporary file could not be removed"
         })
@@ -370,8 +369,11 @@ mod tests {
         truncated: bool,
     ) -> (url::Url, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url =
-            url::Url::parse(&format!("http://{}/image", listener.local_addr().unwrap())).unwrap();
+        let url = url::Url::parse(&format!(
+            "http://{}/attachment",
+            listener.local_addr().unwrap()
+        ))
+        .unwrap();
         let task = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut request = Vec::new();
@@ -422,6 +424,28 @@ mod tests {
     async fn explicit_download_stream_limits_cancel_and_atomic_replacement() {
         let mut image = attachment();
         assert!(original_url(&image).is_some());
+        // Admission depends on a bounded original CDN target, not an image MIME type.
+        image.filename = "synthetic file.bin".into();
+        image.media.url = Some(
+            "https://cdn.discordapp.com/attachments/1/2/synthetic%20file.bin?ex=123&is=123&hm=abc"
+                .into(),
+        );
+        for kind in [
+            Some("application/pdf"),
+            Some("application/octet-stream"),
+            None,
+        ] {
+            image.content_type = kind.map(str::to_owned);
+            assert!(!image.is_image());
+            assert!(original_url(&image).is_some());
+        }
+        for size in [0, MAX_BYTES + 1] {
+            image.size = size;
+            assert!(original_url(&image).is_none());
+        }
+        image.size = MAX_BYTES;
+        assert!(original_url(&image).is_some());
+        image.size = 1024;
         for url in [
             "http://cdn.discordapp.com/attachments/1/2/a.png",
             "https://cdn.discordapp.com.evil.test/attachments/1/2/a.png",
@@ -440,7 +464,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("serein-download-tests-{}", std::process::id()));
         fs::create_dir_all(&root).unwrap();
-        let destination = root.join("chosen.png");
+        let destination = root.join("chosen.bin");
         let client = reqwest::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
@@ -449,7 +473,8 @@ mod tests {
             .unwrap();
         let cancelled = AtomicBool::new(false);
         let wake = Notify::new();
-        let content = vec![37; 64 * 1024];
+        // Preserve arbitrary binary bytes (including NUL and invalid UTF-8) without decoding.
+        let content: Vec<u8> = (0..=255).cycle().take(64 * 1024).collect();
         let (url, task) = endpoint(content.clone(), false, false).await;
         download(
             &client,
