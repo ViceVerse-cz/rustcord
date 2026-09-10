@@ -254,7 +254,9 @@ mod tests {
 	#[test]
 	fn audio_is_explicit_keyboard_operable_and_fits_narrow_cards() {
 		let state = test_support::audio_demo_state();
-		let message = state.timeline.iter().last().unwrap();
+		let mut message = state.timeline.iter().last().unwrap().clone();
+		message.attachments.truncate(1);
+		message.attachments[0].content_type = Some("text/plain".into());
 		let file = &message.attachments[0];
 		for (width, theme) in [
 			(220.0, egui::Theme::Dark),
@@ -266,7 +268,11 @@ mod tests {
 			crate::design::apply(&ctx);
 			ctx.set_theme(theme);
 			let mut audio = AudioUi::default();
-			let frame = |audio: &mut AudioUi, key: Option<egui::Key>| {
+			let mut images = crate::avatars::Avatars::default();
+			let mut viewing = None;
+			let mut opening = None;
+			let mut download = crate::attachments::DownloadUi::default();
+			let mut frame = |audio: &mut AudioUi, key: Option<egui::Key>| {
 				ctx.run_ui(
 					egui::RawInput {
 						screen_rect: Some(egui::Rect::from_min_size(
@@ -288,7 +294,16 @@ mod tests {
 					|ui| {
 						ui.set_width(width);
 						ui.spacing_mut().item_spacing.x = 16.0;
-						audio.show(ui, message, file);
+						crate::attachments::show(
+							ui,
+							&message,
+							&mut images,
+							&mut viewing,
+							&mut opening,
+							&mut download,
+							audio,
+							false,
+						);
 						assert!(ui.min_rect().width() <= width + 2.0);
 					},
 				)

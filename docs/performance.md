@@ -1990,3 +1990,24 @@ fixed 2026-09-11 timestamps. Sizes precede this documentation addendum. No depen
 was added. CPU, memory and frame latency remain unmeasured: the baseline process
 ended before sampling, and the owner subsequently stopped Computer Use with Escape.
 No runtime speed or memory improvement is claimed.
+
+### Audio attachment metadata correction — September 11, 2026
+
+Same Windows host, pinned Rust 1.98.1, locked release profile; baseline `2b75ba3`
+versus the metadata correction. One package per variant, before this documentation
+addendum. Commands: `cargo xtask package` and `cargo xtask package-voice`.
+
+| Metric (bytes) | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable | 51,844,608 | 51,844,608 | 0 |
+| Text installed files | 52,957,420 | 52,957,420 | 0 |
+| Text ZIP | 32,396,566 | 32,397,025 | +459 |
+| Voice executable | 56,952,832 | 56,952,832 | 0 |
+| Voice installed files | 58,171,435 | 58,171,435 | 0 |
+| Voice ZIP | 34,498,982 | 34,498,754 | -228 |
+
+Installed sums include all 66 text / 93 voice package files, excluding the separate
+voice directory from text. ZIP uses Python zipfile, sorted paths, DEFLATE level 9
+and fixed 2026-09-11 timestamps. Tiny compressed-size differences are not a runtime
+improvement. No dependency or cache was added. Native CPU, RSS and frame latency
+remain unmeasured because Computer Use is owner-paused; no runtime improvement is claimed.

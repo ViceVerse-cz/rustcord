@@ -16,24 +16,23 @@ pub struct Attachment {
 }
 impl Attachment {
 	pub fn is_audio(&self) -> bool {
-		match self.content_type.as_deref().map(|kind| {
-			kind.split(';')
-				.next()
-				.unwrap_or(kind)
-				.trim()
-				.to_ascii_lowercase()
-		}) {
-			Some(kind) if kind != "application/octet-stream" => matches!(
-				kind.as_str(),
-				"audio/mpeg" | "audio/mp3" | "audio/wav" | "audio/x-wav" | "audio/wave"
-			),
-			_ => self
-				.filename
-				.rsplit_once('.')
-				.is_some_and(|(_, extension)| {
-					matches!(extension.to_ascii_lowercase().as_str(), "mp3" | "wav")
-				}),
-		}
+		// Metadata only selects the preview; playback validates the actual bytes.
+		self.filename
+			.rsplit_once('.')
+			.is_some_and(|(_, extension)| {
+				extension.eq_ignore_ascii_case("mp3") || extension.eq_ignore_ascii_case("wav")
+			}) || self.content_type.as_deref().is_some_and(|kind| {
+			let kind = kind.split(';').next().unwrap_or(kind).trim();
+			[
+				"audio/mpeg",
+				"audio/mp3",
+				"audio/wav",
+				"audio/x-wav",
+				"audio/wave",
+			]
+			.iter()
+			.any(|supported| kind.eq_ignore_ascii_case(supported))
+		})
 	}
 	pub fn bytes(&self) -> usize {
 		size_of::<Self>()
@@ -44,6 +43,9 @@ impl Attachment {
 			+ self.media.proxy_url.as_ref().map_or(0, String::capacity)
 	}
 	pub fn is_image(&self) -> bool {
+		if self.is_audio() {
+			return false;
+		}
 		if let Some(kind) = &self.content_type {
 			matches!(
 				kind.to_ascii_lowercase().as_str(),
@@ -91,18 +93,44 @@ mod audio_tests {
 			media: EmbedMedia::default(),
 			spoiler: false,
 		};
-		assert!(file.is_audio());
-		file.content_type = Some("application/octet-stream".into());
-		assert!(file.is_audio());
-		file.content_type = Some("text/plain".into());
-		assert!(!file.is_audio());
-		file.content_type = Some("Audio/Wav; codec=pcm".into());
-		assert!(file.is_audio());
-		file.content_type = Some("audio/ogg".into());
-		assert!(!file.is_audio());
-		file.content_type = None;
-		file.filename = "track.mp3.exe".into();
-		assert!(!file.is_audio());
+		for filename in ["TRACK.MP3", "track.WaV"] {
+			file.filename = filename.into();
+			for kind in [
+				None,
+				Some(""),
+				Some("application/octet-stream"),
+				Some("text/plain"),
+				Some("audio/ogg"),
+				Some("image/jpeg"),
+			] {
+				file.content_type = kind.map(str::to_owned);
+				assert!(file.is_audio(), "{filename}: {kind:?}");
+				assert!(!file.is_image());
+			}
+		}
+		file.filename = "attachment".into();
+		for kind in [
+			"audio/mpeg",
+			"audio/mp3",
+			"Audio/Wav; codec=pcm",
+			"audio/x-wav",
+			"audio/wave",
+		] {
+			file.content_type = Some(kind.into());
+			assert!(file.is_audio());
+			assert!(!file.is_image());
+		}
+		for (filename, kind, image) in [
+			("track.mp3.exe", None, false),
+			("track.ogg", Some("audio/ogg"), false),
+			("picture.jpg", Some("image/jpeg"), true),
+			("picture.png", None, true),
+		] {
+			file.filename = filename.into();
+			file.content_type = kind.map(str::to_owned);
+			assert!(!file.is_audio());
+			assert_eq!(file.is_image(), image);
+		}
 	}
 }
 #[derive(Default)]
