@@ -1294,3 +1294,42 @@ The size increase is the three embedded Inter faces (799,444 bytes of OFL font d
 Clean baseline `dff0975` (existing isolated worktree) versus final theme code `70e4f54`, integrated on `b92a082`. Baseline predates the incoming-typing commit; these chat fixtures contain no typing events. Same macOS 27.0 arm64, Apple M1 Pro / 16 GiB, Rust 1.98.1, release thin-LTO, wgpu/Metal, 2× capture scale, requested 1120×760 viewport. Both text/voice packages pass strict local ad-hoc signature verification; they are not notarized. Installed sizes sum files within each app bundle, ZIPs use Python DEFLATE 9, separately for text/voice. Packaged documentation reflects its build-time snapshot before this final report.
 
 Fresh text processes use `--demo --demo-chat`, Default dark, ten-second warmup and ten one-second `ps -p PID -o %cpu=,rss=` samples, no scripted interaction. These short samples ran on a shared development host during builds; CPU varied and RSS differences are noise, not a performance improvement. No child processes were launched by these offline text fixtures. Long sessions, interactive p95 frame/startup timing, GPU allocations and live memory remain unmeasured. Gradient screenshots are visual checks, not equivalent performance comparisons. This addendum supersedes the original theme measurements for the rebased code.
+
+
+## Voice recovery and playback completion - September 10, 2026
+
+| Metric / method | Main 9fcce51 | Voice fixes | Delta |
+| --- | ---: | ---: | ---: |
+| text executable, bytes | 50,789,376 | 50,791,936 | +2,560 (+0.005%) |
+| text installed, bytes | 51,365,836 | 51,371,937 | +6,101 (+0.012%) |
+| text ZIP, bytes | 31,740,225 | 31,742,889 | +2,664 (+0.008%) |
+| voice executable, bytes | 54,142,464 | 54,142,464 | +0 (+0.000%) |
+| voice installed, bytes | 54,941,697 | 54,945,238 | +3,541 (+0.006%) |
+| voice ZIP, bytes | 33,116,953 | 33,122,262 | +5,309 (+0.016%) |
+| 100,000-event replay median, ms | 36.7943 | 36.6734 | -0.1209 (-0.33%; noise) |
+| Retained 500-message timeline, estimated bytes | 228,992..229,477 | 228,992..229,477 | 0 |
+| 1-speaker mixer, median us / 1,000 ticks | 42,850 | 41,672 | -1,178 (-2.75%; noise) |
+| 8-speaker mixer, median us / 1,000 ticks | 336,640 | 333,531 | -3,109 (-0.92%; noise) |
+| 63-speaker mixer, median us / 1,000 ticks | 2,758,741 | 2,661,914 | -96,827 (-3.51%; noise) |
+
+Windows 11 Home 10.0.26200, AMD Ryzen 7 7800X3D (16 logical CPUs), approximately 31 GiB RAM,
+Rust 1.98.1, release thin LTO/one codegen unit. Both unsigned Windows packages built successfully;
+text uses no default features and voice explicitly enables voice. No dependency/lockfile changed;
+package policy/license collection passed. Separate clean baseline and changed package directories
+prevent artifact overwrite. Installed sizes sum package files, ZIPs use Python DEFLATE 9; text
+excludes nested voice and both exclude PR screenshots. Packaged docs are the snapshot copied
+during packaging, before this final measurement addendum.
+
+Replay: one warmup and five direct executable runs per build. Baseline samples 36.7943,36.1554,
+36.4590,39.0662,39.1083ms; after 36.6734,36.2471,37.0721,36.2804,36.8797ms. These are synthetic
+reducer timings, not process RSS or UI latency. Mixer uses the existing ignored release workload:
+one warmup and five 1,000-tick runs at each participant count, 20 ms Opus packets and device-free
+mono 48 kHz decoding/mixing. The small decreases are not a performance improvement claim; this
+shared-host run does not measure microphone/speaker callback latency, network jitter or live audio.
+
+Encoded reorder storage remains at most 10,200 bytes per remote speaker; PCM remains 23,040 bytes
+per speaker, at most 63 remote speakers. Each 20 ms mixer tick decodes at most 8 short packets per
+speaker; loss concealment follows the last packet duration (up to 120 ms), at most 3 consecutive
+missing packets, streamed through the existing buffer. Physical call RSS/CPU, p95 latency,
+device teardown and native screenshots remain unmeasured because the owner's native/live gate
+is still closed. No audio devices or live accounts were accessed.

@@ -318,7 +318,10 @@ impl Voice {
                 ui.voice_push_to_talk,
                 ui.voice_ptt_active,
             );
-            if let Err(error) = self.start_media(runtime, pending, ui, ctx, listen_only) {
+            let input_enabled = state.can_speak(pending.channel);
+            if let Err(error) =
+                self.start_media(runtime, pending, ui, ctx, listen_only, input_enabled)
+            {
                 return self.fail(state, error);
             }
         }
@@ -338,6 +341,7 @@ impl Voice {
                 || deafened
                 || (ui.voice_push_to_talk && !ui.voice_ptt_active);
             live.audio.set_controls(muted, deafened);
+            live.audio.set_input_enabled(state.can_speak(call.channel));
             live.audio
                 .set_gain(ui.voice_gain.input_percent, ui.voice_gain.output_percent);
             live.controls.send_if_modified(|control| {
@@ -392,26 +396,20 @@ impl Voice {
                         ui.voice_privacy_code = Some(code);
                         live.audio.set_ready(true);
                     }
-                    Notice::DeviceReady => {
-                        if live
-                            .audio
-                            .gate
-                            .ready
-                            .load(std::sync::atomic::Ordering::Acquire)
-                        {
-                            state.apply_voice(voice::Event::Progress {
-                                channel: live.channel,
-                                request: live.request,
-                                phase: Phase::Connected,
-                            });
-                        }
-                    }
-                    Notice::RemoteAudio => {}
+                    // Notices wake the UI; only the current device configuration can be ready.
+                    Notice::DeviceReady | Notice::RemoteAudio => {}
                     Notice::Failed(error) => {
                         failure = Some(error);
                         break;
                     }
                 }
+            }
+            if failure.is_none() && live.audio.is_ready() {
+                state.apply_voice(voice::Event::Progress {
+                    channel: live.channel,
+                    request: live.request,
+                    phase: Phase::Connected,
+                });
             }
             if live.audio.is_stopped() && failure.is_none() {
                 failure =
@@ -434,6 +432,7 @@ impl Voice {
         ui: &ui::MessagingUi,
         ctx: &egui::Context,
         listen_only: bool,
+        input_enabled: bool,
     ) -> Result<(), &'static str> {
         let (capture_send, capture) = mpsc::sync_channel(8);
         let (playback, playback_receive) = mpsc::sync_channel(8);
@@ -461,6 +460,7 @@ impl Voice {
             deafened: false,
         });
         audio.set_controls(listen_only || ui.voice_push_to_talk, false);
+        audio.set_input_enabled(input_enabled);
         audio.set_gain(ui.voice_gain.input_percent, ui.voice_gain.output_percent);
         let session = pending.session.ok_or("Missing voice session")?;
         let session_copy = Zeroizing::new(session.expose().to_owned());
