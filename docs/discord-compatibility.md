@@ -1,5 +1,16 @@
 # Discord compatibility — checked 2026-09-10
 
+External fallback (September 10): unsupported channel rows and message placeholders offer
+Open in Discord through an explicit browser confirmation. URLs use the fixed Discord HTTPS
+origin and typed guild/channel/message IDs; DMs use @me with the conversation ID. No content,
+names, credentials or signed media URLs enter the route. Zero IDs, missing DM/guild identity
+and unavailable view permission disable the action. Discord's [message-link help](https://support.discord.com/hc/en-us/articles/206346498-Where-can-I-find-my-User-Server-Message-ID)
+documents linking to an accessible message/conversation; its [Trust and Safety example](https://support.discord.com/hc/en-us/community/posts/1500000159602-How-to-Properly-Report-People-On-Discord)
+shows the guild and @me path structure on the older discordapp.com domain. The current
+discord.com route is an integration assumption, not a new API guarantee. Headless tests cover
+construction and explicit confirmation; native launch, browser account selection and destination
+resolution remain owner-unverified. The browser uses its own session and Discord authorization.
+
 Loaded threads (September 10): READY guild thread arrays follow the original [discord.py-self guild parser](https://github.com/dolfies/discord.py-self/blob/master/discord/guild.py); active create/update/delete, scoped sync, archive eviction and owner-removal handling are informed by its [dispatch implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/state.py). Discord's [Gateway thread events](https://docs.discord.com/developers/events/gateway-events#thread-list-sync) document the guild/parent scope and membership fields. These primary sources establish wire evidence, not normal-account acceptance; no implementation blocks were copied. Active discovery is limited to service-supplied snapshots/events; explicit archive reads are described below, with existing subscriptions unchanged. Unknown updates do not hydrate a missing thread. See [native navigation scope](categories.md).
 
 Serein is unofficial and not endorsed by Discord. No normal-user live session has been tested. Technical compatibility does not imply approval. Discord forbids normal-account automation outside its OAuth2/bot API and warns of account termination ([policy](https://support.discord.com/hc/en-us/articles/115002192352-Automated-User-Accounts-Self-Bots)); its [terms](https://discord.com/terms) also apply.

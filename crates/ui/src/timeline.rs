@@ -1,4 +1,4 @@
-use crate::markdown::{FormatCache, external_url};
+use crate::markdown::{FormatCache, discord_url};
 use client_core::State;
 use egui::RichText;
 use model::{Id, Message};
@@ -29,7 +29,7 @@ pub struct TimelineView {
     revealed: BTreeMap<Id, (String, Vec<model::Embed>, Vec<model::Attachment>)>,
     viewing: Option<(Id, Id)>,
     pub(super) download: crate::attachments::DownloadUi,
-    opening: Option<String>,
+    pub(super) opening: Option<String>,
     text_size: f32,
     scale: f32,
     pub(super) load_older: bool,
@@ -266,6 +266,7 @@ impl TimelineView {
                 channel: state.selected,
                 following: true,
                 download: std::mem::take(&mut self.download),
+                opening: self.opening.take(),
                 jump: true,
                 ..Self::default()
             };
@@ -487,6 +488,9 @@ impl TimelineView {
                                     }
                                     if message.unsupported {
                                         ui.label(RichText::new("System content · Preview unavailable").small().color(colors.muted));
+                                        let target = state.channels.iter().find(|c| c.id == message.channel && state.can_view(c.id))
+                                            .and_then(|c| discord_url(c, Some(message.id)));
+                                        if ui.add_enabled(target.is_some(), egui::Button::new("Open in Discord")).clicked() { self.opening = target; }
                                     }
                                     if let Some(action)=crate::reactions::show(ui,message.reactions.as_deref(),
                                         state.gateway_connected && state.freshness==model::Freshness::Fresh && state.can_read_history(message.channel),
@@ -625,29 +629,6 @@ impl TimelineView {
                 self.viewing = None;
             }
         }
-        if let Some(url) = &self.opening {
-            let mut close = false;
-            egui::Window::new("Open external link?")
-                .collapsible(false)
-                .show(ui.ctx(), |ui| {
-                    ui.label("Open this destination in your default browser:");
-                    ui.add(egui::Label::new(url).wrap().selectable(true));
-                    ui.horizontal(|ui| {
-                        if ui.button("Open in browser").clicked() {
-                            if let Some(url) = external_url(url) {
-                                ui.ctx().open_url(egui::OpenUrl::new_tab(url));
-                            }
-                            close = true;
-                        }
-                        if ui.button("Cancel").clicked() {
-                            close = true;
-                        }
-                    });
-                });
-            if close {
-                self.opening = None;
-            }
-        }
     }
 }
 #[cfg(test)]
@@ -701,6 +682,94 @@ mod tests {
         assert!(!grouped(Some(&first), &next, None));
         assert_eq!(timestamp(Id(u64::MAX)).year(), 2154);
     }
+    #[test]
+    fn unsupported_message_fallback_only_requests_confirmation() {
+        fn button(shape: &egui::Shape) -> Option<egui::Rect> {
+            match shape {
+                egui::Shape::Text(t) if t.galley.job.text == "Open in Discord" => {
+                    Some(t.galley.rect.translate(t.pos.to_vec2()))
+                }
+                egui::Shape::Vec(shapes) => shapes.iter().find_map(button),
+                _ => None,
+            }
+        }
+        let mut state = test_support::demo_state();
+        let channel = state
+            .channels
+            .iter()
+            .find(|c| Some(c.id) == state.selected)
+            .unwrap()
+            .clone();
+        let mut message = text_message(42);
+        message.channel = channel.id;
+        message.unsupported = true;
+        state.timeline.clear();
+        state.timeline.insert(message, false, false).unwrap();
+        for allowed in [true, false] {
+            if !allowed {
+                state.channels.clear();
+            }
+            let ctx = egui::Context::default();
+            let mut view = TimelineView::default();
+            let mut avatars = crate::avatars::Avatars::default();
+            let mut render = |view: &mut TimelineView, events| {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(360.0, 600.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        view.show(
+                            ui,
+                            &mut state,
+                            &mut None,
+                            &mut None,
+                            &mut avatars,
+                            &mut None,
+                        )
+                    },
+                );
+                assert!(output.platform_output.commands.is_empty());
+                let rect = output.shapes.iter().find_map(|s| button(&s.shape));
+                output.drop_without_applying_deltas();
+                rect
+            };
+            for _ in 0..3 {
+                render(&mut view, vec![]);
+            }
+            let point = render(&mut view, vec![])
+                .expect("Unsupported message has a fallback")
+                .center();
+            assert!(view.opening.is_none());
+            for pressed in [true, false] {
+                render(
+                    &mut view,
+                    vec![
+                        egui::Event::PointerMoved(point),
+                        egui::Event::PointerButton {
+                            pos: point,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+            assert_eq!(
+                view.opening,
+                if allowed {
+                    discord_url(&channel, Some(Id(42)))
+                } else {
+                    None
+                }
+            );
+        }
+    }
+
     #[test]
     fn hover_actions_keep_layout_stable_and_support_keyboard_reply() {
         fn texts(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {

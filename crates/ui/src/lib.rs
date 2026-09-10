@@ -679,6 +679,8 @@ impl MessagingUi {
     pub fn show(&mut self, ui: &mut egui::Ui, state: &mut State) -> Vec<Command> {
         let mut commands = Vec::new();
         let ctx = ui.ctx().clone();
+        // Foreground confirmation handles Escape before background search/archive shortcuts.
+        markdown::confirm_external_link(&ctx, &mut self.timeline.opening);
         let colors = crate::design::palette(ui);
         if !self.switcher.is_open()
             && !self.ime_active
@@ -1420,6 +1422,54 @@ mod composer_tests {
             repeat: false,
             modifiers: egui::Modifiers::NONE,
         }
+    }
+
+    #[test]
+    fn link_confirmation_escape_preserves_background_search_and_works_without_selection() {
+        let ctx = egui::Context::default();
+        let mut state = edit_state();
+        let mut view = MessagingUi::default();
+        let frame = |view: &mut MessagingUi, state: &mut State, events| {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1000.0, 700.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    view.show(ui, state);
+                },
+            );
+            let emitted = output.platform_output.commands.len();
+            output.drop_without_applying_deltas();
+            assert_eq!(
+                emitted, 0,
+                "Showing or canceling a link never opens a browser"
+            );
+        };
+        frame(&mut view, &mut state, vec![]);
+        view.search.open = true;
+        view.timeline.opening = Some("https://discord.com/channels/@me/10/20".into());
+        for _ in 0..3 {
+            frame(&mut view, &mut state, vec![]);
+        }
+        frame(&mut view, &mut state, vec![edit_key(egui::Key::Escape)]);
+        assert!(view.timeline.opening.is_none());
+        assert!(
+            view.search.open,
+            "Escape belongs to the foreground confirmation"
+        );
+        state.selected = None;
+        view.timeline.opening = Some("https://discord.com/channels/@me/10".into());
+        for _ in 0..3 {
+            frame(&mut view, &mut state, vec![]);
+        }
+        assert!(view.timeline.opening.is_some());
+        frame(&mut view, &mut state, vec![edit_key(egui::Key::Escape)]);
+        assert!(view.timeline.opening.is_none());
     }
 
     #[test]

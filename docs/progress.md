@@ -2,6 +2,17 @@
 
 ## Current scope and gates
 
+Current implementation: SPEC 9.1 external fallback for unsupported channel/message content.
+Unsupported channel rows gain a keyboard-focusable Open in Discord arrow; message placeholders
+gain a labeled button. The existing timeline link confirmation is shared at the messaging-view
+level so sidebar actions work without a selected conversation. Destinations use fixed HTTPS
+Discord routes and typed IDs, with view-permission/metadata guards; no selection, fetch, call
+or browser action occurs before deliberate confirmation. Cancellation/Escape dismiss the modal.
+The one bounded pending link resets on logout. This branch starts at 36ab5e7 (PR #26), with
+separately copied/hash-verified baseline packages. Native automation remains paused after owner
+Escape stops; no browser, account, microphone or OS notification action is authorized for tests.
+Validation and package measurements are pending for this slice.
+
 Latest implementation: session-only microphone gain and speaker volume (SPEC 11). Both Audio
 menu controls range from 0% to 200%, start at 100%, support keyboard input and offer Reset levels.
 Changes apply to an active call without reopening devices, survive device/call changes in the
@@ -59,7 +70,8 @@ in performance.md. All 45 Wry backend source files match the pinned registry arc
 The original seven dirty source files were hash-checked unchanged. Linux CI remains pending.
 
 The full SPEC objective remains open. Further implementation gaps found in current sources
-include explicit external-open actions for unsupported content;
+include visible deletion state and detection of unrendered payloads in ordinary message types
+(such as polls/stickers/components), beyond the existing unsupported-type marker;
 native/live acceptance and release evidence remain separate gates. Historical entries follow.
 
 Read the original SPEC.md completely before implementation. Repository initially contained only the tracked two-line README and an untracked SPEC.md; no existing source or agent instructions were removed. The owner explicitly revised authentication and storage during implementation. The final spec now requires the official Discord login in a temporary webview, secure remembered login, and allows bounded local SQLite caches, saved drafts/settings and files. Those changes were applied throughout SPEC.md and AGENTS.md.
