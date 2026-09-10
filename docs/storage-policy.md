@@ -99,3 +99,11 @@ history. VIEW-only live messages stay in the bounded RAM timeline without being 
 Existing recovery drafts and explicitly downloaded files keep their documented lifecycle.
 No schema change or external runtime dependency is added; UI tests reuse the existing
 workspace test-support crate through a dev-dependency.
+
+Notification/read activity and notification preferences remain bounded session RAM only;
+no SQLite schema or saved-notification preference is introduced. The OS receives generic
+fixed text only after session opt-in and may keep its own notification/permission history.
+Logout invalidates queued work and requests dismissal; this does not erase OS records.
+See [notification limits and platform behavior](notifications.md). Composer artwork uses
+the existing Twemoji atlas and custom-image cache; saved drafts keep their original wire
+text, with no extra rendered-token storage.

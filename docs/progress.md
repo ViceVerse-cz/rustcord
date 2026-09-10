@@ -594,6 +594,55 @@ Synthetic reducer median 26.474→27.128 ms, with the same retained timeline ran
 this workload does not exercise the changed subscription. No performance improvement
 is claimed. Delivery remains draft pending CI and repaired-build live verification.
 
+
+## Composer, shared editing and notifications — September 10, 2026
+
+Clean baseline `efa724b` on `main`, fetched from existing origin; task branch
+`feat/composer-notifications`, pinned Rust 1.98.1. Known mentions now display as
+`@name` in the native text editor, with bundled Twemoji and static server artwork.
+Wire text remains the draft/send/copy format. Message editing uses the same composer;
+ordinary unsent drafts remain separate, cancel restores them, and confirmation cannot
+discard input typed in the same frame. No separate edit dialog remains.
+
+Incoming DMs get avatar shortcuts with red counts. Servers/channels show unread dots
+and mention badges, with focused latest-view ACKs and replay/self/history deduplication.
+System notifications are session-opt-in, generic-content-only and gated by known
+normal-user mute/DND preferences. Generation changes cancel pending alerts; logout
+requests dismissal. Unknown settings fail closed. The synthetic history generator now
+returns the latest advertised fixture message, so DM badge-clearing is testable offline.
+
+`cargo xtask check` passed formatting, workspace checks, 123 Rust tests (one existing
+ignored performance test), strict Clippy and policy checks. Focused tests cover native
+copy/undo/IME/atomic token movement, edit cancellation/retry/ack races, read-state ordering,
+new-DM first-message handling, zero-entry pruning, queue/item/byte bounds, and mute/DND
+filters. Independent reviews found and fixed stale-alert invalidation, historical-view
+suppression and a notification-map admission issue. Native testing also exposed the
+macOS library's unreliable blocking run-loop check; the worker now awaits its async
+show API without blocking rendering.
+
+Native screenshot evidence lives under `docs/pr-evidence/composer-notifications`.
+Composer/edit comparisons use the same offline chat fixture and viewport; badges use
+a separately labelled incoming-DM/server-mention fixture. OS alert tests require an
+explicit additional demo flag and never contact Discord.
+
+Both release packages built successfully. macOS permission and actual generic
+notification delivery were observed in Notification Center; disabling returned
+the app to off. OS-side dismissal was not conclusively verified because the
+notification window was no longer accessible to automation. Opening the synthetic unread
+DM cleared its rail badge and left the unrelated server mention badge intact.
+Dark and light layouts were inspected; minimum-width resize could not be verified
+with the native automation tool (window/resize errors). Shared editing was exercised
+natively through Save, with the original unsent draft restored.
+
+Validation incident: the UI tool auto-launched a closed temporary app without its
+demo arguments and briefly showed “Checking saved login…” on the sign-in screen.
+It was closed immediately; no credentials or conversations were inspected. We
+cannot assert that no credential-store lookup occurred. Subsequent validation
+copies forced offline mode at startup, used distinct bundle identifiers and were
+not included in shipping artifacts. The source was restored after that temporary
+build. Windows/Linux delivery, minimum-width native inspection and normal-user
+live interoperability remain unverified; this PR stays draft for those gaps.
+See `docs/performance.md` for measured package and runtime deltas.
 ## September 10: owner-requested merge of all open PRs
 
 The owner explicitly requested "merge everything to main". PR #15 (People subscriptions) was merged into main; the dependent #16, #13, #12, #10, #9 and #7 stack was consolidated into #4 because the repository allows only squash merges. Integration of that combined tree with main efa724b was performed in a separate clean worktree, preserving the original uncommitted channel-access work unchanged.
@@ -701,3 +750,52 @@ Both unsigned Windows release packages passed their packaging commands. Each exe
 by 211,456 bytes over #17; installed/ZIP totals and five-run measurements are recorded in
 performance.md. Original seven dirty-source SHA256 values were checked unchanged. No new
 native screenshot or live compatibility claim is made; the new PR is stacked on #17.
+
+
+## Rich-editor and notification permission integration - September 10, 2026
+
+Main advanced to 2879fbc7de8fb7de30664fb64666f6d93482b827 with PR #18 while permission
+PR #19 was in progress. This continuation merges that actual main revision into #19,
+preserving the rich shared composer, automatic viewed-message ACKs, notification preferences,
+platform adapters, package notices and existing documentation/evidence. Source baseline is
+#19's 67bff236e6186a306023c156f8027712049681ba; its Windows package hashes were checked before
+copying separate comparison baselines. Original dirty checkout work remains untouched.
+
+Shared inline edit Save/Enter now uses permission-aware command admission while preserving
+rich text, mentions/IME, pending confirmation, retry and unsent-draft isolation. The old modal
+editor was removed during conflict resolution. Notification badge/dot getters and new-message
+observation/delivery require VIEW access. Permission revocation clears affected observed/service
+counts and queued alerts, retaining dedup high-water state; revoke/restore cannot resurface
+old queued notifications. VIEW-only live activity remains usable without READ_MESSAGE_HISTORY.
+Desktop notification work is invalidated on navigation/permission events using its existing
+generation and app-specific dismissal path. OS history erasure is not claimed.
+
+Windows compilation exposed an inherited notification adapter error: notify-rust 4.18 does
+not publicly export its Windows NotificationHandle. The Windows path now retains a success
+marker and uses the existing app-ID history dismissal; the private response handle is dropped.
+Linux/macOS retain their actual notification handles and macOS's asynchronous show path.
+This follows the installed pinned dependency source and received independent review. No new
+external dependency beyond PR #18 is introduced, and no OS alert was triggered for testing.
+
+cargo xtask check passed 178 offline Rust tests, doctests, formatting, all-feature strict
+Clippy, text-only compilation and runtime policy. New regression assertions cover inaccessible
+badges/dots, revoke-before-dequeue, hidden replay suppression, unaffected channels, VIEW-only
+live activity and unsaved edits after access loss. Release reducer median rose from 29.2795
+to 37.5618 ms for 100,000 events while retaining 500 records / 220,992-221,477 estimated bytes.
+The new observation/count work is included; no performance improvement is claimed.
+
+Native desktop automation remains paused after owner Escape stops. Imported #18 macOS
+screenshots describe that prior upstream build, not this integrated Windows build. No new
+native screenshot, OS notification delivery/dismissal, account operation or microphone test
+was performed. The live/storage/platform gates and the complete SPEC objective remain open.
+PR #19 remains draft; remote checks and inherited strict audit findings are not waived.
+
+
+Both integrated Windows package commands passed; executables grew by 306,688 bytes each
+relative to the pre-integration #19 baseline. The installed/ZIP comparison is in performance.md.
+The original seven dirty-source hashes were rechecked unchanged. The existing PR is retargeted
+to current main and includes the channel-visibility prerequisite; no PR was merged to main.
+Next concrete SPEC 9.2 implementation: consume bounded PRESENCE_UPDATE events for users already
+loaded in the open guild People pane. Existing member-list snapshots display presence, but
+standalone live status transitions currently have no dispatcher. Keep that work scoped to the
+existing subscription and reject late navigation/generation updates; no full directory fetch.

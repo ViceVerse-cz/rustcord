@@ -487,6 +487,50 @@ wire subscription control only. Receiving the required guild typing subscription
 increase incoming event traffic; Serein discards unhandled typing events and clears the
 subscription when the member pane closes. No live performance claim is made.
 
+## Composer, inline editing and notifications — September 10, 2026
+
+Baseline `efa724b` versus `feat/composer-notifications`, locked release builds on
+macOS 27.0 arm64, Apple M1 Pro (8 CPU cores), 16 GB RAM, WGPU/Metal. Text and
+optional voice packages were built separately with `cargo xtask package` and
+`cargo xtask package-voice`. Installed bytes sum regular files inside each `.app`;
+compressed bytes use `ditto -c -k --sequesterRsrc --keepParent`. These are local
+ad-hoc-signed packages; archive metadata can introduce small variation.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable bytes | 45,176,288 | 45,521,920 | +345,632 (+0.77%) |
+| Text installed bytes | 45,476,218 | 45,842,027 | +365,809 (+0.80%) |
+| Text compressed bytes | 29,533,549 | 29,690,224 | +156,675 (+0.53%) |
+| Voice executable bytes | 48,060,336 | 48,384,320 | +323,984 (+0.67%) |
+| Voice installed bytes | 48,591,227 | 48,937,514 | +346,287 (+0.71%) |
+| Voice compressed bytes | 30,925,091 | 31,074,546 | +149,455 (+0.48%) |
+| 100,000-event reducer median | 27.854 ms | 30.185 ms | +2.332 ms (+8.37%) |
+| Retained timeline estimate | 220,992–221,477 B / 500 records | same | unchanged |
+
+Replay: one warmup and five measured direct binary runs per revision, builds
+completed beforehand. Baseline measured runs: 28.682, 27.871, 27.854, 27.097,
+27.139 ms; after: 35.392, 33.829, 30.185, 30.032, 30.069 ms. The observed
+regression includes the new bounded activity tracking (~23 ns/event at these
+medians). It is a synthetic reducer measurement, not UI latency, live throughput
+or RSS; concurrent desktop work and short durations add noise.
+
+Native sampling uses the same offline chat, nominal 1120×760 viewport, 2× display
+scale, external 4096×2304 display and draft `Hi <@2> 👋 🎉 <:serein_leaf:9001>`.
+After at least 60 seconds of warmup, `ps` samples RSS and CPU every second for
+10 samples. The final validation copy changes only the default demo argument
+selection and bundle identity to prevent accidental authenticated auto-launches;
+shipping package size/replay numbers above use the normal builds. System alerts
+are disabled for this memory scenario. RSS excludes GPU allocations and other
+OS processes; no app helper process is spawned for this scenario. Startup peak,
+physical footprint, p95 frame time and OS notification service memory are unmeasured.
+
+Native RSS samples were 113,088 KiB throughout baseline and 135,648 KiB throughout
+after: +22,560 KiB (+19.95%). This is the maximum and settled RSS within the
+10-second sampling window, not a startup peak. CPU median was 0.0% for both; after
+had two samples at 1.7% and 2.1% (mean 0.38%), baseline all 0.0%. This shows higher
+retained process memory for the rich composer scenario; no memory improvement is
+claimed. The package measurements precede these final evidence paragraphs; bundled
+documentation/archive metadata can change the distribution total slightly.
 ## September 10: integration of all open PRs (Windows)
 
 The owner explicitly requested merging every open PR into main. Baseline is the verified feature-stack tree 0f67e69757983c52e1a45c03030a09e7c16a3b30 (same tree as consolidated 9e069ca), copied before integration. After combines that stack with main efa724b, including the already-merged Twemoji artwork/picker, grouped/hover timeline, guild voice and People subscription repair. These deltas measure the combined feature set against the incoming stack, not an individual feature or a comparison against main alone.
@@ -587,3 +631,48 @@ No external runtime dependency or codec was added. UI tests now depend on existi
 
 Executable SHA256: text 991592D31AB2C330F55F97B81755ACF8DA761ACE31B7D3E32B5D4205ADA49109;
 voice BCFA2FB8440261A0DA12B2995C18CAA4A44AA48EFB01C5AABFFD62844801D9A5.
+
+
+## Rich editor / notification integration - September 10, 2026
+
+Actual starting revision is 67bff236e6186a306023c156f8027712049681ba (permission PR #19).
+Its text/voice executable SHA256 values were checked against the preceding recorded builds,
+then only the distribution files were copied into a separate integration baseline directory.
+After integrates main 2879fbc7de8fb7de30664fb64666f6d93482b827 (PR #18) plus permission-aware
+notifications/inline edits and the Windows notification compile fix. This comparison includes
+the newly integrated rich editor and notification dependencies; it does not isolate the cost
+of those fixes or compare against a separately measured #18 build.
+
+Same Windows 11 Home 10.0.26200 / Ryzen 7 7800X3D / 16 logical CPUs / about 31 GiB RAM /
+Rust 1.98.1 release/wgpu host. Text uses no-default-features; voice adds voice. Both packaging
+commands passed and produced unsigned Windows binaries. ZIP uses Python DEFLATE level 9.
+
+| Metric / method | Before integration (67bff23) | Integrated | Delta |
+| --- | ---: | ---: | ---: |
+| text executable bytes | 49,304,064 | 49,610,752 | +306,688 (+0.622%) |
+| text installed bytes | 49,690,144 | 50,033,083 | +342,939 (+0.690%) |
+| text zip bytes | 30,948,093 | 31,080,883 | +132,790 (+0.429%) |
+| voice executable bytes | 52,637,184 | 52,943,872 | +306,688 (+0.583%) |
+| voice installed bytes | 53,247,734 | 53,589,761 | +342,027 (+0.642%) |
+| voice zip bytes | 32,314,397 | 32,444,614 | +130,217 (+0.403%) |
+| Reducer median ms / 100,000 events | 29.2795 | 37.5618 | +8.2823 (+28.29%) |
+
+Installed file counts are now 42 text and 88 voice (32/78 before): notification license texts,
+a documentation page and the explicitly operated shortcut-registration script are included.
+The script is packaged but was not run. Text excludes the voice sibling; both exclude PR
+screenshots. Totals describe actual packaged documentation snapshots before this final
+measurement addendum. No package was launched or claimed signed.
+
+Reducer workload: one direct warmup plus five measured runs per revision; prior baseline
+samples were recorded at the start of this continuation. Before ms: 29.0536, 29.2975, 29.189, 29.2795, 30.2557.
+After ms: 37.5618, 36.5306, 37.2953, 38.116, 37.8277.
+Both retain 500 records / 220,992-221,477 estimated timeline bytes. The measured increase
+includes new notification observation/count work; no speed improvement is claimed. This is
+synthetic reducer timing, not process RSS, role-update storms or UI frame latency. Native
+RSS/idle CPU, display/GPU parameters and physical notifications remain unmeasured because
+owner Escape stops paused native automation. Imported #18 macOS evidence is not evidence for
+this integrated Windows executable.
+
+Integrated executable SHA256:
+- text: 0020AF6225691A06B5C45E47B4F85F7061FFBD046C92B779EFB5F8D1EE15B4E4
+- voice: EAD41DAC6D98F404881987517E83FCC8E3CADBD9BCFC9514985EAD3D853DF145

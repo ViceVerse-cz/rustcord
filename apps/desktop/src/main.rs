@@ -41,6 +41,7 @@ struct Desktop {
     state: State,
     messaging: ui::MessagingUi,
     downloads: downloads::Downloads,
+    notifications: platform::notifications::Notifications,
     uploads: uploads::Uploads,
     download_close_pending: bool,
     window: Arc<winit::window::Window>,
@@ -161,8 +162,10 @@ impl Desktop {
             .build()?;
         let mut store = (!demo).then(|| credentials::Store::start(cc.egui_ctx.clone()));
         let cache = (!demo).then(|| cache::Cache::start(cc.egui_ctx.clone()));
-        let state = if demo {
-            if std::env::args().any(|arg| arg == "--demo-voice") {
+        let mut state = if demo {
+            if std::env::args().any(|arg| arg == "--demo-notifications") {
+                test_support::notification_demo_state()
+            } else if std::env::args().any(|arg| arg == "--demo-voice") {
                 test_support::voice_demo_state()
             } else if std::env::args().any(|arg| arg == "--demo-chat") {
                 test_support::chat_demo_state()
@@ -191,12 +194,22 @@ impl Desktop {
             .iter()
             .last()
             .map_or(10_000, |m| m.id.0.max(10_000));
+        let mut messaging = ui::MessagingUi::default();
+        messaging.notification_test_available =
+            demo && std::env::args().any(|arg| arg == "--demo-system-notifications");
+        if messaging.notification_test_available {
+            state.status = "Offline fixture · explicit system notification test";
+        }
         Ok(Self {
             login: None,
             connection: None,
             state,
-            messaging: ui::MessagingUi::default(),
+            messaging,
             downloads: downloads::Downloads::default(),
+            notifications: {
+                let wake = cc.egui_ctx.clone();
+                platform::notifications::Notifications::new(move || wake.request_repaint())
+            },
             uploads: uploads::Uploads::default(),
             download_close_pending: false,
             window: cc
@@ -271,6 +284,7 @@ impl Desktop {
         ));
     }
     fn logout(&mut self, ctx: &egui::Context) {
+        self.notifications.clear();
         self.uploads.cancel();
         if let Some(store) = &mut self.store {
             store.cancel_load();
@@ -1123,6 +1137,22 @@ impl Desktop {
                 || matches!(&event.event, Event::HistoryFailed { channel, request, failure: Failure::Forbidden }
                 if self.state.selected == Some(*channel) && self.state.request == *request && self.state.history_pending);
             let history_changed = changes_active_history(&self.state, &event.event);
+            if event.generation == self.state.generation
+                && (invalidate
+                    || event.event.changes_access()
+                    || matches!(
+                        &event.event,
+                        Event::NotificationPreferences(_)
+                            | Event::Disconnected
+                            | Event::ReadState(client_core::read_state::Event::Ack { .. })
+                            | Event::ReadState(client_core::read_state::Event::Result {
+                                result: Ok(()),
+                                ..
+                            })
+                    ))
+            {
+                self.notifications.dismiss();
+            }
             self.state.apply(event);
             if !removed_channels.is_empty() {
                 for channel in self
@@ -1245,6 +1275,19 @@ impl eframe::App for Desktop {
     }
     fn logic(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         self.poll(ctx);
+        if self.state.auth != AuthState::Authenticated && !self.state.demo {
+            self.notifications.clear();
+            self.messaging.notifications_enabled = false;
+        }
+        while let Some(notification) = self.state.take_notification() {
+            if !self.fixture_only
+                && self.messaging.notifications_enabled
+                && !(ctx.input(|i| i.focused)
+                    && self.messaging.viewing_latest(notification.channel))
+            {
+                self.notifications.notify();
+            }
+        }
         #[cfg(feature = "voice")]
         {
             self.messaging.voice_ptt_active = ctx
@@ -1362,7 +1405,17 @@ impl eframe::App for Desktop {
             }
         } else if self.state.user.is_some() {
             self.messaging.storage_status = self.cache_status;
+            self.messaging.notification_status = self.notifications.status().label();
             let commands = self.messaging.show(ui, &mut self.state);
+            self.notifications.set_enabled(
+                self.messaging.notifications_enabled
+                    && (!self.fixture_only || self.messaging.notification_test_available),
+            );
+            if std::mem::take(&mut self.messaging.notification_test_requested)
+                && self.messaging.notification_test_available
+            {
+                self.notifications.notify();
+            }
             // Selection may have changed during this frame; never reuse another channel's file.
             self.uploads.poll(
                 self.state.generation,

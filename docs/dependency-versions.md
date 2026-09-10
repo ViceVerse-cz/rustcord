@@ -113,6 +113,7 @@ Rust toolchain: 1.98.1, edition 2024. Host resolution: aarch64-apple-darwin. Car
 | euclid | 0.22.14 | MIT OR Apache-2.0 |
 | fallible-iterator | 0.3.0 | MIT/Apache-2.0 |
 | fallible-streaming-iterator | 0.1.9 | MIT/Apache-2.0 |
+| fastrand | 2.5.0 | Apache-2.0 OR MIT |
 | fax | 0.2.7 | MIT |
 | fdeflate | 0.3.7 | MIT OR Apache-2.0 |
 | fearless_simd | 0.4.1 | Apache-2.0 OR MIT |
@@ -132,9 +133,11 @@ Rust toolchain: 1.98.1, edition 2024. Host resolution: aarch64-apple-darwin. Car
 | futures-core | 0.3.34 | MIT OR Apache-2.0 |
 | futures-executor | 0.3.34 | MIT OR Apache-2.0 |
 | futures-io | 0.3.34 | MIT OR Apache-2.0 |
+| futures-lite | 2.6.1 | Apache-2.0 OR MIT |
 | futures-macro | 0.3.34 | MIT OR Apache-2.0 |
 | futures-sink | 0.3.34 | MIT OR Apache-2.0 |
 | futures-task | 0.3.34 | MIT OR Apache-2.0 |
+| futures-timer | 3.0.4 | MIT/Apache-2.0 |
 | futures-util | 0.3.34 | MIT OR Apache-2.0 |
 | generic-array | 0.14.7 | MIT |
 | getrandom | 0.2.17 | MIT OR Apache-2.0 |
@@ -222,6 +225,8 @@ Rust toolchain: 1.98.1, edition 2024. Host resolution: aarch64-apple-darwin. Car
 | lock_api | 0.4.14 | MIT OR Apache-2.0 |
 | log | 0.4.34 | MIT OR Apache-2.0 |
 | lru-slab | 0.1.2 | MIT OR Apache-2.0 OR Zlib |
+| mac-notification-sys | 0.6.15 | MIT/Apache-2.0 |
+| mac-usernotifications | 0.3.1 | MIT OR Apache-2.0 |
 | mach2 | 0.6.0 | BSD-2-Clause OR MIT OR Apache-2.0 |
 | memchr | 2.8.3 | Unlicense OR MIT |
 | miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 |
@@ -231,6 +236,7 @@ Rust toolchain: 1.98.1, edition 2024. Host resolution: aarch64-apple-darwin. Car
 | naga | 30.0.1 | MIT OR Apache-2.0 |
 | naga-types | 30.0.1 | MIT OR Apache-2.0 |
 | nohash-hasher | 0.2.0 | Apache-2.0 OR MIT |
+| notify-rust | 4.18.0 | MIT OR Apache-2.0 |
 | num-conv | 0.2.2 | MIT OR Apache-2.0 |
 | num-derive | 0.4.2 | MIT OR Apache-2.0 |
 | num-traits | 0.2.19 | MIT OR Apache-2.0 |
@@ -246,6 +252,7 @@ Rust toolchain: 1.98.1, edition 2024. Host resolution: aarch64-apple-darwin. Car
 | objc2-core-foundation | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | objc2-core-graphics | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | objc2-core-image | 0.2.2 | MIT |
+| objc2-core-location | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | objc2-encode | 4.1.0 | MIT |
 | objc2-exception-helper | 0.1.1 | Zlib OR Apache-2.0 OR MIT |
 | objc2-foundation | 0.2.2 | MIT |
@@ -255,6 +262,7 @@ Rust toolchain: 1.98.1, edition 2024. Host resolution: aarch64-apple-darwin. Car
 | objc2-metal | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | objc2-quartz-core | 0.2.2 | MIT |
 | objc2-quartz-core | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
+| objc2-user-notifications | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | objc2-web-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | once_cell | 1.21.4 | MIT OR Apache-2.0 |
 | opaque-debug | 0.3.1 | MIT OR Apache-2.0 |
@@ -268,6 +276,7 @@ Rust toolchain: 1.98.1, edition 2024. Host resolution: aarch64-apple-darwin. Car
 | ordered-float | 5.5.0 | MIT |
 | p256 | 0.13.2 | Apache-2.0 OR MIT |
 | p384 | 0.13.1 | Apache-2.0 OR MIT |
+| parking | 2.2.1 | Apache-2.0 OR MIT |
 | parking_lot | 0.11.2 | Apache-2.0/MIT |
 | parking_lot | 0.12.5 | MIT OR Apache-2.0 |
 | parking_lot_core | 0.8.6 | Apache-2.0/MIT |

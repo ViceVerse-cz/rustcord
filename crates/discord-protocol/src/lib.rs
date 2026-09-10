@@ -2,6 +2,7 @@
 pub mod archives;
 mod attachments;
 mod embeds;
+pub mod notifications;
 pub mod permissions;
 pub mod pins;
 pub mod profile;
@@ -280,6 +281,10 @@ pub struct Ready {
     pub users: Vec<UserDto>,
     #[serde(default)]
     pub read_state: Option<read_state::Snapshot>,
+    #[serde(default)]
+    pub user_guild_settings: Option<notifications::Snapshot>,
+    #[serde(default)]
+    pub sessions: Option<notifications::Sessions>,
     pub user: UserDto,
     pub session_id: String,
     pub resume_gateway_url: String,

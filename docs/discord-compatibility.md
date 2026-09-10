@@ -131,7 +131,7 @@ Only catalog entries explicitly available, unmanaged and unrestricted by roles a
 unknown eligibility remains disabled. Cross-server/DM catalog selection and full role/Nitro
 entitlement inference are not implemented; the service remains authoritative for actual sends.
 Animated emoji are inserted with their original animated markup and shown as still previews.
-The editable composer itself continues to display raw Unicode/markup while editing.
+The composer now displays known user mentions as `@name`, Unicode as bundled Twemoji, and custom emoji as static server artwork, while retaining original wire text for editing/copy/send. Unresolved user IDs remain literal; unavailable server artwork shows its name.
 
 
 ## Server voice — September 10, 2026
@@ -227,3 +227,11 @@ moderating other users' messages, new guild joining, and full member-directory s
 are outside this slice. Synthetic parser, localhost transport and reducer/UI guard tests do
 not establish live compatibility. Native automation remains paused after owner Escape stops;
 no live account action, microphone capture or new native screenshot was performed.
+
+## Composer and notifications — September 10, 2026
+
+See [notifications](notifications.md) for service badge/read-state reconciliation, focused
+view ACKs, session-only native opt-in and fail-closed mute/DND handling. READY read-state
+counts, settings and session presence use isolated unofficial normal-user wire shapes.
+Synthetic protocol/UI tests are not live Discord validation. Role/everyone mention events,
+blocked relationships and complete protobuf notification preferences remain unsupported.

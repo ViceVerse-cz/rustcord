@@ -433,12 +433,17 @@ async fn run_inner(
                                             }
                                         }
                                         let (guilds, channels) = ready.navigation().map_err(|_| Failure::ProtocolAt("Gateway login: invalid or oversized channel/thread navigation"))?;
-                                        let (read_entries,read_version,partial)=ready.read_state.take().map_or((None,None,false),|snapshot|(Some(snapshot.entries.into_iter().filter(|e|e.kind==0).map(|e|(e.id,e.last_message_id)).collect()),snapshot.version,snapshot.partial));
+                                        let (read_entries,read_version,partial)=ready.read_state.take().map_or((None,None,false),|snapshot|(Some(snapshot.entries.into_iter().filter(|e|e.kind==0).map(|e|(e.id,e.last_message_id,e.mention_count)).collect()),snapshot.version,snapshot.partial));
                                         if guilds.len() + channels.len() > MAX_NAV { return Err(Failure::Capacity); }
                                         calls.allowed=channels.iter().filter(|c|(c.guild.is_none() && c.kind==1 && c.recipients.len()==1) || (c.guild.is_some() && c.kind==2)).map(|c|(c.id,c.guild)).collect();
                                         if was_ready { emit(Event::Resync)?; }
                                         emit(Event::Ready { user: ready.user.into_model(), guilds, channels, permissions })?; was_ready = true;
                                         emit(Event::ReadState(client_core::read_state::Event::Snapshot{entries:read_entries,version:read_version,partial}))?;
+                                        if let Some(snapshot) = ready.user_guild_settings.take() {
+                                            let (entries,replace)=snapshot.entries();
+                                            emit(notification_settings(entries,replace))?;
+                                        }
+                                        if let Some(sessions) = ready.sessions.as_ref() { emit(Event::NotificationPreferences(client_core::notifications::Event::Presence(sessions.dnd())))?; }
                                         if !participants.is_empty() { emit(Event::Voice(client_core::voice::Event::Snapshot { partial: false, guild: None, participants }))?; }
                                         ready_at = Some(Instant::now());
                                     }
@@ -475,10 +480,19 @@ async fn run_inner(
                                     }
                                     "CHANNEL_RECIPIENT_ADD" => {let d:RecipientAdded=decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;emit(Event::RecipientAdded {channel:d.channel_id,user:d.user.into_model()})?;}
                                     "CHANNEL_RECIPIENT_REMOVE" => {let d:RecipientRemoved=decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;emit(Event::RecipientRemoved {channel:d.channel_id,user:d.user.id})?;}
+                                    "USER_GUILD_SETTINGS_UPDATE" => {
+                                        let setting=decode::<discord_protocol::notifications::Setting>(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
+                                        emit(notification_settings(vec![setting],false))?;
+                                    }
+                                    "SESSIONS_REPLACE" => {
+                                        let sessions=decode::<discord_protocol::notifications::Sessions>(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
+                                        emit(Event::NotificationPreferences(client_core::notifications::Event::Presence(sessions.dnd())))?;
+                                    }
+                                    "USER_SETTINGS_PROTO_UPDATE" => emit(Event::NotificationPreferences(client_core::notifications::Event::Invalidate))?,
                                     "MESSAGE_CREATE" => emit(Event::Message(decode::<MessageDto>(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?.into_model()))?,
                                     "MESSAGE_ACK" => {
                                         let ack=decode::<read_state::Ack>(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
-                                        emit(Event::ReadState(client_core::read_state::Event::Ack{channel:ack.channel_id,message:ack.message_id,manual:ack.manual,version:ack.version}))?;
+                                        emit(Event::ReadState(client_core::read_state::Event::Ack{channel:ack.channel_id,message:ack.message_id,manual:ack.manual,mention_count:ack.mention_count,version:ack.version}))?;
                                     }
                                     "PASSIVE_UPDATE_V2" => {
                                         if let Some(owner)=owner_id && let Some((guild,roles,timeout_until))=permissions::passive(packet.d.get().as_bytes(),owner).map_err(|_|Failure::Protocol)? {
@@ -590,6 +604,29 @@ async fn run_inner(
     }
     Err(Failure::Network)
 }
+fn notification_settings(
+    entries: Vec<discord_protocol::notifications::Setting>,
+    replace: bool,
+) -> Event {
+    Event::NotificationPreferences(client_core::notifications::Event::Settings {
+        entries: entries
+            .into_iter()
+            .map(|s| client_core::notifications::Setting {
+                guild: s.guild_id,
+                muted: s.channel_overrides.as_ref().and(s.muted),
+                level: s.message_notifications,
+                channels: s
+                    .channel_overrides
+                    .map_or_else(Vec::new, |c| c.0)
+                    .into_iter()
+                    .map(|c| (c.channel_id, c.muted, c.message_notifications))
+                    .collect(),
+            })
+            .collect(),
+        replace,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
