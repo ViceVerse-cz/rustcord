@@ -646,6 +646,66 @@ mod tests {
         net::TcpListener,
     };
     #[tokio::test]
+    async fn single_message_delete_confirms_only_success_and_never_retries_ambiguity() {
+        use model::Id;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let mut api = DiscordApi::new(Arc::new(
+                SessionSecret::from_owner_input("SYNTHETIC_DELETE_TOKEN".into()).unwrap(),
+            ))
+            .unwrap();
+            api.base = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                for status in [
+                    "204 No Content",
+                    "403 Forbidden",
+                    "500 Internal Server Error",
+                ] {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut request = Vec::new();
+                    loop {
+                        let mut bytes = [0; 1024];
+                        let n = socket.read(&mut bytes).await.unwrap();
+                        assert!(n > 0);
+                        request.extend_from_slice(&bytes[..n]);
+                        assert!(request.len() < 4096);
+                        if request.windows(4).any(|w| w == b"\r\n\r\n") {
+                            break;
+                        }
+                    }
+                    let request = std::str::from_utf8(&request).unwrap();
+                    assert!(request.starts_with("DELETE /channels/20/messages/100 HTTP/1.1\r\n"));
+                    assert!(request.contains("SYNTHETIC_DELETE_TOKEN"));
+                    socket.write_all(format!(
+                        "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    ).as_bytes()).await.unwrap();
+                }
+            });
+            let command = || Command::Delete {
+                channel: Id(20),
+                message: Id(100),
+            };
+            assert!(matches!(
+                api.execute(command()).await,
+                Event::Delete {
+                    channel: Id(20),
+                    id: Id(100)
+                }
+            ));
+            assert!(matches!(
+                api.execute(command()).await,
+                Event::Unavailable(Id(20))
+            ));
+            assert!(matches!(
+                api.execute(command()).await,
+                Event::Failure(Failure::Ambiguous)
+            ));
+            server.await.unwrap();
+        })
+        .await
+        .unwrap();
+    }
+    #[tokio::test]
     async fn history_after_includes_zero_and_rejects_combined_cursors() {
         use model::Id;
         tokio::time::timeout(Duration::from_secs(10), async {

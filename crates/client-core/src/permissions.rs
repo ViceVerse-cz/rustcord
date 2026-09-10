@@ -497,7 +497,37 @@ impl State {
             })
     }
     pub fn can_delete(&self, channel: Id, message: Id) -> bool {
-        self.can_edit(channel, message)
+        if self.auth != AuthState::Authenticated
+            || !self.gateway_connected
+            || !self.can_view(channel)
+        {
+            return false;
+        }
+        let Some(user) = self.user.as_ref().filter(|user| user.id.0 != 0) else {
+            return false;
+        };
+        let Some(message) = self
+            .timeline
+            .get(message)
+            .filter(|message| message.channel == channel && message.id.0 != 0)
+        else {
+            return false;
+        };
+        let Some(target) = self
+            .channels
+            .iter()
+            .find(|target| target.id == channel && target.supports_text())
+        else {
+            return false;
+        };
+        // Discord's message-type table explicitly excludes several system messages.
+        if !matches!(message.kind, 0 | 6..=12 | 14..=20 | 22..=29 | 31 | 32 | 36..=39 | 44 | 46) {
+            return false;
+        }
+        (message.author.id == user.id && message.kind != 24)
+            || (target.guild.is_some()
+                && matches!(target.kind, 0 | 5 | 10..=12)
+                && self.permission(channel, p::MANAGE_MESSAGES) == Some(true))
     }
     pub fn prepare_edit(&mut self, channel: Id, message: Id, content: String) -> Option<Command> {
         if !self.can_edit(channel, message)

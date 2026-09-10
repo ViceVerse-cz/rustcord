@@ -1584,3 +1584,35 @@ No application runtime or build-dependency change; Cargo.lock is unchanged. The 
 cargo-deny tool runs only during development/CI. Release packages and replay were not rebuilt
 for this tooling-only slice. CI installation/check cost is separate from client runtime cost;
 no startup, memory or package-size improvement is claimed.
+
+
+## Authorized single-message deletion - September 10, 2026
+
+| Metric / method | Main 899fca7 | Authorized deletion | Delta |
+| --- | ---: | ---: | ---: |
+| text executable, bytes | 50,898,944 | 50,898,432 | -512 (-0.001%) |
+| text installed, bytes | 51,535,910 | 51,538,690 | +2,780 (+0.005%) |
+| text zip, bytes | 31,805,467 | 31,807,111 | +1,644 (+0.005%) |
+| voice executable, bytes | 54,253,568 | 54,253,056 | -512 (-0.001%) |
+| voice installed, bytes | 55,113,307 | 55,116,087 | +2,780 (+0.005%) |
+| voice zip, bytes | 33,177,815 | 33,178,418 | +603 (+0.002%) |
+| 100,000-event replay median, ms | 39.6040 | 39.5085 | -0.0955 (-0.24%) |
+| Retained 500-message timeline, estimated bytes | 236,992..237,477 | 236,992..237,477 | 0 |
+
+Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical CPUs), approximately 31 GiB RAM,
+Rust 1.98.1, release thin LTO/one codegen unit. Both unsigned Windows variants passed.
+Baseline packages were freshly built from clean main 899fca7 in a separate worktree before
+source edits. Text has no default features; voice explicitly enables voice. Installed sums and
+DEFLATE 9 ZIPs exclude PR screenshots and nested voice for text. Package documentation is its
+build-time snapshot before this measurement addendum; installed deltas include docs.
+
+Initial non-interleaved samples showed a large timing difference (baseline median 77.0567 ms),
+so both retained executables were remeasured under the same current host load: one warmup each,
+then five alternating before/after runs. Baseline samples:
+39.1752,41.5123,39.2129,39.604,39.9511ms. Changed samples:
+40.9527,40.2612,38.4499,39.5085,39.2426ms. Reported medians use this paired rerun. This common-path reducer
+workload does not measure deletion network latency or native confirmation rendering; small
+shared-host timing differences are noisy, with no speedup claim. Retained estimates are unchanged.
+No new cache, queue or dependency was added. Native RSS/CPU/frame/startup measurements and
+screenshots remain unavailable while desktop automation is owner-paused. No live account or
+audio action occurred.

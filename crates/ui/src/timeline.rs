@@ -226,23 +226,25 @@ fn message_actions(
             }
             ui.close();
         }
-        if own {
+        if own || can_delete {
             ui.separator();
-            if ui
+        }
+        if own
+            && ui
                 .add_enabled(can_edit, egui::Button::new("Edit message"))
                 .clicked()
-            {
-                *editing = Some((message.channel, message.id, message.content.clone()));
-                *edit_started = true;
-                ui.close();
-            }
-            if ui
-                .add_enabled(can_delete, egui::Button::new("Delete message…"))
+        {
+            *editing = Some((message.channel, message.id, message.content.clone()));
+            *edit_started = true;
+            ui.close();
+        }
+        if (own || can_delete)
+            && ui
+                .add_enabled(can_delete, egui::Button::new("Delete message\u{2026}"))
                 .clicked()
-            {
-                *deleting = Some((message.channel, message.id));
-                ui.close();
-            }
+        {
+            *deleting = Some((message.channel, message.id));
+            ui.close();
         }
     });
     menu.widget_info(|| {
@@ -811,6 +813,116 @@ mod tests {
             embeds_suppressed: false,
         }
     }
+    #[test]
+    fn message_menu_allows_authorized_delete_without_exposing_other_authors_edit() {
+        fn collect(shape: &egui::Shape, labels: &mut Vec<(String, egui::Rect)>) {
+            match shape {
+                egui::Shape::Text(text) => {
+                    labels.push((text.galley.job.text.clone(), text.visual_bounding_rect()))
+                }
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        collect(shape, labels);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for (own, can_delete) in [(false, true), (false, false), (true, false)] {
+            let ctx = egui::Context::default();
+            let message = text_message(1);
+            let mut editing = None;
+            let mut edit_started = false;
+            let mut deleting = None;
+            let mut reply = None;
+            let mut frame = |events: Vec<egui::Event>| {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        focused: true,
+                        events,
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(320.0, 400.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        message_actions(
+                            ui,
+                            &message,
+                            (own, true, true, can_delete),
+                            None,
+                            &mut reply,
+                            (&mut editing, &mut edit_started),
+                            &mut deleting,
+                        )
+                    },
+                );
+                assert!(output.platform_output.commands.is_empty());
+                let mut labels = vec![];
+                for shape in &output.shapes {
+                    collect(&shape.shape, &mut labels);
+                }
+                output.drop_without_applying_deltas();
+                labels
+            };
+            for _ in 0..2 {
+                frame(vec![]);
+            }
+            // The real More button is keyboard reachable and opens the native egui menu.
+            for key in [egui::Key::Tab, egui::Key::Enter] {
+                frame(vec![egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }]);
+            }
+            frame(vec![]);
+            let labels = frame(vec![]);
+            assert!(labels.iter().any(|(label, _)| label == "Copy message"));
+            assert_eq!(labels.iter().any(|(label, _)| label == "Edit message"), own);
+            let delete = labels
+                .iter()
+                .find(|(label, _)| label.starts_with("Delete message"));
+            assert_eq!(delete.is_some(), own || can_delete);
+            let action = if own {
+                labels.iter().find(|(label, _)| label == "Edit message")
+            } else {
+                delete
+            };
+            if let Some((_, rect)) = action {
+                let pos = rect.center();
+                for pressed in [true, false] {
+                    frame(vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ]);
+                }
+            }
+            assert!(reply.is_none());
+            assert_eq!(
+                deleting,
+                (!own && can_delete).then_some((message.channel, message.id))
+            );
+            if own {
+                assert_eq!(
+                    editing,
+                    Some((message.channel, message.id, message.content.clone()))
+                );
+                assert!(edit_started);
+            } else {
+                assert!(editing.is_none() && !edit_started);
+            }
+        }
+    }
+
     #[test]
     fn inline_reveals_are_independent_of_media_and_reset_on_edit_and_navigation() {
         fn collect(shape: &egui::Shape, labels: &mut Vec<(String, egui::Rect)>) {

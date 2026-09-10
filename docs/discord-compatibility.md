@@ -392,3 +392,19 @@ rendered. Equal positions favor the lower role ID, consistent with
 Names retain hue when readable; the theme adjusts insufficient contrast, including hover.
 Member list subscriptions remain unofficial. Synthetic role evidence does not establish
 live role behavior for every account.
+
+
+### Authorized message deletion - September 10, 2026
+
+A loaded guild message can be deleted after explicit confirmation when its author is the current
+user or the current effective channel permissions include MANAGE_MESSAGES. Others' DM/group-DM
+messages are excluded; edit remains author-only. Permission overwrites and thread-parent
+inheritance use the existing permission resolver. The confirmation rechecks access; the server
+remains authoritative and HTTP rejection/uncertainty does not synthesize successful deletion.
+
+The [official message resource](https://docs.discord.com/developers/resources/message#delete-message)
+documents deleting others' guild messages with MANAGE_MESSAGES and lists deletable message types.
+Known non-deletable and unknown types are denied locally; automoderation notices require
+MANAGE_MESSAGES even when their supplied author matches the user. This is dated protocol evidence,
+not proof of normal-user service acceptance. Offline permission/menu/local HTTP tests are synthetic;
+no message was deleted on Discord, and native confirmation/screen-reader evidence remains unverified.

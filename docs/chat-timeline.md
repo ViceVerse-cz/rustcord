@@ -58,3 +58,9 @@ The gallery reuses the bounded media cache and the existing spoiler reveal bound
 Markdown's final block newline no longer creates an empty line beneath messages; internal
 line breaks and the existing author/date/reply/unread grouping boundaries remain intact.
 The default offline fixture now includes a second image to demonstrate the gallery.
+
+
+The More menu also exposes Delete for another author's loaded guild message when effective
+MANAGE_MESSAGES access allows it. It opens the existing confirmation; changing permissions before
+confirmation disables deletion. Copy/reply and author-only edit behavior remain available as before.
+Non-deletable/unknown service message types do not gain a working Delete action.

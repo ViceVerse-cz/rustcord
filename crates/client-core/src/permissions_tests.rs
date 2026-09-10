@@ -182,6 +182,194 @@ fn state() -> State {
 }
 
 #[test]
+fn message_deletion_uses_manage_messages_without_granting_edit_or_requiring_send() {
+    let mut state = state();
+    let mut other = message(101, Id(20));
+    other.author.id = Id(3);
+    apply(&mut state, Event::Message(other));
+    assert!(state.can_delete(Id(20), Id(100)));
+    assert!(!state.can_delete(Id(20), Id(101)));
+    let mut role = snapshot().guilds[0].roles.as_ref().unwrap()[1].clone();
+    role.bits = p::MANAGE_MESSAGES;
+    permission(
+        &mut state,
+        PermissionEvent::Role {
+            guild: Id(10),
+            role,
+        },
+    );
+    permission(
+        &mut state,
+        PermissionEvent::Member {
+            guild: Id(10),
+            roles: Patch::Value(vec![Id(11)]),
+            timeout_until: Patch::Absent,
+        },
+    );
+    // The role's existing channel overwrite denies SEND_MESSAGES only.
+    assert!(!state.can_send(Id(20)));
+    assert!(!state.can_edit(Id(20), Id(101)));
+    assert!(matches!(
+        state.prepare_delete(Id(20), Id(101)),
+        Some(Command::Delete {
+            channel: Id(20),
+            message: Id(101)
+        })
+    ));
+    assert!(!state.can_delete(Id(21), Id(101)));
+    assert!(!state.can_delete(Id(20), Id(999)));
+    let user = state.user.take();
+    assert!(!state.can_delete(Id(20), Id(101)));
+    state.user = user;
+    state.gateway_connected = false;
+    assert!(!state.can_delete(Id(20), Id(101)));
+    state.gateway_connected = true;
+    state.auth = crate::auth::AuthState::Expired;
+    assert!(!state.can_delete(Id(20), Id(101)));
+    state.auth = crate::auth::AuthState::Unauthenticated;
+    assert!(!state.can_delete(Id(20), Id(101)));
+    state.auth = crate::auth::AuthState::Authenticated;
+    deny(&mut state, p::MANAGE_MESSAGES);
+    assert!(state.can_delete(Id(20), Id(100)));
+    assert!(state.prepare_delete(Id(20), Id(101)).is_none());
+    permission(
+        &mut state,
+        PermissionEvent::Channel {
+            channel: Id(20),
+            guild: Some(Id(10)),
+            overwrites: Patch::Null,
+        },
+    );
+    assert!(!state.can_delete(Id(20), Id(100)));
+    state.permissions.replace(snapshot()).unwrap();
+    state
+        .timeline
+        .insert(message(100, Id(20)), false, false)
+        .unwrap();
+    deny(&mut state, p::VIEW_CHANNEL);
+    assert!(!state.can_delete(Id(20), Id(100)));
+}
+
+#[test]
+fn thread_deletion_inherits_parent_overwrites_and_respects_timeout_and_admin() {
+    let mut state = state();
+    let Some(Command::History { request, .. }) = state.select(Id(30)) else {
+        panic!()
+    };
+    history(&mut state, Id(30), request, 100);
+    let mut other = message(101, Id(30));
+    other.author.id = Id(3);
+    apply(&mut state, Event::Message(other));
+    permission(
+        &mut state,
+        PermissionEvent::Channel {
+            channel: Id(20),
+            guild: Some(Id(10)),
+            overwrites: Patch::Value(vec![p::Overwrite {
+                id: Id(2),
+                kind: 1,
+                allow: p::MANAGE_MESSAGES,
+                deny: p::SEND_MESSAGES_IN_THREADS,
+            }]),
+        },
+    );
+    assert!(state.can_delete(Id(30), Id(101)));
+    assert!(!state.can_send(Id(30)));
+    permission(
+        &mut state,
+        PermissionEvent::Member {
+            guild: Id(10),
+            roles: Patch::Absent,
+            timeout_until: Patch::Value(i64::MAX),
+        },
+    );
+    assert!(!state.can_delete(Id(30), Id(101)));
+    assert!(state.can_delete(Id(30), Id(100)));
+    permission(
+        &mut state,
+        PermissionEvent::Member {
+            guild: Id(10),
+            roles: Patch::Absent,
+            timeout_until: Patch::Null,
+        },
+    );
+    deny(&mut state, p::MANAGE_MESSAGES);
+    assert!(!state.can_delete(Id(30), Id(101)));
+    let mut role = snapshot().guilds[0].roles.as_ref().unwrap()[0].clone();
+    role.bits = p::ADMINISTRATOR;
+    permission(
+        &mut state,
+        PermissionEvent::Role {
+            guild: Id(10),
+            role,
+        },
+    );
+    assert!(state.can_delete(Id(30), Id(101)));
+    assert!(!state.can_edit(Id(30), Id(101)));
+}
+
+#[test]
+fn deletion_never_uses_guild_privileges_for_other_private_channel_messages() {
+    for kind in [1, 3] {
+        let mut state = state();
+        let mut private = channel(40, kind, None);
+        private.guild = None;
+        state.channels.push(private);
+        let Some(Command::History { request, .. }) = state.select(Id(40)) else {
+            panic!()
+        };
+        history(&mut state, Id(40), request, 100);
+        let mut other = message(101, Id(40));
+        other.author.id = Id(3);
+        apply(&mut state, Event::Message(other));
+        // Generic private-channel permissions are permissive; ownership must still be required.
+        assert_eq!(state.permission(Id(40), p::MANAGE_MESSAGES), Some(true));
+        assert!(state.can_delete(Id(40), Id(100)));
+        assert!(!state.can_delete(Id(40), Id(101)));
+        assert!(!state.can_edit(Id(40), Id(101)));
+        let mut automod = message(102, Id(40));
+        automod.kind = 24;
+        state.timeline.insert(automod, false, false).unwrap();
+        assert!(!state.can_delete(Id(40), Id(102)));
+        state.channels.retain(|channel| channel.id != Id(40));
+        assert!(!state.can_delete(Id(40), Id(100)));
+    }
+}
+
+#[test]
+fn deletion_obeys_documented_message_types_including_automod_exception() {
+    let mut state = state();
+    for manage in [false, true] {
+        let mut metadata = snapshot();
+        if manage {
+            metadata.guilds[0].roles.as_mut().unwrap()[0].bits |= p::MANAGE_MESSAGES;
+        }
+        state.permissions.replace(metadata).unwrap();
+        for (kind, allowed) in [
+            (0, true),
+            (7, true),
+            (19, true),
+            (46, true),
+            (3, false),
+            (21, false),
+            (13, false),
+            (255, false),
+            (24, manage),
+        ] {
+            state.timeline.clear();
+            let mut message = message(100, Id(20));
+            message.kind = kind;
+            state.timeline.insert(message, false, false).unwrap();
+            assert_eq!(
+                state.can_delete(Id(20), Id(100)),
+                allowed,
+                "kind {kind}, manage {manage}"
+            );
+        }
+    }
+}
+
+#[test]
 fn revoked_view_cannot_return_through_stale_gateway_content_or_old_history() {
     for resync in [false, true] {
         let mut state = state();
