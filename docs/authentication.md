@@ -1,5 +1,23 @@
 # Authentication and owner-controlled live validation
 
+Linux uses GTK4/WebKit6 with a fresh ephemeral NetworkSession and persistent credential
+storage disabled. Normal TLS validation remains enabled. Scripts run at document start only
+in the top Discord frame. Native navigation and candidate origin checks restrict the login
+to https://discord.com. Popups, downloads, file choosers, permission requests, HTTP-auth,
+notifications and printing are denied; embedded challenge availability remains unverified.
+
+WebKit6 script-message callbacks lack trusted sender-frame metadata. The callback accepts
+only a boolean wake signal. A protected main-frame closure retains one ASCII candidate of at
+most 2113 bytes (65-byte capability plus 2048-byte token). A native main-frame query checks
+origin and result bounds before creating a Rust string; Rust checks URI, capability, lifetime
+and SessionSecret validation again. Queries are at least 100 ms apart, with one cancellable
+evaluation and one secret slot. A child frame can only request a query of the main frame.
+
+Close/drop invalidates pending results, clears the secret/scripts/handler, cancels evaluation,
+stops loading, terminates the ephemeral web process and destroys the GTK window. GLib pumping
+checks a 2-ms deadline between at most 16 callbacks; one native callback may exceed that time.
+These are implemented limits, not measured teardown/storage or live login compatibility.
+
 Serein uses Discord’s official login page in a temporary platform webview, not OAuth. The credential handoff is unofficial and live-unverified; see the compatibility matrix. Complete authentication yourself, in the application. Never send passwords, tokens, MFA codes, QR screenshots, or private message contents to the coding agent, issues, logs, or CI.
 
 1. Build `cargo run --locked` on a supported platform. Use a private conversation controlled by the account owner. The owner enables the private-test acknowledgment and presses **Sign in with Discord**.

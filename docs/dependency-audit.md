@@ -1,11 +1,18 @@
 # Dependency audit — September 10, 2026
 
-The native dependency patch now reports **zero vulnerability-class findings and two denied
-warnings**, down from six and five at baseline e4ef4a8. `cargo-audit 0.22.2` with the unchanged
-`--deny warnings` gate still exits 1 for Linux GLib 0.18.5 (RUSTSEC-2024-0429, unsound) and
-proc-macro-error 1.0.4 (RUSTSEC-2024-0370, unmaintained). Neither warning is suppressed.
-This is partial remediation, not a clean audit or release approval. Older results below are
-historical; the native timer/libcrux follow-up at the end records the current change.
+The Linux GTK4/WebKit6 migration passes the unchanged `cargo audit --deny warnings` gate:
+**zero vulnerability-class findings and zero warnings**, exit 0, with 726 locked packages.
+The check used cargo-audit 0.22.2 and 1,243 advisories at
+`b50980aad8b8f14f77e25a97b32dd94bf008b0af`. No ignores or vulnerable-version relabeling were added.
+Historical results below describe earlier revisions. This audit does not prove native login,
+runtime storage isolation, live service compatibility or a completed security review.
+
+The migration replaces Linux's old GLib/GTK3/WebKit2GTK chain with GTK4 0.11.4, WebKit6 0.6.1
+and GLib 0.22.9. Wry's upstream GTK4 migration is not released; its old Linux dependencies
+would remain in Cargo.lock even if the consumer only selected Wry on Windows/macOS. The local
+Wry 0.57.0 manifest/build patch removes those unused declarations and rejects unsupported
+target builds; all backend sources remain unchanged. Provenance is under vendor/wry.
+Native Linux/Wayland/X11 execution and live login validation remain open.
 
 ## Earlier text-client result
 
