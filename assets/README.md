@@ -20,3 +20,7 @@ The five font blobs total **18,111,856 bytes (17.27 MiB)**, below the 18 MiB ass
 The focused test checks egui glyph availability for synthetic Japanese kana/kanji, simplified/traditional Chinese, Korean, Arabic, Latin and combining accents in both font families. It does not prove complete Unicode coverage, correct Arabic shaping/bidirectional editing, actual IME behavior, screen-reader behavior, or platform rendering. The single CJK face uses Japanese regional Han forms; locale-specific forms and extended emoji remain incomplete. Fallback glyphs in code blocks are not guaranteed to have the primary monospace font's cell width.
 
 Test detail: egui 0.36.2's [`Font::has_glyph`](https://github.com/emilk/egui/blob/49682f8baa058bf49e011035cfbd6e825f88a5ef/crates/epaint/src/text/font.rs#L663) compares the selected face with the replacement face. Our initial test observed a false negative for `H`; inspecting that implementation explains why valid glyphs on the replacement face fail this query. The test therefore uses egui's already-resolved Skrifa parser to check every sample scalar against the actual configured face charmaps, then separately checks egui's installed CJK/Arabic fallback path. It does not skip missing sample glyphs.
+
+## Icons
+
+`icons/atlas.png` (38,534 bytes, 512×320 RGBA) bundles 37 [Phosphor Icons](https://github.com/phosphor-icons/core) 2.1.1 glyphs under the MIT license; see [icons/README.md](icons/README.md) for the pinned sources, hashes and the `resvg` regeneration command.

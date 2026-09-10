@@ -241,6 +241,7 @@ impl Desktop {
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         ui::fonts::install(&cc.egui_ctx);
         ui::emoji::install(&cc.egui_ctx)?;
+        ui::icons::install(&cc.egui_ctx);
         if demo {
             // Fixture-only preset preview, e.g. `--demo --demo-theme=onyx --demo-light`.
             if let Some(variant) = std::env::args()
@@ -271,6 +272,8 @@ impl Desktop {
                 test_support::notification_demo_state()
             } else if std::env::args().any(|arg| arg == "--demo-voice") {
                 test_support::voice_demo_state()
+            } else if std::env::args().any(|arg| arg == "--demo-call") {
+                test_support::call_demo_state()
             } else if std::env::args().any(|arg| arg == "--demo-chat") {
                 test_support::chat_demo_state()
             } else {
