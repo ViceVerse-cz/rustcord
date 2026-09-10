@@ -7,7 +7,6 @@ license.workspace = true
 [dependencies]
 client-core.workspace = true
 notify-rust = { version = "=4.18.0", features = ["preview-macos-un"] }
-wry.workspace = true
 winit.workspace = true
 keyring.workspace = true
 url.workspace = true
@@ -16,7 +15,8 @@ getrandom.workspace = true
 rfd = { version = "=0.17.2", default-features = false, features = ["xdg-portal", "wayland"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-gtk = "0.18"
+gtk4 = "=0.11.4"
+webkit6 = "=0.6.1"
 
 [lints]
 workspace = true
@@ -26,3 +26,6 @@ windows = { version = "=0.61.3", features = ["UI_Notifications"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 futures-lite = "=2.6.1"
+
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+wry.workspace = true

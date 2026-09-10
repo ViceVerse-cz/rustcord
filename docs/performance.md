@@ -1,5 +1,40 @@
 # Initial performance evidence
 
+## Linux login migration - Windows package comparison, September 10, 2026
+
+Baseline 512b5e73fa4abac4a8bbe2233ceb74f56b74cdf8 (PR #23) was copied and hash-verified before
+edits. Same Windows 11 Home 10.0.26200 / Ryzen 7 7800X3D / about 31 GiB RAM / Rust 1.98.1,
+release thin LTO, one codegen unit, wgpu. Both unsigned Windows package commands passed.
+One size measurement per variant; ZIP DEFLATE level 9; text excludes the voice subdirectory.
+
+| Metric | Baseline | Migration | Delta |
+| --- | ---: | ---: | ---: |
+| text executable bytes | 49,658,368 | 49,657,344 | -1,024 (-0.002%) |
+| text installed bytes | 50,105,951 | 50,127,753 | +21,802 (+0.044%) |
+| text ZIP bytes | 31,106,640 | 31,117,348 | +10,708 (+0.034%) |
+| voice executable bytes | 53,016,064 | 53,016,064 | 0 |
+| voice installed bytes | 53,687,168 | 53,714,247 | +27,079 (+0.050%) |
+| voice ZIP bytes | 32,480,689 | 32,493,543 | +12,854 (+0.040%) |
+
+File counts rise from 42/88 to 50/96 because eight login notice files are now included.
+Notice bytes were verified in both packages. Totals describe actual staged docs before this
+measurement addendum; neither package contains PR screenshots. Small executable differences
+are not a runtime speed or memory improvement claim. Windows/macOS Wry backend sources remain
+unchanged. No reducer/cache/audio algorithm changed, so reducer replay was not rerun.
+
+Linux uses one ephemeral WebKit6 session, one bounded token slot, one in-flight main-frame query
+and coalesced boolean wake state. Queries are at least 100 ms apart; the event pump checks a
+2-ms deadline between at most 16 callbacks. A single native callback may exceed that budget.
+Linux executable/system-library footprint, web helper CPU/RSS, startup, input latency, storage
+writes and teardown remain unmeasured. Native desktop automation is paused; no window was run.
+The existing WSL lacks GTK4/WebKit6 development libraries; Linux CI compilation is separate.
+
+SHA256 of measured executables:
+- text: 214CB9A68E1C58DC8CAFFF7B21C07D01EF150E92434F95036516CA7865483A63
+- voice: 99A34EC7A3F647B119106E22E35DE9E2FD1847631E6E8C16AFC4ADE4536ECA72
+
+Historical measurements follow.
+
 Measured 2026-09-09 on an Apple M1 Pro (8 CPU cores), 16 GiB RAM, macOS 27.0 beta build 26A5425a, arm64, Rust 1.98.1. These are initial samples, not a completed acceptance benchmark.
 
 | Workload / metric | Actual result | Limits |

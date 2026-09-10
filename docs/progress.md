@@ -2,6 +2,38 @@
 
 ## Current scope and gates
 
+Latest slice: Linux GTK4/WebKit6 authentication migration from 512b5e7 (PR #23), in a new
+isolated worktree with separately copied/hash-verified text and voice package baselines.
+The temporary Linux login window uses an ephemeral NetworkSession and normal TLS. A protected
+top-frame bridge keeps one bounded capability-prefixed candidate; IPC carries only a boolean
+wake. One cancellable main-frame query, at least 100 ms apart, rechecks origin and ASCII bounds
+before native capability/lifetime validation. Close/drop invalidates late results and clears
+secrets/scripts/handler, cancels evaluation and terminates the web process. See authentication.md.
+
+Windows/macOS Wry backend sources remain unchanged in a provenance-preserving fork removing
+old Linux dependency declarations. Linux CI now installs GTK4/WebKitGTK 6 development packages.
+The strict cargo-audit 0.22.2 gate passes with zero vulnerabilities and warnings, down from the
+two Linux warnings at baseline, without suppressions. Cargo.lock drops from 738 to 726 packages.
+New component notices are staged in both package variants; system engines remain prerequisites.
+
+Windows cargo xtask check passed 190 offline Rust tests, doctests, formatting, strict all-feature
+Clippy, text-only compilation and policy checks. node tests/login-handoff.cjs passes existing
+handoff tests plus Linux bridge origin/frame, ASCII bounds, protected one-shot slot, expiry,
+navigation invalidation and token-free wake checks. Independent API/security review found one
+orphan manifest-table cleanup (fixed) and no remaining actionable issue. Linux's Rust handoff
+regression and backend compilation require Linux CI; local WSL lacks GTK4/WebKit6 development
+libraries. Native screenshots, X11/Wayland input, actual teardown/storage tracing and live login
+remain unverified. Desktop automation remains paused; no native window or account action ran.
+
+Both unsigned Windows packages passed; text executable size is down 1,024 bytes and voice is
+unchanged. Eight login notice files are included in each; installed/ZIP totals and limits are
+in performance.md. All 45 Wry backend source files match the pinned registry archive byte-for-byte.
+The original seven dirty source files were hash-checked unchanged. Linux CI remains pending.
+
+The full SPEC objective remains open. Further implementation gaps found in current sources
+include session voice gain controls and explicit external-open actions for unsupported content;
+native/live acceptance and release evidence remain separate gates. Historical entries follow.
+
 Read the original SPEC.md completely before implementation. Repository initially contained only the tracked two-line README and an untracked SPEC.md; no existing source or agent instructions were removed. The owner explicitly revised authentication and storage during implementation. The final spec now requires the official Discord login in a temporary webview, secure remembered login, and allows bounded local SQLite caches, saved drafts/settings and files. Those changes were applied throughout SPEC.md and AGENTS.md.
 
 | Milestone | Actual status |

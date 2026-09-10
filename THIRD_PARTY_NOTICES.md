@@ -1,5 +1,12 @@
 # Third-party notices
 
+Linux login uses gtk4 0.11.4, webkit6 0.6.1, javascriptcore6 0.6.0, glib 0.22.9 and soup3
+0.9.0 Rust bindings (MIT). Windows/macOS retain Wry 0.57.0 (MIT OR Apache-2.0) via a documented
+manifest/build patch excluding obsolete Linux dependencies; backend sources are unchanged.
+Provenance is in vendor/wry/SEREIN-PATCH.md. Component notices and hashes in assets/licenses/login
+are staged in licenses/login in both variants. Binding licenses do not relicense system
+GTK/WebKitGTK libraries, which remain external prerequisites under their own terms.
+
 Original Serein code is MIT OR Apache-2.0. Dependencies retain their own copyrights and licenses. The full resolved host dependency/license inventory is in [docs/dependency-versions.md](docs/dependency-versions.md), derived from Cargo metadata. Cargo.lock includes target-specific packages too; final distributors must ship the license texts/notices for the exact binaries they build.
 
 Core components include egui/eframe/wgpu (MIT OR Apache-2.0), Tokio (MIT), serde (MIT OR Apache-2.0), reqwest (MIT OR Apache-2.0), tokio-tungstenite/tungstenite (MIT OR Apache-2.0 / MIT), rustls and its crypto/provider dependencies, Wry (MIT OR Apache-2.0), keyring (MIT OR Apache-2.0), and rusqlite (MIT) with SQLite (public domain). Consult the resolved inventory for precise expressions and native transitive dependencies, including AWS-LC/BoringSSL notices, ring, Unicode data, and egui’s font licenses.

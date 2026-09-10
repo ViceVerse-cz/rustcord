@@ -1,5 +1,10 @@
 # Resolved dependencies
 
+September 10 Linux migration: current Cargo.lock has 726 packages. GTK4 0.11.4, WebKit6 0.6.1,
+JavaScriptCore6 0.6.0, GLib 0.22.9 and Soup3 0.9.0 replace the earlier GTK3/WebKit2GTK family.
+Wry 0.57.0 is a Windows/macOS-only local patch. Earlier inventory/addenda below are historical.
+Notices/provenance are in assets/licenses/login; the strict audit now passes without ignores.
+
 September 10 native dependency hardening: the historical macOS table below predates this patch.
 Cargo.lock now has 738 packages, down from 775 at e4ef4a8. The unused hpke-rs-libcrux/libcrux/hax
 branch and Davey's OpenMLS browser timer branch (including instant) are removed. The table's
