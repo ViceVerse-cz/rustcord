@@ -4,8 +4,8 @@ use crate::{DiscordApi, Failure};
 use client_core::{Command, Event};
 use reqwest::{Method, Url};
 use std::{
-    path::PathBuf,
-    time::{Duration, SystemTime},
+	path::PathBuf,
+	time::{Duration, SystemTime},
 };
 use tokio::{fs::File, io::AsyncReadExt, sync::watch};
 
@@ -17,425 +17,425 @@ const CHANGED: &str = "Selected file changed or disappeared; select it again";
 
 // Deliberately neither Debug nor Serialize: local paths must not enter logs or session caches.
 pub struct Source {
-    path: PathBuf,
-    filename: String,
-    size: u64,
-    modified: SystemTime,
+	path: PathBuf,
+	filename: String,
+	size: u64,
+	modified: SystemTime,
 }
 impl Source {
-    pub async fn inspect(path: PathBuf) -> Result<Self, &'static str> {
-        if path.as_os_str().as_encoded_bytes().len() > 4096 {
-            return Err("Selected path is too long");
-        }
-        let filename = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or("Unsupported filename")?;
-        if filename.trim().is_empty()
-            || matches!(filename, "." | "..")
-            || filename.len() > 256
-            || filename
-                .chars()
-                .any(|c| c.is_control() || matches!(c, '/' | '\\' | ':'))
-        {
-            return Err("Unsupported filename");
-        }
-        let metadata = tokio::fs::symlink_metadata(&path)
-            .await
-            .map_err(|_| CHANGED)?;
-        if !metadata.is_file() || metadata.file_type().is_symlink() {
-            return Err("Choose a regular file");
-        }
-        if metadata.len() == 0 || metadata.len() > MAX_BYTES {
-            return Err("Choose a nonempty file up to 20 MB");
-        }
-        Ok(Self {
-            filename: filename.into(),
-            path,
-            size: metadata.len(),
-            modified: metadata
-                .modified()
-                .map_err(|_| "File modification time is unavailable")?,
-        })
-    }
-    pub fn filename(&self) -> &str {
-        &self.filename
-    }
-    pub fn size(&self) -> u64 {
-        self.size
-    }
-    fn matches(&self, metadata: &std::fs::Metadata) -> bool {
-        metadata.is_file()
-            && !metadata.file_type().is_symlink()
-            && metadata.len() == self.size
-            && metadata.modified().ok() == Some(self.modified)
-    }
-    async fn validate(&self) -> Result<(), Failure> {
-        let metadata = tokio::fs::symlink_metadata(&self.path)
-            .await
-            .map_err(|_| Failure::ProtocolAt(CHANGED))?;
-        if self.matches(&metadata) {
-            Ok(())
-        } else {
-            Err(Failure::ProtocolAt(CHANGED))
-        }
-    }
+	pub async fn inspect(path: PathBuf) -> Result<Self, &'static str> {
+		if path.as_os_str().as_encoded_bytes().len() > 4096 {
+			return Err("Selected path is too long");
+		}
+		let filename = path
+			.file_name()
+			.and_then(|n| n.to_str())
+			.ok_or("Unsupported filename")?;
+		if filename.trim().is_empty()
+			|| matches!(filename, "." | "..")
+			|| filename.len() > 256
+			|| filename
+				.chars()
+				.any(|c| c.is_control() || matches!(c, '/' | '\\' | ':'))
+		{
+			return Err("Unsupported filename");
+		}
+		let metadata = tokio::fs::symlink_metadata(&path)
+			.await
+			.map_err(|_| CHANGED)?;
+		if !metadata.is_file() || metadata.file_type().is_symlink() {
+			return Err("Choose a regular file");
+		}
+		if metadata.len() == 0 || metadata.len() > MAX_BYTES {
+			return Err("Choose a nonempty file up to 20 MB");
+		}
+		Ok(Self {
+			filename: filename.into(),
+			path,
+			size: metadata.len(),
+			modified: metadata
+				.modified()
+				.map_err(|_| "File modification time is unavailable")?,
+		})
+	}
+	pub fn filename(&self) -> &str {
+		&self.filename
+	}
+	pub fn size(&self) -> u64 {
+		self.size
+	}
+	fn matches(&self, metadata: &std::fs::Metadata) -> bool {
+		metadata.is_file()
+			&& !metadata.file_type().is_symlink()
+			&& metadata.len() == self.size
+			&& metadata.modified().ok() == Some(self.modified)
+	}
+	async fn validate(&self) -> Result<(), Failure> {
+		let metadata = tokio::fs::symlink_metadata(&self.path)
+			.await
+			.map_err(|_| Failure::ProtocolAt(CHANGED))?;
+		if self.matches(&metadata) {
+			Ok(())
+		} else {
+			Err(Failure::ProtocolAt(CHANGED))
+		}
+	}
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Status {
-    Preparing,
-    Uploading { sent: u64, total: u64 },
-    Sending,
-    Finished,
-    Cancelled,
-    Failed(&'static str),
+	Preparing,
+	Uploading { sent: u64, total: u64 },
+	Sending,
+	Finished,
+	Cancelled,
+	Failed(&'static str),
 }
 
 #[derive(serde::Deserialize)]
 struct UploadResponse {
-    attachments: Vec<Target>,
+	attachments: Vec<Target>,
 }
 #[derive(serde::Deserialize)]
 struct Target {
-    #[serde(default)]
-    id: Option<serde_json::Value>,
-    upload_url: String,
-    upload_filename: String,
+	#[serde(default)]
+	id: Option<serde_json::Value>,
+	upload_url: String,
+	upload_filename: String,
 }
 
 impl DiscordApi {
-    pub async fn upload_message(
-        &self,
-        command: Command,
-        source: Source,
-        progress: watch::Sender<Status>,
-        mut cancel: watch::Receiver<bool>,
-    ) -> Event {
-        let Command::Send {
-            channel,
-            content,
-            nonce,
-            reply,
-        } = command
-        else {
-            progress.send_replace(Status::Failed("Invalid upload request"));
-            return Event::Failure(Failure::ProtocolAt("Invalid upload request"));
-        };
-        if content.chars().count() > client_core::MAX_CONTENT {
-            let failure = Failure::ProtocolAt("Message is too long; no file was uploaded");
-            progress.send_replace(Status::Failed(failure.label()));
-            return Event::SendResult {
-                nonce,
-                result: Err(failure),
-            };
-        }
-        progress.send_replace(Status::Preparing);
-        let prepared = tokio::select! {
-            biased;
-            _ = cancelled(&mut cancel) => Err(Failure::ProtocolAt(CANCELLED)),
-            result = self.upload_file(channel, &source, &progress) => result,
-        };
-        let result = match prepared {
-            Ok(attachment) => {
-                // Past this boundary cancellation may race Discord's message acceptance.
-                // Never claim cancellation deleted a message, and never retry the POST.
-                if *cancel.borrow() || cancel.has_changed().is_err() {
-                    Err(Failure::ProtocolAt(CANCELLED))
-                } else {
-                    progress.send_replace(Status::Sending);
-                    tokio::select! {
-                        biased;
-                        _ = cancelled(&mut cancel) => Err(Failure::Ambiguous),
-                        result = self.send_message(channel, &content, &nonce, reply, Some(attachment)) => result,
-                    }
-                }
-            }
-            Err(failure) => Err(failure),
-        };
-        progress.send_replace(match &result {
-            Ok(_) => Status::Finished,
-            Err(Failure::ProtocolAt(CANCELLED)) => Status::Cancelled,
-            Err(failure) => Status::Failed(failure.label()),
-        });
-        Event::SendResult { nonce, result }
-    }
+	pub async fn upload_message(
+		&self,
+		command: Command,
+		source: Source,
+		progress: watch::Sender<Status>,
+		mut cancel: watch::Receiver<bool>,
+	) -> Event {
+		let Command::Send {
+			channel,
+			content,
+			nonce,
+			reply,
+		} = command
+		else {
+			progress.send_replace(Status::Failed("Invalid upload request"));
+			return Event::Failure(Failure::ProtocolAt("Invalid upload request"));
+		};
+		if content.chars().count() > client_core::MAX_CONTENT {
+			let failure = Failure::ProtocolAt("Message is too long; no file was uploaded");
+			progress.send_replace(Status::Failed(failure.label()));
+			return Event::SendResult {
+				nonce,
+				result: Err(failure),
+			};
+		}
+		progress.send_replace(Status::Preparing);
+		let prepared = tokio::select! {
+			biased;
+			_ = cancelled(&mut cancel) => Err(Failure::ProtocolAt(CANCELLED)),
+			result = self.upload_file(channel, &source, &progress) => result,
+		};
+		let result = match prepared {
+			Ok(attachment) => {
+				// Past this boundary cancellation may race Discord's message acceptance.
+				// Never claim cancellation deleted a message, and never retry the POST.
+				if *cancel.borrow() || cancel.has_changed().is_err() {
+					Err(Failure::ProtocolAt(CANCELLED))
+				} else {
+					progress.send_replace(Status::Sending);
+					tokio::select! {
+						biased;
+						_ = cancelled(&mut cancel) => Err(Failure::Ambiguous),
+						result = self.send_message(channel, &content, &nonce, reply, Some(attachment)) => result,
+					}
+				}
+			}
+			Err(failure) => Err(failure),
+		};
+		progress.send_replace(match &result {
+			Ok(_) => Status::Finished,
+			Err(Failure::ProtocolAt(CANCELLED)) => Status::Cancelled,
+			Err(failure) => Status::Failed(failure.label()),
+		});
+		Event::SendResult { nonce, result }
+	}
 
-    async fn upload_file(
-        &self,
-        channel: model::Id,
-        source: &Source,
-        progress: &watch::Sender<Status>,
-    ) -> Result<serde_json::Value, Failure> {
-        source.validate().await?;
-        let file = File::open(&source.path)
-            .await
-            .map_err(|_| Failure::ProtocolAt(CHANGED))?;
-        if !source.matches(
-            &file
-                .metadata()
-                .await
-                .map_err(|_| Failure::ProtocolAt(CHANGED))?,
-        ) {
-            return Err(Failure::ProtocolAt(CHANGED));
-        }
-        let original = file
-            .try_clone()
-            .await
-            .map_err(|_| Failure::ProtocolAt(CHANGED))?;
-        let body = serde_json::json!({"files":[{"id":"0","filename":source.filename(),"file_size":source.size()}]});
-        let response = self
-            .request_limited(
-                Method::POST,
-                &format!("/channels/{channel}/attachments"),
-                Some(body),
-                MAX_RESPONSE,
-            )
-            .await
-            .map_err(|f| {
-                if f == Failure::Ambiguous {
-                    Failure::ProtocolAt("Upload preparation failed; no message was sent")
-                } else {
-                    f
-                }
-            })?;
-        let mut response: UploadResponse = serde_json::from_slice(&response)
-            .map_err(|_| Failure::ProtocolAt("Upload preparation response unsupported"))?;
-        if response.attachments.len() != 1 {
-            return Err(Failure::ProtocolAt(
-                "Upload preparation response unsupported",
-            ));
-        }
-        let target = response.attachments.remove(0);
-        if target.id.as_ref().is_some_and(|id| id != "0" && id != 0)
-            || target.upload_filename.is_empty()
-            || target.upload_filename.len() > 1024
-            || target.upload_filename.chars().any(char::is_control)
-        {
-            return Err(Failure::ProtocolAt(
-                "Upload preparation response unsupported",
-            ));
-        }
-        let url = self.upload_url(&target.upload_url)?;
-        if self.stopped() {
-            return Err(Failure::Expired);
-        }
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .no_proxy()
-            .connect_timeout(Duration::from_secs(10))
-            .read_timeout(Duration::from_secs(30))
-            .timeout(Duration::from_secs(300))
-            .build()
-            .map_err(|_| Failure::Network)?;
-        let total = source.size();
-        progress.send_replace(Status::Uploading { sent: 0, total });
-        let updates = progress.clone();
-        let stream = futures_util::stream::try_unfold((file, 0u64), move |(mut file, sent)| {
-            let updates = updates.clone();
-            async move {
-                if sent == total {
-                    return Ok::<_, std::io::Error>(None);
-                }
-                let mut bytes = vec![0; (total - sent).min(CHUNK_BYTES as u64) as usize];
-                file.read_exact(&mut bytes).await?;
-                let sent = sent + bytes.len() as u64;
-                // Latest-value progress cannot fill the session event queue. Bytes count
-                // data supplied to HTTP, not a remote receipt or confirmed message.
-                updates.send_replace(Status::Uploading { sent, total });
-                Ok(Some((bytes, (file, sent))))
-            }
-        });
-        let mut response = client
-            .put(url)
-            .header(reqwest::header::CONTENT_TYPE, "")
-            .header(reqwest::header::CONTENT_LENGTH, total)
-            .body(reqwest::Body::wrap_stream(stream))
-            .send()
-            .await
-            .map_err(|_| Failure::ProtocolAt("File upload failed; no message was sent"))?;
-        if !response.status().is_success() {
-            return Err(Failure::ProtocolAt(
-                "File upload rejected; no message was sent",
-            ));
-        }
-        if *progress.borrow() != (Status::Uploading { sent: total, total }) {
-            return Err(Failure::ProtocolAt(
-                "File upload incomplete; no message was sent",
-            ));
-        }
-        if response
-            .content_length()
-            .is_some_and(|n| n > MAX_RESPONSE as u64)
-        {
-            return Err(Failure::ProtocolAt("Upload response exceeded its limit"));
-        }
-        let mut received = 0;
-        while let Some(chunk) = response.chunk().await.map_err(|_| Failure::Network)? {
-            received += chunk.len();
-            if received > MAX_RESPONSE {
-                return Err(Failure::ProtocolAt("Upload response exceeded its limit"));
-            }
-        }
-        source.validate().await?;
-        if !source.matches(
-            &original
-                .metadata()
-                .await
-                .map_err(|_| Failure::ProtocolAt(CHANGED))?,
-        ) {
-            return Err(Failure::ProtocolAt(CHANGED));
-        }
-        if self.stopped() {
-            return Err(Failure::Expired);
-        }
-        Ok(
-            serde_json::json!({"id":"0","filename":source.filename(),"uploaded_filename":target.upload_filename}),
-        )
-    }
+	async fn upload_file(
+		&self,
+		channel: model::Id,
+		source: &Source,
+		progress: &watch::Sender<Status>,
+	) -> Result<serde_json::Value, Failure> {
+		source.validate().await?;
+		let file = File::open(&source.path)
+			.await
+			.map_err(|_| Failure::ProtocolAt(CHANGED))?;
+		if !source.matches(
+			&file
+				.metadata()
+				.await
+				.map_err(|_| Failure::ProtocolAt(CHANGED))?,
+		) {
+			return Err(Failure::ProtocolAt(CHANGED));
+		}
+		let original = file
+			.try_clone()
+			.await
+			.map_err(|_| Failure::ProtocolAt(CHANGED))?;
+		let body = serde_json::json!({"files":[{"id":"0","filename":source.filename(),"file_size":source.size()}]});
+		let response = self
+			.request_limited(
+				Method::POST,
+				&format!("/channels/{channel}/attachments"),
+				Some(body),
+				MAX_RESPONSE,
+			)
+			.await
+			.map_err(|f| {
+				if f == Failure::Ambiguous {
+					Failure::ProtocolAt("Upload preparation failed; no message was sent")
+				} else {
+					f
+				}
+			})?;
+		let mut response: UploadResponse = serde_json::from_slice(&response)
+			.map_err(|_| Failure::ProtocolAt("Upload preparation response unsupported"))?;
+		if response.attachments.len() != 1 {
+			return Err(Failure::ProtocolAt(
+				"Upload preparation response unsupported",
+			));
+		}
+		let target = response.attachments.remove(0);
+		if target.id.as_ref().is_some_and(|id| id != "0" && id != 0)
+			|| target.upload_filename.is_empty()
+			|| target.upload_filename.len() > 1024
+			|| target.upload_filename.chars().any(char::is_control)
+		{
+			return Err(Failure::ProtocolAt(
+				"Upload preparation response unsupported",
+			));
+		}
+		let url = self.upload_url(&target.upload_url)?;
+		if self.stopped() {
+			return Err(Failure::Expired);
+		}
+		let client = reqwest::Client::builder()
+			.redirect(reqwest::redirect::Policy::none())
+			.no_proxy()
+			.connect_timeout(Duration::from_secs(10))
+			.read_timeout(Duration::from_secs(30))
+			.timeout(Duration::from_secs(300))
+			.build()
+			.map_err(|_| Failure::Network)?;
+		let total = source.size();
+		progress.send_replace(Status::Uploading { sent: 0, total });
+		let updates = progress.clone();
+		let stream = futures_util::stream::try_unfold((file, 0u64), move |(mut file, sent)| {
+			let updates = updates.clone();
+			async move {
+				if sent == total {
+					return Ok::<_, std::io::Error>(None);
+				}
+				let mut bytes = vec![0; (total - sent).min(CHUNK_BYTES as u64) as usize];
+				file.read_exact(&mut bytes).await?;
+				let sent = sent + bytes.len() as u64;
+				// Latest-value progress cannot fill the session event queue. Bytes count
+				// data supplied to HTTP, not a remote receipt or confirmed message.
+				updates.send_replace(Status::Uploading { sent, total });
+				Ok(Some((bytes, (file, sent))))
+			}
+		});
+		let mut response = client
+			.put(url)
+			.header(reqwest::header::CONTENT_TYPE, "")
+			.header(reqwest::header::CONTENT_LENGTH, total)
+			.body(reqwest::Body::wrap_stream(stream))
+			.send()
+			.await
+			.map_err(|_| Failure::ProtocolAt("File upload failed; no message was sent"))?;
+		if !response.status().is_success() {
+			return Err(Failure::ProtocolAt(
+				"File upload rejected; no message was sent",
+			));
+		}
+		if *progress.borrow() != (Status::Uploading { sent: total, total }) {
+			return Err(Failure::ProtocolAt(
+				"File upload incomplete; no message was sent",
+			));
+		}
+		if response
+			.content_length()
+			.is_some_and(|n| n > MAX_RESPONSE as u64)
+		{
+			return Err(Failure::ProtocolAt("Upload response exceeded its limit"));
+		}
+		let mut received = 0;
+		while let Some(chunk) = response.chunk().await.map_err(|_| Failure::Network)? {
+			received += chunk.len();
+			if received > MAX_RESPONSE {
+				return Err(Failure::ProtocolAt("Upload response exceeded its limit"));
+			}
+		}
+		source.validate().await?;
+		if !source.matches(
+			&original
+				.metadata()
+				.await
+				.map_err(|_| Failure::ProtocolAt(CHANGED))?,
+		) {
+			return Err(Failure::ProtocolAt(CHANGED));
+		}
+		if self.stopped() {
+			return Err(Failure::Expired);
+		}
+		Ok(
+			serde_json::json!({"id":"0","filename":source.filename(),"uploaded_filename":target.upload_filename}),
+		)
+	}
 
-    fn upload_url(&self, value: &str) -> Result<Url, Failure> {
-        let invalid = Failure::ProtocolAt("Upload storage address rejected; no file was uploaded");
-        if value.len() > 4096 {
-            return Err(invalid);
-        }
-        let url = Url::parse(value).map_err(|_| invalid)?;
-        if !url.username().is_empty() || url.password().is_some() || url.fragment().is_some() {
-            return Err(invalid);
-        }
-        let allowed = url.scheme() == "https"
-            && url.host_str() == Some("discord-attachments-uploads-prd.storage.googleapis.com")
-            && url.port_or_known_default() == Some(443);
-        #[cfg(test)]
-        let allowed = allowed
-            || (url.scheme() == "http"
-                && self.upload_origin.is_some_and(|address| {
-                    address.ip().is_loopback()
-                        && url.host_str() == Some("127.0.0.1")
-                        && url.port() == Some(address.port())
-                }));
-        if allowed { Ok(url) } else { Err(invalid) }
-    }
+	fn upload_url(&self, value: &str) -> Result<Url, Failure> {
+		let invalid = Failure::ProtocolAt("Upload storage address rejected; no file was uploaded");
+		if value.len() > 4096 {
+			return Err(invalid);
+		}
+		let url = Url::parse(value).map_err(|_| invalid)?;
+		if !url.username().is_empty() || url.password().is_some() || url.fragment().is_some() {
+			return Err(invalid);
+		}
+		let allowed = url.scheme() == "https"
+			&& url.host_str() == Some("discord-attachments-uploads-prd.storage.googleapis.com")
+			&& url.port_or_known_default() == Some(443);
+		#[cfg(test)]
+		let allowed = allowed
+			|| (url.scheme() == "http"
+				&& self.upload_origin.is_some_and(|address| {
+					address.ip().is_loopback()
+						&& url.host_str() == Some("127.0.0.1")
+						&& url.port() == Some(address.port())
+				}));
+		if allowed { Ok(url) } else { Err(invalid) }
+	}
 }
 
 async fn cancelled(cancel: &mut watch::Receiver<bool>) {
-    loop {
-        let requested = *cancel.borrow_and_update();
-        if requested || cancel.changed().await.is_err() {
-            return;
-        }
-    }
+	loop {
+		let requested = *cancel.borrow_and_update();
+		if requested || cancel.changed().await.is_err() {
+			return;
+		}
+	}
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use client_core::auth::SessionSecret;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    };
-    use tokio::{
-        io::AsyncWriteExt,
-        net::{TcpListener, TcpStream},
-    };
+	use super::*;
+	use client_core::auth::SessionSecret;
+	use std::sync::{
+		Arc,
+		atomic::{AtomicU64, Ordering},
+	};
+	use tokio::{
+		io::AsyncWriteExt,
+		net::{TcpListener, TcpStream},
+	};
 
-    struct Fixture(PathBuf);
-    impl Fixture {
-        async fn new(bytes: &[u8]) -> Self {
-            static NEXT: AtomicU64 = AtomicU64::new(0);
-            let path = std::env::temp_dir().join(format!(
-                "serein-upload-{}-{}-{}.txt",
-                std::process::id(),
-                SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
-            let mut file = tokio::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-                .await
-                .unwrap();
-            file.write_all(bytes).await.unwrap();
-            file.flush().await.unwrap();
-            Self(path)
-        }
-    }
-    impl Drop for Fixture {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.0);
-        }
-    }
-    fn api() -> DiscordApi {
-        DiscordApi::new(Arc::new(
-            SessionSecret::from_owner_input("SYNTHETIC_UPLOAD_TOKEN".into()).unwrap(),
-        ))
-        .unwrap()
-    }
-    fn command() -> Command {
-        Command::Send {
-            channel: model::Id(1),
-            content: String::new(),
-            nonce: "synthetic-upload".into(),
-            reply: Some(model::Id(2)),
-        }
-    }
-    async fn request(socket: &mut TcpStream) -> (String, Vec<u8>) {
-        let mut data = Vec::new();
-        loop {
-            let mut chunk = [0; 4096];
-            let n = socket.read(&mut chunk).await.unwrap();
-            assert!(n > 0);
-            data.extend_from_slice(&chunk[..n]);
-            assert!(data.len() < 256 * 1024);
-            if let Some(end) = data.windows(4).position(|w| w == b"\r\n\r\n") {
-                let head = String::from_utf8(data[..end].to_vec()).unwrap();
-                let length: usize = head
-                    .lines()
-                    .find_map(|line| {
-                        line.to_ascii_lowercase()
-                            .strip_prefix("content-length: ")
-                            .map(str::to_owned)
-                    })
-                    .unwrap()
-                    .parse()
-                    .unwrap();
-                if data.len() >= end + 4 + length {
-                    return (head, data[end + 4..end + 4 + length].to_vec());
-                }
-            }
-        }
-    }
-    async fn respond(socket: &mut TcpStream, status: &str, body: &str) {
-        socket
-            .write_all(
-                format!(
-                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                )
-                .as_bytes(),
-            )
-            .await
-            .unwrap();
-    }
-    fn failed(event: Event) -> Failure {
-        let Event::SendResult {
-            nonce,
-            result: Err(failure),
-        } = event
-        else {
-            panic!("expected scoped send failure");
-        };
-        assert_eq!(nonce, "synthetic-upload");
-        failure
-    }
+	struct Fixture(PathBuf);
+	impl Fixture {
+		async fn new(bytes: &[u8]) -> Self {
+			static NEXT: AtomicU64 = AtomicU64::new(0);
+			let path = std::env::temp_dir().join(format!(
+				"serein-upload-{}-{}-{}.txt",
+				std::process::id(),
+				SystemTime::now()
+					.duration_since(SystemTime::UNIX_EPOCH)
+					.unwrap()
+					.as_nanos(),
+				NEXT.fetch_add(1, Ordering::Relaxed)
+			));
+			let mut file = tokio::fs::OpenOptions::new()
+				.write(true)
+				.create_new(true)
+				.open(&path)
+				.await
+				.unwrap();
+			file.write_all(bytes).await.unwrap();
+			file.flush().await.unwrap();
+			Self(path)
+		}
+	}
+	impl Drop for Fixture {
+		fn drop(&mut self) {
+			let _ = std::fs::remove_file(&self.0);
+		}
+	}
+	fn api() -> DiscordApi {
+		DiscordApi::new(Arc::new(
+			SessionSecret::from_owner_input("SYNTHETIC_UPLOAD_TOKEN".into()).unwrap(),
+		))
+		.unwrap()
+	}
+	fn command() -> Command {
+		Command::Send {
+			channel: model::Id(1),
+			content: String::new(),
+			nonce: "synthetic-upload".into(),
+			reply: Some(model::Id(2)),
+		}
+	}
+	async fn request(socket: &mut TcpStream) -> (String, Vec<u8>) {
+		let mut data = Vec::new();
+		loop {
+			let mut chunk = [0; 4096];
+			let n = socket.read(&mut chunk).await.unwrap();
+			assert!(n > 0);
+			data.extend_from_slice(&chunk[..n]);
+			assert!(data.len() < 256 * 1024);
+			if let Some(end) = data.windows(4).position(|w| w == b"\r\n\r\n") {
+				let head = String::from_utf8(data[..end].to_vec()).unwrap();
+				let length: usize = head
+					.lines()
+					.find_map(|line| {
+						line.to_ascii_lowercase()
+							.strip_prefix("content-length: ")
+							.map(str::to_owned)
+					})
+					.unwrap()
+					.parse()
+					.unwrap();
+				if data.len() >= end + 4 + length {
+					return (head, data[end + 4..end + 4 + length].to_vec());
+				}
+			}
+		}
+	}
+	async fn respond(socket: &mut TcpStream, status: &str, body: &str) {
+		socket
+			.write_all(
+				format!(
+					"HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+					body.len()
+				)
+				.as_bytes(),
+			)
+			.await
+			.unwrap();
+	}
+	fn failed(event: Event) -> Failure {
+		let Event::SendResult {
+			nonce,
+			result: Err(failure),
+		} = event
+		else {
+			panic!("expected scoped send failure");
+		};
+		assert_eq!(nonce, "synthetic-upload");
+		failure
+	}
 
-    #[tokio::test]
-    async fn staged_upload_streams_without_credentials_and_reconciles_message() {
-        tokio::time::timeout(Duration::from_secs(10), async {
+	#[tokio::test]
+	async fn staged_upload_streams_without_credentials_and_reconciles_message() {
+		tokio::time::timeout(Duration::from_secs(10), async {
             let fixture = Fixture::new(&vec![b'x'; CHUNK_BYTES * 2 + 9]).await;
             let source = Source::inspect(fixture.0.clone()).await.unwrap();
             let filename = source.filename().to_owned();
@@ -478,48 +478,48 @@ mod tests {
             assert_eq!(*status.borrow(), Status::Finished);
             server.await.unwrap();
         }).await.unwrap();
-    }
+	}
 
-    #[tokio::test]
-    async fn upload_rejects_changed_missing_oversized_sources_and_untrusted_targets() {
-        let fixture = Fixture::new(b"synthetic").await;
-        let source = Source::inspect(fixture.0.clone()).await.unwrap();
-        tokio::fs::write(&fixture.0, b"changed").await.unwrap();
-        assert_eq!(source.validate().await, Err(Failure::ProtocolAt(CHANGED)));
-        tokio::fs::remove_file(&fixture.0).await.unwrap();
-        assert!(Source::inspect(fixture.0.clone()).await.is_err());
-        let empty = Fixture::new(&[]).await;
-        assert!(Source::inspect(empty.0.clone()).await.is_err());
-        let large = tokio::fs::OpenOptions::new()
-            .write(true)
-            .open(&empty.0)
-            .await
-            .unwrap();
-        large.set_len(MAX_BYTES + 1).await.unwrap();
-        assert!(Source::inspect(empty.0.clone()).await.is_err());
-        drop(large);
-        let api = api();
-        let host = "discord-attachments-uploads-prd.storage.googleapis.com";
-        assert!(
-            api.upload_url(&format!("https://{host}/opaque?upload_id=synthetic"))
-                .is_ok()
-        );
-        for url in [
-            format!("http://{host}/x"),
-            format!("https://{host}.evil.test/x"),
-            format!("https://user@{host}/x"),
-            format!("https://{host}:444/x"),
-            format!("https://{host}/x#fragment"),
-            "http://127.0.0.1:1234/x".into(),
-            format!("https://{host}/{}", "x".repeat(4096)),
-        ] {
-            assert!(api.upload_url(&url).is_err());
-        }
-    }
+	#[tokio::test]
+	async fn upload_rejects_changed_missing_oversized_sources_and_untrusted_targets() {
+		let fixture = Fixture::new(b"synthetic").await;
+		let source = Source::inspect(fixture.0.clone()).await.unwrap();
+		tokio::fs::write(&fixture.0, b"changed").await.unwrap();
+		assert_eq!(source.validate().await, Err(Failure::ProtocolAt(CHANGED)));
+		tokio::fs::remove_file(&fixture.0).await.unwrap();
+		assert!(Source::inspect(fixture.0.clone()).await.is_err());
+		let empty = Fixture::new(&[]).await;
+		assert!(Source::inspect(empty.0.clone()).await.is_err());
+		let large = tokio::fs::OpenOptions::new()
+			.write(true)
+			.open(&empty.0)
+			.await
+			.unwrap();
+		large.set_len(MAX_BYTES + 1).await.unwrap();
+		assert!(Source::inspect(empty.0.clone()).await.is_err());
+		drop(large);
+		let api = api();
+		let host = "discord-attachments-uploads-prd.storage.googleapis.com";
+		assert!(
+			api.upload_url(&format!("https://{host}/opaque?upload_id=synthetic"))
+				.is_ok()
+		);
+		for url in [
+			format!("http://{host}/x"),
+			format!("https://{host}.evil.test/x"),
+			format!("https://user@{host}/x"),
+			format!("https://{host}:444/x"),
+			format!("https://{host}/x#fragment"),
+			"http://127.0.0.1:1234/x".into(),
+			format!("https://{host}/{}", "x".repeat(4096)),
+		] {
+			assert!(api.upload_url(&url).is_err());
+		}
+	}
 
-    #[tokio::test]
-    async fn upload_cancel_before_write_and_redirect_never_send_message() {
-        tokio::time::timeout(Duration::from_secs(10), async {
+	#[tokio::test]
+	async fn upload_cancel_before_write_and_redirect_never_send_message() {
+		tokio::time::timeout(Duration::from_secs(10), async {
             let fixture = Fixture::new(b"synthetic").await;
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let mut api = api();
@@ -550,11 +550,11 @@ mod tests {
             assert_eq!(failed(api.upload_message(command(), Source::inspect(fixture.0.clone()).await.unwrap(), progress, cancelled).await), Failure::ProtocolAt("File upload rejected; no message was sent"));
             server.await.unwrap();
         }).await.unwrap();
-    }
+	}
 
-    #[tokio::test]
-    async fn cancellation_during_message_post_keeps_outcome_unknown() {
-        tokio::time::timeout(Duration::from_secs(10), async {
+	#[tokio::test]
+	async fn cancellation_during_message_post_keeps_outcome_unknown() {
+		tokio::time::timeout(Duration::from_secs(10), async {
             let fixture = Fixture::new(b"synthetic").await;
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let storage = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -583,11 +583,11 @@ mod tests {
             assert_eq!(*status.borrow(), Status::Failed(Failure::Ambiguous.label()));
             server.await.unwrap();
         }).await.unwrap();
-    }
+	}
 
-    #[tokio::test]
-    async fn cancelling_put_or_changing_its_source_never_creates_message() {
-        tokio::time::timeout(Duration::from_secs(10), async {
+	#[tokio::test]
+	async fn cancelling_put_or_changing_its_source_never_creates_message() {
+		tokio::time::timeout(Duration::from_secs(10), async {
             for cancel_put in [true, false] {
                 let fixture = Fixture::new(&vec![b'x'; CHUNK_BYTES * 2 + 9]).await;
                 let source = Source::inspect(fixture.0.clone()).await.unwrap();
@@ -622,5 +622,5 @@ mod tests {
                 server.await.unwrap();
             }
         }).await.unwrap();
-    }
+	}
 }

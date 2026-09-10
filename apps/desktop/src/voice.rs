@@ -1,779 +1,778 @@
 //! Desktop ownership for one explicitly authorized voice session.
 use client_core::{
-    Command, Event, State,
-    voice::{self, Phase, Secret},
+	Command, Event, State,
+	voice::{self, Phase, Secret},
 };
 use discord_voice::{
-    Controls, Status,
-    audio::{Audio, Devices},
+	Controls, Status,
+	audio::{Audio, Devices},
 };
 use eframe::egui;
 use model::Id;
 use std::{
-    sync::mpsc,
-    time::{Duration, Instant},
+	sync::mpsc,
+	time::{Duration, Instant},
 };
 use tokio::{runtime::Runtime, sync::watch, task::JoinHandle};
 use zeroize::Zeroizing;
 
 fn permission_mutes_microphone(
-    state: &State,
-    channel: Id,
-    push_to_talk: bool,
-    ptt_active: bool,
+	state: &State,
+	channel: Id,
+	push_to_talk: bool,
+	ptt_active: bool,
 ) -> bool {
-    !state.can_speak(channel)
-        || (state.permission(channel, model::permissions::USE_VAD) != Some(true)
-            && !(push_to_talk && ptt_active))
+	!state.can_speak(channel)
+		|| (state.permission(channel, model::permissions::USE_VAD) != Some(true)
+			&& !(push_to_talk && ptt_active))
 }
 
 const DEVICE_OPEN_TIMEOUT: Duration = Duration::from_secs(20);
 
 fn device_wait(
-    deadline: &mut Option<Instant>,
-    pending: bool,
-    now: Instant,
+	deadline: &mut Option<Instant>,
+	pending: bool,
+	now: Instant,
 ) -> Result<Option<Duration>, &'static str> {
-    if !pending {
-        *deadline = None;
-        return Ok(None);
-    }
-    deadline
-        .get_or_insert(now + DEVICE_OPEN_TIMEOUT)
-        .checked_duration_since(now)
-        .filter(|remaining| !remaining.is_zero())
-        .map(Some)
-        .ok_or("Audio device opening timed out; check device selection and system microphone permission")
+	if !pending {
+		*deadline = None;
+		return Ok(None);
+	}
+	deadline
+		.get_or_insert(now + DEVICE_OPEN_TIMEOUT)
+		.checked_duration_since(now)
+		.filter(|remaining| !remaining.is_zero())
+		.map(Some)
+		.ok_or(
+			"Audio device opening timed out; check device selection and system microphone permission",
+		)
 }
 
 struct Pending {
-    generation: u64,
-    channel: Id,
-    request: u64,
-    ring: bool,
-    user: Id,
-    peer: Option<Id>,
-    guild: Option<Id>,
-    session: Option<Secret>,
-    server: Option<(Secret, String)>,
-    started: Instant,
+	generation: u64,
+	channel: Id,
+	request: u64,
+	ring: bool,
+	user: Id,
+	peer: Option<Id>,
+	guild: Option<Id>,
+	session: Option<Secret>,
+	server: Option<(Secret, String)>,
+	started: Instant,
 }
 enum Notice {
-    TransportReady,
-    WaitingForPeer,
-    Progress(Phase),
-    MediaReady(String),
-    DeviceReady,
-    RemoteAudio,
-    Failed(&'static str),
+	TransportReady,
+	WaitingForPeer,
+	Progress(Phase),
+	MediaReady(String),
+	DeviceReady,
+	RemoteAudio,
+	Failed(&'static str),
 }
 struct Live {
-    generation: u64,
-    channel: Id,
-    request: u64,
-    ring_pending: bool,
-    session: Zeroizing<String>,
-    audio: Audio,
-    controls: watch::Sender<Controls>,
-    events: mpsc::Receiver<Notice>,
-    task: JoinHandle<()>,
-    devices: Devices,
-    device_deadline: Option<Instant>,
+	generation: u64,
+	channel: Id,
+	request: u64,
+	ring_pending: bool,
+	session: Zeroizing<String>,
+	audio: Audio,
+	controls: watch::Sender<Controls>,
+	events: mpsc::Receiver<Notice>,
+	task: JoinHandle<()>,
+	devices: Devices,
+	device_deadline: Option<Instant>,
 }
 #[derive(Default)]
 pub struct Voice {
-    pending: Option<Pending>,
-    live: Option<Live>,
-    retiring: Option<mpsc::Receiver<()>>,
-    device_scan: Option<mpsc::Receiver<Result<discord_voice::audio::DeviceList, &'static str>>>,
+	pending: Option<Pending>,
+	live: Option<Live>,
+	retiring: Option<mpsc::Receiver<()>>,
+	device_scan: Option<mpsc::Receiver<Result<discord_voice::audio::DeviceList, &'static str>>>,
 }
 impl Voice {
-    pub fn stop(&mut self) {
-        self.pending = None;
-        if let Some(live) = self.live.take() {
-            live.audio.set_ready(false);
-            live.task.abort();
-            self.retiring = Some(live.audio.shutdown());
-        }
-    }
-    fn reap(&mut self) {
-        if self
-            .retiring
-            .as_ref()
-            .is_some_and(|done| !matches!(done.try_recv(), Err(mpsc::TryRecvError::Empty)))
-        {
-            self.retiring = None;
-        }
-    }
-    pub fn begin(&mut self, state: &State, ring: bool) -> Result<(), &'static str> {
-        self.reap();
-        if self.retiring.is_some() {
-            return Err("Previous audio devices are still closing; try again shortly");
-        }
-        if self.pending.is_some() || self.live.is_some() {
-            return Err("A voice call is already active");
-        }
-        let call = state.voice.active.as_ref().ok_or("No call was requested")?;
-        if !state.can_call(call.channel) {
-            return Err("Select an existing DM or server voice channel");
-        }
-        let user = state.user.as_ref().ok_or("Sign in before calling")?.id;
-        let channel = state
-            .channels
-            .iter()
-            .find(|c| c.id == call.channel)
-            .ok_or("The voice channel is unavailable")?;
-        let peer = channel
-            .guild
-            .is_none()
-            .then(|| channel.recipients.first().map(|u| u.id))
-            .flatten();
-        if channel.guild.is_none() && peer.is_none() {
-            return Err("The DM recipient is unavailable");
-        }
-        self.pending = Some(Pending {
-            generation: state.generation,
-            channel: call.channel,
-            request: call.request,
-            user,
-            peer,
-            guild: channel.guild,
-            ring: ring && channel.guild.is_none(),
-            session: None,
-            server: None,
-            started: Instant::now(),
-        });
-        Ok(())
-    }
-    /// Take negotiation secrets before reducing the UI event. Nothing is persisted.
-    pub fn observe(&mut self, state: &State, event: &mut Event) -> Option<&'static str> {
-        let Event::Voice(event) = event else {
-            return None;
-        };
-        if let Some(live) = &self.live {
-            match event {
-                voice::Event::State {
-                    request: Some(request),
-                    user,
-                    channel: Some(channel),
-                    session: Some(session),
-                    ..
-                } if live.generation == state.generation
-                    && *request == live.request
-                    && *channel == live.channel
-                    && state.user.as_ref().is_some_and(|owner| owner.id == *user) =>
-                {
-                    if session.expose() != live.session.as_str() {
-                        return Some("Voice session changed; start a new call");
-                    }
-                }
-                voice::Event::Server {
-                    request, channel, ..
-                } if live.generation == state.generation
-                    && *request == live.request
-                    && *channel == live.channel =>
-                {
-                    return Some("Voice server changed; start a new encrypted call");
-                }
-                _ => {}
-            }
-        }
-        let pending = self.pending.as_mut()?;
-        if pending.generation != state.generation
-            || state.voice.active.as_ref().is_none_or(|c| {
-                c.channel != pending.channel
-                    || c.request != pending.request
-                    || c.phase == Phase::Failed
-            })
-        {
-            return None;
-        }
-        match event {
-            voice::Event::State {
-                request: Some(request),
-                channel: Some(channel),
-                user,
-                session,
-                ..
-            } if *channel == pending.channel
-                && *request == pending.request
-                && *user == pending.user =>
-            {
-                if let Some(session) = session.take() {
-                    if pending
-                        .session
-                        .as_ref()
-                        .is_some_and(|old| old.expose() != session.expose())
-                    {
-                        return Some("Voice session changed during connection; try a new call");
-                    }
-                    pending.session = Some(session);
-                }
-            }
-            voice::Event::Server {
-                request,
-                channel,
-                token,
-                endpoint,
-            } if *request == pending.request && *channel == pending.channel => {
-                let Some(endpoint) = endpoint.take() else {
-                    pending.server = None;
-                    let _ = token.take();
-                    return None;
-                };
-                let Some(token) = token.take() else {
-                    return Some("Discord omitted the voice connection token");
-                };
-                pending.server = Some((token, endpoint));
-            }
-            _ => {}
-        }
-        None
-    }
-    pub fn fail(&mut self, state: &mut State, message: &'static str) -> Option<Command> {
-        self.stop();
-        let call = state.voice.active.as_ref()?;
-        let (channel, request) = (call.channel, call.request);
-        state.apply_voice(voice::Event::Failed {
-            channel,
-            request,
-            message,
-        });
-        Some(Command::Voice(voice::Command::Leave { channel, request }))
-    }
-    pub fn poll(
-        &mut self,
-        runtime: &Runtime,
-        state: &mut State,
-        ui: &mut ui::MessagingUi,
-        ctx: &egui::Context,
-    ) -> Option<Command> {
-        self.reap();
-        if ui.voice_refresh_devices {
-            ui.voice_refresh_devices = false;
-            if !state.demo && self.device_scan.is_none() {
-                let (send, receive) = mpsc::sync_channel(1);
-                let wake = ctx.clone();
-                match std::thread::Builder::new()
-                    .name("audio-devices".into())
-                    .spawn(move || {
-                        let _ = send.send(discord_voice::audio::devices());
-                        wake.request_repaint();
-                    }) {
-                    Ok(_) => {
-                        self.device_scan = Some(receive);
-                        ui.voice_device_status = "Looking for audio devices…";
-                    }
-                    Err(_) => ui.voice_device_status = "Could not start audio device discovery",
-                }
-            }
-        }
-        if let Some(scan) = &self.device_scan {
-            match scan.try_recv() {
-                Ok(Ok(devices)) => {
-                    ui.voice_inputs = devices.inputs;
-                    ui.voice_outputs = devices.outputs;
-                    ui.voice_device_status =
-                        "Audio devices loaded · headphones avoid microphone echo";
-                    self.device_scan = None;
-                }
-                Ok(Err(error)) => {
-                    ui.voice_device_status = error;
-                    self.device_scan = None;
-                }
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    ui.voice_device_status = "Audio device discovery stopped";
-                    self.device_scan = None;
-                }
-                Err(mpsc::TryRecvError::Empty) => {}
-            }
-        }
-        let expected = state
-            .voice
-            .active
-            .as_ref()
-            .filter(|call| call.phase != Phase::Failed)
-            .map(|call| (state.generation, call.channel, call.request));
-        if expected.is_none() {
-            ui.voice_privacy_code = None;
-        }
-        let current = self
-            .live
-            .as_ref()
-            .map(|c| (c.generation, c.channel, c.request))
-            .or_else(|| {
-                self.pending
-                    .as_ref()
-                    .map(|c| (c.generation, c.channel, c.request))
-            });
-        if current.is_some() && current != expected {
-            self.stop();
-            // Permission/removal failures must leave the service too; never target a new account.
-            return current
-                .filter(|(generation, _, _)| *generation == state.generation)
-                .map(|(_, channel, request)| {
-                    Command::Voice(voice::Command::Leave { channel, request })
-                });
-        }
-        if let Some(pending) = &self.pending {
-            if pending.started.elapsed() >= Duration::from_secs(30) {
-                return self.fail(
+	pub fn stop(&mut self) {
+		self.pending = None;
+		if let Some(live) = self.live.take() {
+			live.audio.set_ready(false);
+			live.task.abort();
+			self.retiring = Some(live.audio.shutdown());
+		}
+	}
+	fn reap(&mut self) {
+		if self
+			.retiring
+			.as_ref()
+			.is_some_and(|done| !matches!(done.try_recv(), Err(mpsc::TryRecvError::Empty)))
+		{
+			self.retiring = None;
+		}
+	}
+	pub fn begin(&mut self, state: &State, ring: bool) -> Result<(), &'static str> {
+		self.reap();
+		if self.retiring.is_some() {
+			return Err("Previous audio devices are still closing; try again shortly");
+		}
+		if self.pending.is_some() || self.live.is_some() {
+			return Err("A voice call is already active");
+		}
+		let call = state.voice.active.as_ref().ok_or("No call was requested")?;
+		if !state.can_call(call.channel) {
+			return Err("Select an existing DM or server voice channel");
+		}
+		let user = state.user.as_ref().ok_or("Sign in before calling")?.id;
+		let channel = state
+			.channels
+			.iter()
+			.find(|c| c.id == call.channel)
+			.ok_or("The voice channel is unavailable")?;
+		let peer = channel
+			.guild
+			.is_none()
+			.then(|| channel.recipients.first().map(|u| u.id))
+			.flatten();
+		if channel.guild.is_none() && peer.is_none() {
+			return Err("The DM recipient is unavailable");
+		}
+		self.pending = Some(Pending {
+			generation: state.generation,
+			channel: call.channel,
+			request: call.request,
+			user,
+			peer,
+			guild: channel.guild,
+			ring: ring && channel.guild.is_none(),
+			session: None,
+			server: None,
+			started: Instant::now(),
+		});
+		Ok(())
+	}
+	/// Take negotiation secrets before reducing the UI event. Nothing is persisted.
+	pub fn observe(&mut self, state: &State, event: &mut Event) -> Option<&'static str> {
+		let Event::Voice(event) = event else {
+			return None;
+		};
+		if let Some(live) = &self.live {
+			match event {
+				voice::Event::State {
+					request: Some(request),
+					user,
+					channel: Some(channel),
+					session: Some(session),
+					..
+				} if live.generation == state.generation
+					&& *request == live.request
+					&& *channel == live.channel
+					&& state.user.as_ref().is_some_and(|owner| owner.id == *user) =>
+				{
+					if session.expose() != live.session.as_str() {
+						return Some("Voice session changed; start a new call");
+					}
+				}
+				voice::Event::Server {
+					request, channel, ..
+				} if live.generation == state.generation
+					&& *request == live.request
+					&& *channel == live.channel =>
+				{
+					return Some("Voice server changed; start a new encrypted call");
+				}
+				_ => {}
+			}
+		}
+		let pending = self.pending.as_mut()?;
+		if pending.generation != state.generation
+			|| state.voice.active.as_ref().is_none_or(|c| {
+				c.channel != pending.channel
+					|| c.request != pending.request
+					|| c.phase == Phase::Failed
+			}) {
+			return None;
+		}
+		match event {
+			voice::Event::State {
+				request: Some(request),
+				channel: Some(channel),
+				user,
+				session,
+				..
+			} if *channel == pending.channel
+				&& *request == pending.request
+				&& *user == pending.user =>
+			{
+				if let Some(session) = session.take() {
+					if pending
+						.session
+						.as_ref()
+						.is_some_and(|old| old.expose() != session.expose())
+					{
+						return Some("Voice session changed during connection; try a new call");
+					}
+					pending.session = Some(session);
+				}
+			}
+			voice::Event::Server {
+				request,
+				channel,
+				token,
+				endpoint,
+			} if *request == pending.request && *channel == pending.channel => {
+				let Some(endpoint) = endpoint.take() else {
+					pending.server = None;
+					let _ = token.take();
+					return None;
+				};
+				let Some(token) = token.take() else {
+					return Some("Discord omitted the voice connection token");
+				};
+				pending.server = Some((token, endpoint));
+			}
+			_ => {}
+		}
+		None
+	}
+	pub fn fail(&mut self, state: &mut State, message: &'static str) -> Option<Command> {
+		self.stop();
+		let call = state.voice.active.as_ref()?;
+		let (channel, request) = (call.channel, call.request);
+		state.apply_voice(voice::Event::Failed {
+			channel,
+			request,
+			message,
+		});
+		Some(Command::Voice(voice::Command::Leave { channel, request }))
+	}
+	pub fn poll(
+		&mut self,
+		runtime: &Runtime,
+		state: &mut State,
+		ui: &mut ui::MessagingUi,
+		ctx: &egui::Context,
+	) -> Option<Command> {
+		self.reap();
+		if ui.voice_refresh_devices {
+			ui.voice_refresh_devices = false;
+			if !state.demo && self.device_scan.is_none() {
+				let (send, receive) = mpsc::sync_channel(1);
+				let wake = ctx.clone();
+				match std::thread::Builder::new()
+					.name("audio-devices".into())
+					.spawn(move || {
+						let _ = send.send(discord_voice::audio::devices());
+						wake.request_repaint();
+					}) {
+					Ok(_) => {
+						self.device_scan = Some(receive);
+						ui.voice_device_status = "Looking for audio devices…";
+					}
+					Err(_) => ui.voice_device_status = "Could not start audio device discovery",
+				}
+			}
+		}
+		if let Some(scan) = &self.device_scan {
+			match scan.try_recv() {
+				Ok(Ok(devices)) => {
+					ui.voice_inputs = devices.inputs;
+					ui.voice_outputs = devices.outputs;
+					ui.voice_device_status =
+						"Audio devices loaded · headphones avoid microphone echo";
+					self.device_scan = None;
+				}
+				Ok(Err(error)) => {
+					ui.voice_device_status = error;
+					self.device_scan = None;
+				}
+				Err(mpsc::TryRecvError::Disconnected) => {
+					ui.voice_device_status = "Audio device discovery stopped";
+					self.device_scan = None;
+				}
+				Err(mpsc::TryRecvError::Empty) => {}
+			}
+		}
+		let expected = state
+			.voice
+			.active
+			.as_ref()
+			.filter(|call| call.phase != Phase::Failed)
+			.map(|call| (state.generation, call.channel, call.request));
+		if expected.is_none() {
+			ui.voice_privacy_code = None;
+		}
+		let current = self
+			.live
+			.as_ref()
+			.map(|c| (c.generation, c.channel, c.request))
+			.or_else(|| {
+				self.pending
+					.as_ref()
+					.map(|c| (c.generation, c.channel, c.request))
+			});
+		if current.is_some() && current != expected {
+			self.stop();
+			// Permission/removal failures must leave the service too; never target a new account.
+			return current
+				.filter(|(generation, _, _)| *generation == state.generation)
+				.map(|(_, channel, request)| {
+					Command::Voice(voice::Command::Leave { channel, request })
+				});
+		}
+		if let Some(pending) = &self.pending {
+			if pending.started.elapsed() >= Duration::from_secs(30) {
+				return self.fail(
                     state,
                     "Discord did not provide voice connection details; check Connect permission and channel capacity",
                 );
-            }
-            ctx.request_repaint_after(
-                Duration::from_secs(30).saturating_sub(pending.started.elapsed()),
-            );
-        }
-        if self
-            .pending
-            .as_ref()
-            .is_some_and(|p| p.session.is_some() && p.server.is_some())
-        {
-            let pending = self.pending.take().expect("pending negotiation");
-            let listen_only = permission_mutes_microphone(
-                state,
-                pending.channel,
-                ui.voice_push_to_talk,
-                ui.voice_ptt_active,
-            );
-            let input_enabled = state.can_speak(pending.channel);
-            if let Err(error) =
-                self.start_media(runtime, pending, ui, ctx, listen_only, input_enabled)
-            {
-                return self.fail(state, error);
-            }
-        }
-        let mut failure = None;
-        let mut command = None;
-        if let Some(live) = &mut self.live {
-            let call = state.voice.active.as_ref().expect("matching active call");
-            let deafened = call.deafened || call.server_deafened;
-            let muted = call.muted
-                || permission_mutes_microphone(
-                    state,
-                    call.channel,
-                    ui.voice_push_to_talk,
-                    ui.voice_ptt_active,
-                )
-                || call.server_muted
-                || deafened
-                || (ui.voice_push_to_talk && !ui.voice_ptt_active);
-            live.audio.set_controls(muted, deafened);
-            live.audio.set_input_enabled(state.can_speak(call.channel));
-            live.audio
-                .set_gain(ui.voice_gain.input_percent, ui.voice_gain.output_percent);
-            live.controls.send_if_modified(|control| {
-                if control.muted == muted && control.deafened == deafened {
-                    false
-                } else {
-                    *control = Controls { muted, deafened };
-                    true
-                }
-            });
-            let devices = Devices {
-                input: ui.voice_input.clone(),
-                output: ui.voice_output.clone(),
-            };
-            if devices != live.devices {
-                live.audio.set_devices(devices.clone());
-                live.devices = devices;
-                live.device_deadline = None;
-            }
-            for _ in 0..8 {
-                let Ok(event) = live.events.try_recv() else {
-                    break;
-                };
-                match event {
-                    Notice::TransportReady => {
-                        if live.ring_pending {
-                            live.ring_pending = false;
-                            command = Some(Command::Voice(voice::Command::Ring {
-                                channel: live.channel,
-                                request: live.request,
-                            }));
-                        }
-                    }
-                    Notice::WaitingForPeer => {
-                        ui.voice_privacy_code = None;
-                        live.audio.set_ready(false);
-                        live.device_deadline = None;
-                        state.apply_voice(voice::Event::Progress {
-                            channel: live.channel,
-                            request: live.request,
-                            phase: Phase::Waiting,
-                        });
-                    }
-                    Notice::Progress(phase) => {
-                        ui.voice_privacy_code = None;
-                        live.audio.set_ready(false);
-                        live.device_deadline = None;
-                        state.apply_voice(voice::Event::Progress {
-                            channel: live.channel,
-                            request: live.request,
-                            phase,
-                        });
-                    }
-                    Notice::MediaReady(code) => {
-                        ui.voice_privacy_code = Some(code);
-                        live.audio.set_ready(true);
-                    }
-                    // Notices wake the UI; only the current device configuration can be ready.
-                    Notice::DeviceReady | Notice::RemoteAudio => {}
-                    Notice::Failed(error) => {
-                        failure = Some(error);
-                        break;
-                    }
-                }
-            }
-            let devices_ready = live.audio.is_ready();
-            if failure.is_none() {
-                let pending = live
-                    .audio
-                    .gate
-                    .ready
-                    .load(std::sync::atomic::Ordering::Acquire)
-                    && !devices_ready;
-                match device_wait(&mut live.device_deadline, pending, Instant::now()) {
-                    Ok(Some(remaining)) => {
-                        state.apply_voice(voice::Event::Progress {
-                            channel: live.channel,
-                            request: live.request,
-                            phase: Phase::OpeningAudio,
-                        });
-                        ctx.request_repaint_after(remaining);
-                    }
-                    Ok(None) => {}
-                    Err(error) => failure = Some(error),
-                }
-            }
-            if failure.is_none() && devices_ready {
-                state.apply_voice(voice::Event::Progress {
-                    channel: live.channel,
-                    request: live.request,
-                    phase: Phase::Connected,
-                });
-            }
-            if live.audio.is_stopped() && failure.is_none() {
-                failure =
-                    Some("Audio devices stopped; check microphone permission and device selection");
-            }
-            if live.task.is_finished() && failure.is_none() {
-                failure = Some("Voice connection ended; start a new call explicitly");
-            }
-        }
-        if let Some(error) = failure {
-            self.fail(state, error)
-        } else {
-            command
-        }
-    }
-    fn start_media(
-        &mut self,
-        runtime: &Runtime,
-        pending: Pending,
-        ui: &ui::MessagingUi,
-        ctx: &egui::Context,
-        listen_only: bool,
-        input_enabled: bool,
-    ) -> Result<(), &'static str> {
-        let (capture_send, capture) = mpsc::sync_channel(8);
-        let (playback, playback_receive) = mpsc::sync_channel(8);
-        let (send, events) = mpsc::sync_channel(8);
-        let audio_send = send.clone();
-        let wake = ctx.clone();
-        let devices = Devices {
-            input: ui.voice_input.clone(),
-            output: ui.voice_output.clone(),
-        };
-        let audio = Audio::start(
-            devices.clone(),
-            capture_send,
-            playback_receive,
-            move |result| {
-                let _ = audio_send.try_send(match result {
-                    Ok(()) => Notice::DeviceReady,
-                    Err(error) => Notice::Failed(error),
-                });
-                wake.request_repaint();
-            },
-        )?;
-        let (controls, control_receive) = watch::channel(Controls {
-            muted: listen_only || ui.voice_push_to_talk,
-            deafened: false,
-        });
-        audio.set_controls(listen_only || ui.voice_push_to_talk, false);
-        audio.set_input_enabled(input_enabled);
-        audio.set_gain(ui.voice_gain.input_percent, ui.voice_gain.output_percent);
-        let session = pending.session.ok_or("Missing voice session")?;
-        let session_copy = Zeroizing::new(session.expose().to_owned());
-        let (token, endpoint) = pending.server.ok_or("Missing voice server")?;
-        let credentials = voice::VoiceConnection {
-            channel: pending.channel,
-            request: pending.request,
-            user: pending.user,
-            peer: pending.peer,
-            guild: pending.guild,
-            session,
-            token,
-            endpoint,
-        };
-        let wake = ctx.clone();
-        let task = runtime.spawn(async move {
-            let status = send.clone();
-            let status_wake = wake.clone();
-            let result = discord_voice::run(
-                credentials,
-                capture,
-                playback,
-                control_receive,
-                move |event| {
-                    let notice = match event {
-                        Status::TransportReady => Notice::TransportReady,
-                        Status::Connecting => Notice::Progress(Phase::ConnectingTransport),
-                        Status::Discovering => Notice::Progress(Phase::Discovering),
-                        Status::Securing => Notice::Progress(Phase::Securing),
-                        Status::WaitingForPeer => Notice::WaitingForPeer,
-                        Status::Ready { privacy_code } => {
-                            if privacy_code.len() > 256 {
-                                return Err(());
-                            }
-                            Notice::MediaReady(privacy_code)
-                        }
-                        Status::RemoteAudio => Notice::RemoteAudio,
-                    };
-                    status.try_send(notice).map_err(|_| ())?;
-                    status_wake.request_repaint();
-                    Ok(())
-                },
-            )
-            .await;
-            if let Err(error) = result {
-                let _ = send.try_send(Notice::Failed(error));
-            }
-            wake.request_repaint();
-        });
-        self.live = Some(Live {
-            generation: pending.generation,
-            channel: pending.channel,
-            request: pending.request,
-            session: session_copy,
-            ring_pending: pending.ring,
-            audio,
-            controls,
-            events,
-            task,
-            devices,
-            device_deadline: None,
-        });
-        Ok(())
-    }
+			}
+			ctx.request_repaint_after(
+				Duration::from_secs(30).saturating_sub(pending.started.elapsed()),
+			);
+		}
+		if self
+			.pending
+			.as_ref()
+			.is_some_and(|p| p.session.is_some() && p.server.is_some())
+		{
+			let pending = self.pending.take().expect("pending negotiation");
+			let listen_only = permission_mutes_microphone(
+				state,
+				pending.channel,
+				ui.voice_push_to_talk,
+				ui.voice_ptt_active,
+			);
+			let input_enabled = state.can_speak(pending.channel);
+			if let Err(error) =
+				self.start_media(runtime, pending, ui, ctx, listen_only, input_enabled)
+			{
+				return self.fail(state, error);
+			}
+		}
+		let mut failure = None;
+		let mut command = None;
+		if let Some(live) = &mut self.live {
+			let call = state.voice.active.as_ref().expect("matching active call");
+			let deafened = call.deafened || call.server_deafened;
+			let muted = call.muted
+				|| permission_mutes_microphone(
+					state,
+					call.channel,
+					ui.voice_push_to_talk,
+					ui.voice_ptt_active,
+				) || call.server_muted
+				|| deafened || (ui.voice_push_to_talk && !ui.voice_ptt_active);
+			live.audio.set_controls(muted, deafened);
+			live.audio.set_input_enabled(state.can_speak(call.channel));
+			live.audio
+				.set_gain(ui.voice_gain.input_percent, ui.voice_gain.output_percent);
+			live.controls.send_if_modified(|control| {
+				if control.muted == muted && control.deafened == deafened {
+					false
+				} else {
+					*control = Controls { muted, deafened };
+					true
+				}
+			});
+			let devices = Devices {
+				input: ui.voice_input.clone(),
+				output: ui.voice_output.clone(),
+			};
+			if devices != live.devices {
+				live.audio.set_devices(devices.clone());
+				live.devices = devices;
+				live.device_deadline = None;
+			}
+			for _ in 0..8 {
+				let Ok(event) = live.events.try_recv() else {
+					break;
+				};
+				match event {
+					Notice::TransportReady => {
+						if live.ring_pending {
+							live.ring_pending = false;
+							command = Some(Command::Voice(voice::Command::Ring {
+								channel: live.channel,
+								request: live.request,
+							}));
+						}
+					}
+					Notice::WaitingForPeer => {
+						ui.voice_privacy_code = None;
+						live.audio.set_ready(false);
+						live.device_deadline = None;
+						state.apply_voice(voice::Event::Progress {
+							channel: live.channel,
+							request: live.request,
+							phase: Phase::Waiting,
+						});
+					}
+					Notice::Progress(phase) => {
+						ui.voice_privacy_code = None;
+						live.audio.set_ready(false);
+						live.device_deadline = None;
+						state.apply_voice(voice::Event::Progress {
+							channel: live.channel,
+							request: live.request,
+							phase,
+						});
+					}
+					Notice::MediaReady(code) => {
+						ui.voice_privacy_code = Some(code);
+						live.audio.set_ready(true);
+					}
+					// Notices wake the UI; only the current device configuration can be ready.
+					Notice::DeviceReady | Notice::RemoteAudio => {}
+					Notice::Failed(error) => {
+						failure = Some(error);
+						break;
+					}
+				}
+			}
+			let devices_ready = live.audio.is_ready();
+			if failure.is_none() {
+				let pending = live
+					.audio
+					.gate
+					.ready
+					.load(std::sync::atomic::Ordering::Acquire)
+					&& !devices_ready;
+				match device_wait(&mut live.device_deadline, pending, Instant::now()) {
+					Ok(Some(remaining)) => {
+						state.apply_voice(voice::Event::Progress {
+							channel: live.channel,
+							request: live.request,
+							phase: Phase::OpeningAudio,
+						});
+						ctx.request_repaint_after(remaining);
+					}
+					Ok(None) => {}
+					Err(error) => failure = Some(error),
+				}
+			}
+			if failure.is_none() && devices_ready {
+				state.apply_voice(voice::Event::Progress {
+					channel: live.channel,
+					request: live.request,
+					phase: Phase::Connected,
+				});
+			}
+			if live.audio.is_stopped() && failure.is_none() {
+				failure =
+					Some("Audio devices stopped; check microphone permission and device selection");
+			}
+			if live.task.is_finished() && failure.is_none() {
+				failure = Some("Voice connection ended; start a new call explicitly");
+			}
+		}
+		if let Some(error) = failure {
+			self.fail(state, error)
+		} else {
+			command
+		}
+	}
+	fn start_media(
+		&mut self,
+		runtime: &Runtime,
+		pending: Pending,
+		ui: &ui::MessagingUi,
+		ctx: &egui::Context,
+		listen_only: bool,
+		input_enabled: bool,
+	) -> Result<(), &'static str> {
+		let (capture_send, capture) = mpsc::sync_channel(8);
+		let (playback, playback_receive) = mpsc::sync_channel(8);
+		let (send, events) = mpsc::sync_channel(8);
+		let audio_send = send.clone();
+		let wake = ctx.clone();
+		let devices = Devices {
+			input: ui.voice_input.clone(),
+			output: ui.voice_output.clone(),
+		};
+		let audio = Audio::start(
+			devices.clone(),
+			capture_send,
+			playback_receive,
+			move |result| {
+				let _ = audio_send.try_send(match result {
+					Ok(()) => Notice::DeviceReady,
+					Err(error) => Notice::Failed(error),
+				});
+				wake.request_repaint();
+			},
+		)?;
+		let (controls, control_receive) = watch::channel(Controls {
+			muted: listen_only || ui.voice_push_to_talk,
+			deafened: false,
+		});
+		audio.set_controls(listen_only || ui.voice_push_to_talk, false);
+		audio.set_input_enabled(input_enabled);
+		audio.set_gain(ui.voice_gain.input_percent, ui.voice_gain.output_percent);
+		let session = pending.session.ok_or("Missing voice session")?;
+		let session_copy = Zeroizing::new(session.expose().to_owned());
+		let (token, endpoint) = pending.server.ok_or("Missing voice server")?;
+		let credentials = voice::VoiceConnection {
+			channel: pending.channel,
+			request: pending.request,
+			user: pending.user,
+			peer: pending.peer,
+			guild: pending.guild,
+			session,
+			token,
+			endpoint,
+		};
+		let wake = ctx.clone();
+		let task = runtime.spawn(async move {
+			let status = send.clone();
+			let status_wake = wake.clone();
+			let result = discord_voice::run(
+				credentials,
+				capture,
+				playback,
+				control_receive,
+				move |event| {
+					let notice = match event {
+						Status::TransportReady => Notice::TransportReady,
+						Status::Connecting => Notice::Progress(Phase::ConnectingTransport),
+						Status::Discovering => Notice::Progress(Phase::Discovering),
+						Status::Securing => Notice::Progress(Phase::Securing),
+						Status::WaitingForPeer => Notice::WaitingForPeer,
+						Status::Ready { privacy_code } => {
+							if privacy_code.len() > 256 {
+								return Err(());
+							}
+							Notice::MediaReady(privacy_code)
+						}
+						Status::RemoteAudio => Notice::RemoteAudio,
+					};
+					status.try_send(notice).map_err(|_| ())?;
+					status_wake.request_repaint();
+					Ok(())
+				},
+			)
+			.await;
+			if let Err(error) = result {
+				let _ = send.try_send(Notice::Failed(error));
+			}
+			wake.request_repaint();
+		});
+		self.live = Some(Live {
+			generation: pending.generation,
+			channel: pending.channel,
+			request: pending.request,
+			session: session_copy,
+			ring_pending: pending.ring,
+			audio,
+			controls,
+			events,
+			task,
+			devices,
+			device_deadline: None,
+		});
+		Ok(())
+	}
 }
 impl Drop for Voice {
-    fn drop(&mut self) {
-        self.stop();
-    }
+	fn drop(&mut self) {
+		self.stop();
+	}
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    #[test]
-    fn audio_opening_has_a_deadline_that_clears_on_readiness_or_security_pause() {
-        let now = Instant::now();
-        let mut deadline = None;
-        assert_eq!(device_wait(&mut deadline, false, now), Ok(None));
-        assert_eq!(
-            device_wait(&mut deadline, true, now),
-            Ok(Some(DEVICE_OPEN_TIMEOUT))
-        );
-        assert_eq!(
-            device_wait(&mut deadline, true, now + Duration::from_secs(19)),
-            Ok(Some(Duration::from_secs(1)))
-        );
-        assert!(device_wait(&mut deadline, true, now + DEVICE_OPEN_TIMEOUT).is_err());
-        assert_eq!(
-            device_wait(&mut deadline, false, now + DEVICE_OPEN_TIMEOUT),
-            Ok(None)
-        );
-        assert!(deadline.is_none());
-        assert_eq!(
-            device_wait(&mut deadline, true, now + DEVICE_OPEN_TIMEOUT),
-            Ok(Some(DEVICE_OPEN_TIMEOUT))
-        );
-    }
-    #[test]
-    fn microphone_requires_speak_and_focused_push_to_talk_without_vad() {
-        use model::permissions as p;
-        let mut state = test_support::demo_state();
-        let bits = p::VIEW_CHANNEL | p::CONNECT | p::SPEAK;
-        state.permissions.guilds.insert(
-            Id(10),
-            p::Guild {
-                id: Id(10),
-                owner: Some(Id(999)),
-                roles: Some(vec![p::Role {
-                    name: String::new(),
-                    color: 0,
-                    position: 0,
-                    hoist: false,
-                    id: Id(10),
-                    bits,
-                }]),
-                member: Some(p::Member {
-                    roles: vec![],
-                    timeout_until: None,
-                }),
-            },
-        );
-        state.permissions.channels.insert(
-            Id(25),
-            p::Channel {
-                id: Id(25),
-                guild: Id(10),
-                overwrites: Some(vec![]),
-            },
-        );
-        assert!(permission_mutes_microphone(&state, Id(25), false, false));
-        assert!(permission_mutes_microphone(&state, Id(25), false, true));
-        assert!(permission_mutes_microphone(&state, Id(25), true, false));
-        assert!(!permission_mutes_microphone(&state, Id(25), true, true));
-        state
-            .permissions
-            .guilds
-            .get_mut(&Id(10))
-            .unwrap()
-            .roles
-            .as_mut()
-            .unwrap()[0]
-            .bits |= p::USE_VAD;
-        state.permissions.clear_cache();
-        assert!(!permission_mutes_microphone(&state, Id(25), false, false));
-        state
-            .permissions
-            .guilds
-            .get_mut(&Id(10))
-            .unwrap()
-            .roles
-            .as_mut()
-            .unwrap()[0]
-            .bits &= !p::SPEAK;
-        state.permissions.clear_cache();
-        assert!(permission_mutes_microphone(&state, Id(25), true, true));
-        state.permissions.channels.remove(&Id(25));
-        state.permissions.clear_cache();
-        assert!(permission_mutes_microphone(&state, Id(25), true, true));
-    }
-    #[test]
-    fn guild_negotiation_has_no_dm_peer_or_ringing_and_opens_no_devices() {
-        let mut state = test_support::demo_state();
-        state.demo = false;
-        let command = state.start_call(Id(25), true).unwrap();
-        assert!(matches!(
-            command,
-            Command::Voice(voice::Command::Join { ring: false, .. })
-        ));
-        let mut manager = Voice::default();
-        manager.begin(&state, true).unwrap();
-        let pending = manager.pending.as_ref().unwrap();
-        assert_eq!(pending.guild, Some(Id(10)));
-        assert_eq!(pending.peer, None);
-        assert!(!pending.ring);
-        assert!(manager.live.is_none());
-        state.leave_call();
-        manager.stop();
-        assert!(manager.pending.is_none());
-    }
-    #[test]
-    fn invalidation_leaves_service_but_never_sends_old_account_commands() {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let mut state = test_support::demo_state();
-        state.demo = false;
-        state.start_call(Id(25), false).unwrap();
-        let mut manager = Voice::default();
-        manager.begin(&state, false).unwrap();
-        state.disconnect_voice();
-        let mut ui = ui::MessagingUi::default();
-        let context = egui::Context::default();
-        assert!(matches!(
-            manager.poll(&runtime, &mut state, &mut ui, &context),
-            Some(Command::Voice(voice::Command::Leave {
-                channel: Id(25),
-                ..
-            }))
-        ));
-        assert!(manager.pending.is_none());
-        state.leave_call();
-        state.start_call(Id(25), false).unwrap();
-        manager.begin(&state, false).unwrap();
-        state.generation += 1;
-        assert!(
-            manager
-                .poll(&runtime, &mut state, &mut ui, &context)
-                .is_none()
-        );
-        assert!(manager.pending.is_none());
-    }
-    #[test]
-    fn negotiation_requires_matching_request_owner_and_session_without_opening_devices() {
-        let mut state = test_support::demo_state();
-        state.demo = false;
-        state.start_call(Id(22), true).unwrap();
-        let request = state.voice.active.as_ref().unwrap().request;
-        let mut manager = Voice::default();
-        manager.begin(&state, true).unwrap();
-        let mut stale = Event::Voice(voice::Event::Server {
-            channel: Id(22),
-            request: request + 1,
-            token: Some(Secret::new("synthetic-token".into()).unwrap()),
-            endpoint: Some("synthetic.discord.media".into()),
-        });
-        assert!(manager.observe(&state, &mut stale).is_none());
-        assert!(manager.pending.as_ref().unwrap().server.is_none());
-        let mut server = Event::Voice(voice::Event::Server {
-            channel: Id(22),
-            request,
-            token: Some(Secret::new("synthetic-token".into()).unwrap()),
-            endpoint: Some("synthetic.discord.media".into()),
-        });
-        assert!(manager.observe(&state, &mut server).is_none());
-        assert!(manager.pending.as_ref().unwrap().server.is_some());
-        let session = |user, id: &str| {
-            Event::Voice(voice::Event::State {
-                request: Some(request),
-                guild: None,
-                member: None,
-                server_muted: false,
-                server_deafened: false,
-                channel: Some(Id(22)),
-                user: Id(user),
-                session: Some(Secret::new(id.into()).unwrap()),
-                muted: false,
-                deafened: false,
-            })
-        };
-        assert!(
-            manager
-                .observe(&state, &mut session(2, "other-session"))
-                .is_none()
-        );
-        assert!(manager.pending.as_ref().unwrap().session.is_none());
-        assert!(
-            manager
-                .observe(&state, &mut session(1, "synthetic-session"))
-                .is_none()
-        );
-        assert!(
-            manager
-                .observe(&state, &mut session(1, "changed-session"))
-                .is_some()
-        );
-        assert!(manager.live.is_none());
-        manager.stop();
-        assert!(manager.pending.is_none());
-    }
+	use super::*;
+	#[test]
+	fn audio_opening_has_a_deadline_that_clears_on_readiness_or_security_pause() {
+		let now = Instant::now();
+		let mut deadline = None;
+		assert_eq!(device_wait(&mut deadline, false, now), Ok(None));
+		assert_eq!(
+			device_wait(&mut deadline, true, now),
+			Ok(Some(DEVICE_OPEN_TIMEOUT))
+		);
+		assert_eq!(
+			device_wait(&mut deadline, true, now + Duration::from_secs(19)),
+			Ok(Some(Duration::from_secs(1)))
+		);
+		assert!(device_wait(&mut deadline, true, now + DEVICE_OPEN_TIMEOUT).is_err());
+		assert_eq!(
+			device_wait(&mut deadline, false, now + DEVICE_OPEN_TIMEOUT),
+			Ok(None)
+		);
+		assert!(deadline.is_none());
+		assert_eq!(
+			device_wait(&mut deadline, true, now + DEVICE_OPEN_TIMEOUT),
+			Ok(Some(DEVICE_OPEN_TIMEOUT))
+		);
+	}
+	#[test]
+	fn microphone_requires_speak_and_focused_push_to_talk_without_vad() {
+		use model::permissions as p;
+		let mut state = test_support::demo_state();
+		let bits = p::VIEW_CHANNEL | p::CONNECT | p::SPEAK;
+		state.permissions.guilds.insert(
+			Id(10),
+			p::Guild {
+				id: Id(10),
+				owner: Some(Id(999)),
+				roles: Some(vec![p::Role {
+					name: String::new(),
+					color: 0,
+					position: 0,
+					hoist: false,
+					id: Id(10),
+					bits,
+				}]),
+				member: Some(p::Member {
+					roles: vec![],
+					timeout_until: None,
+				}),
+			},
+		);
+		state.permissions.channels.insert(
+			Id(25),
+			p::Channel {
+				id: Id(25),
+				guild: Id(10),
+				overwrites: Some(vec![]),
+			},
+		);
+		assert!(permission_mutes_microphone(&state, Id(25), false, false));
+		assert!(permission_mutes_microphone(&state, Id(25), false, true));
+		assert!(permission_mutes_microphone(&state, Id(25), true, false));
+		assert!(!permission_mutes_microphone(&state, Id(25), true, true));
+		state
+			.permissions
+			.guilds
+			.get_mut(&Id(10))
+			.unwrap()
+			.roles
+			.as_mut()
+			.unwrap()[0]
+			.bits |= p::USE_VAD;
+		state.permissions.clear_cache();
+		assert!(!permission_mutes_microphone(&state, Id(25), false, false));
+		state
+			.permissions
+			.guilds
+			.get_mut(&Id(10))
+			.unwrap()
+			.roles
+			.as_mut()
+			.unwrap()[0]
+			.bits &= !p::SPEAK;
+		state.permissions.clear_cache();
+		assert!(permission_mutes_microphone(&state, Id(25), true, true));
+		state.permissions.channels.remove(&Id(25));
+		state.permissions.clear_cache();
+		assert!(permission_mutes_microphone(&state, Id(25), true, true));
+	}
+	#[test]
+	fn guild_negotiation_has_no_dm_peer_or_ringing_and_opens_no_devices() {
+		let mut state = test_support::demo_state();
+		state.demo = false;
+		let command = state.start_call(Id(25), true).unwrap();
+		assert!(matches!(
+			command,
+			Command::Voice(voice::Command::Join { ring: false, .. })
+		));
+		let mut manager = Voice::default();
+		manager.begin(&state, true).unwrap();
+		let pending = manager.pending.as_ref().unwrap();
+		assert_eq!(pending.guild, Some(Id(10)));
+		assert_eq!(pending.peer, None);
+		assert!(!pending.ring);
+		assert!(manager.live.is_none());
+		state.leave_call();
+		manager.stop();
+		assert!(manager.pending.is_none());
+	}
+	#[test]
+	fn invalidation_leaves_service_but_never_sends_old_account_commands() {
+		let runtime = tokio::runtime::Builder::new_current_thread()
+			.enable_all()
+			.build()
+			.unwrap();
+		let mut state = test_support::demo_state();
+		state.demo = false;
+		state.start_call(Id(25), false).unwrap();
+		let mut manager = Voice::default();
+		manager.begin(&state, false).unwrap();
+		state.disconnect_voice();
+		let mut ui = ui::MessagingUi::default();
+		let context = egui::Context::default();
+		assert!(matches!(
+			manager.poll(&runtime, &mut state, &mut ui, &context),
+			Some(Command::Voice(voice::Command::Leave {
+				channel: Id(25),
+				..
+			}))
+		));
+		assert!(manager.pending.is_none());
+		state.leave_call();
+		state.start_call(Id(25), false).unwrap();
+		manager.begin(&state, false).unwrap();
+		state.generation += 1;
+		assert!(
+			manager
+				.poll(&runtime, &mut state, &mut ui, &context)
+				.is_none()
+		);
+		assert!(manager.pending.is_none());
+	}
+	#[test]
+	fn negotiation_requires_matching_request_owner_and_session_without_opening_devices() {
+		let mut state = test_support::demo_state();
+		state.demo = false;
+		state.start_call(Id(22), true).unwrap();
+		let request = state.voice.active.as_ref().unwrap().request;
+		let mut manager = Voice::default();
+		manager.begin(&state, true).unwrap();
+		let mut stale = Event::Voice(voice::Event::Server {
+			channel: Id(22),
+			request: request + 1,
+			token: Some(Secret::new("synthetic-token".into()).unwrap()),
+			endpoint: Some("synthetic.discord.media".into()),
+		});
+		assert!(manager.observe(&state, &mut stale).is_none());
+		assert!(manager.pending.as_ref().unwrap().server.is_none());
+		let mut server = Event::Voice(voice::Event::Server {
+			channel: Id(22),
+			request,
+			token: Some(Secret::new("synthetic-token".into()).unwrap()),
+			endpoint: Some("synthetic.discord.media".into()),
+		});
+		assert!(manager.observe(&state, &mut server).is_none());
+		assert!(manager.pending.as_ref().unwrap().server.is_some());
+		let session = |user, id: &str| {
+			Event::Voice(voice::Event::State {
+				request: Some(request),
+				guild: None,
+				member: None,
+				server_muted: false,
+				server_deafened: false,
+				channel: Some(Id(22)),
+				user: Id(user),
+				session: Some(Secret::new(id.into()).unwrap()),
+				muted: false,
+				deafened: false,
+			})
+		};
+		assert!(
+			manager
+				.observe(&state, &mut session(2, "other-session"))
+				.is_none()
+		);
+		assert!(manager.pending.as_ref().unwrap().session.is_none());
+		assert!(
+			manager
+				.observe(&state, &mut session(1, "synthetic-session"))
+				.is_none()
+		);
+		assert!(
+			manager
+				.observe(&state, &mut session(1, "changed-session"))
+				.is_some()
+		);
+		assert!(manager.live.is_none());
+		manager.stop();
+		assert!(manager.pending.is_none());
+	}
 }

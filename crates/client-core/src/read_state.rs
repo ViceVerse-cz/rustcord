@@ -1,644 +1,649 @@
 use crate::{
-    State,
-    auth::{AuthState, Failure},
+	State,
+	auth::{AuthState, Failure},
 };
 use model::{Freshness, Id, Patch};
 use std::collections::BTreeMap;
 
 pub enum Event {
-    Snapshot {
-        entries: Option<Vec<(Id, Option<Id>, u32)>>,
-        version: Option<u64>,
-        partial: bool,
-    },
-    Ack {
-        channel: Id,
-        message: Option<Id>,
-        manual: bool,
-        mention_count: Option<u32>,
-        version: Option<u64>,
-    },
-    Latest(Vec<(Id, Patch<Id>)>),
-    Result {
-        channel: Id,
-        message: Id,
-        request: u64,
-        result: Result<(), Failure>,
-    },
+	Snapshot {
+		entries: Option<Vec<(Id, Option<Id>, u32)>>,
+		version: Option<u64>,
+		partial: bool,
+	},
+	Ack {
+		channel: Id,
+		message: Option<Id>,
+		manual: bool,
+		mention_count: Option<u32>,
+		version: Option<u64>,
+	},
+	Latest(Vec<(Id, Patch<Id>)>),
+	Result {
+		channel: Id,
+		message: Id,
+		request: u64,
+		result: Result<(), Failure>,
+	},
 }
 #[derive(Default)]
 pub struct ReadState {
-    pub(crate) activity: crate::notifications::Activity,
-    entries: BTreeMap<Id, (Option<Id>, u64)>,
-    known: bool,
-    version: Option<u64>,
-    revision: u64,
-    pending: Option<(Id, Id, u64, u64)>,
-    pub status: Option<&'static str>,
+	pub(crate) activity: crate::notifications::Activity,
+	entries: BTreeMap<Id, (Option<Id>, u64)>,
+	known: bool,
+	version: Option<u64>,
+	revision: u64,
+	pending: Option<(Id, Id, u64, u64)>,
+	pub status: Option<&'static str>,
 }
 impl ReadState {
-    pub fn reset(&mut self) {
-        *self = Self {
-            revision: self.revision.wrapping_add(1),
-            ..Self::default()
-        };
-    }
-    pub fn cancel(&mut self) {
-        self.activity.clear_notifications();
-        self.pending = None;
-        self.status = None;
-    }
-    pub fn forget(&mut self, channel: Id) {
-        self.entries.remove(&channel);
-        self.activity.forget(channel);
-        if self.pending.is_some_and(|(id, ..)| id == channel) {
-            self.cancel();
-        }
-    }
+	pub fn reset(&mut self) {
+		*self = Self {
+			revision: self.revision.wrapping_add(1),
+			..Self::default()
+		};
+	}
+	pub fn cancel(&mut self) {
+		self.activity.clear_notifications();
+		self.pending = None;
+		self.status = None;
+	}
+	pub fn forget(&mut self, channel: Id) {
+		self.entries.remove(&channel);
+		self.activity.forget(channel);
+		if self.pending.is_some_and(|(id, ..)| id == channel) {
+			self.cancel();
+		}
+	}
 }
 impl State {
-    pub fn read_marker(&self, channel: Id) -> Option<Option<Id>> {
-        if !self.gateway_connected
-            || !self.can_view(channel)
-            || !self
-                .channels
-                .iter()
-                .any(|c| c.id == channel && c.supports_text())
-        {
-            return None;
-        }
-        (self.read_state.known || self.read_state.entries.contains_key(&channel)).then(|| {
-            self.read_state
-                .entries
-                .get(&channel)
-                .and_then(|(id, _)| *id)
-        })
-    }
-    pub fn unread(&self, channel: Id) -> Option<bool> {
-        self.channel_unread(self.channels.iter().find(|c| c.id == channel)?)
-    }
-    /// Shared unread visibility for sidebar rows and notification badges.
-    pub fn channel_unread(&self, channel: &model::Channel) -> Option<bool> {
-        if !self.gateway_connected
-            || !self.can_view(channel.id)
-            || !channel.supports_text()
-            || !(self.read_state.known || self.read_state.entries.contains_key(&channel.id))
-        {
-            return None;
-        }
-        let read = self
-            .read_state
-            .entries
-            .get(&channel.id)
-            .and_then(|(id, _)| *id);
-        let latest = channel.last_message?;
-        Some(read.is_none_or(|read| latest > read))
-    }
-    pub fn can_jump_unread(&self) -> bool {
-        self.auth == AuthState::Authenticated
-            && self.gateway_connected
-            && self.freshness == Freshness::Fresh
-            && !self.history_pending
-            && self.selected.is_some_and(|channel| {
-                self.can_read_history(channel) && self.unread(channel) == Some(true)
-            })
-    }
-    /// Request the first bounded page after the service read marker. Zero is only
-    /// a pagination cursor for a known empty marker, never a fabricated message ID.
-    pub fn open_unread(&mut self) -> Option<crate::Command> {
-        if !self.can_jump_unread() {
-            return None;
-        }
-        let after = self.read_marker(self.selected?)?.unwrap_or(Id(0));
-        Some(self.open_after_window(after))
-    }
-    pub fn can_load_newer(&self) -> bool {
-        self.auth == AuthState::Authenticated
-            && self.gateway_connected
-            && self.freshness == Freshness::Fresh
-            && !self.history_pending
-            && self
-                .selected
-                .is_some_and(|channel| self.can_read_history(channel))
-            && self.forward_cursor().is_some_and(|last| {
-                self.channels.iter().any(|channel| {
-                    Some(channel.id) == self.selected
-                        && channel.last_message.map_or(
-                            self.newer_may_have_more
-                                || (self.history_targeted && self.history_after.is_none()),
-                            |latest| latest > last,
-                        )
-                })
-            })
-    }
-    pub fn newer_history(&mut self) -> Option<crate::Command> {
-        if !self.can_load_newer() {
-            return None;
-        }
-        Some(self.open_after_window(self.forward_cursor()?))
-    }
-    fn forward_cursor(&self) -> Option<Id> {
-        self.timeline
-            .iter()
-            .last()
-            .map(|m| m.id)
-            .or(self.newer_cursor)
-    }
-    fn open_after_window(&mut self, after: Id) -> crate::Command {
-        self.timeline.clear_window_preserving_deletions();
-        self.history_targeted = true;
-        self.revision += 1;
-        let command = self.history_range(None, Some(after));
-        self.enforce_resident_budget();
-        command
-    }
-    pub fn can_mark_read(&self, message: Id) -> bool {
-        self.auth == AuthState::Authenticated
-            && self.gateway_connected
-            && self.freshness == Freshness::Fresh
-            && self.read_state.pending.is_none()
-            && self
-                .timeline
-                .get(message)
-                .is_some_and(|m| Some(m.channel) == self.selected)
-            && self.selected.is_some_and(|channel| {
-                self.can_view(channel)
-                    && self
-                        .read_marker(channel)
-                        .flatten()
-                        .is_none_or(|read| message > read)
-            })
-    }
-    pub fn prepare_mark_read(&mut self, message: Id) -> Option<crate::Command> {
-        if !self.can_mark_read(message) {
-            return None;
-        }
-        let channel = self.selected?;
-        self.read_state.revision = self.read_state.revision.wrapping_add(1);
-        let request = self.read_state.revision;
-        let epoch = self
-            .read_state
-            .entries
-            .get(&channel)
-            .map_or(0, |(_, epoch)| *epoch);
-        self.read_state.pending = Some((channel, message, request, epoch));
-        self.read_state.status = Some("Marking read…");
-        Some(crate::Command::MarkRead {
-            channel,
-            message,
-            request,
-        })
-    }
-    pub fn observe_last_message(&mut self, channel: Id, message: Id) {
-        if let Some(channel) = self.channels.iter_mut().find(|c| c.id == channel) {
-            self.read_state.activity.observe_latest(channel.id, message);
-            if channel.last_message.is_none_or(|id| message > id) {
-                channel.last_message = Some(message);
-            }
-        }
-    }
-    pub fn apply_read_state(&mut self, event: Event) -> Result<(), &'static str> {
-        match event {
-            Event::Snapshot {
-                entries,
-                version,
-                partial,
-            } => {
-                if entries
-                    .as_ref()
-                    .is_some_and(|items| items.len() > crate::MAX_NAV)
-                {
-                    return Err("Read-state capacity exceeded");
-                }
-                self.read_state = ReadState {
-                    revision: self.read_state.revision.wrapping_add(1),
-                    known: entries.is_some() && !partial,
-                    version,
-                    ..ReadState::default()
-                };
-                for channel in &self.channels {
-                    if let Some(message) = channel.last_message {
-                        self.read_state.activity.observe_latest(channel.id, message);
-                    }
-                }
-                for (channel, message, count) in entries.unwrap_or_default() {
-                    if !self
-                        .channels
-                        .iter()
-                        .any(|c| c.id == channel && c.supports_text())
-                    {
-                        continue;
-                    }
-                    self.read_state.activity.set_count(channel, count);
-                    if self
-                        .read_state
-                        .entries
-                        .insert(channel, (message, self.read_state.revision))
-                        .is_some()
-                    {
-                        self.read_state.reset();
-                        return Err("Duplicate channel read state");
-                    }
-                }
-            }
-            Event::Ack {
-                channel,
-                message,
-                manual,
-                mention_count,
-                version,
-            } => {
-                if !self
-                    .channels
-                    .iter()
-                    .any(|c| c.id == channel && c.supports_text())
-                    || matches!((self.read_state.version,version),(Some(old),Some(new)) if new<old)
-                {
-                    return Ok(());
-                }
-                self.read_state.version = version.or(self.read_state.version);
-                self.read_state.revision = self.read_state.revision.wrapping_add(1);
-                let current = self
-                    .read_state
-                    .entries
-                    .get(&channel)
-                    .and_then(|(id, _)| *id);
-                let message = if manual {
-                    message
-                } else {
-                    message.max(current)
-                };
-                self.read_state
-                    .activity
-                    .ack(channel, message, mention_count);
-                self.read_state
-                    .entries
-                    .insert(channel, (message, self.read_state.revision));
-            }
-            Event::Latest(channels) => {
-                if channels.len() > crate::MAX_NAV {
-                    return Err("Channel update capacity exceeded");
-                }
-                for (id, latest) in channels {
-                    if let Some(channel) = self.channels.iter_mut().find(|c| c.id == id) {
-                        match latest {
-                            Patch::Value(id) => channel.last_message = Some(id),
-                            Patch::Null => channel.last_message = None,
-                            Patch::Absent => {}
-                        }
-                    }
-                }
-            }
-            Event::Result {
-                channel,
-                message,
-                request,
-                result,
-            } => {
-                let Some((pending_channel, pending_message, pending_request, epoch)) =
-                    self.read_state.pending
-                else {
-                    return Ok(());
-                };
-                if (channel, message, request)
-                    != (pending_channel, pending_message, pending_request)
-                {
-                    return Ok(());
-                }
-                self.read_state.pending = None;
-                if !self.can_view(channel) {
-                    self.read_state.status = None;
-                    return Ok(());
-                }
-                match result {
-                    Ok(()) => {
-                        // A newer service ACK (including manual mark-unread) wins over this HTTP completion.
-                        if self.channels.iter().any(|c| c.id == channel)
-                            && self
-                                .read_state
-                                .entries
-                                .get(&channel)
-                                .map_or(0, |(_, epoch)| *epoch)
-                                == epoch
-                        {
-                            self.read_state.revision = self.read_state.revision.wrapping_add(1);
-                            let current = self
-                                .read_state
-                                .entries
-                                .get(&channel)
-                                .and_then(|(id, _)| *id);
-                            self.read_state
-                                .activity
-                                .ack(channel, Some(message).max(current), None);
-                            self.read_state.entries.insert(
-                                channel,
-                                (Some(message).max(current), self.read_state.revision),
-                            );
-                        }
-                        self.read_state.status = Some("Read marker saved");
-                    }
-                    Err(failure) => {
-                        self.read_state.status = Some(failure.label());
-                        if failure.ends_session() {
-                            self.fail(failure);
-                        }
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
+	pub fn read_marker(&self, channel: Id) -> Option<Option<Id>> {
+		if !self.gateway_connected
+			|| !self.can_view(channel)
+			|| !self
+				.channels
+				.iter()
+				.any(|c| c.id == channel && c.supports_text())
+		{
+			return None;
+		}
+		(self.read_state.known || self.read_state.entries.contains_key(&channel)).then(|| {
+			self.read_state
+				.entries
+				.get(&channel)
+				.and_then(|(id, _)| *id)
+		})
+	}
+	pub fn unread(&self, channel: Id) -> Option<bool> {
+		self.channel_unread(self.channels.iter().find(|c| c.id == channel)?)
+	}
+	/// Shared unread visibility for sidebar rows and notification badges.
+	pub fn channel_unread(&self, channel: &model::Channel) -> Option<bool> {
+		if !self.gateway_connected
+			|| !self.can_view(channel.id)
+			|| !channel.supports_text()
+			|| !(self.read_state.known || self.read_state.entries.contains_key(&channel.id))
+		{
+			return None;
+		}
+		let read = self
+			.read_state
+			.entries
+			.get(&channel.id)
+			.and_then(|(id, _)| *id);
+		let latest = channel.last_message?;
+		Some(read.is_none_or(|read| latest > read))
+	}
+	pub fn can_jump_unread(&self) -> bool {
+		self.auth == AuthState::Authenticated
+			&& self.gateway_connected
+			&& self.freshness == Freshness::Fresh
+			&& !self.history_pending
+			&& self.selected.is_some_and(|channel| {
+				self.can_read_history(channel) && self.unread(channel) == Some(true)
+			})
+	}
+	/// Request the first bounded page after the service read marker. Zero is only
+	/// a pagination cursor for a known empty marker, never a fabricated message ID.
+	pub fn open_unread(&mut self) -> Option<crate::Command> {
+		if !self.can_jump_unread() {
+			return None;
+		}
+		let after = self.read_marker(self.selected?)?.unwrap_or(Id(0));
+		Some(self.open_after_window(after))
+	}
+	pub fn can_load_newer(&self) -> bool {
+		self.auth == AuthState::Authenticated
+			&& self.gateway_connected
+			&& self.freshness == Freshness::Fresh
+			&& !self.history_pending
+			&& self
+				.selected
+				.is_some_and(|channel| self.can_read_history(channel))
+			&& self.forward_cursor().is_some_and(|last| {
+				self.channels.iter().any(|channel| {
+					Some(channel.id) == self.selected
+						&& channel.last_message.map_or(
+							self.newer_may_have_more
+								|| (self.history_targeted && self.history_after.is_none()),
+							|latest| latest > last,
+						)
+				})
+			})
+	}
+	pub fn newer_history(&mut self) -> Option<crate::Command> {
+		if !self.can_load_newer() {
+			return None;
+		}
+		Some(self.open_after_window(self.forward_cursor()?))
+	}
+	fn forward_cursor(&self) -> Option<Id> {
+		self.timeline
+			.iter()
+			.last()
+			.map(|m| m.id)
+			.or(self.newer_cursor)
+	}
+	fn open_after_window(&mut self, after: Id) -> crate::Command {
+		self.timeline.clear_window_preserving_deletions();
+		self.history_targeted = true;
+		self.revision += 1;
+		let command = self.history_range(None, Some(after));
+		self.enforce_resident_budget();
+		command
+	}
+	pub fn can_mark_read(&self, message: Id) -> bool {
+		self.auth == AuthState::Authenticated
+			&& self.gateway_connected
+			&& self.freshness == Freshness::Fresh
+			&& self.read_state.pending.is_none()
+			&& self
+				.timeline
+				.get(message)
+				.is_some_and(|m| Some(m.channel) == self.selected)
+			&& self.selected.is_some_and(|channel| {
+				self.can_view(channel)
+					&& self
+						.read_marker(channel)
+						.flatten()
+						.is_none_or(|read| message > read)
+			})
+	}
+	pub fn prepare_mark_read(&mut self, message: Id) -> Option<crate::Command> {
+		if !self.can_mark_read(message) {
+			return None;
+		}
+		let channel = self.selected?;
+		self.read_state.revision = self.read_state.revision.wrapping_add(1);
+		let request = self.read_state.revision;
+		let epoch = self
+			.read_state
+			.entries
+			.get(&channel)
+			.map_or(0, |(_, epoch)| *epoch);
+		self.read_state.pending = Some((channel, message, request, epoch));
+		self.read_state.status = Some("Marking read…");
+		Some(crate::Command::MarkRead {
+			channel,
+			message,
+			request,
+		})
+	}
+	pub fn observe_last_message(&mut self, channel: Id, message: Id) {
+		if let Some(channel) = self.channels.iter_mut().find(|c| c.id == channel) {
+			self.read_state.activity.observe_latest(channel.id, message);
+			if channel.last_message.is_none_or(|id| message > id) {
+				channel.last_message = Some(message);
+			}
+		}
+	}
+	pub fn apply_read_state(&mut self, event: Event) -> Result<(), &'static str> {
+		match event {
+			Event::Snapshot {
+				entries,
+				version,
+				partial,
+			} => {
+				if entries
+					.as_ref()
+					.is_some_and(|items| items.len() > crate::MAX_NAV)
+				{
+					return Err("Read-state capacity exceeded");
+				}
+				self.read_state = ReadState {
+					revision: self.read_state.revision.wrapping_add(1),
+					known: entries.is_some() && !partial,
+					version,
+					..ReadState::default()
+				};
+				for channel in &self.channels {
+					if let Some(message) = channel.last_message {
+						self.read_state.activity.observe_latest(channel.id, message);
+					}
+				}
+				for (channel, message, count) in entries.unwrap_or_default() {
+					if !self
+						.channels
+						.iter()
+						.any(|c| c.id == channel && c.supports_text())
+					{
+						continue;
+					}
+					self.read_state.activity.set_count(channel, count);
+					if self
+						.read_state
+						.entries
+						.insert(channel, (message, self.read_state.revision))
+						.is_some()
+					{
+						self.read_state.reset();
+						return Err("Duplicate channel read state");
+					}
+				}
+			}
+			Event::Ack {
+				channel,
+				message,
+				manual,
+				mention_count,
+				version,
+			} => {
+				if !self
+					.channels
+					.iter()
+					.any(|c| c.id == channel && c.supports_text())
+					|| matches!((self.read_state.version,version),(Some(old),Some(new)) if new<old)
+				{
+					return Ok(());
+				}
+				self.read_state.version = version.or(self.read_state.version);
+				self.read_state.revision = self.read_state.revision.wrapping_add(1);
+				let current = self
+					.read_state
+					.entries
+					.get(&channel)
+					.and_then(|(id, _)| *id);
+				let message = if manual {
+					message
+				} else {
+					message.max(current)
+				};
+				self.read_state
+					.activity
+					.ack(channel, message, mention_count);
+				self.read_state
+					.entries
+					.insert(channel, (message, self.read_state.revision));
+			}
+			Event::Latest(channels) => {
+				if channels.len() > crate::MAX_NAV {
+					return Err("Channel update capacity exceeded");
+				}
+				for (id, latest) in channels {
+					if let Some(channel) = self.channels.iter_mut().find(|c| c.id == id) {
+						if let Some(previous) = channel.last_message {
+							self.read_state
+								.activity
+								.observe_latest(channel.id, previous);
+						}
+						match latest {
+							Patch::Value(id) => channel.last_message = Some(id),
+							Patch::Null => channel.last_message = None,
+							Patch::Absent => {}
+						}
+					}
+				}
+			}
+			Event::Result {
+				channel,
+				message,
+				request,
+				result,
+			} => {
+				let Some((pending_channel, pending_message, pending_request, epoch)) =
+					self.read_state.pending
+				else {
+					return Ok(());
+				};
+				if (channel, message, request)
+					!= (pending_channel, pending_message, pending_request)
+				{
+					return Ok(());
+				}
+				self.read_state.pending = None;
+				if !self.can_view(channel) {
+					self.read_state.status = None;
+					return Ok(());
+				}
+				match result {
+					Ok(()) => {
+						// A newer service ACK (including manual mark-unread) wins over this HTTP completion.
+						if self.channels.iter().any(|c| c.id == channel)
+							&& self
+								.read_state
+								.entries
+								.get(&channel)
+								.map_or(0, |(_, epoch)| *epoch)
+								== epoch
+						{
+							self.read_state.revision = self.read_state.revision.wrapping_add(1);
+							let current = self
+								.read_state
+								.entries
+								.get(&channel)
+								.and_then(|(id, _)| *id);
+							self.read_state
+								.activity
+								.ack(channel, Some(message).max(current), None);
+							self.read_state.entries.insert(
+								channel,
+								(Some(message).max(current), self.read_state.revision),
+							);
+						}
+						self.read_state.status = Some("Read marker saved");
+					}
+					Err(failure) => {
+						self.read_state.status = Some(failure.label());
+						if failure.ends_session() {
+							self.fail(failure);
+						}
+					}
+				}
+			}
+		}
+		Ok(())
+	}
 }
 
 #[cfg(test)]
 mod navigation_tests {
-    use super::*;
-    use crate::{Command, Envelope, Event as CoreEvent};
-    use model::{Channel, Message, User};
-    fn message(id: u64) -> Message {
-        Message {
-            id: Id(id),
-            channel: Id(1),
-            author: User {
-                id: Id(9),
-                name: "Synthetic".into(),
-                avatar: None,
-                discriminator: 0,
-            },
-            content: "Synthetic unread message".into(),
-            reactions: Some(vec![]),
-            mention_roles: vec![],
-            mention_everyone: false,
-            suppress_notifications: false,
-            mentions: vec![],
-            edited: false,
-            edited_at: None,
-            revision: 0,
-            nonce: None,
-            reply_to: None,
-            reply_deleted: false,
-            kind: 0,
-            unsupported: false,
-            extra_content: Default::default(),
-            embeds: vec![],
-            attachments: vec![],
-            embeds_suppressed: false,
-        }
-    }
-    fn state(marker: Option<Id>) -> State {
-        let mut state = State {
-            user: Some(message(1).author),
-            auth: AuthState::Authenticated,
-            gateway_connected: true,
-            freshness: Freshness::Fresh,
-            selected: Some(Id(1)),
-            channels: vec![Channel {
-                id: Id(1),
-                guild: None,
-                parent_id: None,
-                kind: 1,
-                position: 0,
-                name: "Synthetic DM".into(),
-                recipients: vec![],
-                last_message: Some(Id(500)),
-                member_list_id: None,
-            }],
-            ..Default::default()
-        };
-        state
-            .apply_read_state(Event::Snapshot {
-                entries: Some(vec![(Id(1), marker, 0)]),
-                version: None,
-                partial: false,
-            })
-            .unwrap();
-        state.timeline.insert(message(500), false, false).unwrap();
-        state.drafts.insert(Id(1), "Preserve draft".into());
-        state.reply = Some(Id(500));
-        state
-    }
-    fn apply(state: &mut State, event: CoreEvent) {
-        state.apply(Envelope {
-            generation: state.generation,
-            event,
-        });
-    }
-    fn page(state: &mut State, messages: Vec<Message>) {
-        apply(
-            state,
-            CoreEvent::History {
-                channel: Id(1),
-                request: state.request,
-                messages,
-                older: false,
-            },
-        );
-    }
-    #[test]
-    fn unread_and_next_pages_are_bounded_scoped_and_do_not_acknowledge() {
-        for marker in [None, Some(Id(100))] {
-            let mut state = state(marker);
-            let start = marker.unwrap_or(Id(0)).0;
-            assert!(state.can_jump_unread());
-            assert!(
-                matches!(state.open_unread(),Some(Command::History {before:None,after:Some(after),..}) if after.0==start)
-            );
-            assert!(state.history_targeted && state.history_pending);
-            assert!(!state.can_jump_unread() && !state.can_load_newer());
-            let mut incoming = message(501);
-            incoming.author.id = Id(8);
-            apply(&mut state, CoreEvent::Message(incoming));
-            assert!(state.timeline.get(Id(501)).is_none());
-            // Deletion racing the response cannot become the scroll target.
-            apply(
-                &mut state,
-                CoreEvent::Delete {
-                    channel: Id(1),
-                    id: Id(start + 1),
-                },
-            );
-            page(
-                &mut state,
-                (start + 1..=start + 50).map(message).rev().collect(),
-            );
-            assert_eq!(state.search_target, Some(Id(start + 2)));
-            assert_eq!(state.timeline.iter().count(), 49);
-            assert_eq!(state.read_marker(Id(1)), Some(marker));
-            assert_eq!(state.drafts[&Id(1)], "Preserve draft");
-            assert_eq!(state.reply, Some(Id(500)));
-            assert!(state.read_state.pending.is_none());
-            assert!(
-                matches!(state.newer_history(),Some(Command::History {before:None,after:Some(after),..}) if after.0==start+50)
-            );
-            page(
-                &mut state,
-                (start + 51..=start + 100).map(message).collect(),
-            );
-            assert_eq!(state.search_target, Some(Id(start + 51)));
-            assert_eq!(state.timeline.row_count(), 50);
-            assert!(!state.older_exhausted);
-            assert!(state.can_load_older());
-            assert_eq!(state.read_marker(Id(1)), Some(marker));
-            let Command::History { before, after, .. } = state.history(None) else {
-                panic!()
-            };
-            assert!(before.is_none() && after.is_none() && !state.history_targeted);
-        }
-    }
-    #[test]
-    fn historical_sends_confirm_without_splicing_a_live_tail_in_either_order() {
-        for gateway_first in [false, true] {
-            let mut state = state(Some(Id(100)));
-            state.open_unread().unwrap();
-            page(&mut state, (101..=150).map(message).collect());
-            let Command::Send { nonce, .. } = state.prepare_send().unwrap() else {
-                panic!()
-            };
-            let mut sent = message(501);
-            sent.nonce = Some(nonce.clone());
-            if gateway_first {
-                apply(&mut state, CoreEvent::Message(sent.clone()));
-            }
-            apply(
-                &mut state,
-                CoreEvent::SendResult {
-                    nonce,
-                    result: Ok(sent.clone()),
-                },
-            );
-            if !gateway_first {
-                apply(&mut state, CoreEvent::Message(sent));
-            }
-            assert!(state.timeline.get(Id(501)).is_none());
-            assert_eq!(state.channels[0].last_message, Some(Id(501)));
-            assert!(
-                state
-                    .pending
-                    .iter()
-                    .all(|p| p.delivery == model::Delivery::Confirmed)
-            );
-            assert!(matches!(
-                state.newer_history(),
-                Some(Command::History {
-                    after: Some(Id(150)),
-                    ..
-                })
-            ));
-        }
-    }
-    #[test]
-    fn deleted_pages_and_unknown_latest_keep_a_forward_cursor_without_resurrecting_messages() {
-        let mut state = state(Some(Id(100)));
-        state.open_unread().unwrap();
-        apply(
-            &mut state,
-            CoreEvent::DeleteBulk {
-                channel: Id(1),
-                ids: (101..=150).map(Id).collect(),
-            },
-        );
-        apply(
-            &mut state,
-            CoreEvent::Delete {
-                channel: Id(1),
-                id: Id(500),
-            },
-        );
-        page(&mut state, (101..=150).map(message).collect());
-        assert_eq!(state.timeline.iter().count(), 0);
-        assert!(state.search_target.is_none());
-        assert!(matches!(
-            state.newer_history(),
-            Some(Command::History {
-                after: Some(Id(150)),
-                ..
-            })
-        ));
-        page(&mut state, (151..=200).map(message).collect());
-        let mut reply = message(601);
-        reply.reply_to = Some(Id(151));
-        reply.reply_deleted = true;
-        reply.kind = 19;
-        apply(&mut state, CoreEvent::Message(reply));
-        assert!(state.timeline.is_deleted(Id(151)));
-        assert!(state.timeline.get(Id(601)).is_none());
-        assert!(matches!(
-            state.newer_history(),
-            Some(Command::History {
-                after: Some(Id(200)),
-                ..
-            })
-        ));
-        page(&mut state, vec![]);
-        assert!(!state.can_load_newer());
-    }
-    #[test]
-    fn replacing_an_after_page_with_a_missing_target_drops_its_forward_cursor() {
-        let mut state = state(Some(Id(100)));
-        state.open_unread().unwrap();
-        page(&mut state, (101..=150).map(message).collect());
-        state.open_target_window(Id(50)).unwrap();
-        let request = state.request;
-        apply(
-            &mut state,
-            CoreEvent::History {
-                channel: Id(1),
-                request,
-                older: true,
-                messages: vec![],
-            },
-        );
-        assert!(state.newer_cursor.is_none());
-        assert!(!state.can_load_newer());
-        assert_eq!(state.search_target, Some(Id(50)));
-    }
-    #[test]
-    fn unread_navigation_rejects_unavailable_scope_bad_ranges_and_late_results() {
-        for invalid in 0..6 {
-            let mut state = state(Some(Id(100)));
-            match invalid {
-                0 => state.gateway_connected = false,
-                1 => state.auth = AuthState::Unauthenticated,
-                2 => state.freshness = Freshness::Stale,
-                3 => state.history_pending = true,
-                4 => state.read_state.reset(),
-                _ => state.channels.clear(),
-            }
-            assert!(!state.can_jump_unread());
-            assert!(state.open_unread().is_none());
-            assert_eq!(state.timeline.row_count(), 1);
-            assert_eq!(state.drafts[&Id(1)], "Preserve draft");
-        }
-        let mut state = state(Some(Id(100)));
-        state.open_unread().unwrap();
-        page(&mut state, vec![message(100)]);
-        assert_ne!(state.freshness, Freshness::Fresh);
-        assert!(state.timeline.get(Id(100)).is_none());
-        let mut state = self::state(Some(Id(100)));
-        state.open_unread().unwrap();
-        let stale = state.request;
-        state.history(None);
-        apply(
-            &mut state,
-            CoreEvent::History {
-                channel: Id(1),
-                request: stale,
-                older: false,
-                messages: vec![message(101)],
-            },
-        );
-        assert!(state.timeline.get(Id(101)).is_none());
-        page(&mut state, vec![message(500)]);
-        assert!(!state.history_targeted && state.search_target.is_none());
-        state.open_unread().unwrap();
-        page(&mut state, vec![]);
-        assert!(
-            state
-                .status
-                .starts_with("No messages returned after this boundary")
-        );
-        assert!(state.history_targeted && state.search_target.is_none());
-        assert!(!state.can_load_newer());
-        assert!(state.read_state.pending.is_none());
-    }
+	use super::*;
+	use crate::{Command, Envelope, Event as CoreEvent};
+	use model::{Channel, Message, User};
+	fn message(id: u64) -> Message {
+		Message {
+			id: Id(id),
+			channel: Id(1),
+			author: User {
+				id: Id(9),
+				name: "Synthetic".into(),
+				avatar: None,
+				discriminator: 0,
+			},
+			content: "Synthetic unread message".into(),
+			reactions: Some(vec![]),
+			mention_roles: vec![],
+			mention_everyone: false,
+			suppress_notifications: false,
+			mentions: vec![],
+			edited: false,
+			edited_at: None,
+			revision: 0,
+			nonce: None,
+			reply_to: None,
+			reply_deleted: false,
+			kind: 0,
+			unsupported: false,
+			extra_content: Default::default(),
+			embeds: vec![],
+			attachments: vec![],
+			embeds_suppressed: false,
+		}
+	}
+	fn state(marker: Option<Id>) -> State {
+		let mut state = State {
+			user: Some(message(1).author),
+			auth: AuthState::Authenticated,
+			gateway_connected: true,
+			freshness: Freshness::Fresh,
+			selected: Some(Id(1)),
+			channels: vec![Channel {
+				id: Id(1),
+				guild: None,
+				parent_id: None,
+				kind: 1,
+				position: 0,
+				name: "Synthetic DM".into(),
+				recipients: vec![],
+				last_message: Some(Id(500)),
+				member_list_id: None,
+			}],
+			..Default::default()
+		};
+		state
+			.apply_read_state(Event::Snapshot {
+				entries: Some(vec![(Id(1), marker, 0)]),
+				version: None,
+				partial: false,
+			})
+			.unwrap();
+		state.timeline.insert(message(500), false, false).unwrap();
+		state.drafts.insert(Id(1), "Preserve draft".into());
+		state.reply = Some(Id(500));
+		state
+	}
+	fn apply(state: &mut State, event: CoreEvent) {
+		state.apply(Envelope {
+			generation: state.generation,
+			event,
+		});
+	}
+	fn page(state: &mut State, messages: Vec<Message>) {
+		apply(
+			state,
+			CoreEvent::History {
+				channel: Id(1),
+				request: state.request,
+				messages,
+				older: false,
+			},
+		);
+	}
+	#[test]
+	fn unread_and_next_pages_are_bounded_scoped_and_do_not_acknowledge() {
+		for marker in [None, Some(Id(100))] {
+			let mut state = state(marker);
+			let start = marker.unwrap_or(Id(0)).0;
+			assert!(state.can_jump_unread());
+			assert!(
+				matches!(state.open_unread(),Some(Command::History {before:None,after:Some(after),..}) if after.0==start)
+			);
+			assert!(state.history_targeted && state.history_pending);
+			assert!(!state.can_jump_unread() && !state.can_load_newer());
+			let mut incoming = message(501);
+			incoming.author.id = Id(8);
+			apply(&mut state, CoreEvent::Message(incoming));
+			assert!(state.timeline.get(Id(501)).is_none());
+			// Deletion racing the response cannot become the scroll target.
+			apply(
+				&mut state,
+				CoreEvent::Delete {
+					channel: Id(1),
+					id: Id(start + 1),
+				},
+			);
+			page(
+				&mut state,
+				(start + 1..=start + 50).map(message).rev().collect(),
+			);
+			assert_eq!(state.search_target, Some(Id(start + 2)));
+			assert_eq!(state.timeline.iter().count(), 49);
+			assert_eq!(state.read_marker(Id(1)), Some(marker));
+			assert_eq!(state.drafts[&Id(1)], "Preserve draft");
+			assert_eq!(state.reply, Some(Id(500)));
+			assert!(state.read_state.pending.is_none());
+			assert!(
+				matches!(state.newer_history(),Some(Command::History {before:None,after:Some(after),..}) if after.0==start+50)
+			);
+			page(
+				&mut state,
+				(start + 51..=start + 100).map(message).collect(),
+			);
+			assert_eq!(state.search_target, Some(Id(start + 51)));
+			assert_eq!(state.timeline.row_count(), 50);
+			assert!(!state.older_exhausted);
+			assert!(state.can_load_older());
+			assert_eq!(state.read_marker(Id(1)), Some(marker));
+			let Command::History { before, after, .. } = state.history(None) else {
+				panic!()
+			};
+			assert!(before.is_none() && after.is_none() && !state.history_targeted);
+		}
+	}
+	#[test]
+	fn historical_sends_confirm_without_splicing_a_live_tail_in_either_order() {
+		for gateway_first in [false, true] {
+			let mut state = state(Some(Id(100)));
+			state.open_unread().unwrap();
+			page(&mut state, (101..=150).map(message).collect());
+			let Command::Send { nonce, .. } = state.prepare_send().unwrap() else {
+				panic!()
+			};
+			let mut sent = message(501);
+			sent.nonce = Some(nonce.clone());
+			if gateway_first {
+				apply(&mut state, CoreEvent::Message(sent.clone()));
+			}
+			apply(
+				&mut state,
+				CoreEvent::SendResult {
+					nonce,
+					result: Ok(sent.clone()),
+				},
+			);
+			if !gateway_first {
+				apply(&mut state, CoreEvent::Message(sent));
+			}
+			assert!(state.timeline.get(Id(501)).is_none());
+			assert_eq!(state.channels[0].last_message, Some(Id(501)));
+			assert!(
+				state
+					.pending
+					.iter()
+					.all(|p| p.delivery == model::Delivery::Confirmed)
+			);
+			assert!(matches!(
+				state.newer_history(),
+				Some(Command::History {
+					after: Some(Id(150)),
+					..
+				})
+			));
+		}
+	}
+	#[test]
+	fn deleted_pages_and_unknown_latest_keep_a_forward_cursor_without_resurrecting_messages() {
+		let mut state = state(Some(Id(100)));
+		state.open_unread().unwrap();
+		apply(
+			&mut state,
+			CoreEvent::DeleteBulk {
+				channel: Id(1),
+				ids: (101..=150).map(Id).collect(),
+			},
+		);
+		apply(
+			&mut state,
+			CoreEvent::Delete {
+				channel: Id(1),
+				id: Id(500),
+			},
+		);
+		page(&mut state, (101..=150).map(message).collect());
+		assert_eq!(state.timeline.iter().count(), 0);
+		assert!(state.search_target.is_none());
+		assert!(matches!(
+			state.newer_history(),
+			Some(Command::History {
+				after: Some(Id(150)),
+				..
+			})
+		));
+		page(&mut state, (151..=200).map(message).collect());
+		let mut reply = message(601);
+		reply.reply_to = Some(Id(151));
+		reply.reply_deleted = true;
+		reply.kind = 19;
+		apply(&mut state, CoreEvent::Message(reply));
+		assert!(state.timeline.is_deleted(Id(151)));
+		assert!(state.timeline.get(Id(601)).is_none());
+		assert!(matches!(
+			state.newer_history(),
+			Some(Command::History {
+				after: Some(Id(200)),
+				..
+			})
+		));
+		page(&mut state, vec![]);
+		assert!(!state.can_load_newer());
+	}
+	#[test]
+	fn replacing_an_after_page_with_a_missing_target_drops_its_forward_cursor() {
+		let mut state = state(Some(Id(100)));
+		state.open_unread().unwrap();
+		page(&mut state, (101..=150).map(message).collect());
+		state.open_target_window(Id(50)).unwrap();
+		let request = state.request;
+		apply(
+			&mut state,
+			CoreEvent::History {
+				channel: Id(1),
+				request,
+				older: true,
+				messages: vec![],
+			},
+		);
+		assert!(state.newer_cursor.is_none());
+		assert!(!state.can_load_newer());
+		assert_eq!(state.search_target, Some(Id(50)));
+	}
+	#[test]
+	fn unread_navigation_rejects_unavailable_scope_bad_ranges_and_late_results() {
+		for invalid in 0..6 {
+			let mut state = state(Some(Id(100)));
+			match invalid {
+				0 => state.gateway_connected = false,
+				1 => state.auth = AuthState::Unauthenticated,
+				2 => state.freshness = Freshness::Stale,
+				3 => state.history_pending = true,
+				4 => state.read_state.reset(),
+				_ => state.channels.clear(),
+			}
+			assert!(!state.can_jump_unread());
+			assert!(state.open_unread().is_none());
+			assert_eq!(state.timeline.row_count(), 1);
+			assert_eq!(state.drafts[&Id(1)], "Preserve draft");
+		}
+		let mut state = state(Some(Id(100)));
+		state.open_unread().unwrap();
+		page(&mut state, vec![message(100)]);
+		assert_ne!(state.freshness, Freshness::Fresh);
+		assert!(state.timeline.get(Id(100)).is_none());
+		let mut state = self::state(Some(Id(100)));
+		state.open_unread().unwrap();
+		let stale = state.request;
+		state.history(None);
+		apply(
+			&mut state,
+			CoreEvent::History {
+				channel: Id(1),
+				request: stale,
+				older: false,
+				messages: vec![message(101)],
+			},
+		);
+		assert!(state.timeline.get(Id(101)).is_none());
+		page(&mut state, vec![message(500)]);
+		assert!(!state.history_targeted && state.search_target.is_none());
+		state.open_unread().unwrap();
+		page(&mut state, vec![]);
+		assert!(
+			state
+				.status
+				.starts_with("No messages returned after this boundary")
+		);
+		assert!(state.history_targeted && state.search_target.is_none());
+		assert!(!state.can_load_newer());
+		assert!(state.read_state.pending.is_none());
+	}
 }

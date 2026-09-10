@@ -1,5 +1,32 @@
 # Initial performance evidence
 
+## Combined DM/group activity ordering - September 11, 2026
+
+Baseline `fd20dc9`, compared with this change on Windows 11 Home 10.0.26200,
+Ryzen 7 7800X3D, 31.1 GiB visible RAM, Rust 1.98.1; locked release builds,
+thin LTO, one codegen unit, wgpu. Text and optional voice packages were built
+separately with `cargo xtask package` and `cargo xtask package-voice`.
+Installed bytes include all package files; ZIP uses Python zipfile DEFLATE level 9.
+One package sample per variant, before this documentation addendum.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable bytes | 51,146,752 | 51,195,392 | +48,640 |
+| Text installed bytes | 51,843,054 | 51,891,694 | +48,640 |
+| Text ZIP bytes | 31,772,864 | 31,790,250 | +17,386 |
+| Voice executable bytes | 54,500,864 | 54,549,504 | +48,640 |
+| Voice installed bytes | 55,405,357 | 55,453,997 | +48,640 |
+| Voice ZIP bytes | 33,149,123 | 33,165,994 | +16,871 |
+| 100,000-event reducer replay median ms | 42.1050 | 40.3613 | -1.7437 (-4.1%) |
+| Retained timeline estimated bytes | 236,992..237,477 | 236,992..237,477 | unchanged |
+
+Replay: `cargo build --release --locked -p replay-bench`, then one direct executable
+warmup and five measured runs per revision; 500 retained records. This small noisy
+difference is not a speedup claim or a measurement of sidebar sorting, RSS or frames.
+Sorting reuses bounded navigation/activity metadata and allocates no additional cache.
+Native before/after CPU, memory and frame comparisons remain unmeasured: the owner
+stopped Computer Use with Escape before the matched visual capture completed.
+
 ## Inline message spoilers - September 10, 2026
 
 Baseline main b92a082a4b06c480fe6509252712f6513cd7dc62 / PR #35. Its verified text/voice
@@ -1876,3 +1903,52 @@ and does not represent live account memory or a long-session cache bound.
 | Median RSS (MiB) | 160.88 | 161.97 | +1.09 |
 | Peak sampled RSS (MiB) | 160.89 | 161.98 | +1.09 |
 | Median idle CPU (%) | 0.00 | 0.00 | +0.00 |
+
+## September 11, 2026 - message-history scroll stability
+
+Baseline `fd20dc90c5bf25bce1cfc313944661f973f3c9e1`; after: `d6909bd`
+(scroll fix before integrating the newer DM-ordering change from main).
+Windows 11 Home 10.0.26200, AMD Ryzen 7 7800X3D, 31.12 GiB reported RAM,
+Rust 1.98.1, unchanged pinned egui and release profile. Both text and optional voice
+packages were built with `cargo xtask package` / `cargo xtask package-voice` in
+separate baseline and task worktrees. No native renderer or live account was opened.
+
+| Metric (bytes) | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable | 51,146,752 | 51,147,776 | +1,024 (+0.002%) |
+| Text installed files | 51,843,054 | 51,846,013 | +2,959 (+0.006%) |
+| Text ZIP | 31,772,863 | 31,774,478 | +1,615 (+0.005%) |
+| Voice executable | 54,500,864 | 54,501,888 | +1,024 (+0.002%) |
+| Voice installed files | 55,405,357 | 55,408,316 | +2,959 (+0.005%) |
+| Voice ZIP | 33,149,120 | 33,150,379 | +1,259 (+0.004%) |
+
+One package sample per variant/revision. Installed size sums every regular payload
+file (53 text, 99 voice), including staged docs/notices and excluding PR evidence;
+text excludes the separately packaged voice directory. ZIP uses Python `zipfile`,
+DEFLATE level 9, sorted paths and fixed 2026-09-11 timestamps. Measurements precede
+this final evidence addendum. These tiny size deltas are not a speed improvement.
+Text SHA256: `3c742d7b307b80ed66640d4bb8df2babcf0a9475666778f9f4ca86012d704915`.
+Voice SHA256: `fe290e2804f24a21d922574380142dd2e34822087b8bb1fd637b98b2eba6a27c`.
+
+The shared synthetic egui regression renders 500 messages, including compact rows
+and a long wrapped message every seventh row. After eight warmup frames and eight
+frames settling an anchor at message 200, it supplies 4-point wheel input for 120
+upward frames, 240 downward frames and four idle frames. Timestamps advance by
+1/60 second; small point deltas avoid additional wheel smoothing. One transition
+frame per direction is excluded for egui's normal input-to-layout delay. It compares
+the same visible message's painted text position between consecutive presentations.
+Run `cargo test --locked -p ui wheel_scrolling_keeps_visible_messages_stable_during_measurement -- --nocapture`;
+for the baseline, add only this test to the baseline source (the production code is unchanged).
+
+| Maximum displacement error (points) | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| 900x600 viewport | 80 | 0 | -80 |
+| 360x600 viewport | 76 | 0 | -76 |
+
+This deterministic CPU layout check measures scroll-position stability, not UI latency,
+GPU frame timing, startup time or live Discord behavior. Existing virtualized-layout
+checks still prove fewer than 60 initial measured rows from a 500-row timeline.
+The implementation adds no extra layout pass, cache or dependency. Native before/after
+screenshots, renderer/display scale, idle CPU, peak/settled process memory and native
+p95 frame time are unmeasured because native Computer Use remains owner-paused after
+the earlier Escape interruption. No native performance improvement is claimed.

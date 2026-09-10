@@ -1911,3 +1911,79 @@ profile status visibly changes from the striped missing-glyph marker to a yellow
 moon. This validates native label rendering on this Mac, not every emoji sequence
 or live Discord behavior. Temporary preview copies used distinct bundle IDs to
 keep automation separate from the owner's running app.
+
+## September 11, 2026 - message-history scroll stability
+
+Baseline `fd20dc90c5bf25bce1cfc313944661f973f3c9e1`, branch `fix/scroll-jitter`,
+isolated Windows worktree. The original main checkout and its untracked
+`target-relocation-remainder/` were preserved. Rust 1.98.1; unchanged pinned egui,
+text-only default and optional voice features. Baseline release packages were built
+from a separate detached worktree before application edits.
+
+The timeline saved its anchor before egui consumed wheel input, then restored that
+outdated position after measuring new rows. Leading row measurements also shifted
+already visible messages, while estimated trailing heights could leave gaps.
+The fix saves the post-input anchor, measures leading rows in a clipped child whose
+bounds do not move the visible content, and fills the viewport using actual row heights.
+Row widget IDs remain stable across those two layouts. Existing 500-row/content-byte
+bounds and caches are unchanged; no additional rendering passes or dependencies.
+
+Synthetic egui input regression: 500 messages with compact and long wrapped rows,
+900x600 and 360x600 point viewports, explicit 60 Hz timestamps, 120 upward wheel
+frames, 240 downward frames and four idle frames. Maximum visible-message displacement
+error was 80/76 points on the baseline and 0/0 after the fix. These are CPU layout
+coordinates, not native GPU frame-time or live Discord evidence. Existing focused
+timeline checks cover zoom, deletion, spoilers, keyboard actions and jumping to present.
+
+Native Computer Use remains owner-paused from the earlier Escape interruption.
+Before/after native screenshots and native process CPU/RSS sampling are therefore
+unavailable; no desktop automation, live conversation or running owner build was touched.
+The delivery skill requires a draft PR while this evidence is unavailable. Release
+package measurements and their limits are recorded in `docs/performance.md`.
+
+Validation: `cargo test --locked -p ui timeline::tests -- --nocapture` passed;
+`cargo xtask check` passed all 360 tests (one existing opt-in voice test ignored),
+formatting, strict workspace Clippy, text-only check and policy. The tall-leading-row
+regression also verifies first-frame visibility and absence of phantom scroll extent.
+`cargo xtask package` and `cargo xtask package-voice` passed; each executable grew by
+1,024 bytes. Native capture/process metrics and live scrolling remain unverified.
+The shared target initially reused an xtask binary containing the baseline worktree
+path; rebuilding only the xtask cache corrected that before the successful checks
+and final packages. Baseline packages and the owner's running build were preserved.
+
+Owner-requested main integration: preserved the newer DM-ordering fix `990d1c3`;
+the only conflict joined both appended progress sections. The combined
+`cargo xtask check` passed 361 tests, strict Clippy, formatting, text-only check
+and policy (one existing opt-in voice test ignored). Release/size evidence above
+describes `d6909bd` before this integration. The owner explicitly requested pushing
+to main with the previously reported pending CI and paused native evidence.
+
+## Combined DM/group activity ordering - September 11, 2026
+
+DMs and group DMs now share newest-message-first sidebar ordering. Incoming messages
+and confirmed sends update placement; composing or pending sends do not. Existing
+bounded activity cursors retain ordering across deleted latest messages and stale/null
+metadata replacements. Empty conversations fall back to their channel IDs; equal
+activity uses channel ID as a deterministic tie-breaker. Guild/category ordering and
+selection by channel ID remain unchanged. No new storage, dependencies or network calls.
+
+Baseline: clean task worktree from origin/main `fd20dc9`; original local main was
+`2d17054` with unrelated `target-relocation-remainder/`, preserved. Rust 1.98.1.
+The new regression failed against baseline ordering, then passed. Final
+`cargo xtask check` passed all 359 tests, formatting, strict Clippy and policy checks;
+`cargo xtask package` and `cargo xtask package-voice` passed on Windows. Independent
+read-only review found no remaining blockers. Release package/replay comparisons are
+recorded in `docs/performance.md` (text and voice executables each +48,640 bytes).
+
+The existing native `--demo` baseline was inspected; Computer Use was stopped with
+physical Escape before the matched before/after pair, so no visual-pair claim is made.
+The temporary screenshot-only fixture was removed from the delivered change.
+No live Discord session, microphone, macOS or Linux validation was performed.
+The owner explicitly requested rebase and direct push to main instead of a PR.
+
+Protocol basis checked September 11: Discord's [channel fields](https://docs.discord.com/developers/resources/channel)
+provide last_message_id and [snowflake IDs](https://docs.discord.com/developers/reference#snowflakes)
+encode creation time. Ordering is a local interpretation of available metadata;
+synthetic tests do not prove exact official-client ordering or live interoperability.
+
+September 11 owner-requested merge: integrated main 487069f (including scrolling/DM order); retained diagnostics and runtime xtask workspace resolution through formatting conflicts. Full `cargo xtask check` passed 0 tests, strict Clippy, text-only compilation and policy; `node tests/xtask-workspace.cjs` passed. Existing-head cross-platform CI was green. No native/live interaction performed.

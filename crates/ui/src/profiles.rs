@@ -1,19 +1,19 @@
 //! Compact profile popout anchored beside the clicked user, populated only from the selected
 //! service profile and already retained presence.
 use crate::{
-    avatars::Avatars,
-    design,
-    markdown::{Formatted, external_url},
+	avatars::Avatars,
+	design,
+	markdown::{Formatted, external_url},
 };
 use client_core::{State, profile::ProfileView};
 use egui::{Color32, CornerRadius, Pos2, Rect, RichText, Stroke, pos2, vec2};
 use model::{Id, User};
 
 pub enum Action {
-    Close,
-    Retry,
-    Message(Id),
-    Profile(User),
+	Close,
+	Retry,
+	Message(Id),
+	Profile(User),
 }
 
 const WIDTH: f32 = 300.0;
@@ -22,669 +22,669 @@ const AVATAR: f32 = 80.0;
 const RADIUS: u8 = 8;
 
 pub fn presence_label(status: &str) -> &'static str {
-    match status {
-        "online" => "Online",
-        "idle" => "Idle",
-        "dnd" => "Do Not Disturb",
-        "offline" => "Offline",
-        _ => "Presence unavailable",
-    }
+	match status {
+		"online" => "Online",
+		"idle" => "Idle",
+		"dnd" => "Do Not Disturb",
+		"offline" => "Offline",
+		_ => "Presence unavailable",
+	}
 }
 pub(crate) fn presence_color(status: &str) -> Color32 {
-    match status {
-        "online" => Color32::from_rgb(35, 165, 89),
-        "idle" => Color32::from_rgb(240, 178, 50),
-        "dnd" => Color32::from_rgb(242, 63, 67),
-        _ => Color32::from_rgb(128, 132, 142),
-    }
+	match status {
+		"online" => Color32::from_rgb(35, 165, 89),
+		"idle" => Color32::from_rgb(240, 178, 50),
+		"dnd" => Color32::from_rgb(242, 63, 67),
+		_ => Color32::from_rgb(128, 132, 142),
+	}
 }
 /// Prefer the fresh visible member snapshot; DMs use the bounded session presence cache.
 pub(crate) fn presence(
-    state: &State,
-    user: Id,
-    guild: Option<Id>,
+	state: &State,
+	user: Id,
+	guild: Option<Id>,
 ) -> (Option<&str>, Option<&str>, &[model::RichActivity]) {
-    if let Some(member) = state
-        .members
-        .as_ref()
-        .filter(|list| {
-            guild.is_some() && list.guild == guild && list.freshness == model::Freshness::Fresh
-        })
-        .and_then(|list| {
-            list.rows
-                .iter()
-                .flatten()
-                .find(|member| member.user.id == user)
-        })
-        .filter(|_| state.demo || state.gateway_connected)
-    {
-        return (
-            member.status.as_deref(),
-            member.custom_status.as_deref(),
-            &member.activities,
-        );
-    }
-    state
-        .presence_for(user)
-        .map_or((None, None, &[]), |presence| {
-            (
-                presence.status.as_deref(),
-                presence.custom_status.as_deref(),
-                presence.activities.as_slice(),
-            )
-        })
+	if let Some(member) = state
+		.members
+		.as_ref()
+		.filter(|list| {
+			guild.is_some() && list.guild == guild && list.freshness == model::Freshness::Fresh
+		})
+		.and_then(|list| {
+			list.rows
+				.iter()
+				.flatten()
+				.find(|member| member.user.id == user)
+		})
+		.filter(|_| state.demo || state.gateway_connected)
+	{
+		return (
+			member.status.as_deref(),
+			member.custom_status.as_deref(),
+			&member.activities,
+		);
+	}
+	state
+		.presence_for(user)
+		.map_or((None, None, &[]), |presence| {
+			(
+				presence.status.as_deref(),
+				presence.custom_status.as_deref(),
+				presence.activities.as_slice(),
+			)
+		})
 }
 
 pub(crate) fn subtitle(custom: Option<&str>, activities: &[model::RichActivity]) -> Option<String> {
-    activities
-        .first()
-        .map(model::RichActivity::summary)
-        .or_else(|| custom.map(str::to_owned))
+	activities
+		.first()
+		.map(model::RichActivity::summary)
+		.or_else(|| custom.map(str::to_owned))
 }
 
 fn rgb(value: u32) -> Color32 {
-    Color32::from_rgb((value >> 16) as u8, (value >> 8) as u8, value as u8)
+	Color32::from_rgb((value >> 16) as u8, (value >> 8) as u8, value as u8)
 }
 fn luma(color: Color32) -> f32 {
-    let [r, g, b, _] = color.to_array();
-    (0.2126 * f32::from(r) + 0.7152 * f32::from(g) + 0.0722 * f32::from(b)) / 255.0
+	let [r, g, b, _] = color.to_array();
+	(0.2126 * f32::from(r) + 0.7152 * f32::from(g) + 0.0722 * f32::from(b)) / 255.0
 }
 /// Card colors: the shared palette, or the profile theme when the account configured one.
 struct Theme {
-    gradient: Option<(Color32, Color32)>,
-    text: Color32,
-    muted: Color32,
-    panel: Color32,
-    border: Color32,
-    card: Color32,
+	gradient: Option<(Color32, Color32)>,
+	text: Color32,
+	muted: Color32,
+	panel: Color32,
+	border: Color32,
+	card: Color32,
 }
 impl Theme {
-    fn new(colors: &design::Palette, theme: Option<[u32; 2]>) -> Self {
-        match theme {
-            Some([top, bottom]) => {
-                let (top, bottom) = (rgb(top), rgb(bottom));
-                let bright = (luma(top) + luma(bottom)) * 0.5 > 0.55;
-                Self {
-                    gradient: Some((top, bottom)),
-                    text: if bright {
-                        Color32::from_rgb(28, 32, 36)
-                    } else {
-                        Color32::from_rgb(242, 243, 245)
-                    },
-                    muted: if bright {
-                        Color32::from_rgb(64, 70, 76)
-                    } else {
-                        Color32::from_rgb(196, 201, 206)
-                    },
-                    panel: if bright {
-                        Color32::from_white_alpha(120)
-                    } else {
-                        Color32::from_black_alpha(110)
-                    },
-                    border: if bright {
-                        Color32::from_black_alpha(40)
-                    } else {
-                        Color32::from_white_alpha(28)
-                    },
-                    card: top.lerp_to_gamma(bottom, 0.3),
-                }
-            }
-            None => Self {
-                gradient: None,
-                text: colors.text,
-                muted: colors.muted,
-                panel: colors.raised,
-                border: colors.border,
-                card: colors.surface,
-            },
-        }
-    }
-    fn background(&self, rect: Rect, border: Color32) -> egui::Shape {
-        let mut shapes = vec![
-            egui::Shape::Rect(
-                egui::epaint::Shadow {
-                    offset: [0, 6],
-                    blur: 20,
-                    spread: 0,
-                    color: Color32::from_black_alpha(120),
-                }
-                .as_shape(rect, RADIUS),
-            ),
-            egui::Shape::rect_filled(rect, RADIUS, self.card),
-        ];
-        if let Some((top, bottom)) = self.gradient {
-            let band_bottom = rect.bottom() - f32::from(RADIUS);
-            let mut mesh = egui::Mesh::default();
-            mesh.colored_vertex(pos2(rect.left(), rect.top()), top);
-            mesh.colored_vertex(pos2(rect.right(), rect.top()), top);
-            mesh.colored_vertex(pos2(rect.left(), band_bottom), bottom);
-            mesh.colored_vertex(pos2(rect.right(), band_bottom), bottom);
-            mesh.add_triangle(0, 1, 2);
-            mesh.add_triangle(1, 3, 2);
-            // Rounded caps keep the corners while the flat band carries the gradient.
-            shapes.push(egui::Shape::rect_filled(rect, RADIUS, top));
-            shapes.push(egui::Shape::Vec(vec![egui::Shape::mesh(mesh)]));
-            shapes.push(egui::Shape::rect_filled(
-                Rect::from_min_max(pos2(rect.left(), band_bottom), rect.right_bottom()),
-                CornerRadius {
-                    nw: 0,
-                    ne: 0,
-                    sw: RADIUS,
-                    se: RADIUS,
-                },
-                bottom,
-            ));
-        }
-        shapes.push(egui::Shape::rect_stroke(
-            rect,
-            RADIUS,
-            Stroke::new(1.0, border),
-            egui::StrokeKind::Inside,
-        ));
-        egui::Shape::Vec(shapes)
-    }
+	fn new(colors: &design::Palette, theme: Option<[u32; 2]>) -> Self {
+		match theme {
+			Some([top, bottom]) => {
+				let (top, bottom) = (rgb(top), rgb(bottom));
+				let bright = (luma(top) + luma(bottom)) * 0.5 > 0.55;
+				Self {
+					gradient: Some((top, bottom)),
+					text: if bright {
+						Color32::from_rgb(28, 32, 36)
+					} else {
+						Color32::from_rgb(242, 243, 245)
+					},
+					muted: if bright {
+						Color32::from_rgb(64, 70, 76)
+					} else {
+						Color32::from_rgb(196, 201, 206)
+					},
+					panel: if bright {
+						Color32::from_white_alpha(120)
+					} else {
+						Color32::from_black_alpha(110)
+					},
+					border: if bright {
+						Color32::from_black_alpha(40)
+					} else {
+						Color32::from_white_alpha(28)
+					},
+					card: top.lerp_to_gamma(bottom, 0.3),
+				}
+			}
+			None => Self {
+				gradient: None,
+				text: colors.text,
+				muted: colors.muted,
+				panel: colors.raised,
+				border: colors.border,
+				card: colors.surface,
+			},
+		}
+	}
+	fn background(&self, rect: Rect, border: Color32) -> egui::Shape {
+		let mut shapes = vec![
+			egui::Shape::Rect(
+				egui::epaint::Shadow {
+					offset: [0, 6],
+					blur: 20,
+					spread: 0,
+					color: Color32::from_black_alpha(120),
+				}
+				.as_shape(rect, RADIUS),
+			),
+			egui::Shape::rect_filled(rect, RADIUS, self.card),
+		];
+		if let Some((top, bottom)) = self.gradient {
+			let band_bottom = rect.bottom() - f32::from(RADIUS);
+			let mut mesh = egui::Mesh::default();
+			mesh.colored_vertex(pos2(rect.left(), rect.top()), top);
+			mesh.colored_vertex(pos2(rect.right(), rect.top()), top);
+			mesh.colored_vertex(pos2(rect.left(), band_bottom), bottom);
+			mesh.colored_vertex(pos2(rect.right(), band_bottom), bottom);
+			mesh.add_triangle(0, 1, 2);
+			mesh.add_triangle(1, 3, 2);
+			// Rounded caps keep the corners while the flat band carries the gradient.
+			shapes.push(egui::Shape::rect_filled(rect, RADIUS, top));
+			shapes.push(egui::Shape::Vec(vec![egui::Shape::mesh(mesh)]));
+			shapes.push(egui::Shape::rect_filled(
+				Rect::from_min_max(pos2(rect.left(), band_bottom), rect.right_bottom()),
+				CornerRadius {
+					nw: 0,
+					ne: 0,
+					sw: RADIUS,
+					se: RADIUS,
+				},
+				bottom,
+			));
+		}
+		shapes.push(egui::Shape::rect_stroke(
+			rect,
+			RADIUS,
+			Stroke::new(1.0, border),
+			egui::StrokeKind::Inside,
+		));
+		egui::Shape::Vec(shapes)
+	}
 }
 fn heading(ui: &mut egui::Ui, theme: &Theme, text: &str) {
-    ui.label(RichText::new(text).size(11.0).strong().color(theme.muted));
+	ui.label(RichText::new(text).size(11.0).strong().color(theme.muted));
 }
 fn creation_date(id: Id) -> Option<String> {
-    let seconds = ((id.0 >> 22) + 1_420_070_400_000) / 1000;
-    time::OffsetDateTime::from_unix_timestamp(seconds as i64)
-        .ok()
-        .map(|date| date.date().to_string())
+	let seconds = ((id.0 >> 22) + 1_420_070_400_000) / 1000;
+	time::OffsetDateTime::from_unix_timestamp(seconds as i64)
+		.ok()
+		.map(|date| date.date().to_string())
 }
 
 /// Shows the popout beside `anchor`; returns an action when the card wants to change or close.
 #[allow(clippy::too_many_arguments)]
 pub fn show(
-    ui: &mut egui::Ui,
-    user: &User,
-    view: Option<&ProfileView>,
-    state: &State,
-    avatars: &mut Avatars,
-    opening: &mut Option<String>,
-    anchor: Pos2,
+	ui: &mut egui::Ui,
+	user: &User,
+	view: Option<&ProfileView>,
+	state: &State,
+	avatars: &mut Avatars,
+	opening: &mut Option<String>,
+	anchor: Pos2,
 ) -> Option<Action> {
-    let colors = design::palette(ui);
-    let viewport = ui.ctx().content_rect();
-    let bounds = viewport.shrink(8.0);
-    let data = view.and_then(|v| v.data.as_ref());
-    let theme = Theme::new(&colors, data.and_then(|d| d.theme_colors));
-    let guild = state
-        .selected
-        .and_then(|id| state.channels.iter().find(|c| c.id == id))
-        .and_then(|c| c.guild);
-    let (status, custom, activities) = presence(state, user.id, guild);
-    let mut action = None;
-    let x = if anchor.x + 12.0 + WIDTH <= bounds.right() {
-        anchor.x + 12.0
-    } else {
-        (anchor.x - 12.0 - WIDTH).max(bounds.left())
-    };
-    let response = egui::Area::new(egui::Id::unique("user-profile-popout"))
-        .kind(egui::UiKind::Popup)
-        .order(egui::Order::Foreground)
-        .fixed_pos(pos2(x, (anchor.y - 40.0).max(bounds.top())))
-        .constrain_to(bounds)
-        .interactable(true)
-        .show(ui.ctx(), |ui| {
-            ui.set_width(WIDTH);
-            ui.set_max_width(WIDTH);
-            ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
-            // Cross-label drag selection paints stray highlights in this dense card.
-            ui.style_mut().interaction.selectable_labels = false;
-            let background = ui.painter().add(egui::Shape::Noop);
-            ui.visuals_mut().override_text_color = Some(theme.text);
-            ui.visuals_mut().hyperlink_color = if theme.gradient.is_some() {
-                theme.text
-            } else {
-                colors.accent
-            };
+	let colors = design::palette(ui);
+	let viewport = ui.ctx().content_rect();
+	let bounds = viewport.shrink(8.0);
+	let data = view.and_then(|v| v.data.as_ref());
+	let theme = Theme::new(&colors, data.and_then(|d| d.theme_colors));
+	let guild = state
+		.selected
+		.and_then(|id| state.channels.iter().find(|c| c.id == id))
+		.and_then(|c| c.guild);
+	let (status, custom, activities) = presence(state, user.id, guild);
+	let mut action = None;
+	let x = if anchor.x + 12.0 + WIDTH <= bounds.right() {
+		anchor.x + 12.0
+	} else {
+		(anchor.x - 12.0 - WIDTH).max(bounds.left())
+	};
+	let response = egui::Area::new(egui::Id::unique("user-profile-popout"))
+		.kind(egui::UiKind::Popup)
+		.order(egui::Order::Foreground)
+		.fixed_pos(pos2(x, (anchor.y - 40.0).max(bounds.top())))
+		.constrain_to(bounds)
+		.interactable(true)
+		.show(ui.ctx(), |ui| {
+			ui.set_width(WIDTH);
+			ui.set_max_width(WIDTH);
+			ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
+			// Cross-label drag selection paints stray highlights in this dense card.
+			ui.style_mut().interaction.selectable_labels = false;
+			let background = ui.painter().add(egui::Shape::Noop);
+			ui.visuals_mut().override_text_color = Some(theme.text);
+			ui.visuals_mut().hyperlink_color = if theme.gradient.is_some() {
+				theme.text
+			} else {
+				colors.accent
+			};
 
-            // Header: banner or accent strip, overlapping avatar, presence dot, custom status.
-            let has_banner = data.is_some_and(|d| d.banner_key().is_some());
-            let (banner, _) = ui.allocate_exact_size(
-                vec2(WIDTH, if has_banner { 105.0 } else { 60.0 }),
-                egui::Sense::hover(),
-            );
-            let top_corners = CornerRadius {
-                nw: RADIUS,
-                ne: RADIUS,
-                sw: 0,
-                se: 0,
-            };
-            if let Some(data) = data {
-                avatars.paint_banner(ui, data, banner, top_corners, state.demo);
-            } else {
-                ui.painter().rect_filled(banner, top_corners, colors.raised);
-            }
-            let avatar_rect = Rect::from_min_size(
-                banner.left_bottom() + vec2(PAD, -AVATAR * 0.5 - 4.0),
-                egui::Vec2::splat(AVATAR),
-            );
-            ui.painter()
-                .circle_filled(avatar_rect.center(), AVATAR * 0.5 + 5.0, theme.card);
-            ui.scope_builder(egui::UiBuilder::new().max_rect(avatar_rect), |ui| {
-                if let Some(data) = data {
-                    avatars.show_profile_avatar(ui, data, AVATAR, state.demo);
-                } else {
-                    avatars.show(ui, user, AVATAR, state.demo);
-                }
-            });
-            if let Some(status) = status {
-                let center = avatar_rect.right_bottom() - vec2(11.0, 11.0);
-                ui.painter().circle_filled(center, 13.0, theme.card);
-                ui.painter()
-                    .circle_filled(center, 9.0, presence_color(status));
-                ui.allocate_rect(
-                    Rect::from_center_size(center, egui::Vec2::splat(20.0)),
-                    egui::Sense::hover(),
-                )
-                .on_hover_text(presence_label(status));
-            }
-            let mut header_bottom = avatar_rect.bottom();
-            if let Some(custom) = custom {
-                let bubble = Rect::from_min_max(
-                    pos2(avatar_rect.right() + 12.0, banner.bottom() - 26.0),
-                    pos2(banner.right() - PAD, banner.bottom() + 60.0),
-                );
-                let response = ui.scope_builder(egui::UiBuilder::new().max_rect(bubble), |ui| {
-                    egui::Frame::new()
-                        .fill(theme.panel)
-                        .stroke(Stroke::new(1.0, theme.border))
-                        .corner_radius(10)
-                        .inner_margin(egui::Margin::symmetric(10, 6))
-                        .show(ui, |ui| {
-                            ui.set_max_width(bubble.width() - 20.0);
-                            ui.add(egui::Label::new(RichText::new(custom).size(13.0)).wrap());
-                        });
-                });
-                header_bottom = header_bottom.max(response.response.rect.bottom());
-            }
-            ui.add_space((header_bottom - ui.cursor().top() + 10.0).max(0.0));
+			// Header: banner or accent strip, overlapping avatar, presence dot, custom status.
+			let has_banner = data.is_some_and(|d| d.banner_key().is_some());
+			let (banner, _) = ui.allocate_exact_size(
+				vec2(WIDTH, if has_banner { 105.0 } else { 60.0 }),
+				egui::Sense::hover(),
+			);
+			let top_corners = CornerRadius {
+				nw: RADIUS,
+				ne: RADIUS,
+				sw: 0,
+				se: 0,
+			};
+			if let Some(data) = data {
+				avatars.paint_banner(ui, data, banner, top_corners, state.demo);
+			} else {
+				ui.painter().rect_filled(banner, top_corners, colors.raised);
+			}
+			let avatar_rect = Rect::from_min_size(
+				banner.left_bottom() + vec2(PAD, -AVATAR * 0.5 - 4.0),
+				egui::Vec2::splat(AVATAR),
+			);
+			ui.painter()
+				.circle_filled(avatar_rect.center(), AVATAR * 0.5 + 5.0, theme.card);
+			ui.scope_builder(egui::UiBuilder::new().max_rect(avatar_rect), |ui| {
+				if let Some(data) = data {
+					avatars.show_profile_avatar(ui, data, AVATAR, state.demo);
+				} else {
+					avatars.show(ui, user, AVATAR, state.demo);
+				}
+			});
+			if let Some(status) = status {
+				let center = avatar_rect.right_bottom() - vec2(11.0, 11.0);
+				ui.painter().circle_filled(center, 13.0, theme.card);
+				ui.painter()
+					.circle_filled(center, 9.0, presence_color(status));
+				ui.allocate_rect(
+					Rect::from_center_size(center, egui::Vec2::splat(20.0)),
+					egui::Sense::hover(),
+				)
+				.on_hover_text(presence_label(status));
+			}
+			let mut header_bottom = avatar_rect.bottom();
+			if let Some(custom) = custom {
+				let bubble = Rect::from_min_max(
+					pos2(avatar_rect.right() + 12.0, banner.bottom() - 26.0),
+					pos2(banner.right() - PAD, banner.bottom() + 60.0),
+				);
+				let response = ui.scope_builder(egui::UiBuilder::new().max_rect(bubble), |ui| {
+					egui::Frame::new()
+						.fill(theme.panel)
+						.stroke(Stroke::new(1.0, theme.border))
+						.corner_radius(10)
+						.inner_margin(egui::Margin::symmetric(10, 6))
+						.show(ui, |ui| {
+							ui.set_max_width(bubble.width() - 20.0);
+							ui.add(egui::Label::new(RichText::new(custom).size(13.0)).wrap());
+						});
+				});
+				header_bottom = header_bottom.max(response.response.rect.bottom());
+			}
+			ui.add_space((header_bottom - ui.cursor().top() + 10.0).max(0.0));
 
-            egui::Frame::new()
-                .inner_margin(egui::Margin {
-                    left: PAD as i8,
-                    right: PAD as i8,
-                    top: 0,
-                    bottom: PAD as i8,
-                })
-                .show(ui, |ui| {
-                    let display = data
-                        .and_then(|p| {
-                            p.guild
-                                .as_ref()
-                                .and_then(|g| g.nick.as_deref())
-                                .or(p.global_name.as_deref())
-                        })
-                        .unwrap_or(&user.name);
-                    ui.horizontal_wrapped(|ui| {
-                        ui.spacing_mut().item_spacing.x = 8.0;
-                        ui.add(
-                            egui::Label::new(RichText::new(display).size(20.0).strong()).truncate(),
-                        );
-                        if let Some(clan) = data.and_then(|d| d.clan.as_ref()) {
-                            egui::Frame::new()
-                                .fill(theme.panel)
-                                .stroke(Stroke::new(1.0, theme.border))
-                                .corner_radius(6)
-                                .inner_margin(egui::Margin::symmetric(6, 2))
-                                .show(ui, |ui| {
-                                    ui.spacing_mut().item_spacing.x = 4.0;
-                                    avatars.show_icon(
-                                        ui,
-                                        clan.badge_key(),
-                                        14.0,
-                                        state.demo,
-                                        "Server tag badge",
-                                    );
-                                    ui.label(RichText::new(&clan.tag).size(12.0).strong());
-                                })
-                                .response
-                                .on_hover_text(format!("Server tag · server {}", clan.guild));
-                        }
-                    });
-                    let mut identity = Vec::new();
-                    if let Some(data) = data {
-                        identity.push(if data.user.discriminator > 0 {
-                            format!("{}#{:04}", data.username, data.user.discriminator)
-                        } else {
-                            data.username.clone()
-                        });
-                        let pronouns = data
-                            .guild
-                            .as_ref()
-                            .map(|g| g.pronouns.as_str())
-                            .filter(|s| !s.is_empty())
-                            .unwrap_or(&data.pronouns);
-                        if !pronouns.is_empty() {
-                            identity.push(pronouns.to_owned());
-                        }
-                    } else {
-                        identity.push(user.name.clone());
-                    }
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(identity.join(" • "))
-                                .size(14.0)
-                                .color(theme.muted),
-                        )
-                        .truncate(),
-                    );
-                    if let Some(data) = data.filter(|d| !d.badges.is_empty()) {
-                        ui.add_space(2.0);
-                        ui.horizontal_wrapped(|ui| {
-                            ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
-                            for badge in &data.badges {
-                                if badge.icon.is_some() {
-                                    avatars
-                                        .show_icon(
-                                            ui,
-                                            badge.icon_key(),
-                                            22.0,
-                                            state.demo,
-                                            &badge.description,
-                                        )
-                                        .on_hover_text(&badge.description);
-                                } else {
-                                    egui::Frame::new()
-                                        .fill(theme.panel)
-                                        .corner_radius(6)
-                                        .inner_margin(egui::Margin::symmetric(6, 2))
-                                        .show(ui, |ui| {
-                                            ui.label(RichText::new(&badge.description).size(11.0));
-                                        })
-                                        .response
-                                        .on_hover_text(&badge.id);
-                                }
-                            }
-                        });
-                    }
-                    if view.is_none_or(|v| v.loading) {
-                        ui.horizontal(|ui| {
-                            ui.spinner();
-                            ui.label(RichText::new("Loading profile…").color(theme.muted));
-                        });
-                    }
-                    if let Some(error) = view.and_then(|v| v.error) {
-                        ui.label(RichText::new(error).small().color(theme.muted));
-                        if ui.small_button("Retry profile").clicked() {
-                            action = Some(Action::Retry);
-                        }
-                    }
-                    if data.is_some() || !activities.is_empty() {
-                        ui.add_space(4.0);
-                        let used = ui.cursor().top() - banner.top();
-                        let max_height = (bounds.height() - used - 96.0).max(72.0);
-                        egui::Frame::new()
-                            .fill(theme.panel)
-                            .corner_radius(RADIUS)
-                            .inner_margin(12)
-                            .show(ui, |ui| {
-                                ui.set_width(ui.available_width());
-                                egui::ScrollArea::vertical()
-                                    .id_salt("profile-details")
-                                    .max_height(max_height)
-                                    .show(ui, |ui| {
-                                        ui.spacing_mut().item_spacing.y = 4.0;
-                                        if !activities.is_empty() {
-                                            heading(ui, &theme, "ACTIVITY");
-                                            for activity in activities {
-                                                ui.horizontal_top(|ui| {
-                                                    if let Some(image) = &activity.image {
-                                                        avatars.show_icon(
-                                                            ui,
-                                                            Some(image.key()),
-                                                            64.0,
-                                                            state.demo,
-                                                            &format!(
-                                                                "{} activity artwork",
-                                                                activity.name
-                                                            ),
-                                                        );
-                                                    }
-                                                    ui.vertical(|ui| {
-                                                        ui.set_width(ui.available_width());
-                                                        ui.add(
-                                                            egui::Label::new(
-                                                                RichText::new(activity.summary())
-                                                                    .strong()
-                                                                    .size(14.0),
-                                                            )
-                                                            .wrap(),
-                                                        );
-                                                        for text in [
-                                                            activity.details.as_deref(),
-                                                            activity.state.as_deref(),
-                                                        ]
-                                                        .into_iter()
-                                                        .flatten()
-                                                        {
-                                                            ui.add(
-                                                                egui::Label::new(
-                                                                    RichText::new(text)
-                                                                        .size(13.0)
-                                                                        .color(theme.muted),
-                                                                )
-                                                                .wrap(),
-                                                            );
-                                                        }
-                                                    });
-                                                });
-                                                ui.add_space(8.0);
-                                            }
-                                        }
-                                        if let Some(data) = data {
-                                            let bio = data
-                                                .guild
-                                                .as_ref()
-                                                .map(|g| g.bio.as_str())
-                                                .filter(|s| !s.is_empty())
-                                                .unwrap_or(&data.bio);
-                                            if !bio.is_empty() {
-                                                heading(ui, &theme, "ABOUT ME");
-                                                let mut linked_user = None;
-                                                Formatted::parse(bio).show_with_images(
-                                                    ui,
-                                                    opening,
-                                                    &[],
-                                                    &mut linked_user,
-                                                    avatars,
-                                                    state.demo,
-                                                );
-                                                if let Some(user) = linked_user {
-                                                    action = Some(Action::Profile(user));
-                                                }
-                                                ui.add_space(8.0);
-                                            }
-                                            heading(ui, &theme, "MEMBER SINCE");
-                                            ui.horizontal_wrapped(|ui| {
-                                                ui.spacing_mut().item_spacing.x = 6.0;
-                                                if let Some(date) = creation_date(user.id) {
-                                                    ui.label(RichText::new(date).size(13.0));
-                                                }
-                                                if let Some(joined) = data
-                                                    .guild
-                                                    .as_ref()
-                                                    .and_then(|g| g.joined_at.as_deref())
-                                                {
-                                                    let server =
-                                                        data.guild
-                                                            .as_ref()
-                                                            .and_then(|g| {
-                                                                state.guilds.iter().find(|known| {
-                                                                    known.id == g.guild
-                                                                })
-                                                            })
-                                                            .map_or("Server", |g| g.name.as_str());
-                                                    ui.label(
-                                                        RichText::new("•")
-                                                            .size(13.0)
-                                                            .color(theme.muted),
-                                                    );
-                                                    ui.label(
-                                                        RichText::new(format!(
-                                                            "{server} {}",
-                                                            joined
-                                                                .split('T')
-                                                                .next()
-                                                                .unwrap_or(joined)
-                                                        ))
-                                                        .size(13.0),
-                                                    );
-                                                }
-                                            });
-                                            if !data.connections.is_empty() {
-                                                ui.add_space(8.0);
-                                                heading(ui, &theme, "CONNECTIONS");
-                                                for connection in &data.connections {
-                                                    ui.horizontal_wrapped(|ui| {
-                                                        ui.spacing_mut().item_spacing.x = 6.0;
-                                                        ui.label(
-                                                            RichText::new(&connection.kind)
-                                                                .size(13.0)
-                                                                .strong(),
-                                                        );
-                                                        ui.label(
-                                                            RichText::new(&connection.name)
-                                                                .size(13.0),
-                                                        );
-                                                        if connection.verified {
-                                                            ui.label(
-                                                                RichText::new("✓")
-                                                                    .size(12.0)
-                                                                    .color(theme.muted),
-                                                            )
-                                                            .on_hover_text("Verified connection");
-                                                        }
-                                                    });
-                                                }
-                                            }
-                                            if !data.mutual_guilds.is_empty() {
-                                                ui.add_space(8.0);
-                                                let names: Vec<String> = data
-                                                    .mutual_guilds
-                                                    .iter()
-                                                    .map(|guild| {
-                                                        state
-                                                            .guilds
-                                                            .iter()
-                                                            .find(|g| g.id == guild.id)
-                                                            .map_or_else(
-                                                                || format!("Server {}", guild.id),
-                                                                |g| g.name.clone(),
-                                                            )
-                                                    })
-                                                    .collect();
-                                                ui.label(
-                                                    RichText::new(format!(
-                                                        "{} Mutual Server{}",
-                                                        names.len(),
-                                                        if names.len() == 1 { "" } else { "s" }
-                                                    ))
-                                                    .size(13.0)
-                                                    .strong(),
-                                                )
-                                                .on_hover_text(names.join("\n"));
-                                            }
-                                            if data.limited {
-                                                ui.add_space(6.0);
-                                                ui.label(
-                                                    RichText::new(
-                                                        "Some profile details were limited",
-                                                    )
-                                                    .size(11.0)
-                                                    .color(theme.muted),
-                                                );
-                                            }
-                                        }
-                                    });
-                            });
-                    }
-                    ui.add_space(6.0);
-                    if let Some(channel) = state
-                        .channels
-                        .iter()
-                        .find(|c| c.kind == 1 && c.recipients.iter().any(|u| u.id == user.id))
-                        && ui
-                            .add_sized(
-                                [ui.available_width(), 32.0],
-                                egui::Button::new(
-                                    RichText::new(format!("Message @{}", user.name))
-                                        .color(colors.accent_text)
-                                        .strong(),
-                                )
-                                .fill(colors.accent)
-                                .stroke(Stroke::NONE)
-                                .corner_radius(RADIUS),
-                            )
-                            .clicked()
-                    {
-                        action = Some(Action::Message(channel.id));
-                    }
-                    ui.horizontal(|ui| {
-                        if ui
-                            .add(egui::Button::new(RichText::new("Copy user ID").size(12.0)))
-                            .clicked()
-                        {
-                            ui.ctx().copy_text(user.id.to_string());
-                        }
-                        if state.demo {
-                            ui.label(
-                                RichText::new("Offline preview · synthetic")
-                                    .size(11.0)
-                                    .color(theme.muted),
-                            );
-                        }
-                    });
-                });
-            let rect = ui.min_rect();
-            ui.painter()
-                .set(background, theme.background(rect, colors.border));
-        });
-    let rect = response.response.rect;
-    let pressed_outside = ui.ctx().input(|i| {
-        i.pointer.any_pressed()
-            && i.pointer
-                .interact_pos()
-                .is_some_and(|pos| !rect.contains(pos))
-    });
-    let escape = ui
-        .ctx()
-        .input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
-    if (pressed_outside || escape) && opening.is_none() {
-        action = Some(Action::Close);
-    }
-    if let Some(url) = opening.as_ref() {
-        let mut close = false;
-        let response =
-            egui::Modal::new(egui::Id::unique("profile-external-link")).show(ui.ctx(), |ui| {
-                ui.heading("Open external link?");
-                ui.add(egui::Label::new(url).wrap());
-                ui.horizontal(|ui| {
-                    if ui.button("Open in browser").clicked() {
-                        if let Some(target) = external_url(url) {
-                            ui.ctx().open_url(egui::OpenUrl::new_tab(target));
-                        }
-                        close = true;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        close = true;
-                    }
-                });
-            });
-        if close || response.should_close() {
-            *opening = None;
-        }
-    }
-    action
+			egui::Frame::new()
+				.inner_margin(egui::Margin {
+					left: PAD as i8,
+					right: PAD as i8,
+					top: 0,
+					bottom: PAD as i8,
+				})
+				.show(ui, |ui| {
+					let display = data
+						.and_then(|p| {
+							p.guild
+								.as_ref()
+								.and_then(|g| g.nick.as_deref())
+								.or(p.global_name.as_deref())
+						})
+						.unwrap_or(&user.name);
+					ui.horizontal_wrapped(|ui| {
+						ui.spacing_mut().item_spacing.x = 8.0;
+						ui.add(
+							egui::Label::new(RichText::new(display).size(20.0).strong()).truncate(),
+						);
+						if let Some(clan) = data.and_then(|d| d.clan.as_ref()) {
+							egui::Frame::new()
+								.fill(theme.panel)
+								.stroke(Stroke::new(1.0, theme.border))
+								.corner_radius(6)
+								.inner_margin(egui::Margin::symmetric(6, 2))
+								.show(ui, |ui| {
+									ui.spacing_mut().item_spacing.x = 4.0;
+									avatars.show_icon(
+										ui,
+										clan.badge_key(),
+										14.0,
+										state.demo,
+										"Server tag badge",
+									);
+									ui.label(RichText::new(&clan.tag).size(12.0).strong());
+								})
+								.response
+								.on_hover_text(format!("Server tag · server {}", clan.guild));
+						}
+					});
+					let mut identity = Vec::new();
+					if let Some(data) = data {
+						identity.push(if data.user.discriminator > 0 {
+							format!("{}#{:04}", data.username, data.user.discriminator)
+						} else {
+							data.username.clone()
+						});
+						let pronouns = data
+							.guild
+							.as_ref()
+							.map(|g| g.pronouns.as_str())
+							.filter(|s| !s.is_empty())
+							.unwrap_or(&data.pronouns);
+						if !pronouns.is_empty() {
+							identity.push(pronouns.to_owned());
+						}
+					} else {
+						identity.push(user.name.clone());
+					}
+					ui.add(
+						egui::Label::new(
+							RichText::new(identity.join(" • "))
+								.size(14.0)
+								.color(theme.muted),
+						)
+						.truncate(),
+					);
+					if let Some(data) = data.filter(|d| !d.badges.is_empty()) {
+						ui.add_space(2.0);
+						ui.horizontal_wrapped(|ui| {
+							ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
+							for badge in &data.badges {
+								if badge.icon.is_some() {
+									avatars
+										.show_icon(
+											ui,
+											badge.icon_key(),
+											22.0,
+											state.demo,
+											&badge.description,
+										)
+										.on_hover_text(&badge.description);
+								} else {
+									egui::Frame::new()
+										.fill(theme.panel)
+										.corner_radius(6)
+										.inner_margin(egui::Margin::symmetric(6, 2))
+										.show(ui, |ui| {
+											ui.label(RichText::new(&badge.description).size(11.0));
+										})
+										.response
+										.on_hover_text(&badge.id);
+								}
+							}
+						});
+					}
+					if view.is_none_or(|v| v.loading) {
+						ui.horizontal(|ui| {
+							ui.spinner();
+							ui.label(RichText::new("Loading profile…").color(theme.muted));
+						});
+					}
+					if let Some(error) = view.and_then(|v| v.error) {
+						ui.label(RichText::new(error).small().color(theme.muted));
+						if ui.small_button("Retry profile").clicked() {
+							action = Some(Action::Retry);
+						}
+					}
+					if data.is_some() || !activities.is_empty() {
+						ui.add_space(4.0);
+						let used = ui.cursor().top() - banner.top();
+						let max_height = (bounds.height() - used - 96.0).max(72.0);
+						egui::Frame::new()
+							.fill(theme.panel)
+							.corner_radius(RADIUS)
+							.inner_margin(12)
+							.show(ui, |ui| {
+								ui.set_width(ui.available_width());
+								egui::ScrollArea::vertical()
+									.id_salt("profile-details")
+									.max_height(max_height)
+									.show(ui, |ui| {
+										ui.spacing_mut().item_spacing.y = 4.0;
+										if !activities.is_empty() {
+											heading(ui, &theme, "ACTIVITY");
+											for activity in activities {
+												ui.horizontal_top(|ui| {
+													if let Some(image) = &activity.image {
+														avatars.show_icon(
+															ui,
+															Some(image.key()),
+															64.0,
+															state.demo,
+															&format!(
+																"{} activity artwork",
+																activity.name
+															),
+														);
+													}
+													ui.vertical(|ui| {
+														ui.set_width(ui.available_width());
+														ui.add(
+															egui::Label::new(
+																RichText::new(activity.summary())
+																	.strong()
+																	.size(14.0),
+															)
+															.wrap(),
+														);
+														for text in [
+															activity.details.as_deref(),
+															activity.state.as_deref(),
+														]
+														.into_iter()
+														.flatten()
+														{
+															ui.add(
+																egui::Label::new(
+																	RichText::new(text)
+																		.size(13.0)
+																		.color(theme.muted),
+																)
+																.wrap(),
+															);
+														}
+													});
+												});
+												ui.add_space(8.0);
+											}
+										}
+										if let Some(data) = data {
+											let bio = data
+												.guild
+												.as_ref()
+												.map(|g| g.bio.as_str())
+												.filter(|s| !s.is_empty())
+												.unwrap_or(&data.bio);
+											if !bio.is_empty() {
+												heading(ui, &theme, "ABOUT ME");
+												let mut linked_user = None;
+												Formatted::parse(bio).show_with_images(
+													ui,
+													opening,
+													&[],
+													&mut linked_user,
+													avatars,
+													state.demo,
+												);
+												if let Some(user) = linked_user {
+													action = Some(Action::Profile(user));
+												}
+												ui.add_space(8.0);
+											}
+											heading(ui, &theme, "MEMBER SINCE");
+											ui.horizontal_wrapped(|ui| {
+												ui.spacing_mut().item_spacing.x = 6.0;
+												if let Some(date) = creation_date(user.id) {
+													ui.label(RichText::new(date).size(13.0));
+												}
+												if let Some(joined) = data
+													.guild
+													.as_ref()
+													.and_then(|g| g.joined_at.as_deref())
+												{
+													let server =
+														data.guild
+															.as_ref()
+															.and_then(|g| {
+																state.guilds.iter().find(|known| {
+																	known.id == g.guild
+																})
+															})
+															.map_or("Server", |g| g.name.as_str());
+													ui.label(
+														RichText::new("•")
+															.size(13.0)
+															.color(theme.muted),
+													);
+													ui.label(
+														RichText::new(format!(
+															"{server} {}",
+															joined
+																.split('T')
+																.next()
+																.unwrap_or(joined)
+														))
+														.size(13.0),
+													);
+												}
+											});
+											if !data.connections.is_empty() {
+												ui.add_space(8.0);
+												heading(ui, &theme, "CONNECTIONS");
+												for connection in &data.connections {
+													ui.horizontal_wrapped(|ui| {
+														ui.spacing_mut().item_spacing.x = 6.0;
+														ui.label(
+															RichText::new(&connection.kind)
+																.size(13.0)
+																.strong(),
+														);
+														ui.label(
+															RichText::new(&connection.name)
+																.size(13.0),
+														);
+														if connection.verified {
+															ui.label(
+																RichText::new("✓")
+																	.size(12.0)
+																	.color(theme.muted),
+															)
+															.on_hover_text("Verified connection");
+														}
+													});
+												}
+											}
+											if !data.mutual_guilds.is_empty() {
+												ui.add_space(8.0);
+												let names: Vec<String> = data
+													.mutual_guilds
+													.iter()
+													.map(|guild| {
+														state
+															.guilds
+															.iter()
+															.find(|g| g.id == guild.id)
+															.map_or_else(
+																|| format!("Server {}", guild.id),
+																|g| g.name.clone(),
+															)
+													})
+													.collect();
+												ui.label(
+													RichText::new(format!(
+														"{} Mutual Server{}",
+														names.len(),
+														if names.len() == 1 { "" } else { "s" }
+													))
+													.size(13.0)
+													.strong(),
+												)
+												.on_hover_text(names.join("\n"));
+											}
+											if data.limited {
+												ui.add_space(6.0);
+												ui.label(
+													RichText::new(
+														"Some profile details were limited",
+													)
+													.size(11.0)
+													.color(theme.muted),
+												);
+											}
+										}
+									});
+							});
+					}
+					ui.add_space(6.0);
+					if let Some(channel) = state
+						.channels
+						.iter()
+						.find(|c| c.kind == 1 && c.recipients.iter().any(|u| u.id == user.id))
+						&& ui
+							.add_sized(
+								[ui.available_width(), 32.0],
+								egui::Button::new(
+									RichText::new(format!("Message @{}", user.name))
+										.color(colors.accent_text)
+										.strong(),
+								)
+								.fill(colors.accent)
+								.stroke(Stroke::NONE)
+								.corner_radius(RADIUS),
+							)
+							.clicked()
+					{
+						action = Some(Action::Message(channel.id));
+					}
+					ui.horizontal(|ui| {
+						if ui
+							.add(egui::Button::new(RichText::new("Copy user ID").size(12.0)))
+							.clicked()
+						{
+							ui.ctx().copy_text(user.id.to_string());
+						}
+						if state.demo {
+							ui.label(
+								RichText::new("Offline preview · synthetic")
+									.size(11.0)
+									.color(theme.muted),
+							);
+						}
+					});
+				});
+			let rect = ui.min_rect();
+			ui.painter()
+				.set(background, theme.background(rect, colors.border));
+		});
+	let rect = response.response.rect;
+	let pressed_outside = ui.ctx().input(|i| {
+		i.pointer.any_pressed()
+			&& i.pointer
+				.interact_pos()
+				.is_some_and(|pos| !rect.contains(pos))
+	});
+	let escape = ui
+		.ctx()
+		.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+	if (pressed_outside || escape) && opening.is_none() {
+		action = Some(Action::Close);
+	}
+	if let Some(url) = opening.as_ref() {
+		let mut close = false;
+		let response =
+			egui::Modal::new(egui::Id::unique("profile-external-link")).show(ui.ctx(), |ui| {
+				ui.heading("Open external link?");
+				ui.add(egui::Label::new(url).wrap());
+				ui.horizontal(|ui| {
+					if ui.button("Open in browser").clicked() {
+						if let Some(target) = external_url(url) {
+							ui.ctx().open_url(egui::OpenUrl::new_tab(target));
+						}
+						close = true;
+					}
+					if ui.button("Cancel").clicked() {
+						close = true;
+					}
+				});
+			});
+		if close || response.should_close() {
+			*opening = None;
+		}
+	}
+	action
 }
 
 // Explicit offline-only data; never a fallback for a failed service request.
 pub fn synthetic(user: &User, guild: Option<Id>) -> model::UserProfile {
-    let hash = |c: char| c.to_string().repeat(32);
-    model::UserProfile {
+	let hash = |c: char| c.to_string().repeat(32);
+	model::UserProfile {
         user: user.clone(),
         username: "serein.preview".into(),
         global_name: Some(user.name.clone()),
@@ -730,211 +730,211 @@ pub fn synthetic(user: &User, guild: Option<Id>) -> model::UserProfile {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    fn text(shape: &egui::Shape, output: &mut String) {
-        match shape {
-            egui::Shape::Text(s) => output.push_str(&s.galley.job.text),
-            egui::Shape::Vec(items) => {
-                for shape in items {
-                    text(shape, output);
-                }
-            }
-            _ => {}
-        }
-    }
-    fn input(size: egui::Vec2, events: Vec<egui::Event>) -> egui::RawInput {
-        egui::RawInput {
-            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
-            events,
-            ..Default::default()
-        }
-    }
-    #[test]
-    fn dm_presence_does_not_use_a_visible_guild_snapshot() {
-        let mut state = test_support::demo_state();
-        let user = test_support::message(1, Id(22)).author;
-        state.members = Some(model::MemberList {
-            guild: Some(Id(10)),
-            channel: Id(20),
-            request: 1,
-            total: 1,
-            freshness: model::Freshness::Fresh,
-            rows: vec![Some(model::Member {
-                roles: vec![],
-                user: user.clone(),
-                nick: None,
-                status: Some("idle".into()),
-                custom_status: Some("Server status".into()),
-                activities: vec![],
-            })],
-        });
-        state.direct_presences.push(model::MemberPresence {
-            user: user.id,
-            status: Some("online".into()),
-            custom_status: Some("Direct status".into()),
-            activities: vec![],
-        });
-        assert_eq!(
-            presence(&state, user.id, Some(Id(10))).1,
-            Some("Server status")
-        );
-        assert_eq!(presence(&state, user.id, None).1, Some("Direct status"));
-        state.gateway_connected = false;
-        state.demo = false;
-        assert_eq!(presence(&state, user.id, None), (None, None, [].as_slice()));
-        assert_eq!(
-            presence(&state, user.id, Some(Id(10))),
-            (None, None, [].as_slice())
-        );
-    }
+	use super::*;
+	fn text(shape: &egui::Shape, output: &mut String) {
+		match shape {
+			egui::Shape::Text(s) => output.push_str(&s.galley.job.text),
+			egui::Shape::Vec(items) => {
+				for shape in items {
+					text(shape, output);
+				}
+			}
+			_ => {}
+		}
+	}
+	fn input(size: egui::Vec2, events: Vec<egui::Event>) -> egui::RawInput {
+		egui::RawInput {
+			screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+			events,
+			..Default::default()
+		}
+	}
+	#[test]
+	fn dm_presence_does_not_use_a_visible_guild_snapshot() {
+		let mut state = test_support::demo_state();
+		let user = test_support::message(1, Id(22)).author;
+		state.members = Some(model::MemberList {
+			guild: Some(Id(10)),
+			channel: Id(20),
+			request: 1,
+			total: 1,
+			freshness: model::Freshness::Fresh,
+			rows: vec![Some(model::Member {
+				roles: vec![],
+				user: user.clone(),
+				nick: None,
+				status: Some("idle".into()),
+				custom_status: Some("Server status".into()),
+				activities: vec![],
+			})],
+		});
+		state.direct_presences.push(model::MemberPresence {
+			user: user.id,
+			status: Some("online".into()),
+			custom_status: Some("Direct status".into()),
+			activities: vec![],
+		});
+		assert_eq!(
+			presence(&state, user.id, Some(Id(10))).1,
+			Some("Server status")
+		);
+		assert_eq!(presence(&state, user.id, None).1, Some("Direct status"));
+		state.gateway_connected = false;
+		state.demo = false;
+		assert_eq!(presence(&state, user.id, None), (None, None, [].as_slice()));
+		assert_eq!(
+			presence(&state, user.id, Some(Id(10))),
+			(None, None, [].as_slice())
+		);
+	}
 
-    #[test]
-    fn popout_shows_selected_data_beside_anchor_and_closes_with_escape() {
-        let user = User {
-            id: Id(2),
-            name: "Synthetic person".into(),
-            avatar: None,
-            discriminator: 0,
-        };
-        let profile = ProfileView {
-            user: user.id,
-            guild: None,
-            request: 1,
-            loading: false,
-            error: None,
-            data: Some(synthetic(&user, None)),
-        };
-        let state = State {
-            demo: true,
-            ..Default::default()
-        };
-        let ctx = egui::Context::default();
-        let mut images = Avatars::default();
-        let mut opening = None;
-        let mut painted = String::new();
-        let anchor = pos2(120.0, 300.0);
-        for _ in 0..3 {
-            let output = ctx.run_ui(input(vec2(1000.0, 900.0), vec![]), |ui| {
-                assert!(
-                    show(
-                        ui,
-                        &user,
-                        Some(&profile),
-                        &state,
-                        &mut images,
-                        &mut opening,
-                        anchor
-                    )
-                    .is_none()
-                );
-            });
-            for shape in &output.shapes {
-                text(&shape.shape, &mut painted);
-            }
-            assert!(output.platform_output.commands.is_empty());
-            output.drop_without_applying_deltas();
-        }
-        assert!(
-            painted.contains("Synthetic person")
-                && painted.contains("ABOUT ME")
-                && painted.contains("they / them")
-                && painted.contains("SRN")
-        );
-        assert!(images.take_requests().is_empty());
-        let rect = ctx.memory(|m| m.area_rect(egui::Id::unique("user-profile-popout")));
-        let rect = rect.expect("popout area");
-        assert!((rect.left() - (anchor.x + 12.0)).abs() < 1.0);
-        assert!((rect.width() - WIDTH).abs() <= 2.0);
-        assert!(rect.top() <= anchor.y && rect.bottom() >= anchor.y);
+	#[test]
+	fn popout_shows_selected_data_beside_anchor_and_closes_with_escape() {
+		let user = User {
+			id: Id(2),
+			name: "Synthetic person".into(),
+			avatar: None,
+			discriminator: 0,
+		};
+		let profile = ProfileView {
+			user: user.id,
+			guild: None,
+			request: 1,
+			loading: false,
+			error: None,
+			data: Some(synthetic(&user, None)),
+		};
+		let state = State {
+			demo: true,
+			..Default::default()
+		};
+		let ctx = egui::Context::default();
+		let mut images = Avatars::default();
+		let mut opening = None;
+		let mut painted = String::new();
+		let anchor = pos2(120.0, 300.0);
+		for _ in 0..3 {
+			let output = ctx.run_ui(input(vec2(1000.0, 900.0), vec![]), |ui| {
+				assert!(
+					show(
+						ui,
+						&user,
+						Some(&profile),
+						&state,
+						&mut images,
+						&mut opening,
+						anchor
+					)
+					.is_none()
+				);
+			});
+			for shape in &output.shapes {
+				text(&shape.shape, &mut painted);
+			}
+			assert!(output.platform_output.commands.is_empty());
+			output.drop_without_applying_deltas();
+		}
+		assert!(
+			painted.contains("Synthetic person")
+				&& painted.contains("ABOUT ME")
+				&& painted.contains("they / them")
+				&& painted.contains("SRN")
+		);
+		assert!(images.take_requests().is_empty());
+		let rect = ctx.memory(|m| m.area_rect(egui::Id::unique("user-profile-popout")));
+		let rect = rect.expect("popout area");
+		assert!((rect.left() - (anchor.x + 12.0)).abs() < 1.0);
+		assert!((rect.width() - WIDTH).abs() <= 2.0);
+		assert!(rect.top() <= anchor.y && rect.bottom() >= anchor.y);
 
-        // Near the right edge the card flips to the left of the anchor and stays in view.
-        let right_anchor = pos2(950.0, 100.0);
-        let output = ctx.run_ui(input(vec2(1000.0, 900.0), vec![]), |ui| {
-            show(
-                ui,
-                &user,
-                Some(&profile),
-                &state,
-                &mut images,
-                &mut opening,
-                right_anchor,
-            );
-        });
-        output.drop_without_applying_deltas();
-        let rect = ctx
-            .memory(|m| m.area_rect(egui::Id::unique("user-profile-popout")))
-            .unwrap();
-        assert!(rect.right() <= right_anchor.x - 12.0 + 1.0);
+		// Near the right edge the card flips to the left of the anchor and stays in view.
+		let right_anchor = pos2(950.0, 100.0);
+		let output = ctx.run_ui(input(vec2(1000.0, 900.0), vec![]), |ui| {
+			show(
+				ui,
+				&user,
+				Some(&profile),
+				&state,
+				&mut images,
+				&mut opening,
+				right_anchor,
+			);
+		});
+		output.drop_without_applying_deltas();
+		let rect = ctx
+			.memory(|m| m.area_rect(egui::Id::unique("user-profile-popout")))
+			.unwrap();
+		assert!(rect.right() <= right_anchor.x - 12.0 + 1.0);
 
-        let output = ctx.run_ui(
-            input(
-                vec2(1000.0, 900.0),
-                vec![egui::Event::Key {
-                    key: egui::Key::Escape,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers: egui::Modifiers::NONE,
-                }],
-            ),
-            |ui| {
-                assert!(matches!(
-                    show(
-                        ui,
-                        &user,
-                        Some(&profile),
-                        &state,
-                        &mut images,
-                        &mut opening,
-                        anchor
-                    ),
-                    Some(Action::Close)
-                ));
-            },
-        );
-        output.drop_without_applying_deltas();
-    }
+		let output = ctx.run_ui(
+			input(
+				vec2(1000.0, 900.0),
+				vec![egui::Event::Key {
+					key: egui::Key::Escape,
+					physical_key: None,
+					pressed: true,
+					repeat: false,
+					modifiers: egui::Modifiers::NONE,
+				}],
+			),
+			|ui| {
+				assert!(matches!(
+					show(
+						ui,
+						&user,
+						Some(&profile),
+						&state,
+						&mut images,
+						&mut opening,
+						anchor
+					),
+					Some(Action::Close)
+				));
+			},
+		);
+		output.drop_without_applying_deltas();
+	}
 
-    #[test]
-    fn clicking_outside_closes_but_clicking_inside_keeps_the_popout() {
-        let user = User {
-            id: Id(2),
-            name: "Synthetic person".into(),
-            avatar: None,
-            discriminator: 0,
-        };
-        let state = State::default();
-        let ctx = egui::Context::default();
-        let mut images = Avatars::default();
-        let mut opening = None;
-        let anchor = pos2(100.0, 100.0);
-        let output = ctx.run_ui(input(vec2(800.0, 600.0), vec![]), |ui| {
-            show(ui, &user, None, &state, &mut images, &mut opening, anchor);
-        });
-        output.drop_without_applying_deltas();
-        let rect = ctx
-            .memory(|m| m.area_rect(egui::Id::unique("user-profile-popout")))
-            .unwrap();
-        for (pos, closes) in [(rect.center(), false), (pos2(700.0, 550.0), true)] {
-            let output = ctx.run_ui(
-                input(
-                    vec2(800.0, 600.0),
-                    vec![
-                        egui::Event::PointerMoved(pos),
-                        egui::Event::PointerButton {
-                            pos,
-                            button: egui::PointerButton::Primary,
-                            pressed: true,
-                            modifiers: egui::Modifiers::NONE,
-                        },
-                    ],
-                ),
-                |ui| {
-                    let action = show(ui, &user, None, &state, &mut images, &mut opening, anchor);
-                    assert_eq!(matches!(action, Some(Action::Close)), closes);
-                },
-            );
-            output.drop_without_applying_deltas();
-        }
-    }
+	#[test]
+	fn clicking_outside_closes_but_clicking_inside_keeps_the_popout() {
+		let user = User {
+			id: Id(2),
+			name: "Synthetic person".into(),
+			avatar: None,
+			discriminator: 0,
+		};
+		let state = State::default();
+		let ctx = egui::Context::default();
+		let mut images = Avatars::default();
+		let mut opening = None;
+		let anchor = pos2(100.0, 100.0);
+		let output = ctx.run_ui(input(vec2(800.0, 600.0), vec![]), |ui| {
+			show(ui, &user, None, &state, &mut images, &mut opening, anchor);
+		});
+		output.drop_without_applying_deltas();
+		let rect = ctx
+			.memory(|m| m.area_rect(egui::Id::unique("user-profile-popout")))
+			.unwrap();
+		for (pos, closes) in [(rect.center(), false), (pos2(700.0, 550.0), true)] {
+			let output = ctx.run_ui(
+				input(
+					vec2(800.0, 600.0),
+					vec![
+						egui::Event::PointerMoved(pos),
+						egui::Event::PointerButton {
+							pos,
+							button: egui::PointerButton::Primary,
+							pressed: true,
+							modifiers: egui::Modifiers::NONE,
+						},
+					],
+				),
+				|ui| {
+					let action = show(ui, &user, None, &state, &mut images, &mut opening, anchor);
+					assert_eq!(matches!(action, Some(Action::Close)), closes);
+				},
+			);
+			output.drop_without_applying_deltas();
+		}
+	}
 }

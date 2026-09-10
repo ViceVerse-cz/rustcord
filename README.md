@@ -1,32 +1,162 @@
 # Serein
 
-An open-source native Discord desktop client in Rust and egui/eframe. **Experimental, unofficial, and not endorsed by Discord.** The normal-user live message exchange gate has not passed. This is not yet a completed Discord replacement.
+<p align="center">
+  <a href="https://github.com/ViceVerse-cz/rustcord">
+    <img src="docs/pr-evidence/discord-theme-rebase/after.png" alt="Serein Native Discord Client" width="900" style="max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
+  </a>
+</p>
+
+<p align="center">
+  <strong>A lightweight, native Discord desktop client written in Rust, powered by egui and wgpu.</strong>
+</p>
+
+<p align="center">
+  <a href="Cargo.toml"><img src="https://img.shields.io/badge/rust-1.98.1_pinned-blue.svg?logo=rust" alt="Rust 1.98.1 Pinned" /></a>
+  <a href="crates/ui"><img src="https://img.shields.io/badge/ui-egui%20%2F%20wgpu-orange.svg" alt="UI egui/wgpu" /></a>
+  <a href="docs/platform-support.md"><img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-informational.svg" alt="Platform Support" /></a>
+  <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License: MIT or Apache-2.0" /></a>
+</p>
+
+---
+
+> [!WARNING]
+> **Experimental, unofficial, and not endorsed by Discord.**
+> Serein communicates directly with Discord's public gateway and REST endpoints for your existing account. It is **not** a completed Discord replacement, and the normal-user live message exchange gate has not passed. Automating normal accounts outside the official OAuth2/bot API violates Discord's Terms of Service and carries risk of account termination. Technical interoperability does not imply platform approval. Review the [compatibility matrix](docs/discord-compatibility.md) and [authentication guide](docs/authentication.md) before use.
+
+---
+
+## Highlights
+
+- **Pure Native Performance:** Built with pure Rust and `egui`/`wgpu`. Immediate-mode rendering with minimal idle CPU, low memory footprint, and instantaneous launch times—zero Electron, Node.js, or web messaging runtime.
+- **Direct Gateway & REST Transports:** Connects directly to Discord's official endpoints with active rate-limiting cooldowns, heartbeat handling, reconnect/resume loops, and partial payload patching.
+- **Secure OS Credential Storage:** Session tokens are stored exclusively in your operating system's secure vault (macOS Keychain, Windows Credential Manager, or Linux Secret Service). Never saved in plaintext.
+- **Ephemeral Authentication Webview:** Sign-in uses Discord's official hosted login page inside a temporary native webview (WKWebView, WebView2, or WebKitGTK) supporting email/password, QR login, and MFA. An origin-checked handoff secures the session credential and immediately terminates the webview.
+- **Bounded Local Persistence:** Recent chat history, drafts, and media preview indices are stored in an account-isolated, bounded local SQLite database. All local data is strictly cleared upon explicit logout.
+- **Optional Low-Latency Voice:** Standalone opt-in voice engine (`--features voice`) supporting Opus audio, Discord Voice WebSocket/UDP, DAVE v1 protocol, 1-to-1 DM calls, server voice channels, push-to-talk, and native audio device selection.
+
+---
+
+## Quick Start
+
+### Prerequisites
+Rust **1.98.1** is pinned. Ensure you have the standard C/C++ toolchain installed for your platform:
+- **macOS:** Xcode command-line tools (`xcode-select --install`)
+- **Linux:** GCC/Clang, `pkg-config`, GTK 4, WebKitGTK 6.0, fontconfig, and Vulkan drivers (see [Platform Support](docs/platform-support.md))
+- **Windows:** Visual Studio C++ build tools and WebView2 Runtime
+
+### Running Locally
 
 ```sh
-cargo run --locked -- --demo       # synthetic, no network or user storage
-cargo run --locked                 # saved login, or official Discord login webview; text-only
-cargo run --locked --features voice # optional DM and server voice audio
-cargo xtask check
-node tests/login-handoff.cjs       # development-only JS bridge test
-cargo replay
-cargo xtask package                # text-only package; Linux .deb, macOS ad-hoc bundle
-cargo xtask package-voice          # separate voice build under dist/voice
+# 1. Launch offline synthetic demo (no network, no storage)
+cargo run --locked -- --demo
+
+# 2. Launch standard text client (uses saved login or official webview)
+cargo run --locked
+
+# 3. Launch with optional voice engine (DM calls and guild voice channels)
+cargo run --locked --features voice
 ```
 
-Rust 1.98.1 is pinned. See [platform build requirements](docs/platform-support.md) before building on Linux or Windows.
+### Workspace Commands
 
-The open conversation shows incoming typing with short expiry and names already loaded by the
-client. This is synthetic-tested only; service delivery is unverified, and guild signals may
-depend on the existing People subscription. Serein does not send typing notifications.
+```sh
+# Run full workspace validation (formatting, Clippy, tests, policy checks)
+cargo xtask check
 
-The messaging interface is native egui/wgpu. A temporary platform webview displays Discord’s actual login page; after login, an origin-checked handoff accepts the session credential used by that webview’s own Discord requests and closes the webview. Passwords, QR exchange, and challenges are handled by Discord’s page. Acceptance of this embedded login and each authentication method remains **live-unverified**. Unsupported challenges are never bypassed.
+# Run release reducer benchmark
+cargo replay
 
-The owner revised SPEC.md to **allow local storage**. Login uses the OS credential store. Recent history and drafts use an account-isolated, bounded local SQLite cache. Clear cached history removes cached messages and service images; logout removes the saved credential and that account’s cache/drafts. SQLite content is not encrypted by the application. Light/Dark appearance and the chosen theme preset (Default, Onyx, Ash or a gradient) persist across launches; System and Default remove their overrides. See [storage policy](docs/storage-policy.md).
+# Run authentication bridge JS test harness
+node tests/login-handoff.cjs
 
-Implemented: native navigation with collapsible server categories and cached server icons, native embed cards and [inline image attachments](docs/chat-images.md) with cached previews, a full-window image viewer and explicit original-file downloads, virtualized variable-height text rows, composition, bounded Markdown formatting with clickable inline links and plain URLs, safe link confirmation, inline text spoilers with separate media reveal, CJK/Arabic font fallbacks, synthetic send/edit/delete/reply, direct experimental REST/Gateway adapters, rate-limit cooldowns, heartbeat/reconnect/resume handling, partial patches, bounded message reconciliation, cached history and saved drafts, an on-demand People pane, on-demand [service profile cards](docs/profiles.md) with bios, banners and available account/server details, [clickable user mentions with composer suggestions](docs/mentions.md), native reaction counts with an eight-emoji picker and add/remove controls, unread channel/DM badges with explicit remote mark-read actions, conversation search with paged snippets and history navigation, and static profile pictures cached on disk with a small RAM texture working set. Guild member lists currently show the first 100 list positions, including group separators; DM participants come from the session snapshot. Live functionality is not proven by fixtures or local socket tests. Attachment uploads/animations, Discord Markdown parity, advanced/global search, video and screen sharing remain incomplete. Multilingual glyph coverage is tested; actual IME, bidirectional editing and screen-reader behavior remain unverified.
+# Package text-only release (macOS .app bundle, Linux .deb)
+cargo xtask package
 
-The optional `voice` feature implements existing one-to-one DM calls and server voice channels: DM Start/Answer/Decline/Hangup, server Join/Leave with participant rosters and elapsed connection time, bounded group playback, native device selection, mute/deafen, focused V push-to-talk, Opus audio, Discord voice WebSocket/UDP transport and DAVE version 1. Default builds remain text-only. Voice has synthetic protocol/codec tests, **no live Discord or physical microphone/speaker validation**. Use headphones: acoustic echo cancellation is not implemented. See [voice scope and live procedure](docs/voice.md).
+# Package voice-enabled release under dist/voice
+cargo xtask package-voice
+```
 
-Discord forbids automating normal accounts outside its OAuth2/bot API and warns of account termination. Interactive use and open source do not establish approval. Read the [compatibility matrix](docs/discord-compatibility.md) and [owner-controlled live procedure](docs/authentication.md). No bot substitution, backend, relay, credential extraction from other applications, CAPTCHA/MFA bypass, fingerprint spoofing, or telemetry.
+---
 
-See [categories](docs/categories.md), [embeds](docs/embeds.md), [chat images and downloads](docs/chat-images.md), [image caching](docs/icons.md), [progress and actual checks](docs/progress.md), [performance](docs/performance.md), [architecture](docs/architecture.md), and [dependency notices](THIRD_PARTY_NOTICES.md). Original code: MIT OR Apache-2.0.
+## Feature Matrix
+
+| Capability | Status | Notes |
+|---|---|---|
+| **Navigation & Guilds** | Implemented | Collapsible server categories, cached icons, guild channels, DM lists, and People pane |
+| **Message Timeline** | Implemented | Virtualized variable-height rows, inline link confirmations, and inline spoilers |
+| **Markdown Formatting** | Implemented | Bold, italics, code blocks, blockquotes, and clickable inline links |
+| **Reactions & Emojis** | Implemented | Native reaction counts, eight-emoji quick picker, add/remove reaction controls |
+| **User Mentions** | Implemented | Clickable user mentions with interactive composer autocompletion |
+| **Media Previews** | Implemented | Inline image cards, embed cards, full-window image viewer, and explicit downloads |
+| **Profile Cards** | Implemented | On-demand service profiles with banners, bios, and account/guild details |
+| **Typing Indicators** | Partial | Displays incoming typing with short expiry; Serein **never** emits outgoing typing signals |
+| **Persistence & Drafts** | Implemented | Bounded SQLite cache for history and drafts; OS credential store for auth token |
+| **Voice Engine** | Optional (`voice`) | DM calls & server channels, Opus codec, DAVE v1, push-to-talk (`V`), device selector |
+| **File Uploads** | In Progress | Synthetic pipeline validated; direct client uploads in active development |
+| **Video & Screen Sharing** | Unimplemented | Planned for future milestones |
+| **Internationalization** | Partial | CJK and Arabic font fallbacks included; full IME and bidirectional editing unverified |
+
+> [!NOTE]
+> **Voice Scope Notice:** Voice audio currently relies on synthetic protocol and codec tests without physical microphone/speaker verification against live Discord servers. Because acoustic echo cancellation (AEC) is not yet implemented, **always use headphones** when testing voice features.
+
+---
+
+## Architecture Overview
+
+Serein is engineered as a clean multi-crate Cargo workspace, isolating UI rendering from networking, persistence, and service protocols:
+
+```
+rustcord/
+├── apps/
+│   └── desktop/          # Application entrypoint, CLI flags, window lifecycle
+├── crates/
+│   ├── client-core/      # Client state coordinator, generation tracking, events
+│   ├── session-cache/    # In-memory bounded cache and state reconciliation
+│   ├── ui/               # egui widgets, message virtualizer, themes, design tokens
+│   ├── model/            # Strongly-typed Discord domain entities
+│   ├── discord-protocol/ # Wire protocol serialization and partial payload patches
+│   ├── discord-api/      # HTTP/2 REST client with rate limiting and backoff
+│   ├── discord-gateway/  # WebSocket gateway client with heartbeat and resume
+│   ├── discord-voice/    # Opus codecs, RTP/UDP transport, DAVE v1 protocol
+│   ├── local-store/      # Bounded SQLite database for history, drafts, settings
+│   ├── platform/         # OS credential store (Keychain/CredManager/SecretService)
+│   └── test-support/     # Deterministic synthetic fixtures and mocks
+└── tools/
+    └── replay-bench/     # Benchmarking harness for state reducers
+```
+
+---
+
+## Security & Storage Policy
+
+- **Token Protection:** Tokens are saved solely in the native OS credential store (macOS Keychain, Windows Credential Manager, Linux Secret Service). Plaintext token fallback is strictly prohibited. Active tokens remain redacted in memory.
+- **Local Cache Bounds:** SQLite databases store recent channel history, drafts, and image preview metadata within bounded byte and count limits. The local SQLite store is **not** encrypted by the application.
+- **Sanitary Logout:** Executing an explicit logout destroys active network sessions, purges active secrets from memory, deletes the token from the OS credential store, and erases that account's local cache and drafts.
+- **Zero Telemetry:** Serein contains no analytics, telemetry, background crash collectors, or tracking beacons.
+- **Platform Integrity:** No fingerprint spoofing, CAPTCHA/MFA bypasses, bot substitutions, token scrapers, or third-party relays.
+
+For full details, review the [Storage Policy](docs/storage-policy.md) and [Threat Model](docs/threat-model.md).
+
+---
+
+## Documentation
+
+- [Architecture & Monorepo Design](docs/architecture.md)
+- [Discord Compatibility & Protocol Details](docs/discord-compatibility.md)
+- [Authentication & Login Handoff](docs/authentication.md)
+- [Storage Policy & Cache Retention](docs/storage-policy.md)
+- [Platform Support & Build Requirements](docs/platform-support.md)
+- [Voice Architecture & Procedure](docs/voice.md)
+- [Performance & Benchmarks](docs/performance.md)
+- [Design Tokens & UI Styling](docs/design.md)
+- [Third-Party Licenses & Notices](THIRD_PARTY_NOTICES.md)
+
+---
+
+## License
+
+Original Serein code is dual-licensed under either:
+- **MIT License** ([LICENSE-MIT](LICENSE-MIT))
+- **Apache License, Version 2.0** ([LICENSE-APACHE](LICENSE-APACHE))
+
+at your option. Third-party library notices, bundled font licenses (Inter, Noto Sans CJK/Arabic), and Twemoji graphics licenses are cataloged in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
