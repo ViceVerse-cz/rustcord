@@ -655,6 +655,7 @@ impl Desktop {
         if let Command::History {
             channel,
             before: None,
+            after: None,
             request,
         } = &command
             && wants_cached_history(&self.state, *channel, *request)
@@ -891,8 +892,8 @@ impl Desktop {
                     };
                     Event::Members(demo_members(guild, channel, request))
                 }
-                Command::History { before, .. } => {
-                    test_support::load_page(&mut self.state, before);
+                Command::History { before, after, .. } => {
+                    test_support::load_page_with_cursors(&mut self.state, before, after);
                     return;
                 }
                 Command::Send {

@@ -94,6 +94,64 @@ impl State {
         let latest = channel.last_message?;
         Some(read.is_none_or(|read| latest > read))
     }
+    pub fn can_jump_unread(&self) -> bool {
+        self.auth == AuthState::Authenticated
+            && self.gateway_connected
+            && self.freshness == Freshness::Fresh
+            && !self.history_pending
+            && self.selected.is_some_and(|channel| {
+                self.can_read_history(channel) && self.unread(channel) == Some(true)
+            })
+    }
+    /// Request the first bounded page after the service read marker. Zero is only
+    /// a pagination cursor for a known empty marker, never a fabricated message ID.
+    pub fn open_unread(&mut self) -> Option<crate::Command> {
+        if !self.can_jump_unread() {
+            return None;
+        }
+        let after = self.read_marker(self.selected?)?.unwrap_or(Id(0));
+        Some(self.open_after_window(after))
+    }
+    pub fn can_load_newer(&self) -> bool {
+        self.auth == AuthState::Authenticated
+            && self.gateway_connected
+            && self.freshness == Freshness::Fresh
+            && !self.history_pending
+            && self
+                .selected
+                .is_some_and(|channel| self.can_read_history(channel))
+            && self.forward_cursor().is_some_and(|last| {
+                self.channels.iter().any(|channel| {
+                    Some(channel.id) == self.selected
+                        && channel.last_message.map_or(
+                            self.newer_may_have_more
+                                || (self.history_targeted && self.history_after.is_none()),
+                            |latest| latest > last,
+                        )
+                })
+            })
+    }
+    pub fn newer_history(&mut self) -> Option<crate::Command> {
+        if !self.can_load_newer() {
+            return None;
+        }
+        Some(self.open_after_window(self.forward_cursor()?))
+    }
+    fn forward_cursor(&self) -> Option<Id> {
+        self.timeline
+            .iter()
+            .last()
+            .map(|m| m.id)
+            .or(self.newer_cursor)
+    }
+    fn open_after_window(&mut self, after: Id) -> crate::Command {
+        self.timeline.clear_window_preserving_deletions();
+        self.history_targeted = true;
+        self.revision += 1;
+        let command = self.history_range(None, Some(after));
+        self.enforce_resident_budget();
+        command
+    }
     pub fn can_mark_read(&self, message: Id) -> bool {
         self.auth == AuthState::Authenticated
             && self.gateway_connected
@@ -289,5 +347,295 @@ impl State {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod navigation_tests {
+    use super::*;
+    use crate::{Command, Envelope, Event as CoreEvent};
+    use model::{Channel, Message, User};
+    fn message(id: u64) -> Message {
+        Message {
+            id: Id(id),
+            channel: Id(1),
+            author: User {
+                id: Id(9),
+                name: "Synthetic".into(),
+                avatar: None,
+                discriminator: 0,
+            },
+            content: "Synthetic unread message".into(),
+            reactions: Some(vec![]),
+            mentions: vec![],
+            edited: false,
+            edited_at: None,
+            revision: 0,
+            nonce: None,
+            reply_to: None,
+            reply_deleted: false,
+            kind: 0,
+            unsupported: false,
+            extra_content: Default::default(),
+            embeds: vec![],
+            attachments: vec![],
+            embeds_suppressed: false,
+        }
+    }
+    fn state(marker: Option<Id>) -> State {
+        let mut state = State {
+            user: Some(message(1).author),
+            auth: AuthState::Authenticated,
+            gateway_connected: true,
+            freshness: Freshness::Fresh,
+            selected: Some(Id(1)),
+            channels: vec![Channel {
+                id: Id(1),
+                guild: None,
+                parent_id: None,
+                kind: 1,
+                position: 0,
+                name: "Synthetic DM".into(),
+                recipients: vec![],
+                last_message: Some(Id(500)),
+                member_list_id: None,
+            }],
+            ..Default::default()
+        };
+        state
+            .apply_read_state(Event::Snapshot {
+                entries: Some(vec![(Id(1), marker, 0)]),
+                version: None,
+                partial: false,
+            })
+            .unwrap();
+        state.timeline.insert(message(500), false, false).unwrap();
+        state.drafts.insert(Id(1), "Preserve draft".into());
+        state.reply = Some(Id(500));
+        state
+    }
+    fn apply(state: &mut State, event: CoreEvent) {
+        state.apply(Envelope {
+            generation: state.generation,
+            event,
+        });
+    }
+    fn page(state: &mut State, messages: Vec<Message>) {
+        apply(
+            state,
+            CoreEvent::History {
+                channel: Id(1),
+                request: state.request,
+                messages,
+                older: false,
+            },
+        );
+    }
+    #[test]
+    fn unread_and_next_pages_are_bounded_scoped_and_do_not_acknowledge() {
+        for marker in [None, Some(Id(100))] {
+            let mut state = state(marker);
+            let start = marker.unwrap_or(Id(0)).0;
+            assert!(state.can_jump_unread());
+            assert!(
+                matches!(state.open_unread(),Some(Command::History {before:None,after:Some(after),..}) if after.0==start)
+            );
+            assert!(state.history_targeted && state.history_pending);
+            assert!(!state.can_jump_unread() && !state.can_load_newer());
+            let mut incoming = message(501);
+            incoming.author.id = Id(8);
+            apply(&mut state, CoreEvent::Message(incoming));
+            assert!(state.timeline.get(Id(501)).is_none());
+            // Deletion racing the response cannot become the scroll target.
+            apply(
+                &mut state,
+                CoreEvent::Delete {
+                    channel: Id(1),
+                    id: Id(start + 1),
+                },
+            );
+            page(
+                &mut state,
+                (start + 1..=start + 50).map(message).rev().collect(),
+            );
+            assert_eq!(state.search_target, Some(Id(start + 2)));
+            assert_eq!(state.timeline.iter().count(), 49);
+            assert_eq!(state.read_marker(Id(1)), Some(marker));
+            assert_eq!(state.drafts[&Id(1)], "Preserve draft");
+            assert_eq!(state.reply, Some(Id(500)));
+            assert!(state.read_state.pending.is_none());
+            assert!(
+                matches!(state.newer_history(),Some(Command::History {before:None,after:Some(after),..}) if after.0==start+50)
+            );
+            page(
+                &mut state,
+                (start + 51..=start + 100).map(message).collect(),
+            );
+            assert_eq!(state.search_target, Some(Id(start + 51)));
+            assert_eq!(state.timeline.row_count(), 50);
+            assert!(!state.older_exhausted);
+            assert!(state.can_load_older());
+            assert_eq!(state.read_marker(Id(1)), Some(marker));
+            let Command::History { before, after, .. } = state.history(None) else {
+                panic!()
+            };
+            assert!(before.is_none() && after.is_none() && !state.history_targeted);
+        }
+    }
+    #[test]
+    fn historical_sends_confirm_without_splicing_a_live_tail_in_either_order() {
+        for gateway_first in [false, true] {
+            let mut state = state(Some(Id(100)));
+            state.open_unread().unwrap();
+            page(&mut state, (101..=150).map(message).collect());
+            let Command::Send { nonce, .. } = state.prepare_send().unwrap() else {
+                panic!()
+            };
+            let mut sent = message(501);
+            sent.nonce = Some(nonce.clone());
+            if gateway_first {
+                apply(&mut state, CoreEvent::Message(sent.clone()));
+            }
+            apply(
+                &mut state,
+                CoreEvent::SendResult {
+                    nonce,
+                    result: Ok(sent.clone()),
+                },
+            );
+            if !gateway_first {
+                apply(&mut state, CoreEvent::Message(sent));
+            }
+            assert!(state.timeline.get(Id(501)).is_none());
+            assert_eq!(state.channels[0].last_message, Some(Id(501)));
+            assert!(
+                state
+                    .pending
+                    .iter()
+                    .all(|p| p.delivery == model::Delivery::Confirmed)
+            );
+            assert!(matches!(
+                state.newer_history(),
+                Some(Command::History {
+                    after: Some(Id(150)),
+                    ..
+                })
+            ));
+        }
+    }
+    #[test]
+    fn deleted_pages_and_unknown_latest_keep_a_forward_cursor_without_resurrecting_messages() {
+        let mut state = state(Some(Id(100)));
+        state.open_unread().unwrap();
+        apply(
+            &mut state,
+            CoreEvent::DeleteBulk {
+                channel: Id(1),
+                ids: (101..=150).map(Id).collect(),
+            },
+        );
+        apply(
+            &mut state,
+            CoreEvent::Delete {
+                channel: Id(1),
+                id: Id(500),
+            },
+        );
+        page(&mut state, (101..=150).map(message).collect());
+        assert_eq!(state.timeline.iter().count(), 0);
+        assert!(state.search_target.is_none());
+        assert!(matches!(
+            state.newer_history(),
+            Some(Command::History {
+                after: Some(Id(150)),
+                ..
+            })
+        ));
+        page(&mut state, (151..=200).map(message).collect());
+        let mut reply = message(601);
+        reply.reply_to = Some(Id(151));
+        reply.reply_deleted = true;
+        reply.kind = 19;
+        apply(&mut state, CoreEvent::Message(reply));
+        assert!(state.timeline.is_deleted(Id(151)));
+        assert!(state.timeline.get(Id(601)).is_none());
+        assert!(matches!(
+            state.newer_history(),
+            Some(Command::History {
+                after: Some(Id(200)),
+                ..
+            })
+        ));
+        page(&mut state, vec![]);
+        assert!(!state.can_load_newer());
+    }
+    #[test]
+    fn replacing_an_after_page_with_a_missing_target_drops_its_forward_cursor() {
+        let mut state = state(Some(Id(100)));
+        state.open_unread().unwrap();
+        page(&mut state, (101..=150).map(message).collect());
+        state.open_target_window(Id(50)).unwrap();
+        let request = state.request;
+        apply(
+            &mut state,
+            CoreEvent::History {
+                channel: Id(1),
+                request,
+                older: true,
+                messages: vec![],
+            },
+        );
+        assert!(state.newer_cursor.is_none());
+        assert!(!state.can_load_newer());
+        assert_eq!(state.search_target, Some(Id(50)));
+    }
+    #[test]
+    fn unread_navigation_rejects_unavailable_scope_bad_ranges_and_late_results() {
+        for invalid in 0..6 {
+            let mut state = state(Some(Id(100)));
+            match invalid {
+                0 => state.gateway_connected = false,
+                1 => state.auth = AuthState::Unauthenticated,
+                2 => state.freshness = Freshness::Stale,
+                3 => state.history_pending = true,
+                4 => state.read_state.reset(),
+                _ => state.channels.clear(),
+            }
+            assert!(!state.can_jump_unread());
+            assert!(state.open_unread().is_none());
+            assert_eq!(state.timeline.row_count(), 1);
+            assert_eq!(state.drafts[&Id(1)], "Preserve draft");
+        }
+        let mut state = state(Some(Id(100)));
+        state.open_unread().unwrap();
+        page(&mut state, vec![message(100)]);
+        assert_ne!(state.freshness, Freshness::Fresh);
+        assert!(state.timeline.get(Id(100)).is_none());
+        let mut state = self::state(Some(Id(100)));
+        state.open_unread().unwrap();
+        let stale = state.request;
+        state.history(None);
+        apply(
+            &mut state,
+            CoreEvent::History {
+                channel: Id(1),
+                request: stale,
+                older: false,
+                messages: vec![message(101)],
+            },
+        );
+        assert!(state.timeline.get(Id(101)).is_none());
+        page(&mut state, vec![message(500)]);
+        assert!(!state.history_targeted && state.search_target.is_none());
+        state.open_unread().unwrap();
+        page(&mut state, vec![]);
+        assert!(
+            state
+                .status
+                .starts_with("No messages returned after this boundary")
+        );
+        assert!(state.history_targeted && state.search_target.is_none());
+        assert!(!state.can_load_newer());
+        assert!(state.read_state.pending.is_none());
     }
 }

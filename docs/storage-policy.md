@@ -211,3 +211,12 @@ search index, directory fetch or new worker/queue. Closing clears the query; log
 ## September 10: message type retention
 
 Schema 7 adds one checked integer `message_kind` (0..255) per cached message, with no new payload or cache. Existing unsupported rows migrate to the unknown sentinel 255; ordinary rows use 0. Reloaded history supplies the actual type. Existing account/item/byte/page limits remain in force. Migration and reopen/roundtrip tests cover retained rows and invalid values. Builds limited to schema 6 cannot reopen this cache. PR #28 independently uses schema 7 for content markers; merge both column-detected migrations and both save/load fields when integrating these branches.
+
+
+Unread/forward navigation reuses the cancellable history worker, 50-message response limit,
+500-row/4-MiB active timeline and existing global resident budget. It replaces the selected
+window, preserving bounded deletion/reconciliation metadata and drafts. Three fixed-size
+cursor fields and a full-page flag are session-only. Forward-target pages are not restored
+from the SQLite latest-page cache or parked in the resident recent-window cache. Accepted
+message metadata remains subject to ordinary account history persistence; no new cache,
+queue, directory fetch or background pagination is introduced.
