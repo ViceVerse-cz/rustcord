@@ -250,15 +250,17 @@ mod tests {
                 limited: false,
             })
         }
-        let mut state = State::default();
-        state.auth = AuthState::Authenticated;
-        state.gateway_connected = true;
-        state.guilds.push(model::Guild {
-            emojis: None,
-            id: Id(9),
-            name: "Synthetic".into(),
-            icon: None,
-        });
+        let mut state = State {
+            auth: AuthState::Authenticated,
+            gateway_connected: true,
+            guilds: vec![model::Guild {
+                emojis: None,
+                id: Id(9),
+                name: "Synthetic".into(),
+                icon: None,
+            }],
+            ..State::default()
+        };
         let Some(Command::Profile { request, .. }) = state.request_profile(Id(1), None) else {
             panic!("missing request")
         };
