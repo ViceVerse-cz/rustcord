@@ -81,6 +81,7 @@ fn hydrate_cached_history(
         && state.history_pending
         && state.freshness == model::Freshness::Loading
         && state.timeline.is_empty()
+        && state.can_read_history(channel)
         && state
             .channels
             .iter()
@@ -357,6 +358,7 @@ impl Desktop {
         {
             let (channel, nonce) = (*channel, nonce.clone());
             let available = !self.state.demo
+                && self.state.can_attach(channel)
                 && !self.fixture_only
                 && self.state.auth == AuthState::Authenticated
                 && self.state.gateway_connected
@@ -1093,12 +1095,21 @@ impl Desktop {
             let confirmed_channel = confirmed_recovery_channel(&self.state, &event.event);
             let mut removed_channels: std::collections::BTreeSet<_> = if matches!(
                 &event.event,
-                Event::Ready { .. } | Event::ThreadsSync { .. } | Event::ThreadRemoved { .. }
+                Event::Ready { .. }
+                    | Event::Permissions(_)
+                    | Event::ChannelChanged(_)
+                    | Event::ThreadChanged { .. }
+                    | Event::ChannelCreated(_)
+                    | Event::ChannelRestored(_)
+                    | Event::ThreadsSync { .. }
+                    | Event::ThreadRemoved { .. }
             ) {
                 self.state
                     .channels
                     .iter()
-                    .filter(|channel| channel.supports_text())
+                    .filter(|channel| {
+                        channel.supports_text() && self.state.can_read_history(channel.id)
+                    })
                     .map(|channel| channel.id)
                     .collect()
             } else {
@@ -1114,7 +1125,12 @@ impl Desktop {
             let history_changed = changes_active_history(&self.state, &event.event);
             self.state.apply(event);
             if !removed_channels.is_empty() {
-                for channel in self.state.channels.iter().filter(|c| c.supports_text()) {
+                for channel in self
+                    .state
+                    .channels
+                    .iter()
+                    .filter(|c| c.supports_text() && self.state.can_read_history(c.id))
+                {
                     removed_channels.remove(&channel.id);
                 }
             }
@@ -1166,6 +1182,7 @@ impl Desktop {
         if persist_timeline
             && self.state.freshness == model::Freshness::Fresh
             && let Some(channel) = self.state.selected
+            && self.state.can_read_history(channel)
         {
             self.queue_cache(cache::Operation::SaveChannel {
                 channel,
@@ -1241,16 +1258,24 @@ impl eframe::App for Desktop {
         let upload_allowed = self.state.user.is_some()
             && self.state.gateway_connected
             && self.state.freshness == model::Freshness::Fresh;
+        let can_attach = self
+            .state
+            .selected
+            .is_some_and(|channel| self.state.can_attach(channel));
+        if !can_attach {
+            self.uploads.cancel();
+        }
         self.uploads.poll(
             self.state.generation,
             self.state.selected,
-            upload_allowed,
+            self.state.user.is_some() && self.state.gateway_connected,
             &ctx,
         );
         // Move native handles once; never load dropped bytes on the rendering thread.
         let dropped = ctx.input_mut(|input| std::mem::take(&mut input.raw.dropped_files));
         if !dropped.is_empty() {
             if upload_allowed
+                && can_attach
                 && self.login.is_none()
                 && !self.confirming_close
                 && !self.confirming_logout
@@ -1342,9 +1367,16 @@ impl eframe::App for Desktop {
             self.uploads.poll(
                 self.state.generation,
                 self.state.selected,
-                self.state.gateway_connected && self.state.freshness == model::Freshness::Fresh,
+                self.state.user.is_some() && self.state.gateway_connected,
                 &ctx,
             );
+            if !self
+                .state
+                .selected
+                .is_some_and(|channel| self.state.can_attach(channel))
+            {
+                self.uploads.cancel();
+            }
             if std::mem::take(&mut self.messaging.remove_attachment_requested) {
                 self.uploads.remove();
             }
@@ -1353,6 +1385,7 @@ impl eframe::App for Desktop {
             }
             if std::mem::take(&mut self.messaging.attach_requested)
                 && let Some(channel) = self.state.selected
+                && self.state.can_attach(channel)
                 && let Err(error) = self.uploads.start_choose(
                     self.state.generation,
                     channel,
@@ -1472,6 +1505,21 @@ mod tests {
         assert_eq!(state.timeline.len(), 1);
         assert_eq!(state.freshness, model::Freshness::Loading);
         state.timeline.clear();
+        let permissions = state.permissions.clone();
+        state.permissions.channels.remove(&channel);
+        state.permissions.clear_cache();
+        assert!(!state.can_read_history(channel));
+        hydrate_cached_history(
+            &mut state,
+            channel,
+            request,
+            vec![test_support::message(1000, channel)],
+        );
+        assert!(
+            state.timeline.is_empty(),
+            "Loaded navigation alone does not authorize cached history"
+        );
+        state.permissions = permissions;
         for invalid in [
             vec![test_support::message(1001, model::Id(999))],
             vec![test_support::message(1002, channel)],
@@ -1502,6 +1550,7 @@ mod tests {
             event: Event::Ready {
                 user: state.user.clone().unwrap(),
                 guilds: state.guilds.clone(),
+                permissions: test_support::permission_snapshot(&state),
                 channels,
             },
         });

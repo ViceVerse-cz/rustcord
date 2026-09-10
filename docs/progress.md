@@ -653,3 +653,51 @@ more than the eight-event queue capacity. Final independent review found no rema
 blocker. The original seven dirty-source hashes were verified unchanged. The inherited strict
 security audit reports six vulnerabilities and five denied warnings; no dependency/audit policy
 was changed. New remote CI status is pending at draft delivery, not claimed successful.
+
+## Permission-aware actions - September 10, 2026
+
+This slice builds on channel-visibility PR #17 at 6fb81da12942b03e0a51599803d74ea37cbd3503,
+in the separate feat/permission-aware-actions worktree. It implements SPEC 7.3's self-account
+role/overwrite calculation for existing messaging, history and voice actions. It does not
+claim the remaining full SPEC is complete. Original checkout work remains untouched.
+
+Bounded READY/guild snapshots and role/self-member/owner/channel deltas distinguish unknown
+metadata from denied permissions. Shared UI and command checks cover send/attachment,
+own edit/delete, existing/new reactions, history/search/pins/archives and listen/speak/PTT.
+Read-history loss clears loaded content and cancels stale admission; VIEW-only live messages
+and separately authorized sends remain possible. Thread parent changes and deleted-role
+overwrite cleanup invalidate previous decisions. Cached decisions respect timeout boundaries
+and clock rollback. Protocol references and storage limits are in discord-compatibility.md
+and storage-policy.md. The only dependency edge added is the existing test-support crate as
+an UI dev-dependency; no new external runtime dependency or schema migration is introduced.
+
+Independent review identified and fixed deleted-role overwrite retention, thread reparenting,
+late content after revocation, missing disk-cache invalidation for navigation changes,
+unknown reaction snapshot eligibility, and loss of the failed-call state on disconnect.
+Older synthetic tests now explicitly provide the loaded guild/self permission metadata they
+need, retaining their behavioral assertions. Validation results and measurements follow below.
+
+Native before/after screenshots, process RSS/idle CPU and physical UI interaction remain
+unmeasured because owner physical Escape stops paused desktop automation. It was not resumed.
+No Discord message, account or microphone action was performed. Manual owner acceptance:
+change VIEW/READ/SEND/ATTACH separately in a controlled conversation; check that controls and
+late history follow each permission, drafts survive, and restoring access does not send or
+join automatically. Repeat parent overwrite/self-role changes for a thread, and CONNECT,
+SPEAK and USE_VAD changes for voice. Live normal-user delivery/compatibility remains a gate.
+
+Local cargo xtask check passed: 164 offline Rust tests plus doctests, formatting, strict
+all-feature Clippy, text-only compilation and runtime policy. Independent final review found
+no remaining concrete blocker. Replay uses one warmup plus five direct release runs with
+100,000 events: median 27.9407 to 29.2795 ms, retaining the same 500 records and
+220,992-221,477 estimated timeline bytes. Access reconciliation runs only for events that
+can change navigation/permissions; message and action admission remain guarded individually.
+
+Base PR #17 CI completed native checks on Windows, Linux and macOS. Its strict security job
+still failed with six vulnerabilities and five denied warnings (run 34481036861); those
+inherited findings are not waived. New branch CI remains pending until pushed. The delivery
+stays draft under the delivery skill while native evidence and audit gates are unresolved.
+
+Both unsigned Windows release packages passed their packaging commands. Each executable grew
+by 211,456 bytes over #17; installed/ZIP totals and five-run measurements are recorded in
+performance.md. Original seven dirty-source SHA256 values were checked unchanged. No new
+native screenshot or live compatibility claim is made; the new PR is stacked on #17.

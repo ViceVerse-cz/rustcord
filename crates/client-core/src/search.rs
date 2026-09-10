@@ -25,10 +25,9 @@ impl State {
         self.auth == AuthState::Authenticated
             && self.gateway_connected
             && self.freshness != Freshness::Unavailable
-            && self
-                .channels
-                .iter()
-                .any(|c| Some(c.id) == self.selected && c.supports_text())
+            && self.channels.iter().any(|c| {
+                Some(c.id) == self.selected && c.supports_text() && self.can_read_history(c.id)
+            })
     }
     pub fn request_search(&mut self, query: String, before: Option<Id>) -> Option<Command> {
         if !self.can_search() || !model::valid_search_query(&query) {

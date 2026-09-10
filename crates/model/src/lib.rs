@@ -1,5 +1,6 @@
 //! UI-neutral session entities. No filesystem or network dependencies.
 pub mod archives;
+pub mod permissions;
 mod profile;
 pub use profile::*;
 mod attachments;

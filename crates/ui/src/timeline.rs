@@ -174,12 +174,13 @@ fn action_button(ui: &mut egui::Ui, icon: &str, label: &str) -> egui::Response {
 fn message_actions(
     ui: &mut egui::Ui,
     message: &Message,
-    own: bool,
+    actions: (bool, bool, bool, bool),
     mark_read: Option<&mut Option<Id>>,
     reply: &mut Option<Id>,
     editing: &mut Option<(Id, Id, String)>,
     deleting: &mut Option<(Id, Id)>,
 ) {
+    let (own, can_reply, can_edit, can_delete) = actions;
     let (menu, _) = egui::containers::menu::MenuButton::from_button(
         egui::Button::new(RichText::new("…").color(crate::design::palette(ui).muted))
             .frame(false)
@@ -192,7 +193,10 @@ fn message_actions(
             ui.ctx().copy_text(message.content.clone());
             ui.close();
         }
-        if ui.button("Reply").clicked() {
+        if ui
+            .add_enabled(can_reply, egui::Button::new("Reply"))
+            .clicked()
+        {
             *reply = Some(message.id);
             ui.close();
         }
@@ -210,11 +214,17 @@ fn message_actions(
         }
         if own {
             ui.separator();
-            if ui.button("Edit message").clicked() {
+            if ui
+                .add_enabled(can_edit, egui::Button::new("Edit message"))
+                .clicked()
+            {
                 *editing = Some((message.channel, message.id, message.content.clone()));
                 ui.close();
             }
-            if ui.button("Delete message…").clicked() {
+            if ui
+                .add_enabled(can_delete, egui::Button::new("Delete message…"))
+                .clicked()
+            {
                 *deleting = Some((message.channel, message.id));
                 ui.close();
             }
@@ -348,7 +358,13 @@ impl TimelineView {
                 offset = Some(anchor_offset(&self.rows, id, inset));
             }
         }
-        if state.timeline.is_empty() {
+        let history_available = state
+            .selected
+            .is_some_and(|channel| state.can_read_history(channel));
+        if !history_available {
+            ui.weak("Message history is unavailable with current permission information.");
+        }
+        if state.timeline.is_empty() && history_available {
             ui.label(match state.freshness {
                 model::Freshness::Loading => "Loading messages…",
                 model::Freshness::Unavailable => "You cannot view this conversation.",
@@ -381,6 +397,7 @@ impl TimelineView {
             scroll = scroll.vertical_scroll_offset(offset);
         }
         let mut measurements = Vec::new();
+        let mut selected_reply = state.reply;
         let output = scroll.show_viewport(ui, |ui, viewport| {
             ui.spacing_mut().item_spacing.y = 0.0;
             let (first, end, top) = visible_range(
@@ -467,8 +484,9 @@ impl TimelineView {
                                         ui.label(RichText::new("System content · Preview unavailable").small().color(colors.muted));
                                     }
                                     if let Some(action)=crate::reactions::show(ui,message.reactions.as_deref(),
-                                        state.gateway_connected && state.freshness==model::Freshness::Fresh,
-                                        state.reactions.writing.is_some(), state.reactions.invalidated(message.id), (avatars, state.demo)) {
+                                        state.gateway_connected && state.freshness==model::Freshness::Fresh && state.can_read_history(message.channel),
+                                        state.reactions.writing.is_some(), state.reactions.invalidated(message.id), (avatars, state.demo),
+                                        |emoji, add| state.can_react(*id, Some(emoji), add)) {
                                         self.reaction=Some((*id,action));
                                     }
                                 });
@@ -494,12 +512,16 @@ impl TimelineView {
                         toolbar.spacing_mut().button_padding = egui::vec2(4.0, 2.0);
                         toolbar.spacing_mut().interact_size.y = 28.0;
                         toolbar.painter().rect_filled(toolbar_rect, 5.0, colors.raised);
-                        if let Some(action) = crate::reactions::add_button(&mut toolbar, state.gateway_connected && state.freshness == model::Freshness::Fresh, state.reactions.writing.is_some()) {
+                        let react = state.can_react(*id, None, true) || message.reactions.as_ref().is_some_and(|items| items.iter().any(|r| state.can_react(*id, Some(&r.emoji), true)));
+                        if let Some(action) = crate::reactions::add_button(&mut toolbar, react, state.reactions.writing.is_some(), |emoji| state.can_react(*id, Some(emoji), true)) {
                             self.reaction = Some((*id, action));
                         }
-                        if action_button(&mut toolbar, "↩", "Reply").clicked() { state.reply = Some(*id); }
-                        if own && action_button(&mut toolbar, "✎", "Edit message").clicked() { *editing = Some((message.channel, *id, message.content.clone())); }
-                        message_actions(&mut toolbar, message, own, can_mark_read.then_some(&mut self.mark_read), &mut state.reply, editing, deleting);
+                        let can_reply = state.can_send(message.channel);
+                        let can_edit = state.can_edit(message.channel, *id);
+                        let can_delete = state.can_delete(message.channel, *id);
+                        if toolbar.add_enabled_ui(can_reply, |ui| action_button(ui, "↩", "Reply")).inner.clicked() { selected_reply = Some(*id); }
+                        if own && toolbar.add_enabled_ui(can_edit, |ui| action_button(ui, "✎", "Edit message")).inner.clicked() { *editing = Some((message.channel, *id, message.content.clone())); }
+                        message_actions(&mut toolbar, message, (own, can_reply, can_edit, can_delete), can_mark_read.then_some(&mut self.mark_read), &mut selected_reply, editing, deleting);
                         self.toolbar = Some((*id, toolbar_rect));
                     }
                 });
@@ -508,6 +530,7 @@ impl TimelineView {
             let used: f32 = self.rows[..end].iter().map(|(_, height)| *height).sum();
             ui.add_space((total - used).max(0.0));
         });
+        state.reply = selected_reply;
         self.following =
             output.state.offset.y + output.inner_rect.height() >= output.content_size.y - 3.0;
         let mut reflow = false;
@@ -681,13 +704,9 @@ mod tests {
             } else {
                 egui::Visuals::light()
             });
-            let mut state = State {
-                selected: Some(Id(20)),
-                demo: true,
-                gateway_connected: true,
-                freshness: model::Freshness::Fresh,
-                ..Default::default()
-            };
+            let mut state = test_support::demo_state();
+            state.timeline.clear();
+            state.read_state.reset();
             let first = text_message(1);
             state.user = Some(first.author.clone());
             state.timeline.insert(first, false, false).unwrap();

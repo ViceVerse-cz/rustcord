@@ -16,6 +16,17 @@ use std::{
 use tokio::{runtime::Runtime, sync::watch, task::JoinHandle};
 use zeroize::Zeroizing;
 
+fn permission_mutes_microphone(
+    state: &State,
+    channel: Id,
+    push_to_talk: bool,
+    ptt_active: bool,
+) -> bool {
+    !state.can_speak(channel)
+        || (state.permission(channel, model::permissions::USE_VAD) != Some(true)
+            && !(push_to_talk && ptt_active))
+}
+
 struct Pending {
     generation: u64,
     channel: Id,
@@ -301,7 +312,13 @@ impl Voice {
             .is_some_and(|p| p.session.is_some() && p.server.is_some())
         {
             let pending = self.pending.take().expect("pending negotiation");
-            if let Err(error) = self.start_media(runtime, pending, ui, ctx) {
+            let listen_only = permission_mutes_microphone(
+                state,
+                pending.channel,
+                ui.voice_push_to_talk,
+                ui.voice_ptt_active,
+            );
+            if let Err(error) = self.start_media(runtime, pending, ui, ctx, listen_only) {
                 return self.fail(state, error);
             }
         }
@@ -311,6 +328,12 @@ impl Voice {
             let call = state.voice.active.as_ref().expect("matching active call");
             let deafened = call.deafened || call.server_deafened;
             let muted = call.muted
+                || permission_mutes_microphone(
+                    state,
+                    call.channel,
+                    ui.voice_push_to_talk,
+                    ui.voice_ptt_active,
+                )
                 || call.server_muted
                 || deafened
                 || (ui.voice_push_to_talk && !ui.voice_ptt_active);
@@ -408,6 +431,7 @@ impl Voice {
         pending: Pending,
         ui: &ui::MessagingUi,
         ctx: &egui::Context,
+        listen_only: bool,
     ) -> Result<(), &'static str> {
         let (capture_send, capture) = mpsc::sync_channel(8);
         let (playback, playback_receive) = mpsc::sync_channel(8);
@@ -431,10 +455,10 @@ impl Voice {
             },
         )?;
         let (controls, control_receive) = watch::channel(Controls {
-            muted: ui.voice_push_to_talk,
+            muted: listen_only || ui.voice_push_to_talk,
             deafened: false,
         });
-        audio.set_controls(ui.voice_push_to_talk, false);
+        audio.set_controls(listen_only || ui.voice_push_to_talk, false);
         let session = pending.session.ok_or("Missing voice session")?;
         let session_copy = Zeroizing::new(session.expose().to_owned());
         let (token, endpoint) = pending.server.ok_or("Missing voice server")?;
@@ -505,6 +529,61 @@ impl Drop for Voice {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn microphone_requires_speak_and_focused_push_to_talk_without_vad() {
+        use model::permissions as p;
+        let mut state = test_support::demo_state();
+        let bits = p::VIEW_CHANNEL | p::CONNECT | p::SPEAK;
+        state.permissions.guilds.insert(
+            Id(10),
+            p::Guild {
+                id: Id(10),
+                owner: Some(Id(999)),
+                roles: Some(vec![p::Role { id: Id(10), bits }]),
+                member: Some(p::Member {
+                    roles: vec![],
+                    timeout_until: None,
+                }),
+            },
+        );
+        state.permissions.channels.insert(
+            Id(25),
+            p::Channel {
+                id: Id(25),
+                guild: Id(10),
+                overwrites: Some(vec![]),
+            },
+        );
+        assert!(permission_mutes_microphone(&state, Id(25), false, false));
+        assert!(permission_mutes_microphone(&state, Id(25), false, true));
+        assert!(permission_mutes_microphone(&state, Id(25), true, false));
+        assert!(!permission_mutes_microphone(&state, Id(25), true, true));
+        state
+            .permissions
+            .guilds
+            .get_mut(&Id(10))
+            .unwrap()
+            .roles
+            .as_mut()
+            .unwrap()[0]
+            .bits |= p::USE_VAD;
+        state.permissions.clear_cache();
+        assert!(!permission_mutes_microphone(&state, Id(25), false, false));
+        state
+            .permissions
+            .guilds
+            .get_mut(&Id(10))
+            .unwrap()
+            .roles
+            .as_mut()
+            .unwrap()[0]
+            .bits &= !p::SPEAK;
+        state.permissions.clear_cache();
+        assert!(permission_mutes_microphone(&state, Id(25), true, true));
+        state.permissions.channels.remove(&Id(25));
+        state.permissions.clear_cache();
+        assert!(permission_mutes_microphone(&state, Id(25), true, true));
+    }
     #[test]
     fn guild_negotiation_has_no_dm_peer_or_ringing_and_opens_no_devices() {
         let mut state = test_support::demo_state();

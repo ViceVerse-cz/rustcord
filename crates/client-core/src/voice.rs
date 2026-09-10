@@ -211,6 +211,13 @@ impl ClientState {
         !self.demo
             && self.auth == AuthState::Authenticated
             && self.gateway_connected
+            && self.has_voice_access(channel)
+    }
+    pub(crate) fn has_voice_access(&self, channel: Id) -> bool {
+        self.permission(
+            channel,
+            model::permissions::VIEW_CHANNEL | model::permissions::CONNECT,
+        ) == Some(true)
             && self.channels.iter().any(|c| {
                 c.id == channel
                     && ((c.guild.is_some() && c.kind == 2)
@@ -238,6 +245,7 @@ impl ClientState {
             .find(|p| self.user.as_ref().is_some_and(|u| u.id == p.user));
         let server_muted = own.is_some_and(|p| p.server_muted);
         let server_deafened = own.is_some_and(|p| p.server_deafened);
+        let muted = !self.can_speak(channel);
         self.voice.sequence = self.voice.sequence.wrapping_add(1);
         let request = self.voice.sequence;
         self.voice.active = Some(Call {
@@ -248,7 +256,7 @@ impl ClientState {
             server_deafened,
             request,
             phase: Phase::Connecting,
-            muted: false,
+            muted,
             deafened: false,
             participants,
             error: None,
@@ -270,6 +278,11 @@ impl ClientState {
         }))
     }
     pub fn set_call_mute(&mut self, muted: bool, deafened: bool) -> Option<crate::Command> {
+        let channel = self.voice.active.as_ref()?.channel;
+        if !self.can_call(channel) {
+            return None;
+        }
+        let muted = muted || !self.can_speak(channel);
         let call = self.voice.active.as_mut()?;
         if call.phase == Phase::Failed {
             return None;
@@ -549,6 +562,12 @@ mod tests {
                 avatar: None,
                 discriminator: 0,
             }),
+            guilds: vec![model::Guild {
+                id: Id(10),
+                name: "Synthetic".into(),
+                icon: None,
+                emojis: None,
+            }],
             channels: [20, 21]
                 .into_iter()
                 .map(|id| Channel {
@@ -565,6 +584,7 @@ mod tests {
                 .collect(),
             ..ClientState::default()
         };
+        crate::tests::grant_permissions(&mut state);
         let entry = |user, channel| RosterEntry {
             guild: Id(10),
             channel: Id(channel),
@@ -651,6 +671,7 @@ mod tests {
             event: CoreEvent::PermissionsChanged,
         });
         assert!(state.voice.roster.is_empty());
+        crate::tests::grant_permissions(&mut state);
         let mut oversized = entry(2, 20);
         oversized.member = Some(Member {
             user: User {
@@ -684,6 +705,67 @@ mod tests {
             event: CoreEvent::Unavailable(Id(20)),
         });
         assert!(state.voice.roster.is_empty());
+
+        use model::permissions as p;
+        state
+            .permissions
+            .replace(p::Snapshot {
+                guilds: vec![p::Guild {
+                    id: Id(10),
+                    owner: Some(Id(999)),
+                    roles: Some(vec![p::Role {
+                        id: Id(10),
+                        bits: p::VIEW_CHANNEL | p::CONNECT,
+                    }]),
+                    member: Some(p::Member {
+                        roles: vec![],
+                        timeout_until: None,
+                    }),
+                }],
+                channels: vec![p::Channel {
+                    id: Id(21),
+                    guild: Id(10),
+                    overwrites: Some(vec![]),
+                }],
+            })
+            .unwrap();
+        assert!(
+            state.start_call(Id(21), false).is_some(),
+            "CONNECT permits a listen-only call"
+        );
+        assert!(state.voice.active.as_ref().unwrap().muted);
+        assert!(matches!(
+            state.set_call_mute(false, false),
+            Some(crate::Command::Voice(Command::SetMute { mute: true, .. }))
+        ));
+        state
+            .permissions
+            .guilds
+            .get_mut(&Id(10))
+            .unwrap()
+            .roles
+            .as_mut()
+            .unwrap()[0]
+            .bits |= p::SPEAK;
+        state.permissions.clear_cache();
+        assert!(matches!(
+            state.set_call_mute(false, false),
+            Some(crate::Command::Voice(Command::SetMute { mute: false, .. }))
+        ));
+        state
+            .permissions
+            .guilds
+            .get_mut(&Id(10))
+            .unwrap()
+            .roles
+            .as_mut()
+            .unwrap()[0]
+            .bits &= !p::CONNECT;
+        state.permissions.clear_cache();
+        assert!(!state.can_call(Id(21)));
+        assert!(state.set_call_mute(false, false).is_none());
+        state.leave_call();
+        assert!(state.start_call(Id(21), false).is_none());
     }
 
     #[test]

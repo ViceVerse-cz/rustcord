@@ -241,7 +241,7 @@ impl MessagingUi {
                                         let archives = channel.guild.is_some() && matches!(channel.kind, 0 | 5 | 15 | 16);
                                         let width = (ui.available_width() - if archives { 68.0 } else { 0.0 }).max(0.0);
                                         let response = ui.allocate_ui(egui::vec2(width, 36.0), |ui| ui.add_enabled(
-                                            channel.supports_text(),
+                                            channel.supports_text() && state.can_view(channel.id),
                                             egui::Button::selectable(
                                                 active,
                                                 RichText::new(name).color(if active {
@@ -275,15 +275,13 @@ impl MessagingUi {
                                     channel.name,
                                     kind_label(channel.kind)
                                 ))
-                                .on_disabled_hover_text(format!(
-                                    "{} · {}",
-                                    channel.name,
-                                    kind_label(channel.kind)
-                                ));
+                                .on_disabled_hover_text(if state.can_view(channel.id) {
+                                    format!("{} · {}", channel.name, kind_label(channel.kind))
+                                } else { "This conversation is unavailable with current permission information".into() });
                             response.widget_info(|| {
                                 egui::WidgetInfo::labeled(
                                     egui::WidgetType::Button,
-                                    channel.supports_text(),
+                                    response.enabled(),
                                     format!(
                                         "{}{}",
                                         channel.name,
@@ -400,10 +398,26 @@ mod tests {
         assert!(!channels[1].supports_text());
         assert_eq!(kind_label(15), "Forum · loaded posts");
         let mut state = State {
+            user: Some(model::User {
+                id: Id(2),
+                name: "Synthetic member".into(),
+                avatar: None,
+                discriminator: 0,
+            }),
+            guilds: vec![model::Guild {
+                id: Id(100),
+                name: "Synthetic guild".into(),
+                icon: None,
+                emojis: None,
+            }],
             channels,
             demo: true,
             ..State::default()
         };
+        state
+            .permissions
+            .replace(test_support::permission_snapshot(&state))
+            .unwrap();
         assert!(state.select(Id(4)).is_none());
         let ctx = egui::Context::default();
         let mut view = MessagingUi {
@@ -440,6 +454,10 @@ mod tests {
         assert!(state.selected.is_none());
         // Forum containers never request history; their loaded posts remain keyboard-selectable.
         state.channels = vec![channel(7, 15, 0, None), channel(8, 11, 0, Some(Id(7)))];
+        state
+            .permissions
+            .replace(test_support::permission_snapshot(&state))
+            .unwrap();
         assert!(state.select(Id(7)).is_none());
         let ctx = egui::Context::default();
         let mut picked = None;

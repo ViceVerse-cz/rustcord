@@ -186,3 +186,44 @@ clears the active view and ends affected voice state; restoration requires delib
 join. Voice allowances and guild roster snapshots exclude obfuscated channels.
 This closes explicit visibility and stale-response paths, not the full role/overwrite permission
 mirror. Service permission failures remain authoritative; normal-user live behavior is unverified.
+
+## Permission-aware actions (September 10, 2026)
+
+The session now mirrors the current account's guild owner, roles, self-member role IDs and
+timeout, and channel role/self overwrites. Unknown metadata is distinct from a known zero-bit
+result and cannot enable guild actions. Owner/administrator bypass, everyone then combined
+role then self overwrites, and timeout restrictions follow the documented
+[permission calculation](https://docs.discord.com/developers/topics/permissions).
+Threads use their loaded text/announcement/forum/media parent's overwrites and
+SEND_MESSAGES_IN_THREADS; category overwrites are not recursively applied to children.
+Existing DM/group-DM text access remains service-authoritative without guild metadata.
+
+READY and known-guild GUILD_CREATE install bounded snapshots. Role create/update/delete,
+self GUILD_MEMBER_UPDATE, owner and channel overwrite updates replace the relevant metadata;
+READY_SUPPLEMENTAL and PASSIVE_UPDATE_V2 can update already supplied self-member data.
+No full member request or new subscription is added. Normal-user evidence is pinned to
+[READY merged members](https://github.com/dolfies/discord.py-self/blob/2ba64a9a997e151a9c259984e0a179b1fdf4aff4/discord/state.py#L1731),
+[guild owner properties](https://github.com/dolfies/discord.py-self/blob/2ba64a9a997e151a9c259984e0a179b1fdf4aff4/discord/guild.py#L691),
+and [member updates](https://github.com/dolfies/discord.py-self/blob/2ba64a9a997e151a9c259984e0a179b1fdf4aff4/discord/member.py#L375),
+plus the [documented member event](https://docs.discord.com/developers/events/gateway-events#guild-member-update).
+These are wire references, not live account acceptance or a guarantee of event delivery.
+Absent incremental fields preserve known state; explicit null makes roles/overwrites/owner
+unknown or clears a timeout. A full self-member snapshot without a timeout means no timeout.
+
+Shared command/UI checks cover sending, attachment selection/drop/upload, own-message editing
+and deletion, reactions, history/search/pins/archive reads, and voice admission/capture.
+VIEW without READ_MESSAGE_HISTORY permits fresh live messages and separately authorized sends,
+but cannot fetch, seed or persist history. Permission loss clears the affected loaded view,
+pending reads, result pages and reply target; late content cannot restore it. Recovery drafts
+remain. Read restoration requires deliberate reload/reselection. New reactions require
+ADD_REACTIONS; an existing emoji can be added without that bit, with history and timeout checks.
+Removing one's existing reaction remains separate. Private archive enumeration additionally
+requires MANAGE_THREADS. Voice CONNECT permits listen-only joining; SPEAK gates capture;
+without USE_VAD, focused push-to-talk must be enabled and held. Restoration never rejoins.
+
+Discord remains authoritative for action rejection, private-thread membership, account emoji
+entitlements and delivery of permission updates. Role names/colors, role administration,
+moderating other users' messages, new guild joining, and full member-directory synchronization
+are outside this slice. Synthetic parser, localhost transport and reducer/UI guard tests do
+not establish live compatibility. Native automation remains paused after owner Escape stops;
+no live account action, microphone capture or new native screenshot was performed.

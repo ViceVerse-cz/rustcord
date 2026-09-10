@@ -2,6 +2,7 @@
 pub mod archives;
 mod attachments;
 mod embeds;
+pub mod permissions;
 pub mod pins;
 pub mod profile;
 mod reactions;

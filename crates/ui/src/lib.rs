@@ -211,10 +211,10 @@ impl MessagingUi {
         if ctx.input(|input| !input.raw.hovered_files.is_empty()) {
             ui.label(if self.upload_busy || self.attachment.is_some() {
                 "Remove the current attachment or wait before dropping another file"
-            } else if state.gateway_connected && state.freshness == Freshness::Fresh {
+            } else if state.can_attach(channel) {
                 "Drop one file up to 20 MB to attach it here; Send starts the upload"
             } else {
-                "Reconnect and reload this conversation before attaching a file"
+                "Attaching files is unavailable in this conversation"
             });
         }
         for (index, pending) in state
@@ -442,7 +442,8 @@ impl MessagingUi {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
                             .add_enabled(
-                                state.freshness == Freshness::Fresh
+                                state.can_send(channel)
+                                    && (self.attachment.is_none() || state.can_attach(channel))
                                     && !self.upload_busy
                                     && !(state.demo && self.attachment.is_some())
                                     && (count > 0 || self.attachment.is_some()),
@@ -463,7 +464,7 @@ impl MessagingUi {
                                 .color(colors.muted),
                         );
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            if ui.add_enabled(state.gateway_connected && state.freshness == Freshness::Fresh && !self.upload_busy && self.attachment.is_none(), egui::Button::new("Attach file")).on_hover_text("Choose or drop one file up to 20 MB. Upload starts only when you press Send.").clicked() {
+                            if ui.add_enabled(state.can_attach(channel) && !self.upload_busy && self.attachment.is_none(), egui::Button::new("Attach file")).on_hover_text("Choose or drop one file up to 20 MB. Upload starts only when you press Send.").on_disabled_hover_text("Attaching files is unavailable here or an attachment is already selected").clicked() {
                                 self.attach_requested = true;
                             }
                             ui.add(
@@ -481,6 +482,11 @@ impl MessagingUi {
                     && let Some(command) = state.prepare_send_with_attachment(self.attachment.as_ref().map(|(name, _)| name.as_str())) {
                     commands.push(command);
                     edit.request_focus();
+                }
+                if !state.can_send(channel) {
+                    ui.weak("Sending messages is unavailable in this conversation. Your draft is kept.");
+                } else if self.attachment.is_some() && !state.can_attach(channel) {
+                    ui.weak("Attaching files is unavailable here. Remove the attachment to send only text.");
                 }
             });
         ui.add_space(6.0);
@@ -935,7 +941,10 @@ impl MessagingUi {
                                     }
                                     if ui
                                         .add_enabled(
-                                            state.freshness != Freshness::Loading,
+                                            state.freshness != Freshness::Loading
+                                                && state
+                                                    .selected
+                                                    .is_some_and(|id| state.can_read_history(id)),
                                             egui::Button::new("Reload").small().frame(false),
                                         )
                                         .clicked()
@@ -1094,6 +1103,7 @@ impl MessagingUi {
             }
         }
         if let Some((channel, message, content)) = &mut self.editing {
+            let allowed = state.can_edit(*channel, *message);
             let mut save = false;
             let mut cancel = false;
             egui::Window::new("Edit your message")
@@ -1112,16 +1122,17 @@ impl MessagingUi {
                             .desired_width(440.0),
                     );
                     ui.horizontal(|ui| {
-                        save = ui.button("Save edit").clicked();
+                        save = ui.add_enabled(allowed, egui::Button::new("Save edit")).clicked();
                         cancel = ui.button("Cancel").clicked();
                     });
+                    if !allowed { ui.weak("Editing this message is unavailable. Your text is kept until you cancel."); }
                 });
             if save {
-                commands.push(Command::Edit {
-                    channel: *channel,
-                    message: *message,
-                    content: content.clone(),
-                });
+                if let Some(command) = state.prepare_edit(*channel, *message, content.clone()) {
+                    commands.push(command);
+                } else {
+                    save = false;
+                }
             }
             if save || cancel {
                 self.editing = None;
@@ -1139,8 +1150,16 @@ impl MessagingUi {
                             .map_or("Original conversation unavailable", |c| c.name.as_str()),
                     );
                     ui.label("This removes the selected message from the conversation.");
-                    if ui.button("Delete message").clicked() {
-                        commands.push(Command::Delete { channel, message });
+                    let allowed = state.can_delete(channel, message);
+                    if !allowed {
+                        ui.weak("Deleting this message is unavailable.");
+                    }
+                    if ui
+                        .add_enabled(allowed, egui::Button::new("Delete message"))
+                        .clicked()
+                        && let Some(command) = state.prepare_delete(channel, message)
+                    {
+                        commands.push(command);
                         self.deleting = None;
                     }
                     if ui.button("Keep message").clicked() {
@@ -1276,14 +1295,15 @@ mod composer_tests {
 
     #[test]
     fn attachment_only_enter_sends_once_and_busy_upload_blocks_resending() {
-        for busy in [true, false] {
+        for (busy, allowed) in [(true, true), (false, true), (false, false)] {
             let ctx = egui::Context::default();
-            let mut state = State {
-                selected: Some(Id(1)),
-                auth: client_core::auth::AuthState::Authenticated,
-                freshness: Freshness::Fresh,
-                ..Default::default()
-            };
+            let mut state = test_support::demo_state();
+            state.demo = false;
+            let channel = state.selected.unwrap();
+            state.drafts.remove(&channel);
+            if !allowed {
+                state.channels.clear();
+            }
             let mut messaging = MessagingUi {
                 attachment: Some(("synthetic.txt".into(), 32)),
                 upload_busy: busy,
@@ -1293,7 +1313,7 @@ mod composer_tests {
             let mut editor = egui::Id::NULL;
             ctx.run_ui(Default::default(), |ui| {
                 editor = ui.make_persistent_id("message-input");
-                messaging.composer(ui, &mut state, Id(1), &ctx, &mut commands);
+                messaging.composer(ui, &mut state, channel, &ctx, &mut commands);
             })
             .drop_without_applying_deltas();
             ctx.memory_mut(|m| m.request_focus(editor));
@@ -1308,17 +1328,22 @@ mod composer_tests {
                     }],
                     ..Default::default()
                 },
-                |ui| messaging.composer(ui, &mut state, Id(1), &ctx, &mut commands),
+                |ui| messaging.composer(ui, &mut state, channel, &ctx, &mut commands),
             )
             .drop_without_applying_deltas();
-            assert_eq!(commands.len(), usize::from(!busy));
-            if !busy {
+            assert_eq!(commands.len(), usize::from(!busy && allowed));
+            if !busy && allowed {
                 assert!(
                     matches!(&commands[0], Command::Send { content, .. } if content.is_empty())
                 );
                 assert_eq!(
                     state.pending[0].attachment.as_deref(),
                     Some("synthetic.txt")
+                );
+            } else {
+                assert!(
+                    messaging.attachment.is_some(),
+                    "Unavailable sends retain selected metadata"
                 );
             }
         }

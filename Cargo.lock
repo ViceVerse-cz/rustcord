@@ -6553,6 +6553,7 @@ dependencies = [
  "model",
  "pulldown-cmark",
  "skrifa",
+ "test-support",
  "time",
  "unicode-segmentation",
  "url",

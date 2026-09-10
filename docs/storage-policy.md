@@ -81,3 +81,21 @@ matching message channel IDs. Late disk/HTTP responses cannot refill a revoked v
 available for recovery. This does not erase explicit downloaded files or promise deletion of
 already requested image pixels, OS artifacts or remote attachment staging data. No schema,
 persistent visibility list, new worker queue or credential storage is introduced.
+
+The permission mirror is session-only and never enters SQLite, credentials or diagnostics.
+It retains at most 4,000 guild/channel records, 16,384 guild roles and 32,768 overwrites;
+per guild/member role lists stop at 512, per-channel wire overwrites at 1,000. Other members'
+overwrite entries are validated then discarded; all role overwrite entries remain so later
+self-role changes can be calculated. A 2 MiB estimated allocation budget includes reserved
+space for at most 4,000 cached decisions. Updates clone the bounded metadata for atomic
+validation; that temporary copy is additional peak memory. These estimates are not process
+RSS. Decisions expire at timeout boundaries, are recomputed after clock rollback and are
+cleared on metadata updates. Logout/READY replace the session mirror.
+
+Current VIEW and READ_MESSAGE_HISTORY are required for HTTP/cache admission and history
+persistence. Read-access loss, including thread parent/type changes, queues the existing
+account-wide ClearHistory operation. Sending-only permission changes do not erase cached
+history. VIEW-only live messages stay in the bounded RAM timeline without being persisted.
+Existing recovery drafts and explicitly downloaded files keep their documented lifecycle.
+No schema change or external runtime dependency is added; UI tests reuse the existing
+workspace test-support crate through a dev-dependency.

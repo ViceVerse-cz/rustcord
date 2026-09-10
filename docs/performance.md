@@ -543,3 +543,47 @@ behavior docs but precede this final performance/progress addendum. Installed/ZI
 those documentation differences. No dependencies or license contents changed.
 Final executable hashes: text FE540FEEC0781FC54D1CB3C950D53A512A96B770AF26F72D27BC49092F02BBB5;
 voice 264B6EBEAF5FECBC08A33385B4F9A2073F318E3EE03D8E845D3E0A4E7191A80B.
+
+
+## Permission-aware actions - September 10, 2026
+
+Baseline is verified channel-visibility PR #17 revision
+6fb81da12942b03e0a51599803d74ea37cbd3503. Its package outputs and replay executable were
+copied into this task's separate baseline directory before permission implementation;
+no existing unrelated debug build was used. After is feat/permission-aware-actions.
+Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical CPUs), about 31 GiB RAM,
+Rust 1.98.1 release, wgpu. Text is --no-default-features; voice adds --features voice.
+Both unsigned Windows packages were built by cargo xtask package/package-voice.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| text executable bytes | 49,092,608 | 49,304,064 | +211,456 (+0.431%) |
+| text installed bytes | 49,466,993 | 49,690,144 | +223,151 (+0.451%) |
+| text zip bytes | 30,860,898 | 30,948,093 | +87,195 (+0.283%) |
+| voice executable bytes | 52,425,728 | 52,637,184 | +211,456 (+0.403%) |
+| voice installed bytes | 53,023,671 | 53,247,734 | +224,063 (+0.423%) |
+| voice zip bytes | 32,225,829 | 32,314,397 | +88,568 (+0.275%) |
+| 100,000-event replay median ms | 27.9407 | 29.2795 | +1.3388 (+4.79%) |
+
+Installed totals enumerate package files (32 text, 78 voice), excluding the text package's
+voice sibling. ZIP is Python zipfile DEFLATE level 9. Both packages retain dependency notices
+and exclude PR screenshots. Baseline packaged docs predate #17's final measurement addendum;
+changed packaged docs predate this final measurement addendum. Installed/ZIP deltas therefore
+include their actual documentation snapshots and are not executable-only code growth.
+
+cargo replay builds once; each revision receives one direct warmup and five measured direct
+replay-bench runs. Baseline samples (ms): 29.9405, 26.4015, 27.9407, 29.2019, 27.8303.
+After samples (ms): 29.0536, 29.2975, 29.189, 29.2795, 30.2557.
+Both retain exactly 500 records and 220,992-221,477 estimated timeline bytes. This measures
+synthetic reducer/message admission, not role-update storms, native latency, RSS or Discord
+compatibility. The new fixture explicitly supplies permission metadata. The small increase
+is reported as overhead, not an improvement; run-to-run noise is visible in the samples.
+
+Native process memory, idle CPU, startup/frame timing, display scale and GPU adapter were
+not measured: owner Escape stops paused native automation. No physical UI/audio/account test
+was attempted. Permission metadata plus reserved bounded decision storage has a 2 MiB
+estimated budget; an update's temporary cloned candidate is additional peak allocation.
+No external runtime dependency or codec was added. UI tests now depend on existing test-support.
+
+Executable SHA256: text 991592D31AB2C330F55F97B81755ACF8DA761ACE31B7D3E32B5D4205ADA49109;
+voice BCFA2FB8440261A0DA12B2995C18CAA4A44AA48EFB01C5AABFFD62844801D9A5.

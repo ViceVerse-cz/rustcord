@@ -52,3 +52,10 @@ An authenticated empty room displays “Connected · waiting for others”; audi
 `cargo run --locked --features voice -- --demo --demo-voice` shows a separately labeled synthetic roster/call scene, including long names and mute/deafen states. It cannot connect, ring, or access devices. The ordinary `--demo` fixture remains the before/after comparison scenario.
 
 For live verification, the owner must explicitly enable `voice,developer-session` and control a private guild voice channel and the participating official clients. In addition to the DM gate above: join empty then add two official-client participants; verify actual intelligible audio in every direction and simultaneous speech; exercise encrypted joins/leaves and the last peer leaving/rejoining; check self mute/deafen, server mute/deafen, denied Connect/Speak, full room, deliberate switching, a server move/disconnect and voice region migration; verify devices/keys/tasks are released on Leave/logout/exit. Never record participants or publish private account/channel data. None of these live outcomes is established by the synthetic roster screenshot.
+
+Permission-aware continuation: known VIEW_CHANNEL and CONNECT are required for guild joining;
+SPEAK is required before initial or sustained microphone capture, and missing/denied USE_VAD
+requires enabled, focused, held push-to-talk. A listen-only join stays muted. Lost CONNECT
+ends the active call; merely regaining access never rejoins. The failed-call state remains
+visible after Gateway disconnect. These gates are covered by offline permission and
+device-free capture tests; owner-operated live permission changes/audio remain unverified.
