@@ -1876,3 +1876,42 @@ profile status visibly changes from the striped missing-glyph marker to a yellow
 moon. This validates native label rendering on this Mac, not every emoji sequence
 or live Discord behavior. Temporary preview copies used distinct bundle IDs to
 keep automation separate from the owner's running app.
+
+## September 11, 2026 - message-history scroll stability
+
+Baseline `fd20dc90c5bf25bce1cfc313944661f973f3c9e1`, branch `fix/scroll-jitter`,
+isolated Windows worktree. The original main checkout and its untracked
+`target-relocation-remainder/` were preserved. Rust 1.98.1; unchanged pinned egui,
+text-only default and optional voice features. Baseline release packages were built
+from a separate detached worktree before application edits.
+
+The timeline saved its anchor before egui consumed wheel input, then restored that
+outdated position after measuring new rows. Leading row measurements also shifted
+already visible messages, while estimated trailing heights could leave gaps.
+The fix saves the post-input anchor, measures leading rows in a clipped child whose
+bounds do not move the visible content, and fills the viewport using actual row heights.
+Row widget IDs remain stable across those two layouts. Existing 500-row/content-byte
+bounds and caches are unchanged; no additional rendering passes or dependencies.
+
+Synthetic egui input regression: 500 messages with compact and long wrapped rows,
+900x600 and 360x600 point viewports, explicit 60 Hz timestamps, 120 upward wheel
+frames, 240 downward frames and four idle frames. Maximum visible-message displacement
+error was 80/76 points on the baseline and 0/0 after the fix. These are CPU layout
+coordinates, not native GPU frame-time or live Discord evidence. Existing focused
+timeline checks cover zoom, deletion, spoilers, keyboard actions and jumping to present.
+
+Native Computer Use remains owner-paused from the earlier Escape interruption.
+Before/after native screenshots and native process CPU/RSS sampling are therefore
+unavailable; no desktop automation, live conversation or running owner build was touched.
+The delivery skill requires a draft PR while this evidence is unavailable. Release
+package measurements and their limits are recorded in `docs/performance.md`.
+
+Validation: `cargo test --locked -p ui timeline::tests -- --nocapture` passed;
+`cargo xtask check` passed all 360 tests (one existing opt-in voice test ignored),
+formatting, strict workspace Clippy, text-only check and policy. The tall-leading-row
+regression also verifies first-frame visibility and absence of phantom scroll extent.
+`cargo xtask package` and `cargo xtask package-voice` passed; each executable grew by
+1,024 bytes. Native capture/process metrics and live scrolling remain unverified.
+The shared target initially reused an xtask binary containing the baseline worktree
+path; rebuilding only the xtask cache corrected that before the successful checks
+and final packages. Baseline packages and the owner's running build were preserved.
