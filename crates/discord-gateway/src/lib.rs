@@ -408,17 +408,19 @@ async fn run_inner(
                                 }
                                 0 => match packet.t.as_deref().unwrap_or("") {
                                     "READY" => {
-                                        let mut ready: Ready = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?;
+                                        let mut ready: Ready = decode(packet.d.get().as_bytes()).map_err(|_| Failure::ProtocolAt("Gateway login: unsupported READY payload"))?;
                                         owner_id=Some(ready.user.id);
                                         if ready.user.bot { return Err(Failure::InvalidCredential); }
                                         if ready.session_id.len() > 2048 { return Err(Failure::Capacity); }
-                                        state.url = Some(validated_url(&ready.resume_gateway_url)?);
+                                        state.url = Some(validated_url(&ready.resume_gateway_url).map_err(|f|f.protocol_at("Gateway login: resume address rejected"))?);
                                         state.session = Some(Zeroizing::new(std::mem::take(&mut ready.session_id)));
                                         let (guilds, channels) = ready.navigation();
+                                        let (read_entries,read_version,partial)=ready.read_state.take().map_or((None,None,false),|snapshot|(Some(snapshot.entries.into_iter().filter(|e|e.kind==0).map(|e|(e.id,e.last_message_id)).collect()),snapshot.version,snapshot.partial));
                                         if guilds.len() + channels.len() > MAX_NAV { return Err(Failure::Capacity); }
                                         calls.allowed=channels.iter().filter(|c|c.guild.is_none() && c.kind==1 && c.recipients.len()==1).map(|c|c.id).collect();
                                         if was_ready { emit(Event::Resync)?; }
                                         emit(Event::Ready { user: ready.user.into_model(), guilds, channels })?; was_ready = true;
+                                        emit(Event::ReadState(client_core::read_state::Event::Snapshot{entries:read_entries,version:read_version,partial}))?;
                                         ready_at = Some(Instant::now());
                                     }
                                     "RESUMED" => { emit(Event::Resumed)?; ready_at = Some(Instant::now()); },
@@ -435,7 +437,19 @@ async fn run_inner(
                                     "CHANNEL_RECIPIENT_ADD" => {let d:RecipientAdded=decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;emit(Event::RecipientAdded {channel:d.channel_id,user:d.user.into_model()})?;}
                                     "CHANNEL_RECIPIENT_REMOVE" => {let d:RecipientRemoved=decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;emit(Event::RecipientRemoved {channel:d.channel_id,user:d.user.id})?;}
                                     "MESSAGE_CREATE" => emit(Event::Message(decode::<MessageDto>(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?.into_model()))?,
+                                    "MESSAGE_ACK" => {
+                                        let ack=decode::<read_state::Ack>(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
+                                        emit(Event::ReadState(client_core::read_state::Event::Ack{channel:ack.channel_id,message:ack.message_id,manual:ack.manual,version:ack.version}))?;
+                                    }
+                                    "PASSIVE_UPDATE_V2" => {
+                                        let update=decode::<read_state::PassiveUpdate>(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
+                                        emit(Event::ReadState(client_core::read_state::Event::Latest(update.updated_channels.into_iter().map(|c|(c.id,c.last_message_id)).collect())))?;
+                                    }
                                     "MESSAGE_UPDATE" => emit(Event::Patch(decode::<PatchDto>(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?.into_model()))?,
+                                    "MESSAGE_REACTION_ADD" | "MESSAGE_REACTION_REMOVE" | "MESSAGE_REACTION_REMOVE_ALL" | "MESSAGE_REACTION_REMOVE_EMOJI" => {
+                                        let target=decode::<ReactionTarget>(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
+                                        emit(Event::Reactions(client_core::reactions::Event::Changed{channel:target.channel_id,message:target.message_id}))?;
+                                    }
                                     "MESSAGE_DELETE" => { let d: Deleted = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?; emit(Event::Delete { channel:d.channel_id, id:d.id })?; }
                                     "MESSAGE_DELETE_BULK" => { let d: BulkDeleted = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?; if d.ids.len() > 100 { return Err(Failure::Capacity); } emit(Event::DeleteBulk { channel:d.channel_id, ids: d.ids })?; }
                                     "AUTH_SESSION_CHANGE" => return Err(Failure::Expired),
@@ -533,15 +547,23 @@ mod tests {
                 let mut socket=accept_async(stream).await.unwrap();
                 send(&mut socket,json!({"op":10,"d":{"heartbeat_interval":1000}})).await;
                 assert_eq!(packet(&mut socket).await["op"],2);
-                send(&mut socket,ready(1,"synthetic-session")).await;
+                let mut initial=ready(1,"synthetic-session");
+                initial["d"]["read_state"]=json!([]);
+                send(&mut socket,initial).await;
                 for (sequence,name,data) in [
                     (2,"CHANNEL_CREATE",json!({"id":"3","guild_id":"2","type":4,"name":"Synthetic category","position":0})),
                     (3,"CHANNEL_CREATE",json!({"id":"4","guild_id":"2","type":0,"name":"Synthetic channel","parent_id":"3","position":1})),
                     (4,"CHANNEL_UPDATE",json!({"id":"4","parent_id":null,"position":0})),
                     (5,"CHANNEL_UPDATE",json!({"id":"4","permission_overwrites":[]})),
                     (6,"CHANNEL_DELETE",json!({"id":"3","guild_id":"2","type":4})),
+                    (7,"MESSAGE_REACTION_ADD",json!({"channel_id":"4","message_id":"9","user_id":"1","emoji":{"id":null,"name":"x"}})),
+                    (8,"MESSAGE_REACTION_REMOVE",json!({"channel_id":"4","message_id":"9","user_id":"1","emoji":{"id":null,"name":"x"}})),
+                    (9,"MESSAGE_REACTION_REMOVE_ALL",json!({"channel_id":"4","message_id":"9"})),
+                    (10,"MESSAGE_REACTION_REMOVE_EMOJI",json!({"channel_id":"4","message_id":"9","emoji":{"id":null,"name":"x"}})),
+                    (11,"MESSAGE_ACK",json!({"channel_id":"4","message_id":"8","version":2})),
+                    (12,"PASSIVE_UPDATE_V2",json!({"updated_channels":[{"id":"4","last_message_id":"9"}]})),
                 ] {send(&mut socket,json!({"op":0,"t":name,"s":sequence,"d":data})).await;}
-                acknowledge(&mut socket,6).await;
+                acknowledge(&mut socket,12).await;
                 // Force a heartbeat reply to race the following terminal close.
                 send(&mut socket,json!({"op":1,"d":null})).await;
                 socket.send(Frame::Close(Some(CloseFrame {code:CloseCode::from(4004),reason:"synthetic expiration".into()}))).await.unwrap();
@@ -551,11 +573,21 @@ mod tests {
             };
             let state=std::sync::Mutex::new(client_core::State::default());
             let permission_changes=std::sync::atomic::AtomicUsize::new(0);
+            let reaction_changes=std::sync::atomic::AtomicUsize::new(0);
             let client=run_inner(
                 Arc::new(SessionSecret::from_owner_input("synthetic-owner-session".into()).unwrap()),
                 "wss://gateway.discord.gg/".into(),watch::channel(None).1,mpsc::channel(1).1,
                 |event| {
+                    if let Event::ReadState(client_core::read_state::Event::Snapshot {entries,version,partial})=&event {
+                        assert!(entries.as_ref().is_some_and(Vec::is_empty));
+                        assert_eq!(*version,None);
+                        assert!(!partial);
+                    }
                     if matches!(event,Event::PermissionsChanged) {permission_changes.fetch_add(1,std::sync::atomic::Ordering::Relaxed);}
+                    if let Event::Reactions(client_core::reactions::Event::Changed{channel,message})=&event {
+                        assert_eq!((*channel,*message),(Id(4),Id(9)));
+                        reaction_changes.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
+                    }
                     let mut state=state.lock().unwrap();
                     let generation=state.generation;
                     state.apply(client_core::Envelope {generation,event});
@@ -575,7 +607,10 @@ mod tests {
             assert_eq!(state.channels[0].parent_id,None);
             assert_eq!(state.channels[0].position,0);
             assert_eq!(state.channels[0].name,"Synthetic channel");
+            assert_eq!(state.read_marker(Id(4)),Some(Some(Id(8))));
+            assert_eq!(state.unread(Id(4)),Some(true));
             assert_eq!(permission_changes.load(std::sync::atomic::Ordering::Relaxed),1);
+            assert_eq!(reaction_changes.load(std::sync::atomic::Ordering::Relaxed),4);
         }).await.unwrap();
     }
 
@@ -648,6 +683,9 @@ mod tests {
                         Event::Resumed => "resumed",
                         Event::Resync => "resync",
                         Event::Disconnected => "disconnected",
+                        Event::ReadState(client_core::read_state::Event::Snapshot { .. }) => {
+                            return Ok(());
+                        }
                         _ => return Err(Failure::Protocol),
                     };
                     let mut events = events.lock().unwrap();

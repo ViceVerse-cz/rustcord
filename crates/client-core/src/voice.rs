@@ -367,6 +367,7 @@ mod tests {
                 discriminator: 0,
             }),
             channels: vec![Channel {
+                last_message: None,
                 id: Id(2),
                 name: "DM".into(),
                 guild: None,

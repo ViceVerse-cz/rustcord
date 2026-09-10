@@ -22,6 +22,7 @@ use tokio::{
 };
 
 pub struct DiscordApi {
+    ack_token: Mutex<zeroize::Zeroizing<Option<String>>>,
     client: Client,
     secret: Arc<SessionSecret>,
     cooldown: Mutex<Instant>,
@@ -41,6 +42,7 @@ impl DiscordApi {
             .build()
             .map_err(|_| Failure::Network)?;
         Ok(Self {
+            ack_token: Mutex::new(zeroize::Zeroizing::new(None)),
             client,
             secret,
             cooldown: Mutex::new(Instant::now()),
@@ -184,14 +186,22 @@ impl DiscordApi {
         Ok(bytes)
     }
     pub async fn gateway_url(&self) -> Result<String, Failure> {
-        let bytes = self.request(Method::GET, "/gateway", None).await?;
+        let bytes = self
+            .request(Method::GET, "/gateway", None)
+            .await
+            .map_err(|f| f.protocol_at("Gateway discovery: HTTP response rejected"))?;
         decode::<GatewayLocation>(&bytes)
             .map(|g| g.url)
-            .map_err(|_| Failure::Protocol)
+            .map_err(|_| Failure::ProtocolAt("Gateway discovery: response format unsupported"))
     }
     pub async fn current_user(&self) -> Result<User, Failure> {
-        let bytes = self.request(Method::GET, "/users/@me", None).await?;
-        let user = decode::<UserDto>(&bytes).map_err(|_| Failure::Protocol)?;
+        let bytes = self
+            .request(Method::GET, "/users/@me", None)
+            .await
+            .map_err(|f| f.protocol_at("Account verification: HTTP response rejected"))?;
+        let user = decode::<UserDto>(&bytes).map_err(|_| {
+            Failure::ProtocolAt("Account verification: user response format unsupported")
+        })?;
         if user.bot {
             self.stop();
             return Err(Failure::InvalidCredential);
@@ -221,6 +231,91 @@ impl DiscordApi {
     }
     pub async fn execute(&self, command: Command) -> Event {
         match command {
+            Command::Search {
+                channel,
+                guild,
+                query,
+                before,
+                request,
+            } => {
+                let result = self.search(channel, guild, &query, before).await;
+                Event::Search {
+                    channel,
+                    request,
+                    result,
+                }
+            }
+            Command::CancelSearch => Event::Failure(Failure::Protocol),
+            Command::MarkRead {
+                channel,
+                message,
+                request,
+            } => {
+                let result = self.mark_read(channel, message).await;
+                Event::ReadState(client_core::read_state::Event::Result {
+                    channel,
+                    message,
+                    request,
+                    result,
+                })
+            }
+            Command::Reactions(command) => {
+                use client_core::reactions::{Command as R, Event as E};
+                Event::Reactions(match command {
+                    R::Read {
+                        channel,
+                        message,
+                        request,
+                    } => {
+                        let result = self
+                            .request(
+                                Method::GET,
+                                &format!("/channels/{channel}/messages/{message}"),
+                                None,
+                            )
+                            .await
+                            .and_then(|bytes| {
+                                let dto =
+                                    decode::<MessageDto>(&bytes).map_err(|_| Failure::Protocol)?;
+                                if dto.id != message || dto.channel_id != channel {
+                                    return Err(Failure::Protocol);
+                                }
+                                Ok(dto.into_model().reactions.unwrap_or_default())
+                            });
+                        E::Read {
+                            channel,
+                            message,
+                            request,
+                            result,
+                        }
+                    }
+                    R::Set {
+                        channel,
+                        message,
+                        emoji,
+                        add,
+                        request,
+                    } => {
+                        let result = match reaction_path(channel, message, &emoji) {
+                            Some(path) => self
+                                .request(
+                                    if add { Method::PUT } else { Method::DELETE },
+                                    &path,
+                                    None,
+                                )
+                                .await
+                                .map(|_| ()),
+                            None => Err(Failure::Protocol),
+                        };
+                        E::Written {
+                            channel,
+                            message,
+                            request,
+                            result,
+                        }
+                    }
+                })
+            }
             Command::Profile {
                 user,
                 guild,
@@ -356,10 +451,105 @@ impl DiscordApi {
         }
     }
 }
+impl DiscordApi {
+    async fn mark_read(&self, channel: model::Id, message: model::Id) -> Result<(), Failure> {
+        #[derive(serde::Deserialize)]
+        struct Reply {
+            #[serde(default)]
+            token: Option<String>,
+        }
+        // Legacy acknowledgement tokens are session-only, redacted by ownership, and never cached.
+        let mut token = self.ack_token.lock().await;
+        let body = serde_json::json!({"token":token.as_deref(),"manual":false});
+        let bytes = zeroize::Zeroizing::new(
+            self.request_limited(
+                Method::POST,
+                &format!("/channels/{channel}/messages/{message}/ack"),
+                Some(body),
+                4096,
+            )
+            .await?,
+        );
+        let next = zeroize::Zeroizing::new(if bytes.is_empty() {
+            None
+        } else {
+            decode::<Reply>(&bytes)
+                .map_err(|_| Failure::Ambiguous)?
+                .token
+        });
+        if next
+            .as_ref()
+            .is_some_and(|t| t.len() > 2048 || t.chars().any(char::is_control))
+        {
+            return Err(Failure::Ambiguous);
+        }
+        *token = next;
+        Ok(())
+    }
+}
+impl DiscordApi {
+    async fn search(
+        &self,
+        channel: model::Id,
+        guild: Option<model::Id>,
+        query: &str,
+        before: Option<model::Id>,
+    ) -> Result<client_core::search::Outcome, Failure> {
+        if !model::valid_search_query(query) {
+            return Err(Failure::Protocol);
+        }
+        // Encode every query byte; content cannot add filters or change the fixed route.
+        let encoded: String = query.bytes().map(|b| format!("%{b:02X}")).collect();
+        let mut path = match guild {
+            Some(guild) => format!("/guilds/{guild}/messages/search?channel_id={channel}&"),
+            None => format!("/channels/{channel}/messages/search?"),
+        };
+        path.push_str(&format!(
+            "content={encoded}&limit=25&sort_by=timestamp&sort_order=desc"
+        ));
+        if let Some(before) = before {
+            path.push_str(&format!("&max_id={before}"));
+        }
+        let bytes = self
+            .request_limited(Method::GET, &path, None, search::MAX_WIRE)
+            .await?;
+        let reply = decode::<search::Reply>(&bytes).map_err(|_| Failure::Protocol)?;
+        if reply
+            .code
+            .is_some_and(|code| (110000..119999).contains(&code))
+        {
+            let mut next = self.cooldown.lock().await;
+            *next = (*next).max(Instant::now() + safe_delay(reply.retry_after)?);
+            return Ok(client_core::search::Outcome::Indexing);
+        }
+        reply
+            .into_page(channel, before)
+            .map(client_core::search::Outcome::Page)
+            .map_err(|_| Failure::Protocol)
+    }
+}
 impl AuthProvider for DiscordApi {
     async fn authenticate(&mut self) -> Result<User, Failure> {
         self.current_user().await
     }
+}
+fn reaction_path(
+    channel: model::Id,
+    message: model::Id,
+    emoji: &model::ReactionEmoji,
+) -> Option<String> {
+    if !emoji.valid() {
+        return None;
+    }
+    let name = emoji.name.as_ref()?;
+    let value = emoji
+        .id
+        .map_or_else(|| name.clone(), |id| format!("{name}:{id}"));
+    // Encode the complete emoji as one path component, including custom-name separators.
+    let encoded: String = value.bytes().map(|byte| format!("%{byte:02X}")).collect();
+    Some(format!(
+        "/channels/{channel}/messages/{message}/reactions/{encoded}/@me"
+    ))
 }
 fn safe_delay(seconds: Option<f64>) -> Result<Duration, Failure> {
     let seconds = seconds.unwrap_or(1.0);
@@ -376,6 +566,190 @@ mod tests {
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
     };
+    #[tokio::test]
+    async fn search_routes_are_encoded_scoped_and_indexing_never_auto_retries() {
+        use client_core::search::Outcome;
+        use model::Id;
+        tokio::time::timeout(Duration::from_secs(10),async {
+            let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let mut api=DiscordApi::new(Arc::new(SessionSecret::from_owner_input("SYNTHETIC_SEARCH_TOKEN".into()).unwrap())).unwrap();
+            api.base=format!("http://{}",listener.local_addr().unwrap());
+            let server=tokio::spawn(async move {
+                for (route,status,body) in [
+                    ("/guilds/2/messages/search?channel_id=1&content=%78%26%23%3F%2E%2E&limit=25&sort_by=timestamp&sort_order=desc","200 OK",r#"{"messages":[[{"id":"9","channel_id":"1","author":{"id":"3","username":"Synthetic"},"content":"match"}]],"total_results":1}"#),
+                    ("/channels/1/messages/search?content=%78&limit=25&sort_by=timestamp&sort_order=desc&max_id=9","200 OK",r#"{"messages":[],"total_results":0}"#),
+                    ("/channels/1/messages/search?content=%78&limit=25&sort_by=timestamp&sort_order=desc","403 Forbidden",r#"{"code":50001}"#),
+                    ("/channels/1/messages/search?content=%78&limit=25&sort_by=timestamp&sort_order=desc","202 Accepted",r#"{"code":110000,"retry_after":1}"#),
+                ] {
+                    let (mut socket,_)=listener.accept().await.unwrap();let mut request=Vec::new();
+                    loop {let mut buffer=[0;1024];let n=socket.read(&mut buffer).await.unwrap();assert!(n>0);request.extend_from_slice(&buffer[..n]);assert!(request.len()<4096);if request.windows(4).any(|w|w==b"\r\n\r\n") {break;}}
+                    let text=std::str::from_utf8(&request).unwrap();
+                    assert!(text.starts_with(&format!("GET {route} HTTP/1.1\r\n")));
+                    assert!(text.contains("SYNTHETIC_SEARCH_TOKEN"));
+                    socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
+                }
+            });
+            let Event::Search {channel:Id(1),request:8,result:Ok(Outcome::Page(page))}=api.execute(Command::Search {channel:Id(1),guild:Some(Id(2)),query:"x&#?..".into(),before:None,request:8}).await else {panic!()};
+            assert_eq!(page.hits[0].id,Id(9));
+            assert!(matches!(api.search(Id(1),None,"x",Some(Id(9))).await,Ok(Outcome::Page(p)) if p.hits.is_empty()));
+            assert!(matches!(api.search(Id(1),None,"x",None).await,Err(Failure::Forbidden)));
+            assert!(matches!(api.search(Id(1),None,"x",None).await,Ok(Outcome::Indexing)));
+            assert!(*api.cooldown.lock().await>Instant::now());
+            server.await.unwrap();
+        }).await.unwrap();
+    }
+    #[tokio::test]
+    async fn read_ack_is_explicit_scoped_and_chains_only_session_tokens() {
+        use model::Id;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let mut api=DiscordApi::new(Arc::new(SessionSecret::from_owner_input("SYNTHETIC_READ_TOKEN".into()).unwrap())).unwrap();
+            api.base=format!("http://{}",listener.local_addr().unwrap());
+            let server=tokio::spawn(async move {
+                for (expected,body) in [(None,r#"{"token":"synthetic-ack"}"#),(Some("synthetic-ack"),r#"{"token":null}"#),(None,"invalid")] {
+                    let (mut socket,_)=listener.accept().await.unwrap();
+                    let mut request=Vec::new();
+                    let payload=loop {
+                        let mut bytes=[0;1024];
+                        let n=socket.read(&mut bytes).await.unwrap();assert!(n>0);
+                        request.extend_from_slice(&bytes[..n]);assert!(request.len()<4096);
+                        if let Some(end)=request.windows(4).position(|w|w==b"\r\n\r\n") {
+                            let header=std::str::from_utf8(&request[..end]).unwrap();
+                            assert!(header.starts_with("POST /channels/1/messages/2/ack HTTP/1.1\r\n"));
+                            let length:usize=header.lines().find_map(|line|line.to_ascii_lowercase().strip_prefix("content-length: ").map(str::to_owned)).unwrap().parse().unwrap();
+                            if request.len()>=end+4+length {break serde_json::from_slice::<serde_json::Value>(&request[end+4..end+4+length]).unwrap();}
+                        }
+                    };
+                    assert_eq!(payload,serde_json::json!({"manual":false,"token":expected}));
+                    socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
+                }
+            });
+            for (request,expected) in [(1,Ok(())),(2,Ok(())),(3,Err(Failure::Ambiguous))] {
+                let Event::ReadState(client_core::read_state::Event::Result {channel,message,request:actual,result})=api.execute(Command::MarkRead {channel:Id(1),message:Id(2),request}).await else {panic!()};
+                assert_eq!((channel,message,actual),(Id(1),Id(2),request));assert_eq!(result,expected);
+            }
+            server.await.unwrap();
+        }).await.unwrap();
+    }
+    #[tokio::test]
+    async fn reaction_routes_encode_one_component_and_read_back_scoped_counts() {
+        use client_core::reactions::{Command as R, Event as E};
+        use model::{Id, ReactionEmoji};
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut api = DiscordApi::new(Arc::new(
+            SessionSecret::from_owner_input("SYNTHETIC_REACTION_TOKEN".into()).unwrap(),
+        ))
+        .unwrap();
+        api.base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            for (expected, body) in [
+                (
+                    "PUT /channels/1/messages/2/reactions/%F0%9F%91%8D/@me",
+                    None,
+                ),
+                (
+                    "DELETE /channels/1/messages/2/reactions/%61%2F%62%3A%33/@me",
+                    None,
+                ),
+                (
+                    "GET /channels/1/messages/2",
+                    Some(
+                        r#"{"id":"2","channel_id":"1","author":{"id":"4","username":"Synthetic"},"reactions":[{"emoji":{"id":null,"name":"x"},"count":2,"me":true}]}"#,
+                    ),
+                ),
+                (
+                    "GET /channels/1/messages/2",
+                    Some(
+                        r#"{"id":"9","channel_id":"1","author":{"id":"4","username":"Synthetic"}}"#,
+                    ),
+                ),
+            ] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = vec![];
+                loop {
+                    let mut bytes = [0; 1024];
+                    let n = socket.read(&mut bytes).await.unwrap();
+                    assert!(n > 0);
+                    request.extend_from_slice(&bytes[..n]);
+                    assert!(request.len() < 4096);
+                    if request.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let request = std::str::from_utf8(&request).unwrap();
+                assert!(
+                    request.starts_with(&format!("{expected} HTTP/1.1\r\n")),
+                    "{request}"
+                );
+                assert!(request.contains("SYNTHETIC_REACTION_TOKEN"));
+                let response = match body {
+                    Some(body) => format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    ),
+                    None => "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n".into(),
+                };
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        for (emoji, add) in [
+            (
+                ReactionEmoji {
+                    id: None,
+                    name: Some("👍".into()),
+                },
+                true,
+            ),
+            (
+                ReactionEmoji {
+                    id: Some(Id(3)),
+                    name: Some("a/b".into()),
+                },
+                false,
+            ),
+        ] {
+            assert!(matches!(
+                api.execute(Command::Reactions(R::Set {
+                    channel: Id(1),
+                    message: Id(2),
+                    emoji,
+                    add,
+                    request: 1
+                }))
+                .await,
+                Event::Reactions(E::Written { result: Ok(()), .. })
+            ));
+        }
+        let read = || {
+            Command::Reactions(R::Read {
+                channel: Id(1),
+                message: Id(2),
+                request: 2,
+            })
+        };
+        assert!(
+            matches!(api.execute(read()).await,Event::Reactions(E::Read{result:Ok(r),..}) if r.len()==1 && r[0].count==2 && r[0].me)
+        );
+        assert!(matches!(
+            api.execute(read()).await,
+            Event::Reactions(E::Read {
+                result: Err(Failure::Protocol),
+                ..
+            })
+        ));
+        server.await.unwrap();
+        assert!(
+            reaction_path(
+                Id(1),
+                Id(2),
+                &ReactionEmoji {
+                    id: None,
+                    name: None
+                }
+            )
+            .is_none()
+        );
+    }
     #[tokio::test]
     async fn profiles_are_scoped_capped_and_do_not_block_message_writes() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -546,7 +920,16 @@ mod tests {
     #[tokio::test]
     async fn local_http_checks_redirect_expiry_rate_limits_and_response_cap() {
         for (status, body, expected) in [
-            ("302 Found", "", Failure::Protocol),
+            (
+                "302 Found",
+                "",
+                Failure::ProtocolAt("Account verification: HTTP response rejected"),
+            ),
+            (
+                "200 OK",
+                "{\"synthetic_private_field\":\"must-not-appear-in-error\"}",
+                Failure::ProtocolAt("Account verification: user response format unsupported"),
+            ),
             ("401 Unauthorized", "{}", Failure::Expired),
             (
                 "429 Too Many Requests",
@@ -578,12 +961,7 @@ mod tests {
             ))
             .unwrap();
             api.base = format!("http://{address}");
-            assert_eq!(
-                api.request(Method::GET, "/users/@me", None)
-                    .await
-                    .unwrap_err(),
-                expected
-            );
+            assert_eq!(api.current_user().await.map(|_| ()).unwrap_err(), expected);
             if expected.ends_session() {
                 assert!(api.stopped());
             }

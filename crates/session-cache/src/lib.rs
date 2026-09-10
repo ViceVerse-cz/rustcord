@@ -64,6 +64,10 @@ impl Timeline {
             || !model::valid_mentions(&message.mentions)
             || !model::valid_embeds(&message.embeds)
             || !model::valid_attachments(&message.attachments)
+            || message
+                .reactions
+                .as_ref()
+                .is_some_and(|r| !model::valid_reactions(r))
         {
             return Err("Message exceeds safe capacity");
         }
@@ -87,6 +91,7 @@ impl Timeline {
                 + u64::from(
                     previous.content != message.content
                         || previous.mentions != message.mentions
+                        || previous.reactions != message.reactions
                         || previous.edited != message.edited
                         || previous.embeds != message.embeds
                         || previous.attachments != message.attachments
@@ -136,6 +141,7 @@ impl Timeline {
             return Ok(());
         }
         if matches!(&patch.content, Patch::Value(s) if s.len() > 64 * 1024)
+            || matches!(&patch.reactions, Patch::Value(r) if !model::valid_reactions(r))
             || matches!(&patch.mentions, Patch::Value(users) if !model::valid_mentions(users))
             || matches!(&patch.embeds, Patch::Value(embeds) if !model::valid_embeds(embeds))
             || matches!(&patch.attachments, Patch::Value(attachments) if !model::valid_attachments(attachments))
@@ -163,6 +169,9 @@ impl Timeline {
                 .unwrap_or_else(|| patch.clone());
             if !matches!(patch.content, Patch::Absent) {
                 merged.content = patch.content;
+            }
+            if !matches!(patch.reactions, Patch::Absent) {
+                merged.reactions = patch.reactions;
             }
             if !matches!(patch.mentions, Patch::Absent) {
                 merged.mentions = patch.mentions;
@@ -202,6 +211,37 @@ impl Timeline {
     pub fn clear(&mut self) {
         *self = Self::default();
     }
+    pub fn set_reactions(
+        &mut self,
+        id: Id,
+        reactions: Option<Vec<model::Reaction>>,
+    ) -> Result<(), &'static str> {
+        if reactions
+            .as_ref()
+            .is_some_and(|r| !model::valid_reactions(r))
+        {
+            return Err("Reaction data exceeds safe capacity");
+        }
+        let Some(message) = self.messages.get_mut(&id) else {
+            return Ok(());
+        };
+        let old = message.bytes();
+        let new = reactions.as_ref().map_or(0, |r| {
+            model::reaction_bytes(r)
+                + r.capacity().saturating_sub(r.len()) * size_of::<model::Reaction>()
+        });
+        let previous = message.reactions.as_ref().map_or(0, |r| {
+            model::reaction_bytes(r)
+                + r.capacity().saturating_sub(r.len()) * size_of::<model::Reaction>()
+        });
+        if self.bytes - previous + new > MAX_BYTES {
+            return Err("Reaction data exceeds timeline capacity");
+        }
+        message.reactions = reactions;
+        message.revision += 1;
+        self.bytes = self.bytes - old + message.bytes();
+        Ok(())
+    }
 }
 fn patch_bytes(patch: &MessagePatch) -> usize {
     let content = match &patch.content {
@@ -209,6 +249,10 @@ fn patch_bytes(patch: &MessagePatch) -> usize {
         _ => 0,
     };
     content
+        + match &patch.reactions {
+            Patch::Value(r) => model::reaction_bytes(r),
+            _ => 0,
+        }
         + match &patch.mentions {
             Patch::Value(users) => model::mention_bytes(users),
             _ => 0,
@@ -230,6 +274,11 @@ fn apply_patch(message: &mut Message, patch: &MessagePatch) {
         Patch::Value(users) => message.mentions.clone_from(users),
         Patch::Null => message.mentions.clear(),
         Patch::Absent => {}
+    }
+    match &patch.reactions {
+        Patch::Absent => {}
+        Patch::Null => message.reactions = Some(vec![]),
+        Patch::Value(r) => message.reactions = Some(r.clone()),
     }
     match &patch.content {
         Patch::Value(s) => message.content.clone_from(s),
@@ -276,6 +325,7 @@ mod tests {
         timeline.insert(original.clone(), false, false).unwrap();
         let before = timeline.bytes;
         let patch = MessagePatch {
+            reactions: model::Patch::Absent,
             id: Id(1),
             channel: original.channel,
             content: Patch::Absent,
@@ -296,6 +346,7 @@ mod tests {
     }
     fn message(id: u64) -> Message {
         Message {
+            reactions: Some(vec![]),
             id: Id(id),
             channel: Id(1),
             author: model::User {
@@ -336,6 +387,7 @@ mod tests {
             spoiler: false,
         };
         let update = |attachments| MessagePatch {
+            reactions: model::Patch::Absent,
             id: Id(1),
             channel: Id(1),
             content: Patch::Absent,
@@ -409,6 +461,7 @@ mod tests {
             ..Default::default()
         };
         let update = |embeds| MessagePatch {
+            reactions: model::Patch::Absent,
             id: Id(1),
             channel: Id(1),
             content: Patch::Absent,
@@ -480,6 +533,7 @@ mod tests {
         t.begin_page();
         t.delete(Id(1)).unwrap();
         t.patch(MessagePatch {
+            reactions: model::Patch::Absent,
             id: Id(2),
             channel: Id(1),
             content: Patch::Value("after".into()),
@@ -493,6 +547,7 @@ mod tests {
         t.finish_page(vec![message(1), message(2)], false).unwrap();
         assert!(t.get(Id(1)).is_none());
         t.patch(MessagePatch {
+            reactions: model::Patch::Absent,
             id: Id(1),
             channel: Id(1),
             content: Patch::Value("late edit".into()),
@@ -545,6 +600,7 @@ mod tests {
         for (at, content) in [(20, "new edit"), (10, "old edit")] {
             timeline
                 .patch(MessagePatch {
+                    reactions: model::Patch::Absent,
                     id: Id(1),
                     channel: Id(1),
                     content: Patch::Value(content.into()),

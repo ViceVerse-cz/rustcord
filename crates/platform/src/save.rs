@@ -30,9 +30,12 @@ fn safe_filename(filename: &str) -> String {
     if name.is_empty() {
         "attachment.png".into()
     } else if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || (stem.len() == 4
-            && (stem.starts_with("COM") || stem.starts_with("LPT"))
-            && stem.as_bytes()[3].is_ascii_digit())
+        || stem
+            .strip_prefix("COM")
+            .or_else(|| stem.strip_prefix("LPT"))
+            .is_some_and(|suffix| {
+                matches!(suffix.as_bytes(), [b'0'..=b'9']) || matches!(suffix, "¹" | "²" | "³")
+            })
     {
         format!("_{name}")
     } else {
@@ -57,5 +60,14 @@ mod tests {
             assert!(!matches!(safe.as_str(), "." | ".." | "CON.png" | "NUL"));
         }
         assert_eq!(super::safe_filename("photo.png"), "photo.png");
+        for prefix in ["COM", "LPT", "com", "lpt"] {
+            for digit in ["1", "9", "¹", "²", "³"] {
+                let name = format!("{prefix}{digit}.png");
+                assert_eq!(super::safe_filename(&name), format!("_{name}"));
+            }
+        }
+        for name in ["COM10.png", "LPT12.png", "COM¹photo.png", "COM⁴.png"] {
+            assert_eq!(super::safe_filename(name), name);
+        }
     }
 }

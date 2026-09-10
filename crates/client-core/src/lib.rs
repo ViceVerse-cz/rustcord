@@ -1,6 +1,9 @@
 //! Single UI-thread state owner. Adapters deliver generation-tagged typed events.
 pub mod auth;
 pub mod profile;
+pub mod reactions;
+pub mod read_state;
+pub mod search;
 pub mod voice;
 use model::*;
 use session_cache::Timeline;
@@ -14,6 +17,20 @@ pub const EVENT_SLOTS: usize = 8; // <= 32 MiB wire-derived data, not including 
 pub const COMMAND_SLOTS: usize = 16; // each admitted command <= 16 KiB
 
 pub enum Command {
+    Search {
+        channel: Id,
+        guild: Option<Id>,
+        query: String,
+        before: Option<Id>,
+        request: u64,
+    },
+    CancelSearch,
+    MarkRead {
+        channel: Id,
+        message: Id,
+        request: u64,
+    },
+    Reactions(reactions::Command),
     Profile {
         user: Id,
         guild: Option<Id>,
@@ -49,6 +66,13 @@ pub enum Command {
     },
 }
 pub enum Event {
+    Search {
+        channel: Id,
+        request: u64,
+        result: Result<search::Outcome, auth::Failure>,
+    },
+    ReadState(read_state::Event),
+    Reactions(reactions::Event),
     Profile {
         user: Id,
         guild: Option<Id>,
@@ -117,6 +141,11 @@ pub struct Pending {
     pub confirmed: Option<Id>,
 }
 pub struct State {
+    pub search: Option<search::SearchView>,
+    pub search_request: u64,
+    pub search_target: Option<Id>,
+    pub read_state: read_state::ReadState,
+    pub reactions: reactions::Reactions,
     pub profile: Option<profile::ProfileView>,
     pub profile_request: u64,
     pub voice: voice::State,
@@ -146,6 +175,11 @@ pub struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
+            search: None,
+            search_request: 0,
+            search_target: None,
+            read_state: read_state::ReadState::default(),
+            reactions: reactions::Reactions::default(),
             profile: None,
             profile_request: 0,
             voice: voice::State::default(),
@@ -208,6 +242,9 @@ impl State {
         }
         self.members = None;
         self.selected = Some(channel);
+        self.clear_search();
+        self.search_target = None;
+        self.reactions.reset();
         self.timeline.clear();
         self.older_exhausted = false;
         self.reply = None;
@@ -274,6 +311,13 @@ impl State {
         }
     }
     pub fn history(&mut self, before: Option<Id>) -> Command {
+        if self.search.as_ref().is_some_and(|s| s.loading) {
+            self.clear_search();
+        }
+        if before.is_none() {
+            self.search_target = None;
+        }
+        self.reactions.cancel_read();
         self.request += 1;
         self.history_before = before;
         self.history_pending = true;
@@ -337,6 +381,59 @@ impl State {
         })
     }
     pub fn command_rejected(&mut self, command: Command) {
+        if let Command::Search {
+            channel, request, ..
+        } = command
+        {
+            self.apply_search(channel, request, Err(auth::Failure::Capacity));
+            return;
+        }
+        if matches!(command, Command::CancelSearch) {
+            return;
+        }
+        if let Command::MarkRead {
+            channel,
+            message,
+            request,
+        } = command
+        {
+            let _ = self.apply_read_state(read_state::Event::Result {
+                channel,
+                message,
+                request,
+                result: Err(auth::Failure::RateLimited),
+            });
+            self.read_state.status = Some("Work queue full; read marker was not sent");
+            return;
+        }
+        if let Command::Reactions(command) = command {
+            let event = match command {
+                reactions::Command::Read {
+                    channel,
+                    message,
+                    request,
+                } => reactions::Event::Read {
+                    channel,
+                    message,
+                    request,
+                    result: Err(auth::Failure::RateLimited),
+                },
+                reactions::Command::Set {
+                    channel,
+                    message,
+                    request,
+                    ..
+                } => reactions::Event::Written {
+                    channel,
+                    message,
+                    request,
+                    result: Err(auth::Failure::RateLimited),
+                },
+            };
+            let _ = self.apply_reactions(event);
+            self.status = "Work queue full; reaction action was not sent";
+            return;
+        }
         if let Command::Profile {
             user,
             guild,
@@ -386,7 +483,34 @@ impl State {
             return;
         }
         self.revision += 1;
+        if matches!(
+            &envelope.event,
+            Event::Disconnected | Event::Resync | Event::PermissionsChanged | Event::Ready { .. }
+        ) || matches!(&envelope.event,Event::Unavailable(id) if Some(*id)==self.selected)
+            || matches!(&envelope.event,Event::HistoryFailed{channel,failure:auth::Failure::Forbidden,..} if Some(*channel)==self.selected)
+            || matches!(&envelope.event,Event::RecipientRemoved{channel,user} if Some(*channel)==self.selected && self.user.as_ref().is_some_and(|u|u.id==*user))
+        {
+            self.clear_search();
+            self.search_target = None;
+        }
+        // Search is a snapshot. A mutation can race an in-flight index response; invalidate
+        // its snippets instead of restoring deleted/edited text from an older index.
+        if matches!(&envelope.event,Event::Patch(p) if Some(p.channel)==self.selected)
+            || matches!(&envelope.event,Event::Delete{channel,..}|Event::DeleteBulk{channel,..} if Some(*channel)==self.selected)
+        {
+            self.clear_search();
+        }
         let result = match envelope.event {
+            Event::Search {
+                channel,
+                request,
+                result,
+            } => {
+                self.apply_search(channel, request, result);
+                Ok(())
+            }
+            Event::ReadState(event) => self.apply_read_state(event),
+            Event::Reactions(event) => self.apply_reactions(event),
             Event::Profile {
                 user,
                 guild,
@@ -437,6 +561,11 @@ impl State {
             }
             Event::ChannelChanged(patch) => {
                 if let Some(channel) = self.channels.iter_mut().find(|c| c.id == patch.id) {
+                    match patch.last_message {
+                        Patch::Value(id) => channel.last_message = Some(id),
+                        Patch::Null => channel.last_message = None,
+                        Patch::Absent => {}
+                    }
                     match patch.name {
                         Patch::Value(name) => channel.name = name.chars().take(128).collect(),
                         Patch::Null => channel.name.clear(),
@@ -489,6 +618,7 @@ impl State {
             }
             Event::RecipientRemoved { channel, user } => {
                 if self.user.as_ref().is_some_and(|u| u.id == user) {
+                    self.read_state.forget(channel);
                     self.channels.retain(|c| c.id != channel);
                     if self.selected == Some(channel) {
                         self.invalidate_members();
@@ -554,6 +684,7 @@ impl State {
                 }
                 self.members = None;
                 self.clear_profile();
+                self.read_state.reset();
                 self.user = Some(user);
                 self.guilds = guilds;
                 self.channels = channels;
@@ -566,7 +697,7 @@ impl State {
                 channel,
                 request,
                 older,
-                messages,
+                mut messages,
             } => {
                 if self.selected != Some(channel)
                     || request != self.request
@@ -590,6 +721,14 @@ impl State {
                     return;
                 }
                 self.history_pending = false;
+                if !older && let Some(latest) = messages.iter().map(|m| m.id).max() {
+                    self.observe_last_message(channel, latest);
+                }
+                for message in &mut messages {
+                    if self.reactions.invalidated(message.id) {
+                        message.reactions = None;
+                    }
+                }
                 self.older_exhausted = messages.len() < 50;
                 let r = self.timeline.finish_page(messages, older);
                 if r.is_ok() && self.gateway_connected {
@@ -619,7 +758,17 @@ impl State {
                 }
                 Ok(())
             }
-            Event::Message(m) => {
+            Event::Message(mut m) => {
+                self.observe_last_message(m.channel, m.id);
+                if self.selected == Some(m.channel)
+                    && self.reactions.invalidated(m.id)
+                    && m.reactions.is_some()
+                {
+                    self.refresh_reactions(m.id);
+                }
+                if self.reactions.invalidated(m.id) {
+                    m.reactions = None;
+                }
                 self.confirm(&m);
                 if self.selected == Some(m.channel) && self.freshness != Freshness::Unavailable {
                     self.timeline.insert(m, true, false)
@@ -627,7 +776,16 @@ impl State {
                     Ok(())
                 }
             }
-            Event::Patch(p) => {
+            Event::Patch(mut p) => {
+                if self.selected == Some(p.channel)
+                    && self.reactions.invalidated(p.id)
+                    && !matches!(p.reactions, Patch::Absent)
+                {
+                    self.refresh_reactions(p.id);
+                }
+                if self.reactions.invalidated(p.id) {
+                    p.reactions = Patch::Absent;
+                }
                 if self.selected == Some(p.channel) && self.freshness != Freshness::Unavailable {
                     self.timeline.patch(p)
                 } else {
@@ -635,6 +793,13 @@ impl State {
                 }
             }
             Event::Delete { channel, id } => {
+                if let Some(channel) = self
+                    .channels
+                    .iter_mut()
+                    .find(|c| c.id == channel && c.last_message == Some(id))
+                {
+                    channel.last_message = None;
+                }
                 if self.selected == Some(channel) {
                     self.timeline.delete(id)
                 } else {
@@ -642,6 +807,13 @@ impl State {
                 }
             }
             Event::DeleteBulk { channel, ids } => {
+                if let Some(channel) = self
+                    .channels
+                    .iter_mut()
+                    .find(|c| c.id == channel && c.last_message.is_some_and(|id| ids.contains(&id)))
+                {
+                    channel.last_message = None;
+                }
                 if ids.len() > 100 {
                     Err("Bulk deletion exceeds safe capacity")
                 } else if self.selected == Some(channel) {
@@ -689,6 +861,7 @@ impl State {
                 Ok(())
             }
             Event::Disconnected => {
+                self.read_state.cancel();
                 self.clear_profile();
                 self.disconnect_voice();
                 self.invalidate_members();
@@ -707,6 +880,7 @@ impl State {
                 Ok(())
             }
             Event::Resync | Event::PermissionsChanged => {
+                self.read_state.cancel();
                 self.clear_profile();
                 self.disconnect_voice();
                 self.invalidate_members();
@@ -717,6 +891,7 @@ impl State {
                 Ok(())
             }
             Event::Unavailable(channel) => {
+                self.read_state.forget(channel);
                 self.clear_profile();
                 self.channels.retain(|c| c.id != channel);
                 if self
@@ -742,6 +917,9 @@ impl State {
             self.freshness = Freshness::Stale;
             self.timeline.clear();
             self.cancel_history();
+        }
+        if !self.can_search() && self.search.is_some() {
+            self.clear_search();
         }
     }
     fn invalidate_members(&mut self) {
@@ -769,6 +947,9 @@ impl State {
             _ => {}
         }
         if failure.ends_session() {
+            self.clear_search();
+            self.search_target = None;
+            self.read_state.cancel();
             self.clear_profile();
             self.disconnect_voice();
             self.gateway_connected = false;
@@ -778,6 +959,7 @@ impl State {
         self.freshness = Freshness::Stale;
     }
     fn cancel_history(&mut self) {
+        self.reactions.reset();
         self.request += 1;
         self.history_pending = false;
         self.timeline.cancel_page();
@@ -789,6 +971,19 @@ impl Event {
     pub fn bytes(&self) -> usize {
         size_of::<Self>()
             + match self {
+                Self::Search {
+                    result: Ok(search::Outcome::Page(page)),
+                    ..
+                } => page.bytes(),
+                Self::ReadState(read_state::Event::Snapshot { entries, .. }) => entries
+                    .as_ref()
+                    .map_or(0, |e| e.capacity() * size_of::<(Id, Option<Id>)>()),
+                Self::ReadState(read_state::Event::Latest(entries)) => {
+                    entries.capacity() * size_of::<(Id, Patch<Id>)>()
+                }
+                Self::Reactions(reactions::Event::Read { result, .. }) => {
+                    result.as_ref().map_or(0, |r| model::reaction_bytes(r))
+                }
                 Self::Profile { result, .. } => result.as_ref().map_or(0, UserProfile::bytes),
                 Self::Voice(event) => event.bytes(),
                 Self::GuildChanged(patch) => [&patch.name, &patch.icon]
@@ -832,6 +1027,10 @@ impl Event {
                         _ => 0,
                     };
                     content
+                        + match &p.reactions {
+                            Patch::Value(r) => model::reaction_bytes(r),
+                            _ => 0,
+                        }
                         + match &p.mentions {
                             Patch::Value(users) => model::mention_bytes(users),
                             _ => 0,
@@ -857,6 +1056,193 @@ impl Event {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reaction_readback_coalesces_races_and_never_replays_uncertain_writes() {
+        use reactions::{Command as R, Event as E};
+        let channel = Id(1);
+        let id = Id(10);
+        let emoji = ReactionEmoji {
+            id: None,
+            name: Some("👍".into()),
+        };
+        let values = vec![Reaction {
+            emoji: emoji.clone(),
+            count: 3,
+            me: true,
+            me_burst: false,
+        }];
+        let mut state = State {
+            selected: Some(channel),
+            gateway_connected: true,
+            auth: auth::AuthState::Authenticated,
+            freshness: Freshness::Fresh,
+            ..State::default()
+        };
+        state.timeline.insert(message(10), false, false).unwrap();
+        let Command::Reactions(R::Set { request, add, .. }) =
+            state.prepare_reaction(id, emoji.clone()).unwrap()
+        else {
+            panic!()
+        };
+        assert!(add);
+        assert!(state.prepare_reaction(id, emoji.clone()).is_none());
+        apply(
+            &mut state,
+            Event::Reactions(E::Written {
+                channel,
+                message: id,
+                request,
+                result: Err(auth::Failure::Ambiguous),
+            }),
+        );
+        assert!(state.reactions.writing.is_none());
+        let Command::Reactions(R::Read { request, .. }) = state.next_reaction_read().unwrap()
+        else {
+            panic!()
+        };
+        for _ in 0..100 {
+            apply(
+                &mut state,
+                Event::Reactions(E::Changed {
+                    channel,
+                    message: id,
+                }),
+            );
+        }
+        assert!(state.next_reaction_read().is_none());
+        apply(
+            &mut state,
+            Event::Reactions(E::Read {
+                channel,
+                message: id,
+                request,
+                result: Ok(values.clone()),
+            }),
+        );
+        assert!(state.timeline.get(id).unwrap().reactions.is_none());
+        let Command::Reactions(R::Read { request, .. }) = state.next_reaction_read().unwrap()
+        else {
+            panic!()
+        };
+        apply(
+            &mut state,
+            Event::Reactions(E::Read {
+                channel,
+                message: id,
+                request,
+                result: Ok(values.clone()),
+            }),
+        );
+        assert_eq!(
+            state.timeline.get(id).unwrap().reactions,
+            Some(values.clone())
+        );
+        assert!(state.next_reaction_read().is_none());
+        let command = state.prepare_reaction(id, emoji.clone()).unwrap();
+        assert!(matches!(
+            &command,
+            Command::Reactions(R::Set { add: false, .. })
+        ));
+        state.command_rejected(command);
+        assert!(state.reactions.writing.is_none());
+        assert_eq!(state.freshness, Freshness::Fresh);
+        // Reaction events during history loading cannot be overwritten by that page.
+        let _ = state.history(None);
+        apply(
+            &mut state,
+            Event::Reactions(E::Changed {
+                channel,
+                message: Id(11),
+            }),
+        );
+        let history_request = state.request;
+        apply(
+            &mut state,
+            Event::History {
+                channel,
+                request: history_request,
+                older: false,
+                messages: vec![message(11)],
+            },
+        );
+        assert!(state.timeline.get(Id(11)).unwrap().reactions.is_none());
+        let Command::Reactions(R::Read {
+            message: id,
+            request,
+            ..
+        }) = state.next_reaction_read().unwrap()
+        else {
+            panic!()
+        };
+        // Deletion wins over an in-flight reaction response.
+        apply(&mut state, Event::Delete { channel, id });
+        apply(
+            &mut state,
+            Event::Reactions(E::Read {
+                channel,
+                message: id,
+                request,
+                result: Ok(values.clone()),
+            }),
+        );
+        assert!(state.timeline.get(id).is_none());
+        // Rate limits leave an explicit retry, never an automatic loop.
+        state.timeline.insert(message(12), false, false).unwrap();
+        state.refresh_reactions(Id(12));
+        let Command::Reactions(R::Read {
+            message: id,
+            request,
+            ..
+        }) = state.next_reaction_read().unwrap()
+        else {
+            panic!()
+        };
+        apply(
+            &mut state,
+            Event::Reactions(E::Read {
+                channel,
+                message: id,
+                request,
+                result: Err(auth::Failure::RateLimited),
+            }),
+        );
+        assert!(state.next_reaction_read().is_none());
+        state.refresh_reactions(id);
+        let Command::Reactions(R::Read { request, .. }) = state.next_reaction_read().unwrap()
+        else {
+            panic!()
+        };
+        state.reactions.reset(); // navigation/disconnect cancels this request
+        apply(
+            &mut state,
+            Event::Reactions(E::Read {
+                channel,
+                message: id,
+                request,
+                result: Ok(values),
+            }),
+        );
+        assert!(state.timeline.get(id).unwrap().reactions.is_none());
+        state.refresh_reactions(id);
+        let Command::Reactions(R::Read { request, .. }) = state.next_reaction_read().unwrap()
+        else {
+            panic!()
+        };
+        apply(
+            &mut state,
+            Event::Reactions(E::Read {
+                channel,
+                message: id,
+                request,
+                result: Err(auth::Failure::Forbidden),
+            }),
+        );
+        assert!(state.timeline.is_empty());
+        assert_eq!(state.freshness, Freshness::Unavailable);
+        state.logout();
+        assert!(state.next_reaction_read().is_none());
+    }
 
     #[test]
     fn guild_identity_patches_preserve_omitted_fields_and_change_icon_keys() {
@@ -932,6 +1318,7 @@ mod tests {
     fn channel_mutations_preserve_partial_metadata_and_remove_deleted_categories() {
         let mut state = State::default();
         let channel = Channel {
+            last_message: None,
             id: Id(2),
             guild: Some(Id(1)),
             parent_id: Some(Id(3)),
@@ -947,6 +1334,7 @@ mod tests {
         apply(
             &mut state,
             Event::ChannelChanged(ChannelPatch {
+                last_message: model::Patch::Absent,
                 id: Id(2),
                 name: Patch::Absent,
                 parent_id: Patch::Null,
@@ -962,6 +1350,7 @@ mod tests {
         apply(
             &mut state,
             Event::ChannelChanged(ChannelPatch {
+                last_message: model::Patch::Absent,
                 id: Id(2),
                 name: Patch::Absent,
                 parent_id: Patch::Absent,
@@ -978,6 +1367,7 @@ mod tests {
             apply(
                 &mut state,
                 Event::ChannelCreated(Channel {
+                    last_message: None,
                     id: Id(id as u64),
                     guild: None,
                     parent_id: None,
@@ -1001,6 +1391,7 @@ mod tests {
     }
     fn message(id: u64) -> Message {
         Message {
+            reactions: Some(vec![]),
             id: Id(id),
             channel: Id(1),
             author: User {
@@ -1030,6 +1421,7 @@ mod tests {
             gateway_connected: true,
             auth: auth::AuthState::Authenticated,
             channels: vec![Channel {
+                last_message: None,
                 id: Id(1),
                 guild: None,
                 parent_id: None,
@@ -1095,6 +1487,7 @@ mod tests {
                 },
                 guilds: vec![],
                 channels: vec![Channel {
+                    last_message: None,
                     id: Id(1),
                     guild: None,
                     parent_id: None,

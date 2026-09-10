@@ -9,6 +9,8 @@ use std::{
 
 #[derive(Default)]
 pub struct TimelineView {
+    pub(super) mark_read: Option<Id>,
+    pub(super) reaction: Option<(Id, Option<model::ReactionEmoji>)>,
     heights: BTreeMap<Id, (u64, f32)>,
     width: f32,
     rows: Vec<(Id, f32)>,
@@ -60,6 +62,7 @@ fn layout_key(message: &Message) -> u64 {
     // A layout fingerprint only; spoiler visibility uses exact text instead.
     let mut key = DefaultHasher::new();
     message.content.hash(&mut key);
+    message.reactions.hash(&mut key);
     for user in &message.mentions {
         user.id.hash(&mut key);
         user.name.hash(&mut key);
@@ -147,6 +150,17 @@ impl TimelineView {
                 offset = Some(anchor_offset(&self.rows, id, inset));
             }
         }
+        if !state.history_pending
+            && let Some(target) = state.search_target.take()
+        {
+            if state.timeline.get(target).is_some() {
+                self.following = false;
+                self.anchor = Some((target, 0.0));
+                offset = Some(anchor_offset(&self.rows, target, 0.0));
+            } else {
+                state.status = "Search message was not returned; it may have been removed";
+            }
+        }
         let mut scroll = egui::ScrollArea::vertical()
             .id_salt(("timeline", state.selected))
             .auto_shrink([false, false])
@@ -170,6 +184,7 @@ impl TimelineView {
                 .map(|(id, _)| (*id, viewport.min.y - anchor_top));
             ui.add_space(top);
             for (id, _) in &self.rows[first..end] {
+                let can_mark_read = state.can_mark_read(*id);
                 let Some(message) = state.timeline.get(*id) else {
                     continue;
                 };
@@ -200,6 +215,10 @@ impl TimelineView {
                                                 }
                                                 if ui.button("Reply").clicked() {
                                                     state.reply = Some(*id);
+                                                    ui.close();
+                                                }
+                                                if ui.add_enabled(can_mark_read, egui::Button::new("Mark read through here")).clicked() {
+                                                    self.mark_read = Some(*id);
                                                     ui.close();
                                                 }
                                                 if state.user.as_ref().map(|u| u.id)
@@ -270,6 +289,11 @@ impl TimelineView {
                                     }
                                     if message.unsupported {
                                         ui.label(RichText::new("System content · Preview unavailable").small().color(colors.muted));
+                                    }
+                                    if let Some(action)=crate::reactions::show(ui,message.reactions.as_deref(),
+                                        state.gateway_connected && state.freshness==model::Freshness::Fresh,
+                                        state.reactions.writing.is_some(), state.reactions.invalidated(message.id)) {
+                                        self.reaction=Some((*id,action));
                                     }
                                 });
                             });
@@ -375,6 +399,7 @@ mod tests {
     #[test]
     fn same_id_revision_reset_does_not_reuse_reveal_or_height() {
         let mut message = Message {
+            reactions: Some(vec![]),
             id: Id(1),
             channel: Id(2),
             author: model::User {
@@ -456,6 +481,7 @@ mod tests {
             }
         }
         let mut message = Message {
+            reactions: Some(vec![]),
             id: Id(1),
             channel: Id(2),
             author: model::User {

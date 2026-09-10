@@ -13,3 +13,5 @@ Serein uses Discord’s official login page in a temporary platform webview, not
 Record only date, OS/build, methods tested, pass/fail and redacted failure category in docs/progress.md. Never record credentials, account/channel IDs, signed URLs, message contents or QR data. **No real owner-controlled session was supplied or exercised during implementation; the live milestone remains blocked.**
 
 A separate `--features developer-session` build exposes an explicitly labeled, RAM-only owner-provided token field for adapter diagnosis. It is not the normal login, is disabled in release packaging, and never permits extraction from other software.
+
+Saved-login startup reports credential lookup separately from Discord connection. A found credential advances the status immediately; absent/invalid/unavailable outcomes remain visible. The UI stops awaiting lookup after 10 seconds and permits manual hosted login. Manual login, preview, logout and timeout discard late lookup results. The synchronous OS call remains on the existing single worker; no background retry workers or plaintext fallback are created.

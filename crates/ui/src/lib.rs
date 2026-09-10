@@ -9,6 +9,8 @@ pub mod fonts;
 mod markdown;
 mod mentions;
 mod profiles;
+mod reactions;
+mod search;
 mod timeline;
 mod voice;
 use client_core::{Command, MAX_CONTENT, MAX_DRAFT_BYTES, State};
@@ -17,6 +19,7 @@ use model::{Delivery, Freshness, Id};
 
 #[derive(Default)]
 pub struct MessagingUi {
+    search: search::SearchUi,
     timeline: timeline::TimelineView,
     avatars: avatars::Avatars,
     profile: Option<model::User>,
@@ -795,6 +798,15 @@ impl MessagingUi {
                                 |ui| {
                                     if ui
                                         .add_enabled(
+                                            state.can_search(),
+                                            egui::Button::new("Search").small().frame(false),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.search.toggle();
+                                    }
+                                    if ui
+                                        .add_enabled(
                                             state.freshness != Freshness::Loading,
                                             egui::Button::new("Reload").small().frame(false),
                                         )
@@ -818,6 +830,9 @@ impl MessagingUi {
                                 },
                             );
                         });
+                        if let Some(status) = state.read_state.status {
+                            ui.label(RichText::new(status).small().color(colors.muted));
+                        }
                         if state.history_before.is_some() {
                             ui.label(
                                 RichText::new("Browsing older history · Reload returns to latest")
@@ -839,6 +854,21 @@ impl MessagingUi {
                         );
                     });
             });
+        self.search.show(&ctx, state, &mut commands);
+        if let Some(message) = self.timeline.mark_read.take()
+            && let Some(command) = state.prepare_mark_read(message)
+        {
+            commands.push(command);
+        }
+        if let Some((message, emoji)) = self.timeline.reaction.take() {
+            if let Some(emoji) = emoji {
+                if let Some(command) = state.prepare_reaction(message, emoji) {
+                    commands.push(command);
+                }
+            } else {
+                state.refresh_reactions(message);
+            }
+        }
         if let Some(user) = &self.profile {
             let profile_guild = state
                 .channels
@@ -972,6 +1002,7 @@ mod composer_tests {
             demo: true,
             selected: Some(Id(1)),
             channels: vec![model::Channel {
+                last_message: None,
                 id: Id(1),
                 guild: Some(Id(2)),
                 parent_id: None,
@@ -1043,6 +1074,7 @@ mod composer_tests {
                 demo: true,
                 selected: Some(Id(1)),
                 channels: vec![model::Channel {
+                    last_message: None,
                     id: Id(1),
                     guild,
                     parent_id: None,
@@ -1082,6 +1114,7 @@ mod composer_tests {
         let mut state = State {
             selected: Some(Id(1)),
             channels: vec![model::Channel {
+                last_message: None,
                 id: Id(1),
                 guild: None,
                 parent_id: None,

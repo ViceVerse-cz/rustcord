@@ -177,6 +177,7 @@ mod tests {
             ..State::default()
         };
         state.channels.push(model::Channel {
+            last_message: None,
             id: Id(1),
             guild: None,
             parent_id: None,

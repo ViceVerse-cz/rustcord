@@ -275,6 +275,7 @@ mod tests {
             auth: AuthState::Authenticated,
             gateway_connected: true,
             channels: vec![model::Channel {
+                last_message: None,
                 id: Id(1),
                 guild: None,
                 parent_id: None,
