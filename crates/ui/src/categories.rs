@@ -116,7 +116,7 @@ impl MessagingUi {
         );
         let mut participants = BTreeMap::<Id, Vec<_>>::new();
         for entry in &state.voice.roster {
-            if Some(entry.guild) == self.guild {
+            if Some(entry.guild) == self.guild && state.can_view(entry.channel) {
                 participants.entry(entry.channel).or_default().push(entry);
             }
         }

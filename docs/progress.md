@@ -1264,3 +1264,33 @@ Resumed `feat/discord-theme-shell` at `37a0956` with an existing UI diff and bas
 The header now gives its controls their actual width before truncating the channel name. Clicking a People avatar opens its profile; draft-storage status remains visible beside the composer. Independent review caught and fixed two additional regressions: title/status text now occupies separate regions (full status available on hover), and active download progress/cancellation remains visible after switching to voice or clearing selection. A regression test covers both download cases. A native gradient capture also exposed text bleed-through in the archive window; the shared window fill is now opaque for every preset.
 
 `cargo xtask check` passes, including all 75 UI tests, workspace tests/doctests, strict Clippy and policy checks. Final text/voice release packages and strict ad-hoc signature verification pass. Native macOS synthetic before/after dark, after-light and Midnight Blurple captures were inspected under `docs/pr-evidence/discord-theme-rebase/`. Baseline is the existing clean `dff0975` worktree/package; it precedes the incoming-typing main commit. Both runs use `--demo --demo-chat`, the same default 1120×760 requested viewport and 2× capture scale; the baseline outer window includes its old native title bar. No account session, messages, calls or microphone use occurred. Pointer/keyboard-only interaction, narrow-window interaction, screen readers, IME, Windows/Linux and live compatibility remain unverified. The gradient archive window itself has not been recaptured after the opacity fix. The PR remains draft for those interaction evidence gaps and pending CI. Refreshed package and process measurements are in `docs/performance.md`.
+
+
+## Voice completion and recovery fixes - September 10, 2026
+
+Baseline main `9fcce51`, isolated branch `fix/voice-completion`, Windows Rust 1.98.1.
+The original dirty checkout and the unfinished custom-status worktree remain separate.
+
+Implemented bounded resumption for voice-server close 4015 (terminal 4014 still ends the call),
+and ignored bounded pre-group DAVE proposals according to the initial-group procedure.
+Device readiness now acknowledges the current device/security revision, preventing rapid
+pause/resume or late callbacks from leaving the UI stuck or accepting obsolete readiness.
+Denied SPEAK opens playback without selecting/opening a microphone; mute/PTT remains independent
+of device configuration. Revoked VIEW_CHANNEL removes stored voice rosters and prevents late
+updates or sidebar/central rendering from exposing inaccessible participants.
+
+The mixer now fills each 20 ms playback tick from short Opus packets, starts a full eight-packet
+jitter queue before it can repeatedly reset, and preserves 5/60/120 ms lost-packet timing within
+the existing 5,760-sample per-speaker PCM bound. At most eight packets are decoded per tick and
+three consecutive missing packets are concealed; no encoded/PCM queue or dependency grew.
+
+Validation: final `cargo xtask check` passed all 296 offline tests, strict all-feature Clippy,
+formatting, text-only compilation and policy checks. Tests use synthetic MLS keys, localhost
+WebSocket/UDP, device-free callbacks and independent Opus decoding. Independent review found
+and resolved long-packet concealment timing and stale device-error handling issues. Native
+automation remains owner-paused; no new screenshots, microphone/speaker access, Discord calls,
+or account actions were performed. Live two-way audio, physical device loss/switching, echo,
+real-time callback behavior and cleanup on each OS remain unverified; milestone 4 has NOT passed.
+Both `cargo xtask package` and `cargo xtask package-voice` passed. The voice executable stayed
+at 54,142,464 bytes; text grew 2,560 bytes. Release replay and 1/8/63-speaker mixer workloads
+passed with no measured slowdown; results and limits are in docs/performance.md.

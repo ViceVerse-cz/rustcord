@@ -4,7 +4,7 @@ use crate::Frame;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, AtomicU16, Ordering},
+    atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering},
     mpsc,
 };
 use std::time::Duration;
@@ -51,7 +51,10 @@ pub struct Gate {
     pub muted: AtomicBool,
     pub deafened: AtomicBool,
     stopped: AtomicBool,
-    failed: AtomicBool,
+    failed_revision: AtomicU64,
+    revision: AtomicU64,
+    acknowledged_revision: AtomicU64,
+    input_enabled: AtomicBool,
     input_gain: AtomicU16,
     output_gain: AtomicU16,
 }
@@ -62,20 +65,42 @@ impl Default for Gate {
             muted: AtomicBool::new(false),
             deafened: AtomicBool::new(false),
             stopped: AtomicBool::new(false),
-            failed: AtomicBool::new(false),
+            failed_revision: AtomicU64::new(0),
+            revision: AtomicU64::new(1),
+            acknowledged_revision: AtomicU64::new(0),
+            input_enabled: AtomicBool::new(true),
             input_gain: AtomicU16::new(100),
             output_gain: AtomicU16::new(100),
         }
     }
 }
 impl Gate {
-    fn capture(&self) -> bool {
+    fn is_ready(&self) -> bool {
+        let revision = self.revision.load(Ordering::Acquire);
         self.ready.load(Ordering::Acquire)
+            && !self.stopped.load(Ordering::Acquire)
+            && self.failed_revision.load(Ordering::Acquire) != revision
+            && self.acknowledged_revision.load(Ordering::Acquire) == revision
+    }
+    fn acknowledge(&self, revision: u64) -> bool {
+        if self.revision.load(Ordering::Acquire) != revision
+            || !self.ready.load(Ordering::Acquire)
+            || self.stopped.load(Ordering::Acquire)
+        {
+            return false;
+        }
+        self.acknowledged_revision
+            .store(revision, Ordering::Release);
+        self.is_ready()
+    }
+    fn capture(&self) -> bool {
+        self.is_ready()
+            && self.input_enabled.load(Ordering::Acquire)
             && !self.muted.load(Ordering::Acquire)
             && !self.stopped.load(Ordering::Acquire)
     }
     fn playback(&self) -> bool {
-        self.ready.load(Ordering::Acquire)
+        self.is_ready()
             && !self.deafened.load(Ordering::Acquire)
             && !self.stopped.load(Ordering::Acquire)
     }
@@ -100,13 +125,15 @@ impl Audio {
         let thread = std::thread::Builder::new()
             .name("voice-audio".into())
             .spawn(move || {
-                let mut streams = None;
-                let mut current = Devices::default();
+                let mut streams: Option<(u64, Streams)> = None;
                 while !worker_gate.stopped.load(Ordering::Acquire) {
-                    let next = selected.borrow_and_update().clone();
-                    if current != next {
+                    let revision = worker_gate.revision.load(Ordering::Acquire);
+                    let current = selected.borrow_and_update().clone();
+                    if streams
+                        .as_ref()
+                        .is_some_and(|(opened, _)| *opened != revision)
+                    {
                         streams = None;
-                        current = next;
                     }
                     if !worker_gate.ready.load(Ordering::Acquire) {
                         streams = None;
@@ -118,25 +145,35 @@ impl Audio {
                         std::thread::park_timeout(Duration::from_millis(10));
                         continue;
                     }
-                    if streams.is_none() {
-                        match Streams::open(&current, worker_gate.clone()) {
-                            Ok(value) => {
-                                streams = Some(value);
-                                emit(Ok(()));
-                            }
-                            Err(error) => {
-                                emit(Err(error));
-                                break;
-                            }
-                        }
-                    }
-                    if worker_gate.failed.load(Ordering::Acquire) {
+                    if worker_gate.failed_revision.load(Ordering::Acquire) == revision
+                        && worker_gate.revision.load(Ordering::Acquire) == revision
+                    {
                         emit(Err(
                             "Audio device stopped or disconnected; choose a device and call again",
                         ));
                         break;
                     }
-                    let Some(active) = &mut streams else {
+                    if streams.is_none() {
+                        match Streams::open(&current, worker_gate.clone(), revision) {
+                            Ok(value) => {
+                                if !worker_gate.acknowledge(revision) {
+                                    continue;
+                                }
+                                streams = Some((revision, value));
+                                emit(Ok(()));
+                            }
+                            Err(error) => {
+                                if worker_gate.revision.load(Ordering::Acquire) != revision
+                                    || !worker_gate.ready.load(Ordering::Acquire)
+                                {
+                                    continue;
+                                }
+                                emit(Err(error));
+                                break;
+                            }
+                        }
+                    }
+                    let Some((_, active)) = &mut streams else {
                         continue;
                     };
                     for _ in 0..8 {
@@ -170,18 +207,40 @@ impl Audio {
         })
     }
     pub fn is_stopped(&self) -> bool {
-        self.gate.stopped.load(Ordering::Acquire) || self.gate.failed.load(Ordering::Acquire)
+        self.gate.stopped.load(Ordering::Acquire)
+            || self.gate.failed_revision.load(Ordering::Acquire)
+                == self.gate.revision.load(Ordering::Acquire)
     }
     pub fn shutdown(mut self) -> mpsc::Receiver<()> {
         self.done.take().expect("audio owns completion")
     }
     pub fn set_devices(&self, settings: Devices) {
-        self.settings.send_replace(settings);
+        self.settings.send_if_modified(|current| {
+            if *current == settings {
+                return false;
+            }
+            self.gate.revision.fetch_add(1, Ordering::AcqRel);
+            *current = settings;
+            true
+        });
         self.thread.unpark();
     }
     pub fn set_ready(&self, ready: bool) {
-        self.gate.ready.store(ready, Ordering::Release);
+        if self.gate.ready.swap(ready, Ordering::AcqRel) && !ready {
+            self.gate.revision.fetch_add(1, Ordering::AcqRel);
+        }
         self.thread.unpark();
+    }
+    /// Permission-driven microphone availability, independent of mute and push-to-talk.
+    pub fn set_input_enabled(&self, enabled: bool) {
+        if self.gate.input_enabled.swap(enabled, Ordering::AcqRel) != enabled {
+            self.gate.revision.fetch_add(1, Ordering::AcqRel);
+            self.thread.unpark();
+        }
+    }
+    /// True only after streams for the current device/security revision have opened.
+    pub fn is_ready(&self) -> bool {
+        self.gate.is_ready()
     }
     pub fn set_controls(&self, muted: bool, deafened: bool) {
         self.gate.muted.store(muted || deafened, Ordering::Release);
@@ -206,61 +265,102 @@ impl Drop for Audio {
 }
 
 struct Streams {
-    _input: cpal::Stream,
+    _input: Option<cpal::Stream>,
     _output: cpal::Stream,
     input: rtrb::Consumer<Frame>,
     output: rtrb::Producer<Frame>,
 }
 impl Streams {
-    fn open(settings: &Devices, gate: Arc<Gate>) -> Result<Self, &'static str> {
+    fn open(settings: &Devices, gate: Arc<Gate>, revision: u64) -> Result<Self, &'static str> {
         let host = cpal::default_host();
-        let input = choose(&host, settings.input.as_deref(), true)?;
         let output = choose(&host, settings.output.as_deref(), false)?;
-        let input_config = config(&input, true)?;
         let output_config = config(&output, false)?;
         let (input_write, input_read) = rtrb::RingBuffer::new(8);
         let (output_write, output_read) = rtrb::RingBuffer::new(8);
-        let capture = Capture::new(input_config.sample_rate(), input_write);
         let render = Playback::new(output_config.sample_rate(), output_read);
-        let input_stream = match input_config.sample_format() {
-            cpal::SampleFormat::F32 => {
-                input_stream::<f32>(&input, &input_config.config(), capture, gate.clone())
-            }
-            cpal::SampleFormat::I16 => {
-                input_stream::<i16>(&input, &input_config.config(), capture, gate.clone())
-            }
-            cpal::SampleFormat::I32 => {
-                input_stream::<i32>(&input, &input_config.config(), capture, gate.clone())
-            }
-            cpal::SampleFormat::U16 => {
-                input_stream::<u16>(&input, &input_config.config(), capture, gate.clone())
-            }
-            _ => Err("Microphone sample format is not supported"),
-        }?;
+        let input_stream = if gate.input_enabled.load(Ordering::Acquire) {
+            let input = choose(&host, settings.input.as_deref(), true)?;
+            let input_config = config(&input, true)?;
+            let capture = Capture::new(input_config.sample_rate(), input_write);
+            Some(match input_config.sample_format() {
+                cpal::SampleFormat::F32 => input_stream::<f32>(
+                    &input,
+                    &input_config.config(),
+                    capture,
+                    gate.clone(),
+                    revision,
+                ),
+                cpal::SampleFormat::I16 => input_stream::<i16>(
+                    &input,
+                    &input_config.config(),
+                    capture,
+                    gate.clone(),
+                    revision,
+                ),
+                cpal::SampleFormat::I32 => input_stream::<i32>(
+                    &input,
+                    &input_config.config(),
+                    capture,
+                    gate.clone(),
+                    revision,
+                ),
+                cpal::SampleFormat::U16 => input_stream::<u16>(
+                    &input,
+                    &input_config.config(),
+                    capture,
+                    gate.clone(),
+                    revision,
+                ),
+                _ => Err("Microphone sample format is not supported"),
+            }?)
+        } else {
+            None
+        };
         let output_stream = match output_config.sample_format() {
-            cpal::SampleFormat::F32 => {
-                output_stream::<f32>(&output, &output_config.config(), render, gate.clone())
-            }
-            cpal::SampleFormat::I16 => {
-                output_stream::<i16>(&output, &output_config.config(), render, gate.clone())
-            }
-            cpal::SampleFormat::I32 => {
-                output_stream::<i32>(&output, &output_config.config(), render, gate.clone())
-            }
-            cpal::SampleFormat::U16 => {
-                output_stream::<u16>(&output, &output_config.config(), render, gate.clone())
-            }
+            cpal::SampleFormat::F32 => output_stream::<f32>(
+                &output,
+                &output_config.config(),
+                render,
+                gate.clone(),
+                revision,
+            ),
+            cpal::SampleFormat::I16 => output_stream::<i16>(
+                &output,
+                &output_config.config(),
+                render,
+                gate.clone(),
+                revision,
+            ),
+            cpal::SampleFormat::I32 => output_stream::<i32>(
+                &output,
+                &output_config.config(),
+                render,
+                gate.clone(),
+                revision,
+            ),
+            cpal::SampleFormat::U16 => output_stream::<u16>(
+                &output,
+                &output_config.config(),
+                render,
+                gate.clone(),
+                revision,
+            ),
             _ => Err("Speaker sample format is not supported"),
         }?;
-        if !gate.ready.load(Ordering::Acquire) || gate.stopped.load(Ordering::Acquire) {
+        if !gate.ready.load(Ordering::Acquire)
+            || gate.stopped.load(Ordering::Acquire)
+            || gate.revision.load(Ordering::Acquire) != revision
+        {
             return Err("Call ended before audio devices were ready");
         }
         output_stream
             .play()
             .map_err(|_| "Could not start speaker playback")?;
-        input_stream
-            .play()
-            .map_err(|_| "Could not start microphone; check system microphone permission")?;
+        if let Some(input_stream) = &input_stream {
+            input_stream
+                .play()
+                .map_err(|_| "Could not start microphone; check system microphone permission")?;
+        }
         Ok(Self {
             _input: input_stream,
             _output: output_stream,
@@ -335,6 +435,7 @@ fn input_stream<T>(
     config: &cpal::StreamConfig,
     mut capture: Capture,
     gate: Arc<Gate>,
+    revision: u64,
 ) -> Result<cpal::Stream, &'static str>
 where
     T: cpal::SizedSample,
@@ -349,7 +450,9 @@ where
                 capture.process(data, channels, &gate);
             },
             move |_| {
-                failure.failed.store(true, Ordering::Release);
+                failure
+                    .failed_revision
+                    .fetch_max(revision, Ordering::AcqRel);
             },
             None,
         )
@@ -360,6 +463,7 @@ fn output_stream<T>(
     config: &cpal::StreamConfig,
     mut output: Playback,
     gate: Arc<Gate>,
+    revision: u64,
 ) -> Result<cpal::Stream, &'static str>
 where
     T: cpal::SizedSample + cpal::FromSample<f32>,
@@ -373,7 +477,9 @@ where
                 output.render(data, channels, &gate);
             },
             move |_| {
-                failure.failed.store(true, Ordering::Release);
+                failure
+                    .failed_revision
+                    .fetch_max(revision, Ordering::AcqRel);
             },
             None,
         )
@@ -529,11 +635,78 @@ mod tests {
     }
 
     #[test]
+    fn device_readiness_rejects_stale_open_and_fast_security_transitions() {
+        let audio = audio_without_devices();
+        audio.set_ready(true);
+        let first = audio.gate.revision.load(Ordering::Acquire);
+        assert!(!audio.is_ready());
+        assert!(audio.gate.acknowledge(first));
+        assert!(audio.is_ready() && audio.gate.capture() && audio.gate.playback());
+        audio.set_ready(false);
+        audio.set_ready(true); // Worker has not observed the intervening pause.
+        let second = audio.gate.revision.load(Ordering::Acquire);
+        assert_ne!(first, second);
+        assert!(!audio.is_ready() && !audio.gate.capture() && !audio.gate.playback());
+        assert!(!audio.gate.acknowledge(first));
+        assert!(audio.gate.acknowledge(second));
+        audio.set_ready(true);
+        assert_eq!(audio.gate.revision.load(Ordering::Acquire), second);
+        audio.set_devices(Devices::default());
+        assert_eq!(audio.gate.revision.load(Ordering::Acquire), second);
+        audio.set_devices(Devices {
+            input: Some("synthetic-device".into()),
+            output: None,
+        });
+        let third = audio.gate.revision.load(Ordering::Acquire);
+        assert_ne!(second, third);
+        assert!(!audio.is_ready() && !audio.gate.capture());
+        assert!(!audio.gate.acknowledge(second));
+        audio.gate.failed_revision.store(second, Ordering::Release);
+        assert!(!audio.is_stopped()); // A retired device cannot fail the new configuration.
+        assert!(audio.gate.acknowledge(third));
+        assert!(audio.is_ready());
+        audio.gate.failed_revision.store(third, Ordering::Release);
+        assert!(audio.is_stopped());
+        assert!(!audio.is_ready());
+    }
+
+    #[test]
+    fn listen_only_keeps_playback_without_input_and_mute_does_not_reopen_devices() {
+        let audio = audio_without_devices();
+        audio.set_input_enabled(false);
+        audio.set_ready(true);
+        let revision = audio.gate.revision.load(Ordering::Acquire);
+        assert!(audio.gate.acknowledge(revision));
+        assert!(audio.is_ready() && audio.gate.playback());
+        assert!(!audio.gate.capture());
+        let (send, mut received) = rtrb::RingBuffer::new(8);
+        let mut capture = Capture::new(48_000, send);
+        capture.process(&[0.25_f32; 961], 1, &audio.gate);
+        assert!(received.pop().is_err());
+        audio.set_controls(true, false);
+        audio.set_controls(false, false);
+        audio.set_input_enabled(false);
+        assert_eq!(audio.gate.revision.load(Ordering::Acquire), revision);
+        assert!(!audio.gate.capture() && audio.gate.playback());
+        audio.set_input_enabled(true);
+        let next = audio.gate.revision.load(Ordering::Acquire);
+        assert_ne!(next, revision);
+        assert!(!audio.is_ready() && !audio.gate.capture());
+        assert!(audio.gate.acknowledge(next));
+        assert!(audio.gate.capture() && audio.gate.playback());
+    }
+
+    #[test]
     fn callback_gain_defaults_clamps_and_sanitizes_without_devices() {
         let audio = audio_without_devices();
         assert_eq!(audio.gate.input_gain.load(Ordering::Relaxed), 100);
         assert_eq!(audio.gate.output_gain.load(Ordering::Relaxed), 100);
         audio.set_ready(true);
+        assert!(
+            audio
+                .gate
+                .acknowledge(audio.gate.revision.load(Ordering::Acquire))
+        );
         for (percent, expected) in [(0, 0.0), (100, 0.75), (200, 1.0), (u16::MAX, 1.0)] {
             audio.set_gain(percent, percent);
             for sample in [0.75_f32, -0.75] {
@@ -579,6 +752,11 @@ mod tests {
         assert!(captured.pop().is_err());
         assert_eq!(rendered, [0.0; 2]);
         audio.set_ready(true);
+        assert!(
+            audio
+                .gate
+                .acknowledge(audio.gate.revision.load(Ordering::Acquire))
+        );
         playback.render(&mut rendered, 1, &audio.gate);
         assert_eq!(rendered, [0.0; 2]);
 
@@ -630,6 +808,7 @@ mod tests {
         let gate = Gate::default();
         assert!(!gate.capture());
         gate.ready.store(true, Ordering::Release);
+        assert!(gate.acknowledge(gate.revision.load(Ordering::Acquire)));
         assert!(gate.capture());
         gate.muted.store(true, Ordering::Release);
         assert!(!gate.capture());

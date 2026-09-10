@@ -249,7 +249,8 @@ async fn run_inner(
             },
             event=ws.next()=>{
                 let event=match event {
-                    Some(Ok(message))=>message,
+                    // A server crash preserves the voice session. Other close codes remain terminal.
+                    Some(Ok(message)) if !matches!(&message, Message::Close(Some(frame)) if u16::from(frame.code)==4015)=>message,
                     _=>{
                         if encryption.is_none() || resume_attempts>=2 {return Err("Voice socket failed; rejoin the call");}
                         resume_attempts+=1;resuming=true;ready_announced=false;waiting_announced=false;
@@ -591,6 +592,16 @@ mod tests {
                 udp.send_to(&packet, client).await.unwrap();
             }
             tokio::time::sleep(Duration::from_millis(120)).await;
+            if guild {
+                ws.send(Message::Close(Some(
+                    tokio_tungstenite::tungstenite::protocol::CloseFrame {
+                        code: 4015.into(),
+                        reason: "synthetic server restart".into(),
+                    },
+                )))
+                .await
+                .unwrap();
+            }
             drop(ws);
             let (tcp, _) = listener.accept().await.unwrap();
             let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
@@ -616,6 +627,22 @@ mod tests {
             let packet = transport.seal(&header, &encrypted).unwrap();
             udp.send_to(&packet, client).await.unwrap();
             done_rx.await.unwrap();
+            if guild {
+                ws.send(Message::Close(Some(
+                    tokio_tungstenite::tungstenite::protocol::CloseFrame {
+                        code: 4014.into(),
+                        reason: "synthetic terminal disconnect".into(),
+                    },
+                )))
+                .await
+                .unwrap();
+                // A terminal disconnect must never attempt another connection.
+                assert!(
+                    timeout(Duration::from_millis(100), listener.accept())
+                        .await
+                        .is_err()
+                );
+            }
         });
         let credentials = VoiceConnection {
             channel: Id(3),
@@ -669,9 +696,21 @@ mod tests {
         .unwrap();
         let pcm = playback_rx.try_recv().unwrap();
         assert!(pcm.iter().any(|s| s.abs() > 0.01));
-        drop(control_tx);
-        assert!(task.await.unwrap().is_ok());
-        done_tx.send(()).unwrap();
+        if guild {
+            done_tx.send(()).unwrap();
+            assert_eq!(
+                timeout(Duration::from_secs(2), task)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                Err("Discord voice connection closed; rejoin the call")
+            );
+            drop(control_tx);
+        } else {
+            drop(control_tx);
+            assert!(task.await.unwrap().is_ok());
+            done_tx.send(()).unwrap();
+        }
         server.await.unwrap();
     }
 }
