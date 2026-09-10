@@ -223,8 +223,16 @@ impl ActiveMembers {
         if !self.synced || update.guild != Some(self.subscription.guild) {
             return;
         }
+        let Some(previous) = self
+            .rows
+            .iter()
+            .flatten()
+            .find(|row| row.user.id == update.user)
+        else {
+            return;
+        };
         let status = match update.status {
-            model::Patch::Absent => return,
+            model::Patch::Absent => previous.status.clone(),
             model::Patch::Null => None,
             model::Patch::Value(status) => match status.as_str() {
                 "online" | "idle" | "dnd" | "offline" => Some(status.as_str().to_owned()),
@@ -239,8 +247,10 @@ impl ActiveMembers {
             .iter()
             .flatten()
             .map(|row| {
-                if row.user.id == update.user && row.status != status {
-                    row.bytes() - row.status.as_ref().map_or(0, String::capacity)
+                if row.user.id == update.user {
+                    row.bytes()
+                        - row.status.as_ref().map_or(0, String::capacity)
+                        - row.custom_status.as_ref().map_or(0, String::capacity)
                         + status.as_ref().map_or(0, String::len)
                 } else {
                     row.bytes()
@@ -257,8 +267,11 @@ impl ActiveMembers {
             .flatten()
             .filter(|row| row.user.id == update.user)
         {
-            if row.status != status {
+            if row.status != status || row.custom_status.is_some() {
                 row.status = status.clone();
+                // Activities are intentionally discarded by the compact presence DTO;
+                // stop showing a snapshot's custom text when newer presence arrives.
+                row.custom_status = None;
                 changed = true;
             }
         }
@@ -1110,6 +1123,39 @@ mod tests {
 mod member_tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn newer_presence_clears_snapshot_custom_status_without_retaining_activities() {
+        for (patch, expected) in [
+            (json!({"activities":[]}), Some("online")),
+            (json!({"status":"online"}), Some("online")),
+            (json!({"status":"offline"}), Some("offline")),
+        ] {
+            let mut list = ActiveMembers::new(MemberSubscription {
+                guild: Id(1),
+                channel: Id(2),
+                request: 7,
+                list_id: "everyone".into(),
+            });
+            list.update(decode(br#"{"guild_id":"1","id":"everyone","member_count":1,"ops":[{"op":"SYNC","range":[0,99],"items":[{"member":{"user":{"id":"3","username":"Synthetic"},"presence":{"status":"online","activities":[{"type":4,"state":"Old custom status"}]}}}]}]}"#).unwrap()).unwrap();
+            assert!(list.rows[0].as_ref().unwrap().custom_status.is_some());
+            let mut wire = patch;
+            wire["guild_id"] = json!("1");
+            wire["user"] = json!({"id":"3"});
+            list.presence(
+                discord_protocol::presence::decode(&serde_json::to_vec(&wire).unwrap()).unwrap(),
+                Instant::now(),
+            );
+            let row = list.rows[0].as_ref().unwrap();
+            assert_eq!(row.status.as_deref(), expected);
+            assert!(row.custom_status.is_none());
+            let Event::MemberPresence { updates, .. } = list.take_presence().unwrap() else {
+                panic!(
+                    "custom-status invalidation must reach the core even when status is unchanged"
+                );
+            };
+            assert_eq!(updates, vec![(Id(3), expected.map(str::to_owned))]);
+        }
+    }
     #[test]
     fn presence_coalesces_loaded_rows_at_a_fixed_deadline_and_snapshots_supersede_it() {
         let mut list = ActiveMembers::new(MemberSubscription {

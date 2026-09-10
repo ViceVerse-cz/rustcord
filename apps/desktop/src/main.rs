@@ -4,6 +4,7 @@ mod cache;
 mod connection;
 mod credentials;
 mod downloads;
+mod reading_settings;
 mod uploads;
 #[cfg(feature = "voice")]
 mod voice;
@@ -60,6 +61,7 @@ struct Desktop {
     cache_status: &'static str,
     appearance: egui::ThemePreference,
     appearance_changed: bool,
+    reading: reading_settings::ReadingSettings,
     pending_save: Option<Arc<SessionSecret>>,
     credential_status: &'static str,
     forgetting: bool,
@@ -164,6 +166,30 @@ fn changes_active_history(state: &State, event: &Event) -> bool {
     };
     state.selected == Some(*channel)
 }
+/// Synthetic People rows with presence; never a Discord member directory.
+fn demo_members(guild: Option<model::Id>, channel: model::Id, request: u64) -> model::MemberList {
+    model::MemberList {
+        guild,
+        channel,
+        request,
+        rows: vec![
+            Some(model::Member {
+                user: test_support::message(2, channel).author,
+                nick: None,
+                status: Some("idle".into()),
+                custom_status: None,
+            }),
+            Some(model::Member {
+                user: test_support::message(1, channel).author,
+                nick: None,
+                status: Some("online".into()),
+                custom_status: Some("🌙 semifluent in synthetic data".into()),
+            }),
+        ],
+        total: 2,
+        freshness: model::Freshness::Fresh,
+    }
+}
 impl Desktop {
     fn new(
         cc: &eframe::CreationContext<'_>,
@@ -180,7 +206,9 @@ impl Desktop {
         let mut store = (!demo).then(|| credentials::Store::start(cc.egui_ctx.clone()));
         let cache = (!demo).then(|| cache::Cache::start(cc.egui_ctx.clone()));
         let mut state = if demo {
-            if std::env::args().any(|arg| arg == "--demo-notifications") {
+            if std::env::args().any(|arg| arg == "--demo-system-messages") {
+                test_support::system_demo_state()
+            } else if std::env::args().any(|arg| arg == "--demo-notifications") {
                 test_support::notification_demo_state()
             } else if std::env::args().any(|arg| arg == "--demo-voice") {
                 test_support::voice_demo_state()
@@ -195,7 +223,7 @@ impl Desktop {
         let loading_saved = store
             .as_mut()
             .is_some_and(|store| store.load(state.generation, std::time::Instant::now()));
-        let cache_pending = usize::from(cache.as_ref().is_some_and(|cache| {
+        let mut cache_pending = usize::from(cache.as_ref().is_some_and(|cache| {
             // Appearance has its own singleton table; this account ID is unused.
             cache.queue(
                 state.generation,
@@ -203,6 +231,18 @@ impl Desktop {
                 cache::Operation::LoadAppearance,
             )
         }));
+        let mut reading = reading_settings::ReadingSettings::default();
+        if let Some(cache) = &cache {
+            if cache.queue(
+                state.generation,
+                model::Id(0),
+                cache::Operation::LoadReadingPreferences,
+            ) {
+                cache_pending += 1;
+            } else {
+                reading.restore(Err(local_store::StoreError::Unavailable));
+            }
+        }
         let synthetic_id = state
             .timeline
             .iter()
@@ -213,6 +253,15 @@ impl Desktop {
             demo && std::env::args().any(|arg| arg == "--demo-system-notifications");
         if messaging.notification_test_available {
             state.status = "Offline fixture · explicit system notification test";
+        }
+        if demo && std::env::args().any(|arg| arg == "--demo-profile") {
+            // Presence for the fixture card comes from the same synthetic People rows.
+            let _ = state.request_members();
+            if let Some(list) = &state.members {
+                state.members = Some(demo_members(list.guild, list.channel, list.request));
+            }
+            messaging.preview_profile(test_support::message(1, model::Id(20)).author);
+            state.status = "Offline fixture · synthetic profile card opened at startup";
         }
         Ok(Self {
             login: None,
@@ -245,6 +294,7 @@ impl Desktop {
             cache_status: "Loading local appearance…",
             appearance: egui::ThemePreference::System,
             appearance_changed: false,
+            reading,
             pending_save: None,
             credential_status: if demo {
                 "Fixture mode never opens the credential store or network"
@@ -326,6 +376,8 @@ impl Desktop {
         ctx.memory_mut(|m| *m = egui::Memory::default());
         ui::design::apply(ctx);
         ctx.set_theme(self.appearance);
+        self.messaging
+            .apply_reading_preferences(ctx, self.reading.current);
         ctx.clear_animations();
         #[cfg(feature = "developer-session")]
         {
@@ -379,6 +431,35 @@ impl Desktop {
             }
         }
         false
+    }
+    fn save_reading_preferences(&mut self, ctx: &egui::Context) {
+        if self.fixture_only {
+            return;
+        }
+        let now = std::time::Instant::now();
+        // Finish changes made before entering preview; never persist preview controls.
+        if !self.state.demo {
+            self.reading
+                .observe(self.messaging.reading_preferences, now);
+            if std::mem::take(&mut self.messaging.reading_save_requested) {
+                self.reading.request_save(now);
+            }
+        }
+        if self.reading.ready(now) {
+            let accepted = self.cache.as_ref().is_some_and(|cache| {
+                cache.queue(
+                    self.state.generation,
+                    model::Id(0),
+                    cache::Operation::SaveReadingPreferences(self.reading.current),
+                )
+            });
+            self.reading.queued(accepted);
+            self.cache_pending += usize::from(accepted);
+        }
+        if let Some(delay) = self.reading.remaining(now) {
+            ctx.request_repaint_after(delay);
+        }
+        self.messaging.reading_status = self.reading.status();
     }
     fn request_history_clear(&mut self, account: model::Id) {
         if self.state.demo || self.fixture_only {
@@ -771,25 +852,7 @@ impl Desktop {
                     let Some(channel) = channel else {
                         return;
                     };
-                    Event::Members(model::MemberList {
-                        guild,
-                        channel,
-                        request,
-                        rows: vec![
-                            Some(model::Member {
-                                user: test_support::message(2, channel).author,
-                                nick: None,
-                                status: None,
-                            }),
-                            Some(model::Member {
-                                user: test_support::message(1, channel).author,
-                                nick: None,
-                                status: None,
-                            }),
-                        ],
-                        total: 2,
-                        freshness: model::Freshness::Fresh,
-                    })
+                    Event::Members(demo_members(guild, channel, request))
                 }
                 Command::History { before, .. } => {
                     test_support::load_page(&mut self.state, before);
@@ -859,6 +922,7 @@ impl Desktop {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.menu_button("Appearance", |ui| {
                                 egui::widgets::global_theme_preference_buttons(ui);
+                                self.messaging.reading_settings(ui, self.fixture_only || self.state.demo);
                             });
                         });
                     });
@@ -1067,6 +1131,19 @@ impl Desktop {
             self.cache_pending = self.cache_pending.saturating_sub(1);
             // Settings are global; account removal/write failures still matter after logout.
             match &outcome {
+                cache::Outcome::ReadingPreferences(result) => {
+                    if let Some(value) = self.reading.restore(*result)
+                        && !self.state.demo
+                        && !self.fixture_only
+                    {
+                        self.messaging.apply_reading_preferences(ctx, value);
+                    }
+                    continue;
+                }
+                cache::Outcome::ReadingPreferencesSaved(result) => {
+                    self.reading.saved(*result);
+                    continue;
+                }
                 cache::Outcome::Appearance(appearance) => {
                     if !self.state.demo && !self.appearance_changed {
                         self.appearance = match appearance {
@@ -1143,6 +1220,8 @@ impl Desktop {
                     }
                 }
                 cache::Outcome::Appearance(_)
+                | cache::Outcome::ReadingPreferences(_)
+                | cache::Outcome::ReadingPreferencesSaved(_)
                 | cache::Outcome::HistoryCleared
                 | cache::Outcome::Failed { .. } => unreachable!(),
             }
@@ -1390,6 +1469,13 @@ impl eframe::App for Desktop {
         false
     }
     fn logic(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        self.messaging.sync_reading_zoom(ctx);
+        if !self.fixture_only && !self.state.demo {
+            self.reading.observe(
+                self.messaging.reading_preferences,
+                std::time::Instant::now(),
+            );
+        }
         self.poll(ctx);
         if self.state.auth != AuthState::Authenticated && !self.state.demo {
             self.notifications.clear();
@@ -1507,6 +1593,7 @@ impl eframe::App for Desktop {
                 || self.avatar_cleanup.is_some()
                 || self.cache_pending > 0
                 || self.cache_clears.pending()
+                || (!self.fixture_only && self.reading.needs_attention())
                 || self.cache_error)
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -1632,6 +1719,7 @@ impl eframe::App for Desktop {
             self.sign_in_screen(ui);
         }
         let appearance = ctx.options(|options| options.theme_preference);
+        self.save_reading_preferences(&ctx);
         if appearance != self.appearance {
             self.appearance = appearance;
             self.appearance_changed = true;
@@ -1647,6 +1735,7 @@ impl eframe::App for Desktop {
                 ui.label("Saved text drafts survive exit; selected files must be reselected. Logout removes local account data. Edits and uncertain sends need your attention.");
                 if self.forgetting{ui.label("Wait for saved-login removal to finish.");}
                 if self.cache_clears.pending(){ui.label("Cached history cleanup is pending; closing now may leave deleted messages on disk.");}
+                if !self.fixture_only && self.reading.needs_attention(){ui.label(self.reading.status());}
                 ui.horizontal(|ui|{
                     if ui.button("Keep working").clicked(){self.confirming_close=false;self.confirming_logout=false;self.download_close_pending=false;}
                     if ui.add_enabled(!self.forgetting,egui::Button::new("Discard and continue")).clicked(){

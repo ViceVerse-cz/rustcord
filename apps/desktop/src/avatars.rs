@@ -148,6 +148,17 @@ fn cdn_url(key: &str) -> Option<String> {
     if let Some(source) = key.strip_prefix("embed:") {
         return embed_url(source);
     }
+    // Profile badge and server-tag artwork hashes arrive only inside a requested profile.
+    if let Some(hash) = key.strip_prefix("badge-") {
+        return model::valid_avatar_hash(hash)
+            .then(|| format!("https://cdn.discordapp.com/badge-icons/{hash}.png?size=64"));
+    }
+    if let Some(value) = key.strip_prefix("clan-") {
+        let (guild, hash) = value.split_once('-')?;
+        let guild: Id = guild.parse().ok()?;
+        return model::valid_avatar_hash(hash)
+            .then(|| format!("https://cdn.discordapp.com/clan-badges/{guild}/{hash}.png?size=64"));
+    }
     if let Some(icon) = key.strip_prefix("guild-") {
         let (id, hash) = icon.split_once('-')?;
         let id: Id = id.parse().ok()?;
@@ -575,6 +586,16 @@ mod tests {
             "https://cdn.discordapp.com/guilds/2/users/1/avatars/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png?size=128"
         );
         assert!(cdn_url("member-banner-2-0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").is_none());
+        assert_eq!(
+            cdn_url("badge-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
+            "https://cdn.discordapp.com/badge-icons/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png?size=64"
+        );
+        assert_eq!(
+            cdn_url("clan-7-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
+            "https://cdn.discordapp.com/clan-badges/7/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png?size=64"
+        );
+        assert!(cdn_url("badge-../evil").is_none());
+        assert!(cdn_url("clan-0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").is_none());
         assert!(cdn_url("banner-1-../../invalid").is_none());
         assert!(cdn_url("default-6").is_none());
         assert!(cdn_url("0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").is_none());

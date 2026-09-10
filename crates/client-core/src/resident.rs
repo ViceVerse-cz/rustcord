@@ -184,6 +184,7 @@ mod tests {
         Message {
             id: Id(id),
             channel: Id(channel),
+            kind: 0,
             author: User {
                 id: Id(9),
                 name: "Synthetic".into(),

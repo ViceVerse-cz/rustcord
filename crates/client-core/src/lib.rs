@@ -104,7 +104,7 @@ pub enum Event {
         user: Id,
         guild: Option<Id>,
         request: u64,
-        result: Result<UserProfile, auth::Failure>,
+        result: Result<Box<UserProfile>, auth::Failure>,
     },
     Voice(voice::Event),
     ChannelCreated(Channel),
@@ -207,6 +207,7 @@ pub struct State {
     pub reactions: reactions::Reactions,
     pub profile: Option<profile::ProfileView>,
     pub profile_request: u64,
+    pub profile_cache: profile::ProfileCache,
     pub voice: voice::State,
     pub generation: u64,
     pub auth: auth::AuthState,
@@ -246,6 +247,7 @@ impl Default for State {
             reactions: reactions::Reactions::default(),
             profile: None,
             profile_request: 0,
+            profile_cache: Default::default(),
             voice: voice::State::default(),
             generation: 1,
             auth: auth::AuthState::Unauthenticated,
@@ -355,6 +357,7 @@ impl State {
                         user,
                         nick: None,
                         status: None,
+                        custom_status: None,
                     })
                 })
                 .collect()
@@ -753,6 +756,10 @@ impl State {
                         *guild = actual;
                     }
                 }
+                // Typed updates replace the old PermissionsChanged fallback too.
+                // Retire both snapshots and in-flight profiles before applying them.
+                self.clear_profile();
+                self.profile_cache.clear();
                 let result = self.permissions.update(event);
                 if result.is_err() {
                     self.permissions = permissions::Permissions::default();
@@ -1072,6 +1079,7 @@ impl State {
                 self.voice.roster.clear();
                 self.members = None;
                 self.clear_profile();
+                self.profile_cache.clear();
                 self.read_state.reset();
                 self.notification_preferences = notifications::Preferences::default();
                 self.user = Some(user);
@@ -1309,6 +1317,7 @@ impl State {
                 self.permissions = permissions::Permissions::default();
                 self.read_state.cancel();
                 self.clear_profile();
+                self.profile_cache.clear();
                 self.disconnect_voice();
                 self.invalidate_members();
                 self.timeline.clear();
@@ -1387,6 +1396,7 @@ impl State {
         }
         if !removed.is_empty() {
             self.clear_profile();
+            self.profile_cache.clear();
         }
         if self.selected.is_some_and(|id| removed.contains(&id)) {
             self.clear_search();
@@ -1421,6 +1431,7 @@ impl State {
             self.search_target = None;
             self.read_state.cancel();
             self.clear_profile();
+            self.profile_cache.clear();
             self.disconnect_voice();
             self.gateway_connected = false;
             self.invalidate_members();
@@ -1478,7 +1489,7 @@ impl Event {
                 Self::Reactions(reactions::Event::Read { result, .. }) => {
                     result.as_ref().map_or(0, |r| model::reaction_bytes(r))
                 }
-                Self::Profile { result, .. } => result.as_ref().map_or(0, UserProfile::bytes),
+                Self::Profile { result, .. } => result.as_ref().map_or(0, |p| p.bytes()),
                 Self::Voice(event) => event.bytes(),
                 Self::Permissions(event) => event.bytes(),
                 Self::GuildEmojis { emojis, .. } => custom_emoji_bytes(emojis),
@@ -2254,6 +2265,7 @@ mod tests {
             revision: 0,
             nonce: None,
             reply_to: None,
+            kind: 0,
             unsupported: false,
             extra_content: Default::default(),
             embeds: vec![],

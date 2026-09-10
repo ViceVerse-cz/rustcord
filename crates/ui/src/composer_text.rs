@@ -169,7 +169,10 @@ impl Layout {
                 child.set_clip_rect(output.text_clip_rect);
                 image.paint_at(
                     &child,
-                    egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(inline.width)),
+                    egui::Rect::from_center_size(
+                        rect.center(),
+                        image.calc_size(egui::Vec2::splat(inline.width), image.size()),
+                    ),
                 );
             }
         }
@@ -256,6 +259,52 @@ mod tests {
             avatar: None,
             discriminator: 0,
         }]
+    }
+
+    #[test]
+    fn nonsquare_emoji_keep_aspect_in_messages_and_composer() {
+        for dimensions in [[64, 32], [32, 64]] {
+            let ctx = egui::Context::default();
+            let texture = ctx.load_texture(
+                "synthetic-emoji",
+                egui::ColorImage::filled(dimensions, Color32::WHITE),
+                Default::default(),
+            );
+            let image = Image::new(&texture).fit_to_exact_size(egui::Vec2::splat(24.0));
+            let mut layout = Layout::default();
+            let mut avatars = Avatars::default();
+            let mut text = "<:serein_leaf:9001>".to_owned();
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                emoji::selectable(ui, &text, |_| Some(image.clone()), 24.0, false);
+                let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, width| {
+                    layout.galley(ui, buffer.as_str(), width, &[], &mut avatars, true)
+                };
+                let edit = egui::TextEdit::multiline(&mut text)
+                    .layouter(&mut layouter)
+                    .show(ui);
+                layout.inlines[0].image = Some(image.clone());
+                layout.paint(ui, &edit);
+            });
+            output.textures_delta.clear();
+            let sizes: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(rect) if rect.fill_texture_id() == texture.id() => {
+                        Some(rect.rect.size())
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(sizes.len(), 2);
+            for size in sizes {
+                assert!(
+                    (size.x / size.y - dimensions[0] as f32 / dimensions[1] as f32).abs() < 0.01
+                );
+                assert!(size.x <= 24.0 && size.y <= 24.0);
+            }
+            output.drop_without_applying_deltas();
+        }
     }
 
     #[test]
