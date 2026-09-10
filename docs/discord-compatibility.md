@@ -60,7 +60,7 @@ Serein is unofficial and not endorsed by Discord. No normal-user live session ha
 | Server categories | [Channel resource](https://docs.discord.com/developers/resources/channel), existing session snapshot and channel events | Documented metadata; normal-user delivery unofficial | Ordered collapsible headings, orphan fallback, partial create/update/delete; offline and keyboard tests; [details](categories.md) |
 | Server icons | [Image reference](https://docs.discord.com/developers/reference#image-formatting), guild metadata and GUILD_UPDATE | Documented CDN path; nested READY properties unofficial | Cached static icons and hash updates, initials fallback, offline tests; [details](icons.md) |
 | Message embeds | [Message resource](https://docs.discord.com/developers/resources/message#embed-object) | Documented attributes; normal-user delivery/proxy conversion unverified | Native cards, partial embed-only updates, suppression/spoilers, cached static service-proxy previews; video opens externally, [limits](embeds.md) |
-| People / member pane | Normal session; [discord.py-self Gateway](https://github.com/dolfies/discord.py-self/blob/master/discord/gateway.py), [member-list identity](https://github.com/dolfies/discord.py-self/blob/master/discord/abc.py), [wire types](https://github.com/dolfies/discord.py-self/blob/master/discord/types/gateway.py) | Unofficial and unstable | On-demand opcode 37 with the required guild typing subscription, first 100 list positions, typed incremental operations, identity/request filtering and 15-second timeout; DM recipients from READY. Missing metadata or unsupported replies show unavailable; live-unverified |
+| People / member pane | Normal session; [discord.py-self Gateway](https://github.com/dolfies/discord.py-self/blob/master/discord/gateway.py), [member-list identity](https://github.com/dolfies/discord.py-self/blob/master/discord/abc.py), [wire types](https://github.com/dolfies/discord.py-self/blob/master/discord/types/gateway.py) | Unofficial and unstable | On-demand opcode 37 with the required guild typing subscription, first 100 list positions, typed incremental operations, identity/request filtering and 15-second timeout; list identity resolves from current bounded permission metadata rather than the initial channel snapshot; DM recipients from READY. Missing metadata or unsupported replies show unavailable; live-unverified |
 | Profile pictures | [Discord image formatting](https://docs.discord.com/developers/reference#image-formatting), [User resource](https://docs.discord.com/developers/resources/user#user-object) | Documented CDN paths and user metadata; normal-session acquisition unofficial | Static PNGs, credential-free requests, account-isolated disk cache, bounded decode/textures, fallback initials; offline transport/cache tests only |
 | User mentions | [Message formatting](https://docs.discord.com/developers/reference#message-formatting) | Documented syntax; normal-user notification behavior unverified | Local @ autocomplete, clickable names/profile cards, exact user allowlists, bounded SQLite metadata; [tests and limits](mentions.md) |
 | User profile cards | Normal session `/users/{id}/profile`; [public implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/http.py) | Unofficial route and payload; live-unverified | Anchored popout with banner/avatar/bio/pronouns/badge artwork/server tag/theme colors/connections/mutual servers and retained presence/custom status, cancellable requests and visible failures; badge and server-tag CDN paths are observed, not documented; [evidence](profiles.md) |
@@ -336,3 +336,59 @@ bounded object visitor rather than recursively hydrated. One existing history pa
 target+1 retrieves an unloaded original; there is no bulk search or background traversal.
 This is public protocol evidence, not proof of normal-user endpoint acceptance. Live validation
 is unperformed; offline regressions cover reference shape, missing/null data and deletion races.
+
+
+### Server member identity after hydration (September 10, 2026)
+
+A guild refresh triggered by subscribing can recreate channel navigation objects without
+the READY-only member-list ID. Member requests now compute that ID from the existing
+bounded role/overwrite mirror, so GUILD_CREATE, newly delivered/restored channels and
+Reload people use current metadata. A change in list identity retires the active request
+and lets the visible pane request again; unchanged metadata preserves pending replies.
+Missing metadata still means unavailable; threads retain their separate-protocol limitation.
+The shared hash accepts the same u128 permission values as the permission parser.
+
+The original [subscription lifecycle](https://github.com/dolfies/discord.py-self/blob/2ba64a9a997e151a9c259984e0a179b1fdf4aff4/discord/state.py)
+and [list identity algorithm](https://github.com/dolfies/discord.py-self/blob/2ba64a9a997e151a9c259984e0a179b1fdf4aff4/discord/abc.py)
+were rechecked. This changes local identity selection, not the opcode, requested ranges,
+permissions or account access. Synthetic regression tests establish the hydration bug
+and its repair, not acceptance by Discord; owner-operated live verification remains unrun.
+
+
+### Member list row headers and refresh bursts (September 10, 2026)
+
+The original [Gateway wire types](https://github.com/dolfies/discord.py-self/blob/2ba64a9a997e151a9c259984e0a179b1fdf4aff4/discord/types/gateway.py)
+distinguish top-level group summaries (ID plus count) from group items inside SYNC ranges
+(ID only). Serein incorrectly required a count in every group item, rejecting the complete
+member update. It now reads only the group ID needed to recognize an index placeholder;
+counts are not fabricated. An exact synthetic ID-only-header regression loads the following
+member at the correct position. The owner-run redacted trace confirms that member replies
+were rejected by the decoder; the owner subsequently confirmed the repaired list loads.
+
+GUILD_CREATE can emit a synchronous channel-navigation burst. The previous eight-item
+reliable queue could terminate the session before the UI drained it. Admission now shares
+the same 32 MiB estimated byte budget across up to 4,008 events, preserving FIFO order,
+per-item limits and failure on real exhaustion. Full-burst/byte-exhaustion/cleanup tests
+are synthetic; this does not promise every large account fits existing account budgets.
+
+The owner confirmed the affected server member list loads after restarting the repaired
+diagnostic build on September 10, 2026. This does not establish general live compatibility
+or long-running capacity behavior.
+
+### Member role display
+
+The active server member pane groups loaded online members by their highest hoisted role,
+then shows ungrouped Online and Offline sections. Heading counts cover loaded members, not
+the entire server; the existing partial-list hint remains. Highest nonzero role color sets
+online names independently of the hoisted role. Offline names remain muted. Unknown roles
+fall back to ordinary names/groups. Role changes/removals reuse the live permission mirror,
+and member list SYNC/UPDATE supplies role membership. No directory fetch was added.
+
+Role name, position, hoist and primary color are documented fields in
+[Discord's role object](https://docs.discord.com/developers/topics/permissions#role-object).
+Modern `colors.primary_color` takes precedence over legacy `color`; role gradients are not
+rendered. Equal positions favor the lower role ID, consistent with
+[discord.py role comparison](https://github.com/Rapptz/discord.py/blob/master/discord/role.py).
+Names retain hue when readable; the theme adjusts insufficient contrast, including hover.
+Member list subscriptions remain unofficial. Synthetic role evidence does not establish
+live role behavior for every account.

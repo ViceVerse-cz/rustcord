@@ -213,6 +213,33 @@ search index, directory fetch or new worker/queue. Closing clears the query; log
 Schema 7 adds one checked integer `message_kind` (0..255) per cached message, with no new payload or cache. Existing unsupported rows migrate to the unknown sentinel 255; ordinary rows use 0. Reloaded history supplies the actual type. Existing account/item/byte/page limits remain in force. Migration and reopen/roundtrip tests cover retained rows and invalid values. Builds limited to schema 6 cannot reopen this cache. PR #28 independently uses schema 7 for content markers; merge both column-detected migrations and both save/load fields when integrating these branches.
 
 
+### Opt-in member synchronization diagnostics
+
+`SEREIN_MEMBER_DIAGNOSTICS=1` enables at most 64 fixed-label stderr lines per Gateway run,
+including reconnect attempts, plus one terminal session-failure label (under 8 KiB total). It is disabled
+by default. Labels distinguish subscription/cancellation, empty or populated SYNC,
+identity mismatch, decode/range/capacity failure and timeout. They contain no credentials,
+account/channel/list IDs, usernames, message content or raw payloads. No log file or
+telemetry is created by the application. If the owner redirects stderr to a file, that
+file is owner-managed and may also include unrelated framework stderr; the size bound
+above applies only to the prefixed Serein member diagnostics.
+
+
+The reliable Gateway/HTTP-to-UI queue accepts one bounded navigation refresh burst
+(up to MAX_NAV + EVENT_SLOTS = 4,008 items) within the existing 32 MiB aggregate estimated
+envelope/permit byte budget. Each event remains capped at 4 MiB. Receiving or dropping an
+envelope releases its permits; full/oversized admission still fails visibly. The UI drains
+eight reliable events per frame and repaints only while work remains. This fixes normal
+GUILD_CREATE channel fanout exceeding the old eight-item queue; it does not enlarge the
+byte budget or silently discard reliable events. These are component limits, not RSS.
+
+Member role display reuses session-only permission metadata: at most 512 roles per guild,
+16,384 across the mirror, within its existing byte budget. Each name retains at most 100
+non-control characters; owned string capacities count toward both event and mirror budgets.
+Member rows retain at most 512 role IDs, bounded while decoding and checked at state admission;
+their vector capacities count toward the existing active-pane byte bound. No role directory,
+new cache, persistent schema, or network endpoint is introduced.
+
 Unread/forward navigation reuses the cancellable history worker, 50-message response limit,
 500-row/4-MiB active timeline and existing global resident budget. It replaces the selected
 window, preserving bounded deletion/reconciliation metadata and drafts. Three fixed-size

@@ -34,10 +34,26 @@ pub const MAX_ROLES: usize = 512;
 pub const MAX_MEMBER_ROLES: usize = 512;
 pub const MAX_OVERWRITES: usize = 1000;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Role {
     pub id: Id,
     pub bits: u128,
+    pub name: String,
+    pub color: u32,
+    pub position: i32,
+    pub hoist: bool,
+}
+impl Role {
+    /// Higher positions rank first; equal positions favor the older (lower) role ID.
+    /// Compare roles from the same guild, excluding its @everyone role.
+    pub fn cmp_hierarchy(&self, other: &Self) -> std::cmp::Ordering {
+        self.position
+            .cmp(&other.position)
+            .then_with(|| other.id.cmp(&self.id))
+    }
+    pub fn bytes(&self) -> usize {
+        size_of::<Self>() + self.name.capacity()
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Overwrite {
@@ -46,6 +62,60 @@ pub struct Overwrite {
     pub allow: u128,
     pub deny: u128,
 }
+// Unofficial list identity observed by discord.py-self (abc.GuildChannel.member_list_id).
+// This hash selects a server list; it never grants permissions.
+pub fn member_list_id(everyone: u128, overwrites: &[Overwrite]) -> Option<String> {
+    if overwrites.len() > MAX_OVERWRITES {
+        return None;
+    }
+    if everyone & VIEW_CHANNEL != 0 && !overwrites.iter().any(|o| o.deny & VIEW_CHANNEL != 0) {
+        return Some("everyone".into());
+    }
+    let mut entries: Vec<_> = overwrites
+        .iter()
+        .filter_map(|o| {
+            if o.allow & VIEW_CHANNEL != 0 {
+                Some(format!("allow:{}", o.id))
+            } else if o.deny & VIEW_CHANNEL != 0 {
+                Some(format!("deny:{}", o.id))
+            } else {
+                None
+            }
+        })
+        .collect();
+    entries.sort();
+    Some(murmur3(entries.join(",").as_bytes()).to_string())
+}
+fn murmur3(bytes: &[u8]) -> u32 {
+    let mix = |n: u32| {
+        n.wrapping_mul(0xcc9e2d51)
+            .rotate_left(15)
+            .wrapping_mul(0x1b873593)
+    };
+    let mut hash = 0u32;
+    let (chunks, remainder) = bytes.as_chunks::<4>();
+    for part in chunks {
+        hash ^= mix(u32::from_le_bytes(*part));
+        hash = hash
+            .rotate_left(13)
+            .wrapping_mul(5)
+            .wrapping_add(0xe6546b64);
+    }
+    let tail = remainder
+        .iter()
+        .enumerate()
+        .fold(0u32, |n, (i, b)| n | (u32::from(*b) << (i * 8)));
+    if !remainder.is_empty() {
+        hash ^= mix(tail);
+    }
+    hash ^= bytes.len() as u32;
+    hash ^= hash >> 16;
+    hash = hash.wrapping_mul(0x85ebca6b);
+    hash ^= hash >> 13;
+    hash = hash.wrapping_mul(0xc2b2ae35);
+    hash ^ (hash >> 16)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Member {
     pub roles: Vec<Id>,
@@ -80,10 +150,10 @@ impl Member {
 impl Guild {
     pub fn bytes(&self) -> usize {
         size_of::<Self>()
-            + self
-                .roles
-                .as_ref()
-                .map_or(0, |roles| roles.capacity() * size_of::<Role>())
+            + self.roles.as_ref().map_or(0, |roles| {
+                roles.capacity() * size_of::<Role>()
+                    + roles.iter().map(|role| role.name.capacity()).sum::<usize>()
+            })
             + self
                 .member
                 .as_ref()
@@ -192,12 +262,52 @@ pub fn effective(
 mod tests {
     use super::*;
 
+    #[test]
+    fn member_list_identity_matches_wire_hash_and_bounds() {
+        assert_eq!(murmur3(b""), 0);
+        assert_eq!(murmur3(b"foo"), 0xf6a5c420);
+        assert_eq!(murmur3(b"hello"), 0x248bfa47);
+        assert_eq!(
+            member_list_id(VIEW_CHANNEL, &[]).as_deref(),
+            Some("everyone")
+        );
+        assert_eq!(member_list_id(0, &[]).as_deref(), Some("0"));
+        let deny = Overwrite {
+            id: Id(5),
+            kind: 0,
+            allow: 0,
+            deny: VIEW_CHANNEL,
+        };
+        let allow = Overwrite {
+            id: Id(9),
+            kind: 1,
+            allow: VIEW_CHANNEL | (1 << 100),
+            deny: VIEW_CHANNEL,
+        };
+        assert_eq!(
+            member_list_id(VIEW_CHANNEL, &[deny, allow]),
+            Some(murmur3(b"allow:9,deny:5").to_string())
+        );
+        assert_eq!(
+            member_list_id(0, &[allow, deny]),
+            member_list_id(0, &[deny, allow])
+        );
+        assert_eq!(
+            member_list_id(VIEW_CHANNEL, &[deny; MAX_OVERWRITES + 1]),
+            None
+        );
+    }
+
     fn guild() -> Guild {
         Guild {
             id: Id(1),
             owner: Some(Id(99)),
             roles: Some(vec![
                 Role {
+                    name: String::new(),
+                    color: 0,
+                    position: 0,
+                    hoist: false,
                     id: Id(1),
                     bits: VIEW_CHANNEL
                         | READ_MESSAGE_HISTORY
@@ -206,10 +316,18 @@ mod tests {
                         | (1 << 100),
                 },
                 Role {
+                    name: String::new(),
+                    color: 0,
+                    position: 0,
+                    hoist: false,
                     id: Id(2),
                     bits: CONNECT,
                 },
                 Role {
+                    name: String::new(),
+                    color: 0,
+                    position: 0,
+                    hoist: false,
                     id: Id(3),
                     bits: SPEAK | SEND_MESSAGES_IN_THREADS,
                 },
@@ -325,11 +443,28 @@ mod tests {
                 ..valid.clone()
             },
             Guild {
-                roles: Some(vec![Role { id: Id(1), bits: 0 }; 2]),
+                roles: Some(vec![
+                    Role {
+                        name: String::new(),
+                        color: 0,
+                        position: 0,
+                        hoist: false,
+                        id: Id(1),
+                        bits: 0
+                    };
+                    2
+                ]),
                 ..valid.clone()
             },
             Guild {
-                roles: Some(vec![Role { id: Id(2), bits: 0 }]),
+                roles: Some(vec![Role {
+                    name: String::new(),
+                    color: 0,
+                    position: 0,
+                    hoist: false,
+                    id: Id(2),
+                    bits: 0,
+                }]),
                 ..valid.clone()
             },
             Guild {
@@ -357,6 +492,10 @@ mod tests {
                 roles: Some(
                     (1..=MAX_ROLES + 1)
                         .map(|id| Role {
+                            name: String::new(),
+                            color: 0,
+                            position: 0,
+                            hoist: false,
                             id: Id(id as u64),
                             bits: 0,
                         })

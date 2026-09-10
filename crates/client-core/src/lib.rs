@@ -26,7 +26,7 @@ pub const MAX_CONTENT: usize = 2000;
 pub const MAX_NAV: usize = 4000;
 pub const MAX_MEMBER_PRESENCE_BYTES: usize = 64 * 1024;
 pub const MAX_EVENT_BYTES: usize = 4 * 1024 * 1024;
-pub const EVENT_SLOTS: usize = 8; // <= 32 MiB wire-derived data, not including one decoder
+pub const EVENT_SLOTS: usize = 8; // UI drain batch; reliable events share a 32 MiB byte budget.
 pub const COMMAND_SLOTS: usize = 16; // each admitted command <= 16 KiB
 
 pub enum Command {
@@ -364,6 +364,7 @@ impl State {
         if !self.can_view(channel.id) {
             return None;
         }
+        let list_id = self.member_list_id(channel);
         let rows = if channel.guild.is_none() && self.freshness != Freshness::Unavailable {
             let mut users = channel.recipients.clone();
             if let Some(user) = &self.user
@@ -375,6 +376,7 @@ impl State {
                 .into_iter()
                 .map(|user| {
                     Some(Member {
+                        roles: vec![],
                         user,
                         nick: None,
                         status: None,
@@ -389,7 +391,7 @@ impl State {
             Freshness::Unavailable
         } else if channel.guild.is_none() {
             Freshness::Fresh
-        } else if channel.member_list_id.is_none() {
+        } else if list_id.is_none() {
             Freshness::Unavailable
         } else {
             Freshness::Loading
@@ -403,12 +405,12 @@ impl State {
             freshness,
         });
         Some(Command::Members {
-            guild: channel.guild.filter(|_| {
-                channel.member_list_id.is_some() && self.freshness != Freshness::Unavailable
-            }),
+            guild: channel
+                .guild
+                .filter(|_| list_id.is_some() && self.freshness != Freshness::Unavailable),
             channel: Some(channel.id),
             request: self.member_request,
-            list_id: channel.member_list_id.clone(),
+            list_id,
         })
     }
     pub fn close_members(&mut self) -> Command {
@@ -701,6 +703,12 @@ impl State {
             self.typing.clear();
         }
         let previous_access = access_changed.then(|| self.permission_access()).flatten();
+        let previous_member_list = (access_changed && self.members.is_some()).then(|| {
+            self.channels
+                .iter()
+                .find(|channel| Some(channel.id) == self.selected)
+                .and_then(|channel| self.member_list_id(channel))
+        });
         if let Event::ChannelRestored(channel) = &envelope.event
             && (channel.id.0 == 0
                 || !matches!(channel.kind, 0 | 2 | 4 | 5 | 13..=16)
@@ -1050,6 +1058,11 @@ impl State {
                     return;
                 }
                 if list.rows.len() > 100
+                    || list
+                        .rows
+                        .iter()
+                        .flatten()
+                        .any(|member| member.roles.len() > model::permissions::MAX_MEMBER_ROLES)
                     || list.rows.iter().flatten().map(Member::bytes).sum::<usize>() > 128 * 1024
                 {
                     self.members.as_mut().unwrap().freshness = Freshness::Unavailable;
@@ -1468,6 +1481,17 @@ impl State {
         }
         if access_changed {
             self.reconcile_permissions(previous_access);
+            if let Some(previous) = previous_member_list {
+                let current = self
+                    .channels
+                    .iter()
+                    .find(|channel| Some(channel.id) == self.selected)
+                    .and_then(|channel| self.member_list_id(channel));
+                if previous != current {
+                    // Let the visible pane request the new list; late snapshots lose their request scope.
+                    self.close_members();
+                }
+            }
             self.reconcile_notifications();
             self.prune_resident();
         }

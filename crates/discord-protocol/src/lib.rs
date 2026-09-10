@@ -348,7 +348,7 @@ impl Ready {
                     .roles
                     .iter()
                     .find(|r| r.id == g.id)
-                    .and_then(|r| r.permissions.parse::<u64>().ok());
+                    .and_then(|r| r.permissions.parse::<u128>().ok());
                 let hidden: std::collections::BTreeSet<_> = g
                     .channels
                     .iter()
@@ -895,70 +895,27 @@ pub struct Overwrite {
     pub allow: String,
     pub deny: String,
 }
-// Unofficial list identity observed by discord.py-self (abc.GuildChannel.member_list_id).
-// This hash selects a server list; it never grants permissions.
-fn member_list_id(everyone: u64, overwrites: &[Overwrite]) -> Option<String> {
-    if overwrites.len() > 1000
-        || overwrites
-            .iter()
-            .any(|o| o.allow.parse::<u64>().is_err() || o.deny.parse::<u64>().is_err())
-    {
+fn member_list_id(everyone: u128, overwrites: &[Overwrite]) -> Option<String> {
+    if overwrites.len() > model::permissions::MAX_OVERWRITES {
         return None;
     }
-    let view = 1 << 10;
-    if everyone & view != 0
-        && !overwrites
-            .iter()
-            .any(|o| o.deny.parse::<u64>().unwrap_or(0) & view != 0)
-    {
-        return Some("everyone".into());
-    }
-    let mut entries: Vec<_> = overwrites
+    let overwrites = overwrites
         .iter()
-        .filter_map(|o| {
-            if o.allow.parse::<u64>().unwrap_or(0) & view != 0 {
-                Some(format!("allow:{}", o.id))
-            } else if o.deny.parse::<u64>().unwrap_or(0) & view != 0 {
-                Some(format!("deny:{}", o.id))
-            } else {
-                None
-            }
+        .map(|o| {
+            Some(model::permissions::Overwrite {
+                id: o.id,
+                kind: 0, // List identity uses IDs and view bits, regardless of overwrite kind.
+                allow: o.allow.parse::<u128>().ok()?,
+                deny: o.deny.parse::<u128>().ok()?,
+            })
         })
-        .collect();
-    entries.sort();
-    Some(murmur3(entries.join(",").as_bytes()).to_string())
-}
-fn murmur3(bytes: &[u8]) -> u32 {
-    let mix = |n: u32| {
-        n.wrapping_mul(0xcc9e2d51)
-            .rotate_left(15)
-            .wrapping_mul(0x1b873593)
-    };
-    let mut hash = 0u32;
-    let (chunks, remainder) = bytes.as_chunks::<4>();
-    for part in chunks {
-        hash ^= mix(u32::from_le_bytes(*part));
-        hash = hash
-            .rotate_left(13)
-            .wrapping_mul(5)
-            .wrapping_add(0xe6546b64);
-    }
-    let tail = remainder
-        .iter()
-        .enumerate()
-        .fold(0u32, |n, (i, b)| n | (u32::from(*b) << (i * 8)));
-    if !remainder.is_empty() {
-        hash ^= mix(tail);
-    }
-    hash ^= bytes.len() as u32;
-    hash ^= hash >> 16;
-    hash = hash.wrapping_mul(0x85ebca6b);
-    hash ^= hash >> 13;
-    hash = hash.wrapping_mul(0xc2b2ae35);
-    hash ^ (hash >> 16)
+        .collect::<Option<Vec<_>>>()?;
+    model::permissions::member_list_id(everyone, &overwrites)
 }
 #[derive(Deserialize)]
 pub struct MemberDto {
+    #[serde(default, deserialize_with = "permissions::member_roles")]
+    pub roles: Vec<Id>,
     pub user: UserDto,
     #[serde(default)]
     pub nick: Option<String>,
@@ -986,13 +943,13 @@ pub enum MemberItem {
 #[derive(Deserialize)]
 pub struct MemberGroup {
     pub id: String,
-    pub count: u64,
 }
 impl MemberItem {
     pub fn into_model(self) -> Option<model::Member> {
         match self {
             Self::Group { .. } => None,
             Self::Member { member: m } => Some(model::Member {
+                roles: m.roles,
                 user: m.user.into_model(),
                 nick: m.nick.map(|n| n.chars().take(128).collect()),
                 custom_status: m.presence.as_ref().and_then(PresenceDto::custom_status),
@@ -1032,6 +989,26 @@ pub struct MemberUpdate {
 #[cfg(test)]
 mod member_tests {
     use super::*;
+    #[test]
+    fn member_roles_are_retained_sorted_and_bounded_before_list_admission() {
+        let member: MemberItem =
+            decode(br#"{"member":{"user":{"id":"5","username":"Synthetic"},"roles":["12","11"]}}"#)
+                .unwrap();
+        let mut member = member.into_model().unwrap();
+        assert_eq!(member.roles, vec![Id(11), Id(12)]);
+        let bytes = member.bytes();
+        member.roles.reserve(100);
+        assert!(member.bytes() >= bytes + 100 * size_of::<Id>());
+        for roles in [
+            serde_json::json!(["0"]),
+            serde_json::json!(["11", "11"]),
+            serde_json::json!((1..=513).map(|id| id.to_string()).collect::<Vec<_>>()),
+        ] {
+            let value = serde_json::json!({"member":{"user":{"id":"5","username":"Synthetic"},"roles":roles}});
+            assert!(decode::<MemberItem>(&serde_json::to_vec(&value).unwrap()).is_err());
+        }
+    }
+
     #[test]
     fn avatars_recipients_and_permission_scoped_list_ids() {
         let mut nested: Ready = decode(br#"{"user":{"id":"1","username":"Synthetic"},"session_id":"synthetic","resume_gateway_url":"wss://gateway.discord.gg","guilds":[{"id":"2","properties":{"name":"Nested","icon":"0123456789abcdef0123456789abcdef"}},{"id":"3","name":"Flat fallback","icon":"0123456789abcdef0123456789abcdef","properties":{"icon":null}}]}"#).unwrap();
@@ -1087,11 +1064,19 @@ mod member_tests {
                 .count(),
             128
         );
-        assert_eq!(murmur3(b""), 0);
-        assert_eq!(murmur3(b"foo"), 0xf6a5c420);
-        assert_eq!(murmur3(b"hello"), 0x248bfa47);
         assert_eq!(member_list_id(1024, &[]), Some("everyone".into()));
         assert_eq!(member_list_id(0, &[]), Some("0".into()));
+        assert_eq!(
+            member_list_id(
+                1024 | (1 << 100),
+                &[Overwrite {
+                    id: Id(5),
+                    allow: (1u128 << 100).to_string(),
+                    deny: "0".into(),
+                }]
+            ),
+            Some("everyone".into())
+        );
         let deny = Overwrite {
             id: Id(5),
             allow: "0".into(),

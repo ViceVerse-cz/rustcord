@@ -180,28 +180,53 @@ fn changes_active_history(state: &State, event: &Event) -> bool {
 }
 /// Synthetic People rows with presence; never a Discord member directory.
 fn demo_members(guild: Option<model::Id>, channel: model::Id, request: u64) -> model::MemberList {
+    let mut members = vec![
+        model::Member {
+            user: test_support::message(2, channel).author,
+            nick: None,
+            roles: if guild.is_some() {
+                vec![model::Id(9001)]
+            } else {
+                vec![]
+            },
+            status: Some("idle".into()),
+            custom_status: None,
+        },
+        model::Member {
+            user: test_support::message(1, channel).author,
+            nick: None,
+            roles: if guild.is_some() {
+                vec![model::Id(9002)]
+            } else {
+                vec![]
+            },
+            status: Some("online".into()),
+            custom_status: Some("🌙 semifluent in synthetic data".into()),
+        },
+    ];
+    if guild.is_some() {
+        for (id, name, status) in [
+            (9003, "Alex (synthetic)", "online"),
+            (9004, "Sam (synthetic)", "offline"),
+        ] {
+            let mut member = members[0].clone();
+            member.user.id = model::Id(id);
+            member.user.name = name.into();
+            member.roles.clear();
+            member.status = Some(status.into());
+            members.push(member);
+        }
+    }
     model::MemberList {
         guild,
         channel,
         request,
-        rows: vec![
-            Some(model::Member {
-                user: test_support::message(2, channel).author,
-                nick: None,
-                status: Some("idle".into()),
-                custom_status: None,
-            }),
-            Some(model::Member {
-                user: test_support::message(1, channel).author,
-                nick: None,
-                status: Some("online".into()),
-                custom_status: Some("🌙 semifluent in synthetic data".into()),
-            }),
-        ],
-        total: 2,
+        total: members.len() as u64,
+        rows: members.into_iter().map(Some).collect(),
         freshness: model::Freshness::Fresh,
     }
 }
+
 impl Desktop {
     fn new(
         cc: &eframe::CreationContext<'_>,
@@ -247,6 +272,31 @@ impl Desktop {
         } else {
             State::default()
         };
+        if demo {
+            // Synthetic role metadata exercises the same bounded permission mirror as live events.
+            for guild in state.permissions.guilds.values_mut() {
+                if let Some(roles) = &mut guild.roles {
+                    roles.extend([
+                        model::permissions::Role {
+                            id: model::Id(9001),
+                            bits: 0,
+                            name: "Founders".into(),
+                            color: 0xe78284,
+                            position: 2,
+                            hoist: true,
+                        },
+                        model::permissions::Role {
+                            id: model::Id(9002),
+                            bits: 0,
+                            name: "Community".into(),
+                            color: 0xe5c769,
+                            position: 1,
+                            hoist: true,
+                        },
+                    ]);
+                }
+            }
+        }
         let loading_saved = store
             .as_mut()
             .is_some_and(|store| store.load(state.generation, std::time::Instant::now()));
@@ -1481,6 +1531,12 @@ impl Desktop {
             });
         }
         if let Some(failure) = terminal {
+            if std::env::var_os("SEREIN_MEMBER_DIAGNOSTICS").as_deref()
+                == Some(std::ffi::OsStr::new("1"))
+            {
+                // One additional fixed-label diagnostic when the session terminates.
+                eprintln!("[Serein members] Session stopped: {}", failure.label());
+            }
             self.connection = None;
             self.pending_save = None;
             self.state.apply(Envelope {

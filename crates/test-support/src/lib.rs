@@ -360,6 +360,7 @@ pub fn voice_demo_state() -> State {
             server_deafened: false,
         },
         member: Some(Member {
+            roles: vec![],
             user: User {
                 id: Id(id),
                 name: name.into(),
@@ -491,7 +492,14 @@ pub fn permission_snapshot(state: &State) -> model::permissions::Snapshot {
             .map(|guild| p::Guild {
                 id: guild.id,
                 owner: Some(Id(u64::MAX)),
-                roles: Some(vec![p::Role { id: guild.id, bits }]),
+                roles: Some(vec![p::Role {
+                    name: String::new(),
+                    color: 0,
+                    position: 0,
+                    hoist: false,
+                    id: guild.id,
+                    bits,
+                }]),
                 member: Some(p::Member {
                     roles: vec![],
                     timeout_until: None,

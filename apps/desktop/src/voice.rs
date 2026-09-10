@@ -613,7 +613,14 @@ mod tests {
             p::Guild {
                 id: Id(10),
                 owner: Some(Id(999)),
-                roles: Some(vec![p::Role { id: Id(10), bits }]),
+                roles: Some(vec![p::Role {
+                    name: String::new(),
+                    color: 0,
+                    position: 0,
+                    hoist: false,
+                    id: Id(10),
+                    bits,
+                }]),
                 member: Some(p::Member {
                     roles: vec![],
                     timeout_until: None,

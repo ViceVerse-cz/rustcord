@@ -264,6 +264,10 @@ mod tests {
                     id: Id(1),
                     owner: Some(Id(999)),
                     roles: Some(vec![p::Role {
+                        name: String::new(),
+                        color: 0,
+                        position: 0,
+                        hoist: false,
                         id: Id(1),
                         bits: p::VIEW_CHANNEL | p::READ_MESSAGE_HISTORY,
                     }]),

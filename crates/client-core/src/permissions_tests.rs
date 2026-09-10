@@ -67,10 +67,18 @@ fn snapshot() -> p::Snapshot {
             owner: Some(Id(999)),
             roles: Some(vec![
                 p::Role {
+                    name: String::new(),
+                    color: 0,
+                    position: 0,
+                    hoist: false,
                     id: Id(10),
                     bits: BITS,
                 },
                 p::Role {
+                    name: String::new(),
+                    color: 0,
+                    position: 0,
+                    hoist: false,
                     id: Id(11),
                     bits: 0,
                 },
@@ -256,6 +264,10 @@ fn send_only_access_accepts_new_live_messages_without_restoring_old_history() {
         PermissionEvent::Role {
             guild: Id(10),
             role: p::Role {
+                name: String::new(),
+                color: 0,
+                position: 0,
+                hoist: false,
                 id: Id(11),
                 bits: p::ATTACH_FILES,
             },
@@ -302,6 +314,10 @@ fn deleting_an_unassigned_role_prunes_its_overwrites_and_invalidates_cached_deci
         PermissionEvent::Role {
             guild: Id(10),
             role: p::Role {
+                name: String::new(),
+                color: 0,
+                position: 0,
+                hoist: false,
                 id: Id(10),
                 bits: BITS & !p::SEND_MESSAGES,
             },
@@ -370,6 +386,10 @@ fn malformed_snapshots_are_atomic_and_rejected_permission_events_fail_closed() {
     oversized.guilds[0].roles = Some(
         (1..=513)
             .map(|id| p::Role {
+                name: String::new(),
+                color: 0,
+                position: 0,
+                hoist: false,
                 id: Id(id),
                 bits: BITS,
             })
@@ -422,4 +442,195 @@ fn malformed_snapshots_are_atomic_and_rejected_permission_events_fail_closed() {
         state.timeline.is_empty(),
         "Rejected reducer updates cannot keep granting old access"
     );
+}
+
+#[test]
+fn member_requests_survive_guild_hydration_and_follow_current_permissions() {
+    let mut state = state();
+    state.channels[0].member_list_id = Some("everyone".into());
+    let request = |state: &mut State| {
+        let Some(Command::Members {
+            guild: Some(Id(10)),
+            list_id: Some(id),
+            request,
+            ..
+        }) = state.request_members()
+        else {
+            panic!("Known channel permissions must produce a member subscription")
+        };
+        (id, request)
+    };
+    let (id, first) = request(&mut state);
+    assert_eq!(id, "everyone");
+    // Subscribing can hydrate a guild: permission snapshot precedes recreated channels.
+    permission(&mut state, PermissionEvent::Snapshot(snapshot()));
+    apply(&mut state, Event::ChannelCreated(channel(20, 0, None)));
+    assert_eq!(state.members.as_ref().unwrap().request, first);
+    let mut loaded = model::MemberList {
+        guild: Some(Id(10)),
+        channel: Id(20),
+        request: first,
+        total: 1,
+        rows: vec![Some(model::Member {
+            roles: vec![],
+            user: user(),
+            nick: None,
+            status: None,
+            custom_status: None,
+        })],
+        freshness: Freshness::Fresh,
+    };
+    apply(&mut state, Event::Members(loaded.clone()));
+    assert_eq!(state.members.as_ref().unwrap().freshness, Freshness::Fresh);
+    let (id, reloaded) = request(&mut state);
+    assert_eq!(
+        id, "everyone",
+        "Reload after GUILD_CREATE must retain a usable identity"
+    );
+    loaded.request = reloaded;
+    apply(&mut state, Event::Members(loaded.clone()));
+
+    // Changing another role's VIEW overwrite changes the list, but not our access.
+    permission(
+        &mut state,
+        PermissionEvent::Channel {
+            channel: Id(20),
+            guild: Some(Id(10)),
+            overwrites: Patch::Value(vec![p::Overwrite {
+                id: Id(11),
+                kind: 0,
+                allow: 0,
+                deny: p::VIEW_CHANNEL,
+            }]),
+        },
+    );
+    assert!(state.can_view(Id(20)) && state.members.is_none());
+    apply(&mut state, Event::Members(loaded));
+    assert!(
+        state.members.is_none(),
+        "Late old-list rows must not return"
+    );
+    assert_ne!(request(&mut state).0, "everyone");
+    permission(
+        &mut state,
+        PermissionEvent::Channel {
+            channel: Id(20),
+            guild: Some(Id(10)),
+            overwrites: Patch::Null,
+        },
+    );
+    assert!(state.members.is_none());
+    // Owner access doesn't make missing list metadata known.
+    permission(
+        &mut state,
+        PermissionEvent::Owner {
+            guild: Id(10),
+            owner: Patch::Value(Id(2)),
+        },
+    );
+    assert!(matches!(
+        state.request_members(),
+        Some(Command::Members {
+            guild: None,
+            list_id: None,
+            ..
+        })
+    ));
+    assert_eq!(
+        state.members.as_ref().unwrap().freshness,
+        Freshness::Unavailable
+    );
+    permission(&mut state, PermissionEvent::Snapshot(snapshot()));
+    assert!(
+        state.members.is_none(),
+        "Hydration must wake an unavailable open pane"
+    );
+    state.history(None);
+    let current = state.request;
+    history(&mut state, Id(20), current, 100);
+    assert_eq!(request(&mut state).0, "everyone");
+    assert!(
+        state
+            .member_list_id(&channel(30, 11, Some(Id(20))))
+            .is_none()
+    );
+}
+
+#[test]
+fn member_role_display_tracks_live_role_metadata_and_membership() {
+    let mut state = state();
+    let mut member = model::Member {
+        roles: vec![Id(13), Id(12), Id(11), Id(10)],
+        user: user(),
+        nick: None,
+        status: Some("online".into()),
+        custom_status: None,
+    };
+    let role = |id, position, color, hoist| p::Role {
+        id: Id(id),
+        bits: 0,
+        name: format!("Role {id}"),
+        position,
+        color,
+        hoist,
+    };
+    for role in [
+        role(11, 2, 0x112233, true),
+        role(12, 2, 0x445566, true),
+        role(13, 3, 0, false),
+    ] {
+        permission(
+            &mut state,
+            PermissionEvent::Role {
+                guild: Id(10),
+                role,
+            },
+        );
+    }
+    let resolved = |state: &State, member: &model::Member| {
+        let (group, color) = state.member_roles(Id(10), member);
+        (group.map(|role| role.id), color.map(|role| role.color))
+    };
+    assert_eq!(resolved(&state, &member), (Some(Id(11)), Some(0x112233)));
+    permission(
+        &mut state,
+        PermissionEvent::Role {
+            guild: Id(10),
+            role: role(12, 4, 0x778899, false),
+        },
+    );
+    assert_eq!(resolved(&state, &member), (Some(Id(11)), Some(0x778899)));
+    permission(
+        &mut state,
+        PermissionEvent::RoleRemoved {
+            guild: Id(10),
+            id: Id(11),
+        },
+    );
+    assert_eq!(resolved(&state, &member), (None, Some(0x778899)));
+    member.roles = vec![Id(13), Id(999)];
+    assert_eq!(resolved(&state, &member), (None, None));
+    assert!(state.member_roles(Id(99), &member).0.is_none());
+    // The default role never gives an individual a group or color, even if malformed.
+    let mut everyone = role(10, 999, 0xff_ffff, true);
+    everyone.bits = BITS;
+    permission(
+        &mut state,
+        PermissionEvent::Role {
+            guild: Id(10),
+            role: everyone,
+        },
+    );
+    member.roles = vec![Id(10)];
+    assert_eq!(resolved(&state, &member), (None, None));
+    let before = state.permissions.bytes();
+    let mut named = role(14, 0, 0, false);
+    named.name.reserve(512);
+    let event = PermissionEvent::Role {
+        guild: Id(10),
+        role: named,
+    };
+    assert!(event.bytes() >= size_of::<PermissionEvent>() + 512);
+    permission(&mut state, event);
+    assert!(state.permissions.bytes() >= before + 512);
 }

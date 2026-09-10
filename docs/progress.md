@@ -1272,6 +1272,114 @@ The header now gives its controls their actual width before truncating the chann
 `cargo xtask check` passes, including all 75 UI tests, workspace tests/doctests, strict Clippy and policy checks. Final text/voice release packages and strict ad-hoc signature verification pass. Native macOS synthetic before/after dark, after-light and Midnight Blurple captures were inspected under `docs/pr-evidence/discord-theme-rebase/`. Baseline is the existing clean `dff0975` worktree/package; it precedes the incoming-typing main commit. Both runs use `--demo --demo-chat`, the same default 1120×760 requested viewport and 2× capture scale; the baseline outer window includes its old native title bar. No account session, messages, calls or microphone use occurred. Pointer/keyboard-only interaction, narrow-window interaction, screen readers, IME, Windows/Linux and live compatibility remain unverified. The gradient archive window itself has not been recaptured after the opacity fix. The PR remains draft for those interaction evidence gaps and pending CI. Refreshed package and process measurements are in `docs/performance.md`.
 
 
+## Server member list hydration repair — September 10, 2026
+
+Baseline: clean `main` at `9fcce51`, matching fetched `origin/main`; task branch
+`fix/server-member-sync`, pinned Rust 1.98.1 on macOS 27 / Apple M1 Pro / 16 GiB.
+The prior opcode-37/typing repair was already present. A GUILD_CREATE refresh replaced
+READY channel records with records lacking their computed member-list ID, making Reload
+people unable to request the server list. New/restored channels and changed overwrites
+had the same dependency on stale navigation metadata.
+
+Member requests now derive their ID from the existing bounded permission mirror, sharing
+the existing hash with the protocol layer and retaining u128 permission precision.
+An identity change clears the open request for the visible pane to refresh; identical
+hydration preserves pending replies. Missing metadata stays unavailable, stale replies
+remain rejected and threads retain their separate-protocol limitation. No dependency,
+additional directory request, UI layout or DM recipient behavior changed.
+
+Verification: the synthetic hydration/reload regression fails against `9fcce51` and
+passes after the fix. It also covers overwrite changes, late replies from the active
+old request, missing metadata and subsequent hydration. Shared hash tests cover known
+vectors, ordering, capacity and high permission bits. An independent review found no
+blocking issue. The baseline regression used a detached worktree; affected Cargo package
+caches were cleared before final validation to eliminate reuse across the two source trees.
+Native screenshots are not applicable: this fixes state/request selection; the synthetic
+member rendering is unchanged and identical pictures cannot demonstrate service acceptance.
+No saved account, Discord messages, calls, microphone or private payloads were accessed.
+
+Release package measurements and synthetic reducer results are recorded in
+`docs/performance.md`. Owner-operated live validation and Windows/Linux runtime testing
+remain unrun; this repair is not a claim of complete normal-user interoperability.
+
+Final local verification: `cargo xtask check` passed formatting, all workspace tests,
+strict all-feature Clippy and policy checks; the strengthened focused hydration regression
+also passed. `cargo xtask package` and `cargo xtask package-voice` built and verified their
+ad-hoc signatures. Text/voice executables grew by 1,216/1,200 bytes; synthetic reducer
+median was 37.244→37.569 ms with identical retained bounds, within run variation.
+
+Delivery: [draft PR #38](https://github.com/ViceVerse-cz/rustcord/pull/38), implementation
+commit `c11b7ab`. macOS, Ubuntu, Windows and security checks were pending at initial
+inspection; no remote CI success is claimed. The reported server still needs the owner's
+live verification with the repaired build.
+
+
+### Member-list diagnostic follow-up — September 10, 2026
+
+The owner reports that the live member pane still becomes unavailable after the initial
+identity repair. Read-only inspection found the owner-launched `target/debug/serein`
+writing stdout/stderr to its terminal, with no member-sync logger in the implementation.
+The app lookup accidentally launched a separate packaged copy; that extra copy was closed,
+leaving the owner's debug process running. No credentials or private payloads were read
+from disk/process memory, and no messages, calls or microphone actions were taken.
+A visible server total with no member rows does not identify the remaining failure.
+
+Added explicitly enabled, fixed-label stderr diagnostics via
+`SEREIN_MEMBER_DIAGNOSTICS=1`: maximum 64 lines per Gateway run, disabled by default.
+These distinguish absent subscriptions, empty/populated SYNC, identity mismatch,
+decode/range/capacity failure and timeout without logging service identifiers or content.
+Focused Gateway tests (7) and `cargo xtask check` pass; a new debug build is ready.
+The owner must restart that build and reproduce once before a concrete live cause can be
+claimed. The prior synthetic hydration repair is not evidence that this remaining live
+failure has been fixed. The draft PR remains open for that diagnostic result.
+
+
+Further diagnosis: the owner-run fixed-label trace shows member reply decoding failures,
+followed by incremental-only updates and eventual timeout. The current primary protocol
+schema permits SYNC group headers containing only an ID; our unused required `count`
+field rejected those rows. Removed that field and added a regression preserving the group
+index and following member. No raw member payload or serde error text was recorded.
+
+The owner also reported intermittent Safe capacity exceeded. A single GUILD_CREATE can
+synchronously emit more channel events than the old eight-slot queue accepts. The reliable
+queue now fits one bounded navigation fanout (4,008 items) in the unchanged 32 MiB estimated
+byte budget, with nonblocking admission, FIFO order, permit release and repaint while
+backlogged. Seven focused connection tests pass, including full navigation burst, exact
+byte exhaustion, oversized rejection, cleanup and typing isolation. Debug build includes
+both repairs. Detailed temporary structural introspection used during debugging was
+removed; shipped diagnostics remain fixed labels only. The owner restarted the repaired
+build and confirmed the server member list is working. Long-running live capacity behavior
+has not been independently measured. Final `cargo xtask check`, debug build, text package
+and voice package passed. Final measurements are in docs/performance.md.
+
+### Member roles and name colors — September 10, 2026
+
+Starting branch `feat/member-role-display` at `7221390`, based on repaired member-sync PR #38.
+The owner confirmed that repair loads the affected server list, then requested role headings
+and name colors from a visual reference. Reuse bounded role metadata and active member rows;
+group loaded online members by their highest hoisted role, with independent highest-colored
+role names. Offline and DM behavior remains present. Heading labels support accessibility,
+truncation and hover text; colors adapt to the current background for legibility.
+
+The synthetic preview adds two role definitions plus ungrouped online/offline members. Before
+evidence shows the original two-member roleless fixture; after evidence explicitly uses the
+extended offline fixture. No private reference image or account data is included in evidence.
+Focused model/protocol/core/Gateway and UI tests pass, covering current/legacy colors, role
+hierarchy, create/update/delete, member SYNC/UPDATE, caps, byte accounting, grouping and
+virtualization. Full checks, package measurements and native review recorded below on completion.
+
+Final validation: `cargo xtask check`, debug build, text package and voice package pass.
+All four checks on member-repair PR #38 passed, and that PR is ready for review. The role
+feature is a dependent PR based on `fix/server-member-sync`. Native before/after PNGs were
+inspected at 1120×760 / 2×, each under 0.5 MiB; light-mode rendering was also inspected.
+The CUA tool exposed only window controls for the new preview, and click/keyboard/resize
+actions produced no observed state change. Thus native profile/keyboard/narrow/scroll checks
+remain unverified; the role PR stays draft. Existing headless virtualization/grouping and
+contrast checks pass. Live role behavior remains owner-unverified. Release text/voice
+executables grew 40,720/40,592 bytes; reducer median 37.213→38.166 ms. Higher noisy native
+RSS samples are disclosed in docs/performance.md. The debug binary includes both the member
+loading repairs and role display. Only agent-owned offline preview processes were closed.
+
 ## Voice completion and recovery fixes - September 10, 2026
 
 Baseline main `9fcce51`, isolated branch `fix/voice-completion`, Windows Rust 1.98.1.
@@ -1424,6 +1532,19 @@ workspace tests, the text-only build and policy checks.
   Package/ZIP deltas and one-warmup/five-run replay results are in docs/performance.md;
   retained 500-message data remains 228,992..229,477 estimated bytes. No speedup claim.
 
+## Server member sync main refresh — September 10, 2026
+
+Fast-forwarded `fix/server-member-sync` to its published head `71ee144`, then merged
+`origin/main` at `5f11cb9` without rewriting branch history. The Gateway test conflict keeps
+the member diagnostic cap and role-membership coverage alongside main's newer partial-presence
+coalescing regression. Append-only performance, progress and storage records from both branches
+were retained. No feature behavior or resource limit was intentionally changed by the merge.
+The focused Gateway member suite passed 9 tests. `cargo xtask check` and
+`cargo build --locked -p serein` passed after adding neutral display metadata to two new
+main-branch test fixtures that construct the extended role/member models.
+While validating, `main` advanced to `192b40c`; a second normal merge retained its group-mention
+roles with neutral display metadata and kept both progress entries. Five focused notification
+tests, `cargo xtask check`, and `cargo build --locked -p serein` passed against that final base.
 
 ## Group mentions and silent notifications (September 10, 2026)
 

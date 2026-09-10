@@ -98,6 +98,20 @@ fn jitter_ms(max: u64) -> u64 {
         % max.max(1)
 }
 
+// Explicit troubleshooting only. Static labels cannot contain credentials, IDs or payloads.
+// At most 64 lines (<8 KiB) per Gateway run, including reconnects; stderr only.
+struct MemberDiagnostics {
+    remaining: u8,
+}
+impl MemberDiagnostics {
+    fn record(&mut self, label: &'static str) {
+        if self.remaining > 0 {
+            self.remaining -= 1;
+            eprintln!("[Serein members] {label}");
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct MemberSubscription {
     pub guild: Id,
@@ -354,6 +368,15 @@ async fn run_inner(
     #[cfg(test)] test_endpoint: Option<&str>,
 ) -> Result<(), Failure> {
     let initial_url = validated_url(&initial_url)?;
+    let mut member_diagnostics = MemberDiagnostics {
+        remaining: if std::env::var_os("SEREIN_MEMBER_DIAGNOSTICS").as_deref()
+            == Some(std::ffi::OsStr::new("1"))
+        {
+            64
+        } else {
+            0
+        },
+    };
     let mut state = ResumeState::default();
     let mut was_ready = false;
     let mut owner_id = None;
@@ -454,8 +477,14 @@ async fn run_inner(
                     ) {
                         break;
                     }
+                    member_diagnostics.record("subscription sent: first 100 positions");
                     active_members = Some(ActiveMembers::new(subscription));
                     members_deadline = Some(Instant::now() + Duration::from_secs(15));
+                }
+                if active_members.is_none() {
+                    member_diagnostics.record(
+                        "no active server subscription (closed pane or unavailable metadata)",
+                    );
                 }
                 sent_members = true;
             }
@@ -483,9 +512,11 @@ async fn run_inner(
                 changed=subscriptions.changed(), if subscriptions_open && ready_at.is_some() => {
                     subscriptions_open=changed.is_ok();
                     if let Some(old)=active_members.take() && !matches!(timeout(Duration::from_secs(5),socket.send(subscription_packet(old.subscription.guild,None))).await,Ok(Ok(()))) {break;}
+                    member_diagnostics.record("subscription replaced or canceled");
                     members_deadline=None;sent_members = !subscriptions_open;
                 }
                 _=tokio::time::sleep_until(members_deadline.unwrap_or(ready_deadline)), if members_deadline.is_some() => {
+                    member_diagnostics.record("timeout: no populated member SYNC within 15 seconds");
                     if let Some(active)=&mut active_members {active.clear_presence();active.rows.clear();active.rows.resize(100,None);active.synced=false;emit(Event::Members(active.snapshot(Freshness::Unavailable)))?;}
                     members_deadline=None;
                 }
@@ -582,10 +613,18 @@ async fn run_inner(
                                     "CALL_CREATE" | "CALL_UPDATE" | "CALL_DELETE" | "VOICE_STATE_UPDATE" | "VOICE_SERVER_UPDATE" => calls.dispatch(packet.t.as_deref().unwrap_or(""),packet.d.get().as_bytes(),owner_id,&emit)?,
                                     "GUILD_MEMBER_LIST_UPDATE" => {
                                         if let Some(active)=&mut active_members {
-                                            match decode::<MemberUpdate>(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol).and_then(|update|active.update(update)) {
-                                                Ok(true)=>{let freshness=if active.synced {Freshness::Fresh}else{Freshness::Stale};emit(Event::Members(active.snapshot(freshness)))?;if active.synced {members_deadline=None;}else{members_deadline=Some(Instant::now()+Duration::from_secs(15));}},
+                                            let decoded = decode::<MemberUpdate>(packet.d.get().as_bytes());
+                                            match &decoded {
+                                                Err(_) => member_diagnostics.record("reply decode failed: unsupported member payload"),
+                                                Ok(update) if update.guild_id != active.subscription.guild || update.id != active.subscription.list_id => member_diagnostics.record("reply ignored: different guild or list identity"),
+                                                Ok(update) if update.ops.iter().any(|op| matches!(op, MemberOp::Sync {items, ..} if !items.is_empty())) => member_diagnostics.record("reply: populated SYNC received"),
+                                                Ok(update) if update.ops.iter().any(|op| matches!(op, MemberOp::Sync {items, ..} if items.is_empty())) => member_diagnostics.record("reply: empty SYNC received"),
+                                                Ok(_) => member_diagnostics.record("reply: incremental operations only; no SYNC"),
+                                            }
+                                            match decoded.map_err(|_|Failure::Protocol).and_then(|update|active.update(update)) {
+                                                Ok(true)=>{member_diagnostics.record(if active.synced {"snapshot synchronized"} else {"snapshot still awaiting populated SYNC"});let freshness=if active.synced {Freshness::Fresh}else{Freshness::Stale};emit(Event::Members(active.snapshot(freshness)))?;if active.synced {members_deadline=None;}else{members_deadline=Some(Instant::now()+Duration::from_secs(15));}},
                                                 Ok(false)=>{},
-                                                Err(_)=>{active.clear_presence();active.rows.fill(None);active.synced=false;emit(Event::Members(active.snapshot(Freshness::Unavailable)))?;members_deadline=None;}
+                                                Err(_)=>{member_diagnostics.record("snapshot unavailable: decode, range or capacity failure");active.clear_presence();active.rows.fill(None);active.synced=false;emit(Event::Members(active.snapshot(Freshness::Unavailable)))?;members_deadline=None;}
                                             }
                                         }
                                     }
@@ -662,8 +701,9 @@ async fn run_inner(
                                         emit(Event::GuildEmojis { guild: update.guild_id, emojis: update.emojis.0 })?;
                                     }
                                     "GUILD_CREATE" => {
-                                        let permissions=owner_id.map(|owner|permissions::guild(packet.d.get().as_bytes(),owner)).transpose().map_err(|_|Failure::Protocol)?;
-                                        let mut guild: GuildDto = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?;
+                                        member_diagnostics.record("guild refresh received");
+                                        let permissions=owner_id.map(|owner|permissions::guild(packet.d.get().as_bytes(),owner)).transpose().map_err(|_|Failure::ProtocolAt("Gateway guild refresh: invalid permission metadata"))?;
+                                        let mut guild: GuildDto = decode(packet.d.get().as_bytes()).map_err(|_| Failure::ProtocolAt("Gateway guild refresh: unsupported guild payload"))?;
                                         if guild.channels.len() + calls.allowed.len() > MAX_NAV { return Err(Failure::Capacity); }
                                         if let Some(permissions)=permissions {emit(Event::Permissions(client_core::permissions::Event::Snapshot(permissions)))?;}
                                         let hidden:std::collections::BTreeSet<_>=guild.channels.iter().filter(|c|c.is_obfuscated()).map(|c|c.id).collect();
@@ -1219,6 +1259,17 @@ mod member_tests {
         }
     }
     #[test]
+    fn member_diagnostics_are_opt_in_and_capped() {
+        let mut disabled = MemberDiagnostics { remaining: 0 };
+        disabled.record("synthetic diagnostic");
+        assert_eq!(disabled.remaining, 0);
+        let mut enabled = MemberDiagnostics { remaining: 64 };
+        for _ in 0..1000 {
+            enabled.record("synthetic diagnostic");
+        }
+        assert_eq!(enabled.remaining, 0);
+    }
+    #[test]
     fn custom_status_patches_preserve_replace_clear_and_coalesce() {
         let mut list = ActiveMembers::new(MemberSubscription {
             guild: Id(1),
@@ -1269,6 +1320,26 @@ mod member_tests {
         };
         assert_eq!(updates, vec![record(3, Some("dnd"), None)]);
     }
+    #[test]
+    fn member_sync_and_updates_replace_role_membership() {
+        let mut list = ActiveMembers::new(MemberSubscription {
+            guild: Id(1),
+            channel: Id(2),
+            request: 7,
+            list_id: "everyone".into(),
+        });
+        list.update(decode(br#"{"guild_id":"1","id":"everyone","member_count":1,"ops":[{"op":"SYNC","range":[0,99],"items":[{"member":{"user":{"id":"3","username":"Synthetic"},"roles":["12","11"]}}]}]}"#).unwrap()).unwrap();
+        assert_eq!(list.rows[0].as_ref().unwrap().roles, vec![Id(11), Id(12)]);
+        list.update(decode(br#"{"guild_id":"1","id":"everyone","member_count":1,"ops":[{"op":"UPDATE","index":0,"item":{"member":{"user":{"id":"3","username":"Synthetic"},"roles":["13"]}}}]}"#).unwrap()).unwrap();
+        assert_eq!(
+            list.snapshot(Freshness::Fresh).rows[0]
+                .as_ref()
+                .unwrap()
+                .roles,
+            vec![Id(13)]
+        );
+    }
+
     #[test]
     fn presence_coalesces_loaded_rows_at_a_fixed_deadline_and_snapshots_supersede_it() {
         let mut list = ActiveMembers::new(MemberSubscription {
@@ -1461,6 +1532,21 @@ mod member_tests {
             now,
         );
         assert_eq!(list.rows[0].as_ref().unwrap().bytes(), 128 * 1024 - 3);
+    }
+    #[test]
+    fn member_sync_accepts_group_headers_without_summary_counts() {
+        let mut list = ActiveMembers::new(MemberSubscription {
+            guild: Id(1),
+            channel: Id(2),
+            request: 7,
+            list_id: "everyone".into(),
+        });
+        let update = decode(br#"{"guild_id":"1","id":"everyone","member_count":1,"groups":[{"id":"online","count":1}],"ops":[{"op":"SYNC","range":[0,99],"items":[{"group":{"id":"online"}},{"member":{"user":{"id":"3","username":"Synthetic"}}}]}]}"#).unwrap();
+        assert!(list.update(update).unwrap());
+        assert!(list.synced);
+        assert!(list.rows[0].is_none());
+        assert_eq!(list.rows[1].as_ref().unwrap().user.id, Id(3));
+        assert_eq!(list.snapshot(Freshness::Fresh).total, 1);
     }
     #[test]
     fn member_operations_preserve_indices_scope_and_bounds() {

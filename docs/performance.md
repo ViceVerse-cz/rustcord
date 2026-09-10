@@ -1296,6 +1296,87 @@ Clean baseline `dff0975` (existing isolated worktree) versus final theme code `7
 Fresh text processes use `--demo --demo-chat`, Default dark, ten-second warmup and ten one-second `ps -p PID -o %cpu=,rss=` samples, no scripted interaction. These short samples ran on a shared development host during builds; CPU varied and RSS differences are noise, not a performance improvement. No child processes were launched by these offline text fixtures. Long sessions, interactive p95 frame/startup timing, GPU allocations and live memory remain unmeasured. Gradient screenshots are visual checks, not equivalent performance comparisons. This addendum supersedes the original theme measurements for the rebased code.
 
 
+## Server member identity repair — September 10, 2026
+
+Baseline `9fcce51` versus `fix/server-member-sync`; macOS 27.0 (26A428), Apple M1 Pro,
+16 GiB RAM, Rust 1.98.1, locked release profile. Both text-only and optional voice packages
+were rebuilt and ad-hoc signature verification passed. Installed bytes sum all files in
+the app bundle, including required resources/notices; compressed bytes use Python tarfile
+`w:gz` with the bundle named `Serein.app`. Snapshot outputs were kept separately under
+`target/member-sync-baseline` and `target/member-sync-after`. Bundles include documentation
+at packaging time, before these final measurement notes were appended.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable bytes | 47,431,712 | 47,432,928 | +1,216 (+0.003%) |
+| Text installed bytes | 48,014,712 | 48,019,348 | +4,636 (+0.010%) |
+| Text compressed bytes | 30,590,560 | 30,593,122 | +2,562 (+0.008%) |
+| Voice executable bytes | 50,251,296 | 50,252,496 | +1,200 (+0.002%) |
+| Voice installed bytes | 51,064,507 | 51,069,127 | +4,620 (+0.009%) |
+| Voice compressed bytes | 31,901,498 | 31,904,374 | +2,876 (+0.009%) |
+| Reducer median ms | 37.244 | 37.569 | +0.325 (+0.87%) |
+
+`cargo replay` was built for each revision; the resulting binary ran one warmup followed
+by five measured executions. Both retained 228,992–229,477 estimated timeline bytes and
+500 records for 100,000 synthetic events. Baseline runs: 40.181, 37.590, 37.244, 36.541,
+36.311 ms; after: 37.830, 37.724, 36.808, 37.278, 37.569 ms. The 0.325-ms median difference
+is within observed run variation; no speed improvement is claimed. This message-reducer
+workload does not measure member-list synchronization latency, process RSS, UI frame time
+or live service behavior. No protocol range, persistent cache or dependency was added;
+member snapshots remain bounded to 100 positions and 128 KiB.
+
+### Final member decoding and queue repair — September 10, 2026
+
+Same macOS 27.0 / M1 Pro / 16 GiB host and locked release text/voice packaging; baseline
+`9fcce51`, final working tree based on `702b2ed`. Byte measurements reuse verified packages.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable bytes | 47,431,712 | 47,435,472 | +3,760 |
+| Text installed bytes | 48,014,712 | 48,029,580 | +14,868 |
+| Text gzip distribution bytes | 30,590,560 | 30,599,671 | +9,111 |
+| Voice executable bytes | 50,251,296 | 50,254,960 | +3,664 |
+| Voice installed bytes | 51,064,507 | 51,079,279 | +14,772 |
+| Voice gzip distribution bytes | 31,901,498 | 31,909,408 | +7,910 |
+| Reducer median ms / 100,000 events | 37.244 | 51.645 | +14.401 (+38.7%) |
+
+One warmup, five measured reducer runs: 45.286, 48.421, 59.164, 53.595, 51.645 ms.
+Retained timeline bounds remain 228,992–229,477 estimated bytes / 500 records. This shared-host
+measurement is materially slower than the earlier baseline and has wide variation; no speed
+improvement is claimed. The changed queue and Gateway decoder are outside this reducer
+workload. This is not member latency, RSS or frame timing. Reliable queue admission is tested
+at 4,008 items and its unchanged 32 MiB estimated-byte ceiling; the UI still drains eight/frame.
+
+### Member role display — September 10, 2026
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable bytes | 47,435,472 | 47,476,192 | +40,720 (+0.09%) |
+| Text installed bytes | 48,029,580 | 48,074,988 | +45,408 (+0.09%) |
+| Text gzip distribution bytes | 30,599,671 | 30,615,929 | +16,258 (+0.05%) |
+| Voice executable bytes | 50,254,960 | 50,295,552 | +40,592 (+0.08%) |
+| Voice installed bytes | 51,079,279 | 51,124,559 | +45,280 (+0.09%) |
+| Voice gzip distribution bytes | 31,909,408 | 31,926,452 | +17,044 (+0.05%) |
+| Reducer median ms / 100,000 events | 37.213 | 38.166 | +0.953 (+2.56%) |
+| Peak sampled RSS KiB | 141,072 | 154,672 | +13,600 |
+| Final sampled RSS KiB | 92,752 | 152,080 | +59,328 |
+| Median idle CPU % | 0.0 | 0.0 | +0.0 |
+
+Baseline `7221390`; final role-display working tree. macOS 27.0 (26A428), Apple M1 Pro,
+16 GiB RAM, Rust 1.98.1, locked text/voice release builds. Wgpu native demo at 1120×760
+logical pixels, 2× display scale. Packages are verified ad-hoc builds; gzip archives include
+the complete app. One warmup and five alternating baseline/after reducer runs; retained
+timeline stays 228,992–229,477 estimated bytes / 500 records. No member latency/frame-time claim.
+
+Native memory: fresh `--demo` process, automatically open member pane, 10-second warmup then
+10 one-second `ps rss,%cpu` samples, no helper processes. After fixture adds two roles and two
+member rows. A matched repeat followed an initial noisy comparison (peak 140,592→150,464 KiB;
+final 79,936→133,600 KiB). The table records the repeat, not a selected minimum. Baseline RSS
+fell sharply during sampling while the changed build stayed higher. Other worktrees were
+compiling on this shared host, so memory pressure and fixture differences prevent attributing
+this RSS increase solely to role code. The measured increase is material; no memory improvement
+or isolated regression estimate is claimed. Startup and p95 frame latency are unmeasured.
+
 ## Voice recovery and playback completion - September 10, 2026
 
 | Metric / method | Main 9fcce51 | Voice fixes | Delta |

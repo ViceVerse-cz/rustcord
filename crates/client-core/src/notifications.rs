@@ -449,14 +449,26 @@ mod tests {
                         p::Role {
                             id: Id(1),
                             bits: p::VIEW_CHANNEL,
+                            name: String::new(),
+                            color: 0,
+                            position: 0,
+                            hoist: false,
                         },
                         p::Role {
                             id: Id(10),
                             bits: 0,
+                            name: String::new(),
+                            color: 0,
+                            position: 0,
+                            hoist: false,
                         },
                         p::Role {
                             id: Id(11),
                             bits: 0,
+                            name: String::new(),
+                            color: 0,
+                            position: 0,
+                            hoist: false,
                         },
                     ]),
                     member: Some(p::Member {
