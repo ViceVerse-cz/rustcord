@@ -104,6 +104,9 @@ pub fn message(id: u64, channel: Id) -> Message {
         } else {
             vec![]
         },
+        mention_roles: vec![],
+        mention_everyone: false,
+        suppress_notifications: false,
         mentions: if id == 500 {
             vec![User {
                 id: Id(2),
@@ -636,6 +639,8 @@ mod tests {
                 entries: vec![n::Setting {
                     guild: None,
                     muted: Some(false),
+                    suppress_everyone: Some(false),
+                    suppress_roles: Some(false),
                     level: Some(0),
                     channels: vec![],
                 }],
@@ -747,6 +752,8 @@ mod tests {
         let setting = n::Setting {
             guild: channel.guild,
             muted: Some(false),
+            suppress_everyone: Some(false),
+            suppress_roles: Some(false),
             level: Some(1),
             channels: vec![],
         };
@@ -824,6 +831,8 @@ mod tests {
                 entries: vec![n::Setting {
                     guild: None,
                     muted: Some(false),
+                    suppress_everyone: Some(false),
+                    suppress_roles: Some(false),
                     level: Some(0),
                     channels: vec![],
                 }],
@@ -846,6 +855,8 @@ mod tests {
                 entries: vec![n::Setting {
                     guild: None,
                     muted: Some(false),
+                    suppress_everyone: Some(false),
+                    suppress_roles: Some(false),
                     level: Some(0),
                     channels: vec![(channel, Some(true), Some(0))],
                 }],
@@ -862,6 +873,8 @@ mod tests {
                 entries: vec![n::Setting {
                     guild: None,
                     muted: Some(false),
+                    suppress_everyone: Some(false),
+                    suppress_roles: Some(false),
                     level: Some(0),
                     channels: vec![],
                 }],

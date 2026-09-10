@@ -18,6 +18,10 @@ pub struct Setting {
     #[serde(default)]
     pub muted: Option<bool>,
     #[serde(default)]
+    pub suppress_everyone: Option<bool>,
+    #[serde(default)]
+    pub suppress_roles: Option<bool>,
+    #[serde(default)]
     pub message_notifications: Option<u8>,
     #[serde(default)]
     pub channel_overrides: Option<Overrides>,
@@ -65,6 +69,36 @@ impl Sessions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mention_suppression_settings_preserve_unknown_false_and_true() {
+        for (fields, everyone, roles) in [
+            (r#""#, None, None),
+            (
+                r#", "suppress_everyone":null,"suppress_roles":null"#,
+                None,
+                None,
+            ),
+            (
+                r#", "suppress_everyone":false,"suppress_roles":true"#,
+                Some(false),
+                Some(true),
+            ),
+            (
+                r#", "suppress_everyone":true,"suppress_roles":false"#,
+                Some(true),
+                Some(false),
+            ),
+        ] {
+            let setting: Setting =
+                crate::decode(format!(r#"{{"guild_id":"1"{fields}}}"#).as_bytes()).unwrap();
+            assert_eq!(
+                (setting.suppress_everyone, setting.suppress_roles),
+                (everyone, roles)
+            );
+        }
+        assert!(crate::decode::<Setting>(br#"{"guild_id":"1","suppress_roles":"false"}"#).is_err());
+        assert!(crate::decode::<Setting>(br#"{"guild_id":"1","suppress_everyone":0}"#).is_err());
+    }
     #[test]
     fn bounded_preferences_and_unknown_presence_fail_closed() {
         let snapshot: Snapshot = crate::decode(br#"{"entries":[{"guild_id":null,"muted":false,"message_notifications":0,"channel_overrides":[{"channel_id":"2","muted":true,"message_notifications":2}]}],"partial":false}"#).unwrap();

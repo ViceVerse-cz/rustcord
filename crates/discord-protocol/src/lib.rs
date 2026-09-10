@@ -401,6 +401,31 @@ impl Ready {
 }
 #[derive(Deserialize, Default)]
 pub struct MentionList(#[serde(deserialize_with = "model::deserialize_mentions")] pub Vec<UserDto>);
+fn mention_roles<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Id>, D::Error> {
+    struct Roles;
+    impl<'de> serde::de::Visitor<'de> for Roles {
+        type Value = Vec<Id>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("at most 100 unique role IDs")
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(
+            self,
+            mut seq: A,
+        ) -> Result<Self::Value, A::Error> {
+            let mut roles = Vec::new();
+            while let Some(role) = seq.next_element::<Id>()? {
+                if roles.len() == model::MAX_MENTION_ROLES || roles.contains(&role) {
+                    return Err(serde::de::Error::custom(
+                        "Invalid or excessive role mentions",
+                    ));
+                }
+                roles.push(role);
+            }
+            Ok(roles.into_boxed_slice().into_vec())
+        }
+    }
+    d.deserialize_seq(Roles)
+}
 #[derive(Deserialize)]
 pub struct MessageDto {
     #[serde(default)]
@@ -420,6 +445,10 @@ pub struct MessageDto {
     pub content: String,
     #[serde(default)]
     pub mentions: MentionList,
+    #[serde(default, deserialize_with = "mention_roles")]
+    pub mention_roles: Vec<Id>,
+    #[serde(default)]
+    pub mention_everyone: bool,
     #[serde(default)]
     pub edited_timestamp: Option<Timestamp>,
     #[serde(default)]
@@ -481,6 +510,9 @@ impl MessageDto {
             channel: self.channel_id,
             author: self.author.into_model(),
             content: self.content,
+            mention_roles: self.mention_roles,
+            mention_everyone: self.mention_everyone,
+            suppress_notifications: self.flags & (1 << 12) != 0,
             mentions: self
                 .mentions
                 .0
@@ -625,6 +657,55 @@ pub struct ErrorBody {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn notification_metadata_is_service_derived_and_role_mentions_are_bounded() {
+        let wire = || {
+            serde_json::json!({
+                "id":"100", "channel_id":"2", "author":{"id":"3","username":"Synthetic"},
+                "content":"@everyone <@&4>",
+            })
+        };
+        let read =
+            |value: &serde_json::Value| decode::<MessageDto>(&serde_json::to_vec(value).unwrap());
+        let plain = read(&wire()).unwrap().into_model();
+        assert!(plain.mention_roles.is_empty());
+        assert!(!plain.mention_everyone && !plain.suppress_notifications);
+        let mut value = wire();
+        value["mention_roles"] = serde_json::json!(["4", "5"]);
+        value["mention_everyone"] = true.into();
+        value["flags"] = (4096 | 4 | 32768).into();
+        let message = read(&value).unwrap().into_model();
+        assert_eq!(message.mention_roles, vec![Id(4), Id(5)]);
+        assert!(message.mention_everyone && message.suppress_notifications);
+        assert!(message.embeds_suppressed && message.extra_content.components_v2);
+        assert!(model::valid_mention_roles(&message.mention_roles));
+        let bytes = message.bytes();
+        let role_bytes = message.mention_roles.capacity() * size_of::<Id>();
+        let mut without_roles = message;
+        without_roles.mention_roles = Vec::new();
+        assert_eq!(bytes - without_roles.bytes(), role_bytes);
+        value["mention_roles"] = (1..=100)
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .into();
+        assert!(model::valid_mention_roles(
+            &read(&value).unwrap().into_model().mention_roles
+        ));
+        for roles in [
+            serde_json::json!(null),
+            serde_json::json!({}),
+            serde_json::json!(["0"]),
+            serde_json::json!([1]),
+            serde_json::json!(["4", "4"]),
+            serde_json::json!((1..=101).map(|id| id.to_string()).collect::<Vec<_>>()),
+        ] {
+            value["mention_roles"] = roles;
+            assert!(read(&value).is_err());
+        }
+        value["mention_roles"] = serde_json::json!([]);
+        value["mention_everyone"] = serde_json::json!("true");
+        assert!(read(&value).is_err());
+    }
     #[test]
     fn reply_references_require_same_channel_and_distinguish_deleted_from_unknown() {
         let wire = || {

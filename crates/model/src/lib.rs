@@ -167,6 +167,10 @@ pub struct Message {
     pub author: User,
     pub content: String,
     pub mentions: Vec<User>,
+    /// Session-only service notification metadata; never inferred from message text.
+    pub mention_roles: Vec<Id>,
+    pub mention_everyone: bool,
+    pub suppress_notifications: bool,
     pub edited: bool,
     pub edited_at: Option<i128>,
     pub revision: u64,
@@ -204,6 +208,7 @@ impl Message {
             + self.content.capacity()
             + self.author.heap_bytes()
             + mention_bytes(&self.mentions)
+            + self.mention_roles.capacity() * size_of::<Id>()
             + self.nonce.as_ref().map_or(0, String::capacity)
             + attachment_bytes(&self.attachments)
             + self
@@ -214,6 +219,15 @@ impl Message {
             + embed_bytes(&self.embeds)
             + self.embeds.capacity().saturating_sub(self.embeds.len()) * size_of::<Embed>()
     }
+}
+pub const MAX_MENTION_ROLES: usize = 100;
+pub fn valid_mention_roles(roles: &Vec<Id>) -> bool {
+    roles.len() <= MAX_MENTION_ROLES
+        && roles.capacity() <= MAX_MENTION_ROLES
+        && roles
+            .iter()
+            .enumerate()
+            .all(|(index, id)| id.0 != 0 && !roles[..index].contains(id))
 }
 /// Missing differs from explicit null in partial service updates.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -311,4 +325,18 @@ pub struct MemberList {
     pub rows: Vec<Option<Member>>,
     pub total: u64,
     pub freshness: Freshness,
+}
+
+#[cfg(test)]
+mod notification_metadata_tests {
+    use super::*;
+    #[test]
+    fn role_mentions_bound_identity_count_and_reserved_allocation() {
+        assert!(valid_mention_roles(&Vec::new()));
+        assert!(valid_mention_roles(&(1..=100).map(Id).collect()));
+        assert!(!valid_mention_roles(&vec![Id(0)]));
+        assert!(!valid_mention_roles(&vec![Id(1), Id(1)]));
+        assert!(!valid_mention_roles(&(1..=101).map(Id).collect()));
+        assert!(!valid_mention_roles(&Vec::with_capacity(101)));
+    }
 }
