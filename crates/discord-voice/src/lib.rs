@@ -13,6 +13,8 @@ pub struct Controls {
     pub deafened: bool,
 }
 pub enum Status {
+    Connecting,
+    Discovering,
     TransportReady,
     Securing,
     WaitingForPeer,

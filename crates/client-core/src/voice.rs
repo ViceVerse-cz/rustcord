@@ -45,6 +45,9 @@ pub struct VoiceConnection {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
     Connecting,
+    ConnectingTransport,
+    Discovering,
+    OpeningAudio,
     Ringing,
     Securing,
     Connected,
@@ -54,6 +57,9 @@ pub enum Phase {
 impl Phase {
     pub fn label(self) -> &'static str {
         match self {
+            Self::ConnectingTransport => "Connecting to voice server...",
+            Self::Discovering => "Checking voice network...",
+            Self::OpeningAudio => "Opening audio devices...",
             Self::Connecting => "Connecting call…",
             Self::Ringing => "Ringing…",
             Self::Securing => "Securing audio…",

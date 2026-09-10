@@ -22,10 +22,7 @@ impl Delivery {
     }
     pub fn add_proposal(&self, creator: &Dave, key_package: &[u8]) -> Vec<u8> {
         assert_eq!(key_package[0], 26);
-        let incoming = MlsMessageIn::tls_deserialize_exact_bytes(&key_package[1..]).unwrap();
-        let MlsMessageBodyIn::KeyPackage(package) = incoming.extract() else {
-            panic!("not a key package")
-        };
+        let package = KeyPackageIn::tls_deserialize_exact_bytes(&key_package[1..]).unwrap();
         let provider = OpenMlsRustCrypto::default();
         let package = package
             .validate(provider.crypto(), ProtocolVersion::Mls10)

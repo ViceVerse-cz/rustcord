@@ -1294,3 +1294,37 @@ real-time callback behavior and cleanup on each OS remain unverified; milestone 
 Both `cargo xtask package` and `cargo xtask package-voice` passed. The voice executable stayed
 at 54,142,464 bytes; text grew 2,560 bytes. Release replay and 1/8/63-speaker mixer workloads
 passed with no measured slowdown; results and limits are in docs/performance.md.
+
+
+## Voice stuck during connection - September 10, 2026
+
+The owner reported that the voice-enabled build starts a call but neither direction has audio
+and the call remains in a connection state. Baseline main `b72b3b1`; work is isolated in
+`fix/voice-negotiation`, preserving the running owner process and unrelated custom-status work.
+
+The outgoing key package contained an extra four-byte MLSMessage header compared with libdave
+and the inspected reference client's actual send chain. Removed that header and replaced the
+fixture's matching assumption with exact raw-KeyPackage parsing and cryptographic validation.
+The source/whitepaper discrepancy is documented in the voice adapter README. This is a strong
+candidate for the reported negotiation failure; the owner's live result has not been reverified.
+
+Connection progress now distinguishes transport, UDP, encryption and native-device opening;
+static negotiation timeout messages identify the missing stage. Device opening now has a
+20-second Desktop watchdog. CPAL's synchronous default-device format lookup can wait without a
+bound; the watchdog disables audio and requests departure while retaining the retiring worker,
+preventing repeated stuck workers. It cannot forcibly release an OS call that never returns.
+
+`cargo xtask check` passes: 298 offline tests, format, strict all-feature Clippy, text-only compile
+and policy. Synthetic tests cover raw key-package validation, localhost encrypted DM/guild
+negotiation and resume, status order, missing group versus pending transition, and the device
+watchdog boundary/reset. Independent source review found no remaining blocker in this diff.
+No live call, microphone, speaker, native automation or account action was performed by the
+agent. The previous native pause remains respected; screenshots and physical audio remain
+unverified. Milestone 4 remains open. Both unsigned Windows packages pass; text executable size is
+unchanged and voice grows 4,096 bytes. Package/replay measurements are in docs/performance.md.
+
+
+After implementation, the owner explicitly requested running the build. Launched the new voice
+release executable from the isolated negotiation package; process 28944 exposed a responding
+Serein window. This confirms launch only. No call controls, microphone, account contents or
+native screenshots were accessed; the owner performs the live retry.

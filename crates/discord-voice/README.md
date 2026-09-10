@@ -40,3 +40,15 @@ speaker; longer packets retain their remaining PCM for subsequent ticks. No queu
 Voice close 4015 can use the existing resume budget; terminal closes still stop the call.
 DAVE proposals before local group creation are bounded and ignored, following the
 [initial-group procedure](https://daveprotocol.com/#initial-group-creation).
+
+
+### Key-package interoperability correction
+
+Opcode 26 now carries the raw TLS KeyPackage after the opcode byte, matching
+[libdave serialization](https://github.com/discord/libdave/blob/5cb8952a8e6f08071d8c24edae2496199d7a9197/cpp/src/mls/session.cpp#L625-L635)
+and the [reference client send path](https://github.com/dolfies/discord.py-self/blob/2ba64a9a997e151a9c259984e0a179b1fdf4aff4/discord/voice_state.py#L329-L340).
+The written [whitepaper](https://daveprotocol.com/#dave_mls_key_package-26) instead describes an
+MLSMessage wrapper. We follow those implementation paths here; the previous extra four bytes
+also appeared in our test server's assumed format. The fixture now independently deserializes
+and cryptographically validates a raw KeyPackage. This resolves a reference-format mismatch,
+but does not prove that the owner's live no-audio report is resolved.
