@@ -1242,3 +1242,22 @@ Baseline `85fde15` (`main`) versus branch `feat/discord-theme-shell`, same macOS
 | Native CPU median % | 0.0 | 0.0 | +0 |
 
 The size increase is the three embedded Inter faces (799,444 bytes of OFL font data) plus the new vector icon and theme code; no dependency changed (lockfile untouched). Both text and voice packages passed strict local ad-hoc signature verification; the baseline packages were built from an isolated `main` worktree with its own target directory. Native samples: fresh release process per revision, default 1120×760 viewport, dark system appearance, Default preset, 10-second warmup, ten `ps -p PID -o %cpu=,rss=` samples at one-second intervals. Every sample was identical within each run, so the RSS difference is a single-process comparison, not a distribution; it does not establish memory behaviour for gradient presets (which add one full-window mesh per frame), long sessions or live channels. Reducer replay was not rerun: no reducer, cache or protocol code changed. p95 frame/startup latency, GPU allocation and Windows/Linux were not measured.
+
+
+## Theme integration refresh — September 10, 2026
+
+| Metric | Baseline | After | Delta |
+| --- | --- | --- | --- |
+| Text executable, bytes | 46,570,512 | 47,415,168 | +844,656 (+1.81%) |
+| Text installed, bytes | 47,125,105 | 47,990,950 | +865,845 (+1.84%) |
+| Text zip, bytes | 30,139,009 | 30,616,531 | +477,522 (+1.58%) |
+| Voice executable, bytes | 49,390,112 | 50,234,752 | +844,640 (+1.71%) |
+| Voice installed, bytes | 50,174,916 | 51,040,745 | +865,829 (+1.73%) |
+| Voice zip, bytes | 31,484,290 | 31,959,704 | +475,414 (+1.51%) |
+| CPU median, % | 0 | 0 | +0 |
+| RSS median, KiB | 155152 | 154144 | -1008 |
+| RSS sample peak, KiB | 155216 | 154240 | -976 |
+
+Clean baseline `dff0975` (existing isolated worktree) versus final theme code `70e4f54`, integrated on `b92a082`. Baseline predates the incoming-typing commit; these chat fixtures contain no typing events. Same macOS 27.0 arm64, Apple M1 Pro / 16 GiB, Rust 1.98.1, release thin-LTO, wgpu/Metal, 2× capture scale, requested 1120×760 viewport. Both text/voice packages pass strict local ad-hoc signature verification; they are not notarized. Installed sizes sum files within each app bundle, ZIPs use Python DEFLATE 9, separately for text/voice. Packaged documentation reflects its build-time snapshot before this final report.
+
+Fresh text processes use `--demo --demo-chat`, Default dark, ten-second warmup and ten one-second `ps -p PID -o %cpu=,rss=` samples, no scripted interaction. These short samples ran on a shared development host during builds; CPU varied and RSS differences are noise, not a performance improvement. No child processes were launched by these offline text fixtures. Long sessions, interactive p95 frame/startup timing, GPU allocations and live memory remain unmeasured. Gradient screenshots are visual checks, not equivalent performance comparisons. This addendum supersedes the original theme measurements for the rebased code.
