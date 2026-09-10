@@ -1593,6 +1593,38 @@ tests, `cargo xtask check`, and `cargo build --locked -p serein` passed against 
   candidates include fuzzing, Linux distribution packaging, authorized guild message deletion,
   and bounded unknown-event diagnostics. Live/native evidence gates remain owner-controlled.
 
+## Repository agent orchestration (September 10, 2026)
+
+- Clean baseline `899fca7` on `main`, fetched and fast-forward checked against `origin/main`;
+  task branch `chore/agent-orchestration`. No personal agent settings changed.
+- Added one shared orchestration skill, native Codex/Claude project workers and project lead
+  defaults: Astra/Fable high; Sol/Sonnet implementation; Terra/Sonnet research/review;
+  Luna max/Sonnet medium verification and understood mechanical conflicts. Root instructions
+  activate the policy; Claude imports the same AGENTS.md through CLAUDE.md.
+- Three-worker ceiling, explicit file ownership, serialized build/GUI resources, baseline-first
+  performance evidence, targeted correction then lead escalation, and risk-based fresh review.
+  No new runtime dependencies, proxy, recursive agent tree or permissive tool settings.
+- `cargo xtask check` passed on macOS with pinned rustc 1.98.1: 334 tests including doctests,
+  formatting, strict all-feature Clippy, text-only compilation and policy checks. Existing
+  vendored wry warnings remain. Skill validation and all TOML/JSON/YAML parsing passed using
+  temporary `uv run --python 3.12 --with pyyaml` tooling (system Python lacks yaml/tomllib).
+  `git diff --check` passed. Codex 0.153.4 `debug prompt-input` loaded the orchestration skill;
+  Claude Code 2.1.267 `doctor` reported no installation issues. Its unrelated Remote Control
+  feature is disabled by organization policy; this workflow uses local native agents.
+- Native explicit Terra/high delegation was exercised for source research and configuration
+  review. Requested model/effort are visible in the spawn request; realized model usage/cost
+  is not exposed by this session. Claude `-p --output-format json` OK probes (implicit and explicit project settings) resolved
+  the parent to `claude-fable-5-1`; foreground `--agent serein-{researcher,builder,verifier}`
+  probes resolved all three to `claude-sonnet-5` with no reported error. These only establish
+  discovery/model resolution, not Agent-tool delegation, tool restrictions or actual effort.
+  Codex `--strict-config --help` accepted the configuration. Account policy and explicit host
+  overrides can change selection. Independent review caught missing explicit role restrictions
+  for generic spawns and missing diff/output requirements for shell-less reviewers; both fixed.
+  Measurement guidance now explicitly pauses checkout writers during evidence capture.
+- Screenshots: not applicable — no visible UI change. Performance: not applicable — no runtime
+  or build dependency change. No model-cost or speed savings claimed. See
+  `docs/agent-orchestration.md` for fresh-session usage, source links and limitations.
+
 
 ## Authorized single-message deletion (September 10, 2026)
 
@@ -1987,3 +2019,5 @@ encode creation time. Ordering is a local interpretation of available metadata;
 synthetic tests do not prove exact official-client ordering or live interoperability.
 
 September 11 owner-requested merge: integrated main 487069f (including scrolling/DM order); retained diagnostics and runtime xtask workspace resolution through formatting conflicts. Full `cargo xtask check` passed 361 tests, strict Clippy, text-only compilation and policy; `node tests/xtask-workspace.cjs` passed. Existing-head cross-platform CI was green. No native/live interaction performed.
+
+September 11 owner-requested PR47 integration: preserved current main fast-local policy and all runtime changes. Four TOML files, settings JSON, three Claude frontmatters and both skills validated; no hooks or permission bypasses added. Runtime unchanged by this PR; no new native run needed.
