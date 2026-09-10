@@ -290,3 +290,36 @@ scheduling and real-time latency. The 64-total-person limit retains at most 63 d
 states, 63 × 10,200 encoded jitter bytes and 63 × 23,040 decoded PCM bytes, plus codec,
 MLS and native allocations. Eight-frame device queues remain bounded. See the adapter
 README for packet, transition and timeout limits. No acoustic echo cancellation was added.
+
+
+## Server people subscription repair — September 10, 2026
+
+Clean baseline `dc48391` vs `fix/server-people-list`; Rust 1.98.1, macOS 27.0
+(26A428), Apple M1 Pro, 16 GiB RAM. Both release configurations built using
+`cargo xtask package` and `cargo xtask package-voice`, including strict ad-hoc
+signature verification. Baseline artifacts were preserved in
+`target/people-baseline`; changed distribution measurements in `target/people-after`.
+Installed bytes sum regular bundle files, archives use `tar -czf` per bundle;
+package totals include the documentation snapshot present at packaging time.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable bytes | 45,176,320 | 45,176,288 | -32 (-0.000%) |
+| Text installed bytes | 45,470,755 | 45,473,718 | +2,963 (+0.007%) |
+| Text tar.gz bytes | 29,505,591 | 29,506,659 | +1,068 (+0.004%) |
+| Voice executable bytes | 48,060,368 | 48,060,336 | -32 (-0.000%) |
+| Voice installed bytes | 48,585,764 | 48,588,727 | +2,963 (+0.006%) |
+| Voice tar.gz bytes | 30,834,259 | 30,835,849 | +1,590 (+0.005%) |
+| Reducer median ms | 26.474292 | 27.127792 | +0.653500 (+2.468%) |
+
+`cargo replay` built the reducer workload, followed by one direct warmup and five
+measured direct executions per comparison. Both retained 220,992–221,477 estimated
+timeline bytes and 500 records. The reducer does not exercise Gateway subscriptions;
+its unchanged executable measures host timing noise here, not a fix-related speedup.
+The +0.654-ms median difference is not evidence of a Gateway regression. Full installed
+and archive deltas also include documentation, signatures and archive metadata.
+No dependency changes; both stripped executable sizes decreased by only 32 bytes.
+UI latency, process RSS/CPU and live event rates were not measured: this patch changes
+wire subscription control only. Receiving the required guild typing subscription can
+increase incoming event traffic; Serein discards unhandled typing events and clears the
+subscription when the member pane closes. No live performance claim is made.
