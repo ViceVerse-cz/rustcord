@@ -1,5 +1,26 @@
 # Implementation progress — 2026-09-10
 
+## Image clipping investigation — 2026-09-11
+
+The owner reports cropped inline images while the enlarged viewer is correct. The
+root cause remains unresolved. Offline demo media now uses a bounded 320×180 grid
+texture with a white border through the existing image cache and painting path,
+so missing edges can be observed instead of being hidden by vector placeholders.
+This is a diagnostic fixture, not a clipping fix; real-account rendering is unchanged.
+
+The text-only release package built successfully on Windows/Rust 1.98.1 at baseline
+d8e3bd6 plus the fixture. Its executable grew from 51,709,440 to 51,714,048 bytes
+(+4,608 bytes). Native inspection of the textured fixture was interrupted by the
+owner's physical Escape stop; no verified before/after pair, runtime performance
+comparison, voice package or live validation is claimed. The owner subsequently
+requested a direct push to main; only the fixture and this status note are included.
+
+After fast-forwarding to main 609f8bf, `cargo test --locked -p ui` passed all 95
+tests. `cargo xtask check` passed formatting but stopped at pre-existing strict
+Clippy errors in `crates/discord-voice/src/audio/echo.rs:39,48`
+(`chunks_exact_to_as_chunks`). That unrelated voice code was left unchanged;
+the full workspace check is not green. `git diff --check` passed.
+
 ## Current scope and gates
 
 Current slice: bounded Gateway compatibility diagnostics from main 31bf546. Full SPEC
