@@ -2,9 +2,9 @@
 
 ## Current scope and gates
 
-Current slice: bounded offline fuzzing after authorized deletion PR #49,
-from main dc49d64, integrated with main 4325dd1. Full SPEC completion remains active; native automation and live-account
-validation remain owner-controlled. See the bounded fuzzing entry for verification.
+Current slice: Debian/Ubuntu distribution packaging from main 68526e8. Full SPEC completion
+remains active; native automation and live-account validation remain owner-controlled.
+See the Linux packaging entry for verification.
 
 ## Inline message spoilers (merged PR #36)
 
@@ -1795,3 +1795,52 @@ Both release packages and cargo replay passed. Each executable grows17,408 bytes
 replay medians40.3052 ->40.4948 ms are noise with unchanged timeline bounds; see performance.md.
 Independent cross-layer review found no additional blocking defect. Package measurement does not
 substitute for native screenshot/process or live-account artwork evidence.
+
+
+## Debian/Ubuntu distribution packaging (September 10, 2026)
+
+- Baseline main `68526e822461ff8134c3b14e786b17f4bf5920ce`; isolated branch
+  `feat/linux-distribution-package`. The original checkout's ongoing work remains untouched.
+- SPEC14.5 packaging now stages an unsigned native `.deb` for each text/voice variant through
+  the existing package commands. Runtime shared-library dependencies come from dpkg-shlibdeps;
+  desktop libraries loaded dynamically and session services are declared separately. The
+  desktop entry installs with the binary, documentation, asset notices and relevant voice source.
+- Packaging uses an explicit input list and a fresh private temporary directory. Root ownership,
+  executable/data modes, metadata, extracted file contents, desktop syntax and linked-library
+  availability are checked before the archive is copied to dist. No maintainer scripts, autostart,
+  account-data changes, root installation or application launch occur in this smoke test.
+- Windows `cargo xtask check` passed 351 Rust tests, doctests, formatting, strict all-feature
+  Clippy, text-only compilation and policy checks. The Linux synthetic package regression passed
+  both variant payloads, stale nested-file exclusion and invalid ELF/payload rejection. Independent
+  review found no remaining blockers after the source-manifest fix.
+- Integrated main `3307396` (startup game-presence fix); Windows full checks passed again with
+  353 Rust tests. Both real Linux release variants and `.deb` package smoke passed on Ubuntu 26.04
+  x86_64 under WSL2, Rust 1.98.1. Text: 52 payload files/28,056,260 compressed bytes; voice:
+  98 files/29,256,868 bytes. Full installed/binary sizes and measurement limits are in performance.md.
+  The locally provisioned compiler and build cache are isolated under the E: build directory.
+  X11/Wayland rendering, Secret Service, portal dialogs, IME, accessibility and actual login/audio
+  remain unverified; WSL compilation and archive inspection do not prove those desktop paths.
+- Previous PR #51's Linux fuzz, license and security jobs passed on GitHub; native jobs remained
+  queued or running at this inspection. This is separate from the new packaging validation.
+
+- Packaging host emitted a dpkg-shlibdeps warning for the libc6 `/lib64` loader diversion.
+  Readlink and dpkg ownership checks resolve both paths to the installed libc6 loader;
+  generated Depends includes libc6 >=2.43 and both host library-closure checks passed. No
+  missing-library/dependency-metadata checks were suppressed. These builds target this host
+  distribution, not older Debian/Ubuntu versions. The `.deb` files remain unsigned.
+- No application source/dependency changes were made by this slice. Native install/launch,
+  Wayland/X11, desktop services, IME, accessibility and physical/live audio remain unverified.
+  Remaining implementation work includes bounded unknown-event compatibility diagnostics;
+  source-license assembly and the documented runtime/live evidence gates remain incomplete.
+
+### Owner-authorized merge of activity artwork
+
+The owner explicitly requested merging PR #54. Integrated main31bf546, preserving Debian
+packaging and both sets of progress/performance notes; conflicts were limited to appended docs.
+The combined cargo xtask check passed358 tests, strict Clippy and policy. Application source,
+assets and lockfile match the previously verified artwork release builds exactly, so those
+Windows text/voice package results remain applicable. Linux packaging is covered by its own
+main/CI checks, not claimed as locally executed on Windows. Before integration, macOS, Ubuntu,
+security, licenses and fuzz CI passed; Windows CI was still pending. Native screenshots remain
+owner-paused and live artwork remains unverified; this explicit merge request accepts those
+reported limitations without changing repository protection or enabling account automation.
