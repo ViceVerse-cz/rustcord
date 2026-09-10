@@ -1,4 +1,6 @@
 // Direct, origin-fixed REST adapter. No cookies, redirects, logging, persistence or bot SDK.
+mod archives;
+pub mod upload;
 use client_core::{
     Command, Event,
     auth::{AuthProvider, Failure, SessionSecret},
@@ -30,6 +32,8 @@ pub struct DiscordApi {
     stopped: AtomicBool,
     #[cfg(test)]
     base: String,
+    #[cfg(test)]
+    upload_origin: Option<std::net::SocketAddr>,
 }
 impl DiscordApi {
     pub fn new(secret: Arc<SessionSecret>) -> Result<Self, Failure> {
@@ -50,6 +54,8 @@ impl DiscordApi {
             stopped: AtomicBool::new(false),
             #[cfg(test)]
             base: "https://discord.com/api/v10".into(),
+            #[cfg(test)]
+            upload_origin: None,
         })
     }
     pub fn stop(&self) {
@@ -231,8 +237,26 @@ impl DiscordApi {
     }
     pub async fn execute(&self, command: Command) -> Event {
         match command {
-            Command::Pins { channel, request } => {
-                let result = self.pins(channel).await;
+            Command::Archives {
+                parent,
+                guild,
+                kind,
+                before,
+                request,
+            } => {
+                let result = self.archives(parent, guild, kind, before).await;
+                Event::Archives {
+                    parent,
+                    request,
+                    result,
+                }
+            }
+            Command::Pins {
+                channel,
+                before,
+                request,
+            } => {
+                let result = self.pins(channel, before).await;
                 Event::Search {
                     channel,
                     request,
@@ -389,30 +413,9 @@ impl DiscordApi {
                 nonce,
                 reply,
             } => {
-                if content.trim().is_empty() || content.chars().count() > client_core::MAX_CONTENT {
-                    return Event::SendResult {
-                        nonce,
-                        result: Err(Failure::Capacity),
-                    };
-                }
-                let mut body = serde_json::json!({ "content": content, "nonce": nonce, "allowed_mentions": allowed_mentions(&content) });
-                if let Some(reply) = reply {
-                    body["message_reference"] =
-                        serde_json::json!({"message_id": reply, "channel_id": channel});
-                }
-                // No enforce_nonce claim until normal-user semantics are live verified. Never auto-retry writes.
                 let result = self
-                    .request(
-                        Method::POST,
-                        &format!("/channels/{channel}/messages"),
-                        Some(body),
-                    )
-                    .await
-                    .and_then(|bytes| {
-                        decode::<MessageDto>(&bytes)
-                            .map(MessageDto::into_model)
-                            .map_err(|_| Failure::Ambiguous)
-                    });
+                    .send_message(channel, &content, &nonce, reply, None)
+                    .await;
                 Event::SendResult { nonce, result }
             }
             Command::Edit {
@@ -498,18 +501,26 @@ impl DiscordApi {
     }
 }
 impl DiscordApi {
-    async fn pins(&self, channel: model::Id) -> Result<client_core::search::Outcome, Failure> {
+    async fn pins(
+        &self,
+        channel: model::Id,
+        before: Option<i128>,
+    ) -> Result<client_core::search::Outcome, Failure> {
+        let mut path = format!("/channels/{channel}/messages/pins?limit=25");
+        if let Some(cursor) = before {
+            let timestamp = pins::format_cursor(cursor).map_err(|_| Failure::Protocol)?;
+            let encoded: String = timestamp
+                .bytes()
+                .map(|byte| format!("%{byte:02X}"))
+                .collect();
+            path.push_str(&format!("&before={encoded}"));
+        }
         let bytes = self
-            .request_limited(
-                Method::GET,
-                &format!("/channels/{channel}/messages/pins?limit=25"),
-                None,
-                search::MAX_WIRE,
-            )
+            .request_limited(Method::GET, &path, None, search::MAX_WIRE)
             .await?;
         decode::<discord_protocol::pins::Reply>(&bytes)
             .map_err(|_| Failure::Protocol)?
-            .into_page(channel)
+            .into_page(channel, before)
             .map(client_core::search::Outcome::Pins)
             .map_err(|_| Failure::Protocol)
     }
@@ -551,6 +562,40 @@ impl DiscordApi {
             .into_page(channel, before)
             .map(client_core::search::Outcome::Page)
             .map_err(|_| Failure::Protocol)
+    }
+    async fn send_message(
+        &self,
+        channel: model::Id,
+        content: &str,
+        nonce: &str,
+        reply: Option<model::Id>,
+        attachment: Option<serde_json::Value>,
+    ) -> Result<model::Message, Failure> {
+        if (content.trim().is_empty() && attachment.is_none())
+            || content.chars().count() > client_core::MAX_CONTENT
+        {
+            return Err(Failure::Capacity);
+        }
+        let mut body = serde_json::json!({"content":content,"nonce":nonce,"allowed_mentions":allowed_mentions(content)});
+        if let Some(reply) = reply {
+            body["message_reference"] =
+                serde_json::json!({"message_id":reply,"channel_id":channel});
+        }
+        if let Some(attachment) = attachment {
+            body["attachments"] = serde_json::json!([attachment]);
+        }
+        // No enforce_nonce claim until normal-user semantics are live verified. Never auto-retry writes.
+        self.request(
+            Method::POST,
+            &format!("/channels/{channel}/messages"),
+            Some(body),
+        )
+        .await
+        .and_then(|bytes| {
+            decode::<MessageDto>(&bytes)
+                .map(MessageDto::into_model)
+                .map_err(|_| Failure::Ambiguous)
+        })
     }
 }
 impl AuthProvider for DiscordApi {
@@ -605,6 +650,8 @@ mod tests {
                     ("/channels/1/messages/search?content=%78&limit=25&sort_by=timestamp&sort_order=desc&max_id=9","200 OK",r#"{"messages":[],"total_results":0}"#),
                     ("/channels/1/messages/search?content=%78&limit=25&sort_by=timestamp&sort_order=desc","403 Forbidden",r#"{"code":50001}"#),
                     ("/channels/1/messages/pins?limit=25","200 OK",r#"{"items":[{"pinned_at":"2026-09-10T12:00:00Z","message":{"id":"9","channel_id":"1","author":{"id":"3","username":"Synthetic"},"content":"pin"}}],"has_more":true}"#),
+                    ("/channels/1/messages/pins?limit=25&before=%32%30%32%36%2D%30%39%2D%31%30%54%31%32%3A%30%30%3A%30%30%5A","200 OK",r#"{"items":[{"pinned_at":"2026-09-10T11:00:00Z","message":{"id":"99","channel_id":"1","author":{"id":"3","username":"Synthetic"},"content":"older pin, newer message"}}],"has_more":false}"#),
+                    ("/channels/1/messages/pins?limit=25&before=%32%30%32%36%2D%30%39%2D%31%30%54%31%32%3A%30%30%3A%30%30%5A","200 OK",r#"{"items":[{"pinned_at":"2026-09-10T12:00:00Z","message":{"id":"99","channel_id":"1","author":{"id":"3","username":"Synthetic"}}}],"has_more":true}"#),
                     ("/channels/1/messages/pins?limit=25","403 Forbidden",r#"{"code":50001}"#),
                     ("/channels/1/messages/search?content=%78&limit=25&sort_by=timestamp&sort_order=desc","202 Accepted",r#"{"code":110000,"retry_after":1}"#),
                 ] {
@@ -620,8 +667,13 @@ mod tests {
             assert_eq!(page.hits[0].id,Id(9));
             assert!(matches!(api.search(Id(1),None,"x",Some(Id(9))).await,Ok(Outcome::Page(p)) if p.hits.is_empty()));
             assert!(matches!(api.search(Id(1),None,"x",None).await,Err(Failure::Forbidden)));
-            assert!(matches!(api.execute(Command::Pins { channel:Id(1),request:9 }).await, Event::Search { channel:Id(1),request:9,result:Ok(Outcome::Pins(p)) } if p.hits[0].id == Id(9) && p.partial));
-            assert!(matches!(api.pins(Id(1)).await,Err(Failure::Forbidden)));
+            let Event::Search { channel:Id(1),request:9,result:Ok(Outcome::Pins(page)) } = api.execute(Command::Pins { channel:Id(1),before:None,request:9 }).await else {panic!()};
+            assert!(page.hits[0].id == Id(9) && page.partial);
+            let cursor = page.pin_cursor.unwrap();
+            assert!(matches!(api.pins(Id(1),Some(cursor)).await,Ok(Outcome::Pins(p)) if p.hits[0].id == Id(99) && p.pin_cursor.is_none() && !p.partial));
+            assert!(matches!(api.pins(Id(1),Some(cursor)).await,Err(Failure::Protocol)));
+            assert!(matches!(api.pins(Id(1),Some(i128::MAX)).await,Err(Failure::Protocol)));
+            assert!(matches!(api.pins(Id(1),None).await,Err(Failure::Forbidden)));
             assert!(matches!(api.search(Id(1),None,"x",None).await,Ok(Outcome::Indexing)));
             assert!(*api.cooldown.lock().await>Instant::now());
             server.await.unwrap();

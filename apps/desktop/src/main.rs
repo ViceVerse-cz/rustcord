@@ -4,6 +4,7 @@ mod cache;
 mod connection;
 mod credentials;
 mod downloads;
+mod uploads;
 #[cfg(feature = "voice")]
 mod voice;
 use client_core::{
@@ -40,6 +41,7 @@ struct Desktop {
     state: State,
     messaging: ui::MessagingUi,
     downloads: downloads::Downloads,
+    uploads: uploads::Uploads,
     download_close_pending: bool,
     window: Arc<winit::window::Window>,
     avatars: Option<avatars::AvatarWorker>,
@@ -159,6 +161,7 @@ impl Desktop {
             state,
             messaging: ui::MessagingUi::default(),
             downloads: downloads::Downloads::default(),
+            uploads: uploads::Uploads::default(),
             download_close_pending: false,
             window: cc
                 .winit_window()
@@ -209,6 +212,7 @@ impl Desktop {
         #[cfg(feature = "voice")]
         self.voice.stop();
         self.state.disconnect_voice();
+        self.uploads.cancel();
         self.login = None;
         self.connection = None;
         if let Some(worker) = self.avatars.take() {
@@ -231,6 +235,7 @@ impl Desktop {
         ));
     }
     fn logout(&mut self, ctx: &egui::Context) {
+        self.uploads.cancel();
         if let Some(store) = &mut self.store {
             store.cancel_load();
         }
@@ -308,6 +313,59 @@ impl Desktop {
         false
     }
     fn command(&mut self, command: Command) {
+        if let Command::Send { channel, nonce, .. } = &command
+            && self
+                .state
+                .pending
+                .iter()
+                .any(|p| p.nonce == *nonce && p.attachment.is_some())
+        {
+            let (channel, nonce) = (*channel, nonce.clone());
+            let available = !self.state.demo
+                && !self.fixture_only
+                && self.state.auth == AuthState::Authenticated
+                && self.state.gateway_connected
+                && self.state.freshness == model::Freshness::Fresh
+                && self.state.selected == Some(channel)
+                && self.connection.is_some();
+            if available
+                && let Some(source) = self.uploads.take_source(self.state.generation, channel)
+            {
+                let (progress, receive) =
+                    tokio::sync::watch::channel(discord_api::upload::Status::Preparing);
+                let (cancel, _) = tokio::sync::watch::channel(false);
+                if self.uploads.begin_upload(receive, cancel.clone()).is_ok() {
+                    let request = uploads::UploadRequest {
+                        command,
+                        source,
+                        progress,
+                        cancel,
+                    };
+                    self.messaging.attachment = None;
+                    if let Err(error) = self.connection.as_ref().unwrap().uploads.try_send(request)
+                    {
+                        let request = error.into_inner();
+                        request
+                            .progress
+                            .send_replace(discord_api::upload::Status::Failed(
+                                "Upload queue full; reselect the file",
+                            ));
+                        self.state.command_rejected(request.command);
+                    }
+                    return;
+                }
+            }
+            self.state.apply(Envelope {
+                generation: self.state.generation,
+                event: Event::SendResult {
+                    nonce,
+                    result: Err(Failure::ProtocolAt(
+                        "File not sent; reconnect and reselect the attachment",
+                    )),
+                },
+            });
+            return;
+        }
         if let Command::Voice(control) = &command {
             if self.state.demo || self.fixture_only {
                 self.state.status = "Voice calls are unavailable in the offline preview";
@@ -420,30 +478,99 @@ impl Desktop {
                     })
                 }
                 Command::Voice(_) | Command::CancelProfile | Command::CancelSearch => return,
-                Command::Pins { channel, request } => {
-                    // Explicit synthetic pins, independent of message creation order.
-                    let hits = [480, 499, 470]
+                Command::Archives {
+                    parent,
+                    guild,
+                    kind,
+                    before,
+                    request,
+                } => {
+                    use model::archives::{Cursor, Kind, Page};
+                    let offset = parent.0.saturating_mul(10_000).saturating_add(match kind {
+                        Kind::Public => 0,
+                        Kind::Private => 1_000,
+                        Kind::JoinedPrivate => 2_000,
+                    });
+                    let ids = (if before.is_none() {
+                        [900, 850, 800]
+                    } else {
+                        [700, 650, 600]
+                    })
+                    .map(|id| offset.saturating_add(id));
+                    let public_kind = if self
+                        .state
+                        .channels
+                        .iter()
+                        .any(|c| c.id == parent && c.kind == 5)
+                    {
+                        10
+                    } else {
+                        11
+                    };
+                    let threads = ids
                         .into_iter()
-                        .map(|id| {
-                            let message = test_support::message(id, channel);
-                            model::SearchHit {
-                                id: message.id,
-                                channel,
-                                author: message.author.name,
-                                excerpt: format!(
-                                    "Synthetic pinned message: {}",
-                                    message.content.chars().take(200).collect::<String>()
-                                ),
-                            }
+                        .map(|id| model::Channel {
+                            id: model::Id(id),
+                            guild: Some(guild),
+                            parent_id: Some(parent),
+                            position: 0,
+                            name: format!("Synthetic archived thread {id}"),
+                            kind: if kind == Kind::Public {
+                                public_kind
+                            } else {
+                                12
+                            },
+                            recipients: vec![],
+                            last_message: None,
+                            member_list_id: None,
                         })
                         .collect();
+                    Event::Archives {
+                        parent,
+                        request,
+                        result: Ok(Page {
+                            threads,
+                            next: before.is_none().then_some(if kind == Kind::JoinedPrivate {
+                                Cursor::Id(model::Id(ids[2]))
+                            } else {
+                                Cursor::Time(1_788_998_400_000_000_000)
+                            }),
+                        }),
+                    }
+                }
+                Command::Pins {
+                    channel,
+                    before,
+                    request,
+                } => {
+                    // Explicit synthetic pins, independent of message creation order.
+                    let hits = if before.is_none() {
+                        [480, 499, 470]
+                    } else {
+                        [420, 455, 430]
+                    }
+                    .into_iter()
+                    .map(|id| {
+                        let message = test_support::message(id, channel);
+                        model::SearchHit {
+                            id: message.id,
+                            channel,
+                            author: message.author.name,
+                            excerpt: format!(
+                                "Synthetic pinned message: {}",
+                                message.content.chars().take(200).collect::<String>()
+                            ),
+                        }
+                    })
+                    .collect();
                     Event::Search {
                         channel,
                         request,
                         result: Ok(client_core::search::Outcome::Pins(model::SearchPage {
                             hits,
                             total: 0,
-                            partial: false,
+                            partial: before.is_none(),
+                            pin_cursor: before.is_none().then_some(1_788_998_400_000_000_000),
                         })),
                     }
                 }
@@ -484,6 +611,7 @@ impl Desktop {
                             hits,
                             total,
                             partial: false,
+                            pin_cursor: None,
                         })),
                     }
                 }
@@ -937,6 +1065,19 @@ impl Desktop {
             let ready = matches!(event.event, Event::Ready { .. });
             let resumed = matches!(event.event, Event::Resumed);
             let confirmed_channel = confirmed_recovery_channel(&self.state, &event.event);
+            let mut removed_threads: std::collections::BTreeSet<_> = if matches!(
+                &event.event,
+                Event::ThreadsSync { .. } | Event::ThreadRemoved { .. }
+            ) {
+                self.state
+                    .channels
+                    .iter()
+                    .filter(|channel| matches!(channel.kind, 10..=12))
+                    .map(|channel| channel.id)
+                    .collect()
+            } else {
+                Default::default()
+            };
             let invalidate = matches!(
                 event.event,
                 Event::Resync | Event::PermissionsChanged | Event::Unavailable(_)
@@ -946,13 +1087,20 @@ impl Desktop {
                 if self.state.selected == Some(*channel) && self.state.request == *request && self.state.history_pending);
             let history_changed = changes_active_history(&self.state, &event.event);
             self.state.apply(event);
+            if !removed_threads.is_empty() {
+                for channel in &self.state.channels {
+                    removed_threads.remove(&channel.id);
+                }
+            }
             #[cfg(feature = "voice")]
             if let Some(error) = voice_failure
                 && let Some(command) = self.voice.fail(&mut self.state, error)
             {
                 self.command(command);
             }
-            if invalidate {
+            // ponytail: accepted thread removals clear account-wide history;
+            // add scoped disk deletion if thread churn makes refetch cost significant.
+            if invalidate || !removed_threads.is_empty() {
                 self.queue_cache(cache::Operation::ClearHistory);
             }
             persist_timeline |= history_changed;
@@ -1064,16 +1212,56 @@ impl eframe::App for Desktop {
     }
     fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        let upload_allowed = self.state.user.is_some()
+            && self.state.gateway_connected
+            && self.state.freshness == model::Freshness::Fresh;
+        self.uploads.poll(
+            self.state.generation,
+            self.state.selected,
+            upload_allowed,
+            &ctx,
+        );
+        // Move native handles once; never load dropped bytes on the rendering thread.
+        let dropped = ctx.input_mut(|input| std::mem::take(&mut input.raw.dropped_files));
+        if !dropped.is_empty() {
+            if upload_allowed
+                && self.login.is_none()
+                && !self.confirming_close
+                && !self.confirming_logout
+                && !self.messaging.has_edit()
+                && !self.downloads.is_active()
+                && let Some(channel) = self.state.selected
+            {
+                if let Err(error) = self.uploads.start_drop(
+                    self.state.generation,
+                    channel,
+                    self.runtime.handle(),
+                    &ctx,
+                    dropped,
+                ) {
+                    self.state.status = error;
+                }
+            } else {
+                self.state.status =
+                    "File not attached; return to a connected conversation and drop it again";
+            }
+        }
+        self.messaging.attachment = self
+            .uploads
+            .selection()
+            .map(|(name, size)| (name.to_owned(), size));
+        self.messaging.upload_busy = self.uploads.busy();
+        self.messaging.upload_status = self.uploads.status();
         if self.state.user.is_none() {
             self.downloads.cancel();
         }
         let download_status = match self.downloads.poll() {
             downloads::Status::Idle => String::new(),
-            downloads::Status::Choosing => "Choose where to save the image…".into(),
+            downloads::Status::Choosing => "Choose where to save the attachment…".into(),
             downloads::Status::Downloading { received, total } => {
                 format!("Downloading: {} / {} KiB", received / 1024, total / 1024)
             }
-            downloads::Status::Saved => "Image downloaded".into(),
+            downloads::Status::Saved => "Attachment downloaded".into(),
             downloads::Status::Cancelled => "Download cancelled".into(),
             downloads::Status::Failed(error) => (*error).into(),
         };
@@ -1104,6 +1292,7 @@ impl eframe::App for Desktop {
                     .iter()
                     .any(|p| p.delivery != Delivery::Confirmed)
                 || self.messaging.has_edit()
+                || self.uploads.has_unsent()
                 || self.forgetting
                 || self.avatar_cleanup.is_some()
                 || self.cache_pending > 0
@@ -1123,6 +1312,31 @@ impl eframe::App for Desktop {
         } else if self.state.user.is_some() {
             self.messaging.storage_status = self.cache_status;
             let commands = self.messaging.show(ui, &mut self.state);
+            // Selection may have changed during this frame; never reuse another channel's file.
+            self.uploads.poll(
+                self.state.generation,
+                self.state.selected,
+                self.state.gateway_connected && self.state.freshness == model::Freshness::Fresh,
+                &ctx,
+            );
+            if std::mem::take(&mut self.messaging.remove_attachment_requested) {
+                self.uploads.remove();
+            }
+            if std::mem::take(&mut self.messaging.cancel_upload_requested) {
+                self.uploads.cancel();
+            }
+            if std::mem::take(&mut self.messaging.attach_requested)
+                && let Some(channel) = self.state.selected
+                && let Err(error) = self.uploads.start_choose(
+                    self.state.generation,
+                    channel,
+                    self.runtime.handle(),
+                    &ctx,
+                    self.window.clone(),
+                )
+            {
+                self.state.status = error;
+            }
             if std::mem::take(&mut self.messaging.downloads().cancel_requested) {
                 self.downloads.cancel();
             }
@@ -1177,7 +1391,8 @@ impl eframe::App for Desktop {
             self.poll_voice(&ctx);
             if self.messaging.logout_requested {
                 self.messaging.logout_requested = false;
-                if self.state.has_unsent() || self.messaging.has_edit() {
+                if self.state.has_unsent() || self.messaging.has_edit() || self.uploads.has_unsent()
+                {
                     self.confirming_logout = true;
                 } else {
                     self.logout(&ctx);
@@ -1199,12 +1414,12 @@ impl eframe::App for Desktop {
         }
         if self.confirming_close || self.confirming_logout {
             egui::Window::new("Leave this session?").collapsible(false).show(&ctx,|ui|{
-                ui.label("Saved drafts survive exit. Logout removes local account data. Edits and uncertain sends need your attention.");
+                ui.label("Saved text drafts survive exit; selected files must be reselected. Logout removes local account data. Edits and uncertain sends need your attention.");
                 if self.forgetting{ui.label("Wait for saved-login removal to finish.");}
                 ui.horizontal(|ui|{
                     if ui.button("Keep working").clicked(){self.confirming_close=false;self.confirming_logout=false;self.download_close_pending=false;}
                     if ui.add_enabled(!self.forgetting,egui::Button::new("Discard and continue")).clicked(){
-                        if self.confirming_close{self.close_approved=true;if self.downloads.is_active(){self.downloads.cancel();self.download_close_pending=true;}else{ctx.send_viewport_cmd(egui::ViewportCommand::Close);}}else{self.logout(&ctx);}
+                        if self.confirming_close{self.close_approved=true;self.uploads.cancel();if self.downloads.is_active(){self.downloads.cancel();self.download_close_pending=true;}else{ctx.send_viewport_cmd(egui::ViewportCommand::Close);}}else{self.logout(&ctx);}
                     }
                 });
             });

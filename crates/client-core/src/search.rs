@@ -9,6 +9,7 @@ pub struct SearchView {
     pub channel: Id,
     pub query: String,
     pub before: Option<Id>,
+    pub pin_before: Option<i128>,
     pub request: u64,
     pub loading: bool,
     pub error: Option<&'static str>,
@@ -47,11 +48,13 @@ impl State {
             return None;
         }
         self.search_request = self.search_request.wrapping_add(1);
+        self.archives = None;
         self.search = Some(SearchView {
             pins: false,
             channel,
             query: query.clone(),
             before,
+            pin_before: None,
             request: self.search_request,
             loading: true,
             error: None,
@@ -66,16 +69,33 @@ impl State {
         })
     }
     pub fn request_pins(&mut self) -> Option<Command> {
+        self.request_pins_page(None)
+    }
+    pub fn request_older_pins(&mut self) -> Option<Command> {
+        let view = self.search.as_ref()?;
+        if !view.pins || view.loading || Some(view.channel) != self.selected {
+            return None;
+        }
+        let before = if view.error.is_some() {
+            view.pin_before?
+        } else {
+            view.page.as_ref()?.pin_cursor?
+        };
+        self.request_pins_page(Some(before))
+    }
+    fn request_pins_page(&mut self, before: Option<i128>) -> Option<Command> {
         if !self.can_search() {
             return None;
         }
         let channel = self.selected?;
         self.search_request = self.search_request.wrapping_add(1);
+        self.archives = None;
         self.search = Some(SearchView {
             pins: true,
             channel,
             query: String::new(),
             before: None,
+            pin_before: before,
             request: self.search_request,
             loading: true,
             error: None,
@@ -83,12 +103,14 @@ impl State {
         });
         Some(Command::Pins {
             channel,
+            before,
             request: self.search_request,
         })
     }
     pub fn clear_search(&mut self) -> Command {
         self.search_request = self.search_request.wrapping_add(1);
         self.search = None;
+        self.archives = None;
         Command::CancelSearch
     }
     pub fn apply_search(&mut self, channel: Id, request: u64, result: Result<Outcome, Failure>) {
@@ -116,7 +138,14 @@ impl State {
                 view.page = Some(page);
                 view.error = None;
             }
-            Ok(Outcome::Pins(page)) if view.pins && page.valid_pins(channel) => {
+            Ok(Outcome::Pins(page))
+                if view.pins
+                    && page.valid_pins(channel)
+                    && page.partial == page.pin_cursor.is_some()
+                    && page.pin_cursor.is_none_or(|cursor| {
+                        !page.hits.is_empty() && view.pin_before.is_none_or(|b| cursor < b)
+                    }) =>
+            {
                 view.page = Some(page);
                 view.error = None;
             }

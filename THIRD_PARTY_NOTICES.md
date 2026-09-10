@@ -19,3 +19,5 @@ Bundled fallback fonts are unmodified and licensed under SIL OFL 1.1: **Noto San
 The initial packaging command stages original licenses and this inventory notice. Complete per-artifact transitive license-text assembly and platform redistribution review remain a release-hardening gate; do not treat a development package as a completed legal/distribution review.
 
 Native Save As uses rfd 0.17.2 (MIT) and its pollster 0.4.0 dependency (MIT OR Apache-2.0). Their unmodified license texts are in `assets/licenses/files` and are staged in `licenses/files` in both package variants.
+
+Single-file upload streaming enables existing reqwest's `stream` feature and Tokio's `fs` feature. The native dependency addition is **tokio-util 0.7.19** (MIT, Tokio Contributors); its unmodified registry `LICENSE` is included as `assets/licenses/files/tokio-util-LICENSE-MIT` and staged in both package variants. Existing futures-util remains MIT OR Apache-2.0. Cargo.lock also gains wasm-streams 0.5.0 through reqwest's wasm-only target declaration; it is not selected by these native builds. See the dated addendum in [the dependency inventory](docs/dependency-versions.md).

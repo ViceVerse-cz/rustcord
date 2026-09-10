@@ -1,9 +1,11 @@
 //! Single UI-thread state owner. Adapters deliver generation-tagged typed events.
+pub mod archives;
 pub mod auth;
 pub mod profile;
 pub mod reactions;
 pub mod read_state;
 pub mod search;
+mod threads;
 pub mod voice;
 use model::*;
 use session_cache::Timeline;
@@ -17,8 +19,16 @@ pub const EVENT_SLOTS: usize = 8; // <= 32 MiB wire-derived data, not including 
 pub const COMMAND_SLOTS: usize = 16; // each admitted command <= 16 KiB
 
 pub enum Command {
+    Archives {
+        parent: Id,
+        guild: Id,
+        kind: model::archives::Kind,
+        before: Option<model::archives::Cursor>,
+        request: u64,
+    },
     Pins {
         channel: Id,
+        before: Option<i128>,
         request: u64,
     },
     Search {
@@ -70,6 +80,11 @@ pub enum Command {
     },
 }
 pub enum Event {
+    Archives {
+        parent: Id,
+        request: u64,
+        result: Result<model::archives::Page, auth::Failure>,
+    },
     Search {
         channel: Id,
         request: u64,
@@ -86,6 +101,19 @@ pub enum Event {
     Voice(voice::Event),
     ChannelCreated(Channel),
     ChannelChanged(ChannelPatch),
+    ThreadChanged {
+        guild: Id,
+        patch: ChannelPatch,
+    },
+    ThreadRemoved {
+        guild: Id,
+        id: Id,
+    },
+    ThreadsSync {
+        guild: Id,
+        parents: Option<Vec<Id>>,
+        threads: Vec<Channel>,
+    },
     GuildChanged(GuildPatch),
     Members(MemberList),
     RecipientAdded {
@@ -140,11 +168,14 @@ pub struct Envelope {
 pub struct Pending {
     pub channel: Id,
     pub content: String,
+    pub attachment: Option<String>,
     pub nonce: String,
     pub delivery: Delivery,
     pub confirmed: Option<Id>,
 }
 pub struct State {
+    pub archives: Option<archives::View>,
+    pub archived_thread: Option<Id>,
     pub search: Option<search::SearchView>,
     pub search_request: u64,
     pub search_target: Option<Id>,
@@ -179,6 +210,8 @@ pub struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
+            archives: None,
+            archived_thread: None,
             search: None,
             search_request: 0,
             search_target: None,
@@ -232,7 +265,12 @@ impl State {
             + self
                 .pending
                 .iter()
-                .map(|p| p.content.capacity() + p.nonce.capacity() + size_of::<Pending>())
+                .map(|p| {
+                    p.content.capacity()
+                        + p.nonce.capacity()
+                        + p.attachment.as_ref().map_or(0, String::capacity)
+                        + size_of::<Pending>()
+                })
                 .sum::<usize>()
     }
     pub fn select(&mut self, channel: Id) -> Option<Command> {
@@ -244,6 +282,7 @@ impl State {
             self.status = "This channel kind is unsupported";
             return None;
         }
+        self.retire_archived_thread(Some(channel));
         self.members = None;
         self.selected = Some(channel);
         self.clear_search();
@@ -315,7 +354,9 @@ impl State {
         }
     }
     pub fn history(&mut self, before: Option<Id>) -> Command {
-        if self.search.as_ref().is_some_and(|s| s.loading) {
+        if self.search.as_ref().is_some_and(|s| s.loading)
+            || self.archives.as_ref().is_some_and(|s| s.loading)
+        {
             self.clear_search();
         }
         if before.is_none() {
@@ -348,21 +389,40 @@ impl State {
         Some(self.history(Some(before)))
     }
     pub fn prepare_send(&mut self) -> Option<Command> {
+        self.prepare_send_with_attachment(None)
+    }
+    pub fn prepare_send_with_attachment(&mut self, filename: Option<&str>) -> Option<Command> {
         let channel = self.selected?;
         if self.auth != auth::AuthState::Authenticated || self.freshness != Freshness::Fresh {
             self.status = "Wait for a current connected channel";
             return None;
         }
-        let content = self.drafts.get(&channel)?;
-        if content.trim().is_empty()
+        if filename.is_some_and(|name| {
+            name.trim().is_empty()
+                || name.len() > 256
+                || matches!(name, "." | "..")
+                || name
+                    .chars()
+                    .any(|c| c.is_control() || matches!(c, '/' | '\\' | ':'))
+        }) {
+            self.status = "Attachment filename is invalid or too long";
+            return None;
+        }
+        let content = self.drafts.get(&channel).map_or("", String::as_str);
+        if (content.trim().is_empty() && filename.is_none())
             || content.chars().count() > MAX_CONTENT
             || self.pending.len() >= 64
-            || self.draft_bytes() + content.len() > MAX_DRAFT_BYTES
+            || self.draft_bytes()
+                + content.len()
+                + filename.map_or(0, str::len)
+                + size_of::<Pending>()
+                + 32
+                > MAX_DRAFT_BYTES
         {
             self.status = "Send exceeds the session input budget";
             return None;
         }
-        let content = content.clone();
+        let content = content.to_owned();
         self.send_sequence += 1;
         let epoch = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -372,6 +432,7 @@ impl State {
         self.pending.push(Pending {
             channel,
             content: content.clone(),
+            attachment: filename.map(str::to_owned),
             nonce: nonce.clone(),
             delivery: Delivery::Sending,
             confirmed: None,
@@ -385,10 +446,19 @@ impl State {
         })
     }
     pub fn command_rejected(&mut self, command: Command) {
+        if let Command::Archives {
+            parent, request, ..
+        } = command
+        {
+            self.apply_archives(parent, request, Err(auth::Failure::Capacity));
+            return;
+        }
         if let Command::Search {
             channel, request, ..
         }
-        | Command::Pins { channel, request } = command
+        | Command::Pins {
+            channel, request, ..
+        } = command
         {
             self.apply_search(channel, request, Err(auth::Failure::Capacity));
             return;
@@ -475,16 +545,56 @@ impl State {
         if matches!(&command, Command::History { request, .. } if *request == self.request) {
             self.cancel_history();
         }
-        if let Command::Send { nonce, .. } = command
-            && let Some(p) = self.pending.iter_mut().find(|p| p.nonce == nonce)
-        {
-            p.delivery = Delivery::Rejected;
+        if let Command::Send { nonce, .. } = command {
+            self.apply(Envelope {
+                generation: self.generation,
+                event: Event::SendResult {
+                    nonce,
+                    result: Err(auth::Failure::ProtocolAt(
+                        "Work queue full; message was not sent",
+                    )),
+                },
+            });
+            return;
         }
         self.status = "Work queue full; action was not sent";
         self.freshness = Freshness::Stale;
     }
     pub fn apply(&mut self, envelope: Envelope) {
         if envelope.generation != self.generation {
+            return;
+        }
+        let archive_mutation = match &envelope.event {
+            Event::ThreadRemoved { guild, id } => Some((*guild, *id)),
+            Event::ThreadChanged { guild, patch } => Some((*guild, patch.id)),
+            _ => None,
+        };
+        if archive_mutation.is_some_and(|(guild, id)| {
+            self.archives.as_ref().is_some_and(|view| {
+                view.guild == guild
+                    && (view.loading
+                        || view
+                            .page
+                            .as_ref()
+                            .is_some_and(|page| page.threads.iter().any(|thread| thread.id == id)))
+            })
+        }) {
+            self.clear_archives();
+        }
+        if let Event::ThreadChanged { guild, patch } = &envelope.event
+            && !self
+                .channels
+                .iter()
+                .any(|c| c.id == patch.id && c.guild == Some(*guild) && matches!(c.kind, 10..=12))
+        {
+            return;
+        }
+        if let Event::ThreadRemoved { guild, id } = &envelope.event
+            && !self
+                .channels
+                .iter()
+                .any(|c| c.id == *id && c.guild == Some(*guild) && matches!(c.kind, 10..=12))
+        {
             return;
         }
         self.revision += 1;
@@ -506,6 +616,14 @@ impl State {
             self.clear_search();
         }
         let result = match envelope.event {
+            Event::Archives {
+                parent,
+                request,
+                result,
+            } => {
+                self.apply_archives(parent, request, result);
+                Ok(())
+            }
             Event::Search {
                 channel,
                 request,
@@ -515,6 +633,11 @@ impl State {
                 Ok(())
             }
             Event::ReadState(event) => self.apply_read_state(event),
+            Event::ThreadsSync {
+                guild,
+                parents,
+                threads,
+            } => self.apply_threads_sync(guild, parents, threads),
             Event::Reactions(event) => self.apply_reactions(event),
             Event::Profile {
                 user,
@@ -542,6 +665,25 @@ impl State {
                 Ok(())
             }
             Event::ChannelCreated(channel) => {
+                if self.archived_thread == Some(channel.id)
+                    && self.channels.iter().any(|old| {
+                        old.id == channel.id
+                            && (old.guild != channel.guild
+                                || old.parent_id != channel.parent_id
+                                || old.kind != channel.kind)
+                    })
+                {
+                    return;
+                }
+                if matches!(channel.kind, 10..=12)
+                    && (!self.guilds.iter().any(|g| Some(g.id) == channel.guild)
+                        || self.channels.iter().any(|old| {
+                            old.id == channel.id
+                                && (old.guild != channel.guild || !matches!(old.kind, 10..=12))
+                        }))
+                {
+                    return;
+                }
                 let old = self.channels.iter().position(|c| c.id == channel.id);
                 if channel.recipients.len() > 64
                     || (old.is_none() && self.channels.len() + self.guilds.len() >= MAX_NAV)
@@ -557,14 +699,35 @@ impl State {
                     self.fail(auth::Failure::Capacity);
                     return;
                 }
+                if self
+                    .archives
+                    .as_ref()
+                    .is_some_and(|view| view.parent == channel.id)
+                {
+                    self.clear_archives();
+                }
                 if let Some(index) = old {
+                    if self.archived_thread == Some(channel.id)
+                        && self.channels[index].guild == channel.guild
+                        && self.channels[index].parent_id == channel.parent_id
+                        && self.channels[index].kind == channel.kind
+                    {
+                        self.archived_thread = None;
+                    }
                     self.channels[index] = channel;
                 } else {
                     self.channels.push(channel);
                 }
                 Ok(())
             }
-            Event::ChannelChanged(patch) => {
+            Event::ChannelChanged(patch) | Event::ThreadChanged { patch, .. } => {
+                if self
+                    .archives
+                    .as_ref()
+                    .is_some_and(|view| view.parent == patch.id)
+                {
+                    self.clear_archives();
+                }
                 if let Some(channel) = self.channels.iter_mut().find(|c| c.id == patch.id) {
                     match patch.last_message {
                         Patch::Value(id) => channel.last_message = Some(id),
@@ -693,6 +856,7 @@ impl State {
                 self.user = Some(user);
                 self.guilds = guilds;
                 self.channels = channels;
+                self.archived_thread = None;
                 self.auth = auth::AuthState::Authenticated;
                 self.gateway_connected = true;
                 self.status = "Connected · unofficial session";
@@ -855,7 +1019,11 @@ impl State {
                                 Delivery::Rejected
                             };
                         }
-                        self.fail(f);
+                        if f.ends_session() {
+                            self.fail(f);
+                        } else {
+                            self.status = f.label();
+                        }
                     }
                 }
                 self.pending.retain(|p| p.delivery != Delivery::Confirmed);
@@ -895,24 +1063,15 @@ impl State {
                 self.status = "Session or permissions changed · reload active history";
                 Ok(())
             }
-            Event::Unavailable(channel) => {
-                self.read_state.forget(channel);
-                self.clear_profile();
-                self.channels.retain(|c| c.id != channel);
-                if self
-                    .voice
-                    .active
-                    .as_ref()
-                    .is_some_and(|c| c.channel == channel)
-                {
-                    self.disconnect_voice();
-                }
-                if self.selected == Some(channel) {
-                    self.invalidate_members();
-                    self.timeline.clear();
-                    self.freshness = Freshness::Unavailable;
-                    self.cancel_history();
-                }
+            Event::Unavailable(channel) | Event::ThreadRemoved { id: channel, .. } => {
+                let mut removed = BTreeSet::from([channel]);
+                removed.extend(
+                    self.channels
+                        .iter()
+                        .filter(|c| matches!(c.kind, 10..=12) && c.parent_id == Some(channel))
+                        .map(|c| c.id),
+                );
+                self.remove_channels(&removed);
                 self.status = "Channel unavailable or permission denied";
                 Ok(())
             }
@@ -926,6 +1085,13 @@ impl State {
         if !self.can_search() && self.search.is_some() {
             self.clear_search();
         }
+        if self
+            .archives
+            .as_ref()
+            .is_some_and(|view| !self.can_archive(view.parent, view.kind))
+        {
+            self.clear_archives();
+        }
     }
     fn invalidate_members(&mut self) {
         self.member_request = self.member_request.wrapping_add(1);
@@ -933,6 +1099,42 @@ impl State {
             list.request = self.member_request;
             list.rows.clear();
             list.freshness = Freshness::Unavailable;
+        }
+    }
+    fn remove_channels(&mut self, removed: &BTreeSet<Id>) {
+        if self
+            .archives
+            .as_ref()
+            .is_some_and(|view| removed.contains(&view.parent))
+        {
+            self.clear_archives();
+        }
+        if self.archived_thread.is_some_and(|id| removed.contains(&id)) {
+            self.archived_thread = None;
+        }
+        self.channels.retain(|c| !removed.contains(&c.id));
+        for id in removed {
+            self.read_state.forget(*id);
+        }
+        if !removed.is_empty() {
+            self.clear_profile();
+        }
+        if self
+            .voice
+            .active
+            .as_ref()
+            .is_some_and(|c| removed.contains(&c.channel))
+        {
+            self.disconnect_voice();
+        }
+        if self.selected.is_some_and(|id| removed.contains(&id)) {
+            self.clear_search();
+            self.search_target = None;
+            self.invalidate_members();
+            self.timeline.clear();
+            self.freshness = Freshness::Unavailable;
+            self.cancel_history();
+            self.status = "Conversation no longer available in navigation";
         }
     }
     fn confirm(&mut self, message: &Message) {
@@ -976,6 +1178,9 @@ impl Event {
     pub fn bytes(&self) -> usize {
         size_of::<Self>()
             + match self {
+                Self::Archives { result, .. } => {
+                    result.as_ref().map_or(0, model::archives::Page::bytes)
+                }
                 Self::Search {
                     result: Ok(search::Outcome::Page(page) | search::Outcome::Pins(page)),
                     ..
@@ -999,10 +1204,21 @@ impl Event {
                     })
                     .sum(),
                 Self::ChannelCreated(channel) => channel.bytes(),
-                Self::ChannelChanged(patch) => match &patch.name {
-                    Patch::Value(name) => name.capacity(),
-                    _ => 0,
-                },
+                Self::ThreadsSync {
+                    parents, threads, ..
+                } => {
+                    parents
+                        .as_ref()
+                        .map_or(0, |p| p.capacity() * size_of::<Id>())
+                        + threads.capacity().saturating_sub(threads.len()) * size_of::<Channel>()
+                        + threads.iter().map(Channel::bytes).sum::<usize>()
+                }
+                Self::ChannelChanged(patch) | Self::ThreadChanged { patch, .. } => {
+                    match &patch.name {
+                        Patch::Value(name) => name.capacity(),
+                        _ => 0,
+                    }
+                }
                 Self::Ready {
                     user,
                     guilds,
@@ -1060,6 +1276,114 @@ impl Event {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rejected_sends_do_not_invalidate_a_healthy_conversation() {
+        let mut state = State {
+            selected: Some(Id(1)),
+            auth: auth::AuthState::Authenticated,
+            freshness: Freshness::Fresh,
+            gateway_connected: true,
+            ..State::default()
+        };
+        let command = state.prepare_send_with_attachment(Some("a.txt")).unwrap();
+        let Command::Send { nonce, .. } = &command else {
+            panic!()
+        };
+        let nonce = nonce.clone();
+        state.selected = Some(Id(2));
+        state.command_rejected(command);
+        assert_eq!(state.pending[0].delivery, Delivery::Rejected);
+        assert_eq!(state.freshness, Freshness::Fresh);
+        apply(
+            &mut state,
+            Event::SendResult {
+                nonce: nonce.clone(),
+                result: Err(auth::Failure::ProtocolAt(
+                    "Upload cancelled; no message was sent",
+                )),
+            },
+        );
+        assert_eq!(state.freshness, Freshness::Fresh);
+        assert!(state.gateway_connected);
+        apply(
+            &mut state,
+            Event::SendResult {
+                nonce,
+                result: Err(auth::Failure::Expired),
+            },
+        );
+        assert_eq!(state.auth, auth::AuthState::Expired);
+        assert_eq!(state.freshness, Freshness::Stale);
+        assert!(!state.gateway_connected);
+    }
+    #[test]
+    fn attachment_only_sends_are_bounded_and_keep_existing_confirmation() {
+        let mut state = State {
+            selected: Some(Id(1)),
+            auth: auth::AuthState::Authenticated,
+            freshness: Freshness::Fresh,
+            ..State::default()
+        };
+        assert!(state.prepare_send().is_none());
+        for invalid in [
+            "",
+            " ",
+            ".",
+            "..",
+            "../secret.txt",
+            "C:\\secret.txt",
+            "a\nb",
+        ] {
+            assert!(state.prepare_send_with_attachment(Some(invalid)).is_none());
+        }
+        assert!(
+            state
+                .prepare_send_with_attachment(Some(&"é".repeat(129)))
+                .is_none()
+        );
+        state.reply = Some(Id(4));
+        let Command::Send {
+            content,
+            nonce,
+            reply,
+            ..
+        } = state
+            .prepare_send_with_attachment(Some("résumé.txt"))
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert!(content.is_empty());
+        assert_eq!(reply, Some(Id(4)));
+        assert_eq!(state.pending[0].attachment.as_deref(), Some("résumé.txt"));
+        assert!(state.draft_bytes() >= "résumé.txt".len() + nonce.len() + size_of::<Pending>());
+        apply(
+            &mut state,
+            Event::SendResult {
+                nonce: nonce.clone(),
+                result: Err(auth::Failure::Ambiguous),
+            },
+        );
+        assert_eq!(state.pending[0].delivery, Delivery::Ambiguous);
+        let mut confirmed = message(10);
+        confirmed.nonce = Some(nonce.clone());
+        apply(
+            &mut state,
+            Event::SendResult {
+                nonce,
+                result: Ok(confirmed),
+            },
+        );
+        assert!(state.pending.is_empty());
+        state.freshness = Freshness::Fresh;
+        state.drafts.insert(
+            Id(2),
+            "x".repeat(MAX_DRAFT_BYTES - size_of::<Pending>() - 32),
+        );
+        assert!(state.prepare_send_with_attachment(Some("a.txt")).is_none());
+        state.logout();
+        assert!(!state.has_unsent());
+    }
     use super::*;
 
     #[test]

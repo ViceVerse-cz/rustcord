@@ -1,0 +1,9 @@
+# Synthetic native evidence
+
+Baseline: e99bc8817454335789b84140c2998394bca899cf, Windows text package launched explicitly with `--demo`. Its executable hash matched the reviewed baseline build before copying to a separate measurement directory. `before.png` shows the synthetic getting-started conversation at 1122x792, dark appearance, before Attach file existed. No account content appears in this image.
+
+Computer Use was stopped by the owner's physical Escape key before the after-build inspection. No further desktop-control tools were called. The after image, native picker selection/cancel, changed-build light/dark and narrow-layout inspection, and comparable process sample remain pending. The headless composer and loopback transport tests are separate synthetic evidence; they do not establish native interaction or Discord compatibility. Delivery remains a draft.
+
+Pending reproduction: run the changed text package with `--demo`, choose a public synthetic file with Attach file, inspect its filename/size and Remove attachment, then cancel another selection. Sending attachments must stay disabled with the offline-preview explanation. Live testing requires the separate owner-controlled developer-session gate.
+
+On the next continuation, the file-picker build at b83b41a was launched from a separate package copy with --demo and its native Attach file control was inspected. Computer Use stopped again with physical Escape on the attempted chooser click; no further desktop-control calls followed. That observation is not final drag/drop-build evidence. Pending reproduction now also includes dropping one synthetic local file, rejecting a second selection and multiple-file drops, and confirming that navigation discards an unfinished selection. No after image has been substituted for these missing checks.

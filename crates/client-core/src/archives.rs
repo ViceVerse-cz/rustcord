@@ -1,0 +1,512 @@
+//! A single bounded archive page; opening a result admits one transient conversation.
+use crate::{
+    Command, MAX_EVENT_BYTES, MAX_NAV, State,
+    auth::{AuthState, Failure},
+};
+use model::{
+    Channel, Id,
+    archives::{Cursor, Kind, Page},
+};
+use std::collections::BTreeSet;
+
+pub struct View {
+    pub parent: Id,
+    pub guild: Id,
+    pub kind: Kind,
+    pub before: Option<Cursor>,
+    pub request: u64,
+    pub loading: bool,
+    pub error: Option<&'static str>,
+    pub page: Option<Page>,
+}
+
+impl State {
+    pub fn can_archive(&self, parent: Id, kind: Kind) -> bool {
+        self.auth == AuthState::Authenticated
+            && self.gateway_connected
+            && self.channels.iter().any(|c| {
+                c.id == parent
+                    && c.guild
+                        .is_some_and(|guild| self.guilds.iter().any(|g| g.id == guild))
+                    && match kind {
+                        Kind::Public => matches!(c.kind, 0 | 5 | 15 | 16),
+                        Kind::Private | Kind::JoinedPrivate => c.kind == 0,
+                    }
+            })
+    }
+
+    pub fn request_archives(
+        &mut self,
+        parent: Id,
+        kind: Kind,
+        before: Option<Cursor>,
+    ) -> Option<Command> {
+        if !self.can_archive(parent, kind) {
+            return None;
+        }
+        let guild = self.channels.iter().find(|c| c.id == parent)?.guild?;
+        if before.is_some()
+            && !self.archives.as_ref().is_some_and(|view| {
+                view.parent == parent
+                    && view.guild == guild
+                    && view.kind == kind
+                    && !view.loading
+                    && if view.error.is_some() {
+                        view.before == before
+                    } else {
+                        view.page.as_ref().is_some_and(|page| page.next == before)
+                    }
+            })
+        {
+            return None;
+        }
+        self.clear_search();
+        self.archives = Some(View {
+            parent,
+            guild,
+            kind,
+            before,
+            request: self.search_request,
+            loading: true,
+            error: None,
+            page: None,
+        });
+        Some(Command::Archives {
+            parent,
+            guild,
+            kind,
+            before,
+            request: self.search_request,
+        })
+    }
+
+    pub fn clear_archives(&mut self) -> Command {
+        self.clear_search()
+    }
+
+    pub fn apply_archives(&mut self, parent: Id, request: u64, result: Result<Page, Failure>) {
+        if let Err(failure) = &result
+            && failure.ends_session()
+            && *failure != Failure::Capacity
+        {
+            self.fail(*failure);
+            return;
+        }
+        let Some(view) = self.archives.as_ref() else {
+            return;
+        };
+        if view.parent != parent
+            || view.request != request
+            || !view.loading
+            || self.search.is_some()
+            || !self.can_archive(parent, view.kind)
+            || !self
+                .channels
+                .iter()
+                .any(|c| c.id == parent && c.guild == Some(view.guild))
+        {
+            return;
+        }
+        let expected_kind = self.archive_thread_kind(parent, view.kind);
+        let view = self.archives.as_mut().unwrap();
+        view.loading = false;
+        match result {
+            Ok(page)
+                if page.valid(parent, view.guild, view.kind, view.before)
+                    && page.threads.iter().all(|c| Some(c.kind) == expected_kind) =>
+            {
+                view.page = Some(page);
+                view.error = None;
+            }
+            Ok(_) => view.error = Some("Archived threads were invalid or too large"),
+            Err(failure) => view.error = Some(failure.label()),
+        }
+    }
+
+    pub fn open_archived_thread(&mut self, id: Id) -> Option<Command> {
+        let view = self.archives.as_ref()?;
+        if view.loading || !self.can_archive(view.parent, view.kind) {
+            return None;
+        }
+        let page = view.page.as_ref()?;
+        if !page.valid(view.parent, view.guild, view.kind, view.before)
+            || page
+                .threads
+                .iter()
+                .any(|c| Some(c.kind) != self.archive_thread_kind(view.parent, view.kind))
+        {
+            return None;
+        }
+        let thread = page.threads.iter().find(|c| c.id == id)?;
+        if let Some(existing) = self.channels.iter().find(|c| c.id == id) {
+            if existing.guild != thread.guild
+                || existing.parent_id != thread.parent_id
+                || existing.kind != thread.kind
+            {
+                self.archives.as_mut()?.error = Some("Thread conflicts with current navigation");
+                return None;
+            }
+            return self.select(id);
+        }
+        let retained = self
+            .channels
+            .iter()
+            .filter(|c| Some(c.id) != self.archived_thread);
+        let guild_bytes = self
+            .guilds
+            .iter()
+            .map(|g| {
+                size_of::<model::Guild>()
+                    + g.name.capacity()
+                    + g.icon.as_ref().map_or(0, String::capacity)
+            })
+            .sum::<usize>();
+        if retained.clone().count() + self.guilds.len() >= MAX_NAV
+            || retained.map(Channel::bytes).sum::<usize>() + guild_bytes + thread.bytes()
+                > MAX_EVENT_BYTES
+        {
+            self.archives.as_mut()?.error = Some("Thread exceeds the navigation budget");
+            return None;
+        }
+        let thread = thread.clone();
+        self.retire_archived_thread(None);
+        self.channels.push(thread);
+        self.archived_thread = Some(id);
+        self.select(id)
+    }
+
+    pub(super) fn retire_archived_thread(&mut self, keep: Option<Id>) {
+        if let Some(id) = self.archived_thread
+            && Some(id) != keep
+        {
+            self.remove_channels(&BTreeSet::from([id]));
+        }
+    }
+
+    fn archive_thread_kind(&self, parent: Id, kind: Kind) -> Option<u8> {
+        let parent = self.channels.iter().find(|c| c.id == parent)?;
+        Some(match kind {
+            Kind::Public if parent.kind == 5 => 10,
+            Kind::Public => 11,
+            Kind::Private | Kind::JoinedPrivate => 12,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Envelope, Event};
+    use model::{Freshness, Guild};
+
+    fn channel(id: u64, parent: Option<Id>, kind: u8) -> Channel {
+        Channel {
+            id: Id(id),
+            guild: Some(Id(1)),
+            parent_id: parent,
+            kind,
+            name: "Synthetic".into(),
+            position: 0,
+            recipients: vec![],
+            last_message: None,
+            member_list_id: None,
+        }
+    }
+    fn state() -> State {
+        State {
+            auth: AuthState::Authenticated,
+            gateway_connected: true,
+            freshness: Freshness::Fresh,
+            selected: Some(Id(10)),
+            guilds: vec![Guild {
+                id: Id(1),
+                name: "Synthetic".into(),
+                icon: None,
+            }],
+            channels: vec![channel(10, None, 0), channel(20, None, 15)],
+            ..State::default()
+        }
+    }
+    fn page(id: u64, next: Option<Cursor>) -> Page {
+        Page {
+            threads: vec![channel(id, Some(Id(10)), 11)],
+            next,
+        }
+    }
+    fn apply(state: &mut State, event: Event) {
+        state.apply(Envelope {
+            generation: state.generation,
+            event,
+        });
+    }
+
+    #[test]
+    fn archive_pages_are_scoped_replaceable_retryable_and_bounded() {
+        let mut state = state();
+        assert!(state.can_archive(Id(20), Kind::Public));
+        assert!(!state.can_archive(Id(20), Kind::Private));
+        assert!(!state.can_archive(Id(999), Kind::Public));
+        assert!(
+            state
+                .request_archives(Id(10), Kind::Public, Some(Cursor::Time(100)))
+                .is_none()
+        );
+        state.request_archives(Id(10), Kind::Public, None).unwrap();
+        let stale = state.search_request;
+        state.request_pins().unwrap();
+        assert!(state.archives.is_none());
+        state.apply_archives(Id(10), stale, Ok(page(100, None)));
+        assert!(state.archives.is_none());
+        state.request_archives(Id(10), Kind::Public, None).unwrap();
+        assert!(state.search.is_none());
+        let request = state.search_request;
+        state.apply_archives(Id(20), request, Ok(page(100, None)));
+        assert!(state.archives.as_ref().unwrap().loading);
+        state.apply_archives(Id(10), request, Ok(page(100, Some(Cursor::Time(100)))));
+        let before = Some(Cursor::Time(100));
+        let older = state
+            .request_archives(Id(10), Kind::Public, before)
+            .unwrap();
+        assert!(state.archives.as_ref().unwrap().page.is_none());
+        assert!(
+            state
+                .request_archives(Id(10), Kind::Public, before)
+                .is_none()
+        );
+        state.command_rejected(older);
+        assert!(state.gateway_connected);
+        state
+            .request_archives(Id(10), Kind::Public, before)
+            .unwrap();
+        let request = state.search_request;
+        state.apply_archives(Id(10), request, Ok(page(99, before)));
+        assert!(
+            state.archives.as_ref().unwrap().error.is_some(),
+            "Nonprogressing pages are rejected"
+        );
+        state
+            .request_archives(Id(10), Kind::Public, before)
+            .unwrap();
+        state.apply_archives(Id(10), state.search_request, Ok(page(99, None)));
+        assert_eq!(
+            state
+                .archives
+                .as_ref()
+                .unwrap()
+                .page
+                .as_ref()
+                .unwrap()
+                .threads[0]
+                .id,
+            Id(99)
+        );
+        assert!(state.open_archived_thread(Id(100)).is_none());
+
+        for changed in [false, true] {
+            let mutation = |guild, id| {
+                if changed {
+                    Event::ThreadChanged {
+                        guild: Id(guild),
+                        patch: model::ChannelPatch {
+                            id: Id(id),
+                            name: model::Patch::Value("Updated archive metadata".into()),
+                            last_message: model::Patch::Absent,
+                            parent_id: model::Patch::Absent,
+                            position: model::Patch::Absent,
+                            kind: model::Patch::Absent,
+                        },
+                    }
+                } else {
+                    Event::ThreadRemoved {
+                        guild: Id(guild),
+                        id: Id(id),
+                    }
+                }
+            };
+            state.request_archives(Id(10), Kind::Public, None).unwrap();
+            state.apply_archives(Id(10), state.search_request, Ok(page(99, None)));
+            assert!(state.channels.iter().all(|c| c.id != Id(99)));
+            apply(&mut state, mutation(2, 99));
+            apply(&mut state, mutation(1, 100));
+            assert!(
+                state.archives.as_ref().unwrap().page.is_some(),
+                "Another guild or an unrelated completed row does not invalidate this snapshot"
+            );
+            apply(&mut state, mutation(1, 99));
+            assert!(
+                state.archives.is_none(),
+                "Unloaded archive rows still receive invalidation"
+            );
+            assert!(state.open_archived_thread(Id(99)).is_none());
+
+            state.request_archives(Id(10), Kind::Public, None).unwrap();
+            let request = state.search_request;
+            apply(&mut state, mutation(2, 99));
+            assert!(state.archives.as_ref().unwrap().loading);
+            apply(&mut state, mutation(1, 500));
+            assert!(
+                state.archives.is_none(),
+                "An in-flight page cannot yet identify its affected rows"
+            );
+            state.apply_archives(Id(10), request, Ok(page(99, None)));
+            assert!(
+                state.archives.is_none(),
+                "A late page cannot restore a revoked snapshot"
+            );
+        }
+
+        for invalid in [
+            Page {
+                threads: (100..126).map(|id| channel(id, Some(Id(10)), 11)).collect(),
+                next: None,
+            },
+            Page {
+                threads: vec![channel(100, Some(Id(20)), 11)],
+                next: None,
+            },
+            Page {
+                threads: vec![channel(100, Some(Id(10)), 10)],
+                next: None,
+            },
+            Page {
+                threads: vec![channel(100, Some(Id(10)), 11); 2],
+                next: None,
+            },
+        ] {
+            state.request_archives(Id(10), Kind::Public, None).unwrap();
+            state.apply_archives(Id(10), state.search_request, Ok(invalid));
+            assert!(state.archives.as_ref().unwrap().error.is_some());
+            assert!(state.archives.as_ref().unwrap().page.is_none());
+        }
+        let mut large = page(100, None);
+        large.threads[0].name.reserve(64 * 1024);
+        state.request_archives(Id(10), Kind::Public, None).unwrap();
+        state.apply_archives(Id(10), state.search_request, Ok(large));
+        assert!(state.archives.as_ref().unwrap().error.is_some());
+        state.request_archives(Id(10), Kind::Public, None).unwrap();
+        let request = state.search_request;
+        apply(&mut state, Event::PermissionsChanged);
+        state.apply_archives(Id(10), request, Ok(page(100, None)));
+        assert!(state.archives.is_none());
+        state.request_archives(Id(10), Kind::Public, None).unwrap();
+        let request = state.search_request;
+        apply(&mut state, Event::Unavailable(Id(10)));
+        state.apply_archives(Id(10), request, Ok(page(100, None)));
+        assert!(state.archives.is_none());
+    }
+
+    #[test]
+    fn opened_archives_are_single_transients_until_gateway_adoption() {
+        let mut state = state();
+        state.drafts.insert(Id(100), "Preserved draft".into());
+        state.request_archives(Id(10), Kind::Public, None).unwrap();
+        state.apply_archives(Id(10), state.search_request, Ok(page(100, None)));
+        assert!(matches!(
+            state.open_archived_thread(Id(100)),
+            Some(Command::History {
+                channel: Id(100),
+                before: None,
+                ..
+            })
+        ));
+        assert!(state.archives.is_none());
+        assert_eq!(state.archived_thread, Some(Id(100)));
+        let previous_history = state.request;
+        state.request_archives(Id(10), Kind::Public, None).unwrap();
+        state.apply_archives(Id(10), state.search_request, Ok(page(101, None)));
+        state.open_archived_thread(Id(101)).unwrap();
+        assert_eq!(state.archived_thread, Some(Id(101)));
+        assert!(state.channels.iter().all(|c| c.id != Id(100)));
+        assert!(state.request > previous_history);
+        state.request_archives(Id(10), Kind::Public, None).unwrap();
+        state.apply_archives(Id(10), state.search_request, Ok(page(100, None)));
+        state.open_archived_thread(Id(100)).unwrap();
+        assert!(state.channels.iter().all(|c| c.id != Id(101)));
+        apply(
+            &mut state,
+            Event::ThreadsSync {
+                guild: Id(1),
+                parents: None,
+                threads: vec![],
+            },
+        );
+        assert!(
+            state.channels.iter().any(|c| c.id == Id(100)),
+            "Active-list omission is not archive revocation"
+        );
+        state.clear_archives();
+        assert_eq!(state.selected, Some(Id(100)));
+        assert!(state.channels.iter().any(|c| c.id == Id(100)));
+        state.select(Id(10)).unwrap();
+        assert!(state.channels.iter().all(|c| c.id != Id(100)));
+        assert_eq!(state.drafts[&Id(100)], "Preserved draft");
+
+        for adopt_with_snapshot in [false, true] {
+            state.request_archives(Id(10), Kind::Public, None).unwrap();
+            state.apply_archives(Id(10), state.search_request, Ok(page(100, None)));
+            state.open_archived_thread(Id(100)).unwrap();
+            apply(
+                &mut state,
+                if adopt_with_snapshot {
+                    Event::ThreadsSync {
+                        guild: Id(1),
+                        parents: None,
+                        threads: vec![channel(100, Some(Id(10)), 11)],
+                    }
+                } else {
+                    Event::ChannelCreated(channel(100, Some(Id(10)), 11))
+                },
+            );
+            assert!(state.archived_thread.is_none());
+            state.select(Id(10)).unwrap();
+            assert!(state.channels.iter().any(|c| c.id == Id(100)));
+            state.channels.retain(|c| c.id != Id(100));
+        }
+        for collision in [
+            channel(100, Some(Id(20)), 11),
+            channel(100, None, 0),
+            Channel {
+                guild: Some(Id(2)),
+                ..channel(100, Some(Id(10)), 11)
+            },
+        ] {
+            state.channels.push(collision.clone());
+            state.request_archives(Id(10), Kind::Public, None).unwrap();
+            state.apply_archives(Id(10), state.search_request, Ok(page(100, None)));
+            assert!(state.open_archived_thread(Id(100)).is_none());
+            assert!(state.channels.iter().any(|c| c == &collision));
+            state.channels.retain(|c| c.id != Id(100));
+        }
+        state
+            .channels
+            .extend((1000..(1000 + MAX_NAV - 3) as u64).map(|id| channel(id, None, 0)));
+        state.request_archives(Id(10), Kind::Public, None).unwrap();
+        state.apply_archives(Id(10), state.search_request, Ok(page(100, None)));
+        assert!(
+            state.open_archived_thread(Id(100)).is_none(),
+            "Account item budget applies to transient insertion"
+        );
+        state.channels.truncate(2);
+        state.channels[1].name.reserve(MAX_EVENT_BYTES);
+        state.request_archives(Id(10), Kind::Public, None).unwrap();
+        state.apply_archives(Id(10), state.search_request, Ok(page(100, None)));
+        assert!(
+            state.open_archived_thread(Id(100)).is_none(),
+            "Account byte budget applies to transient insertion"
+        );
+        state.channels[1].name = "Synthetic".into();
+        state.request_archives(Id(10), Kind::Public, None).unwrap();
+        state.apply_archives(Id(10), state.search_request, Ok(page(100, None)));
+        state.open_archived_thread(Id(100)).unwrap();
+        apply(&mut state, Event::Unavailable(Id(10)));
+        assert!(state.channels.iter().all(|c| c.id != Id(100)));
+        assert!(state.archived_thread.is_none());
+        assert!(!state.history_pending);
+        assert_eq!(state.drafts[&Id(100)], "Preserved draft");
+        assert_eq!(state.freshness, Freshness::Unavailable);
+        assert!(
+            state.request_archives(Id(20), Kind::Public, None).is_some(),
+            "Another loaded parent remains browsable after selected-thread revocation"
+        );
+    }
+}

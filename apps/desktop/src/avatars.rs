@@ -650,13 +650,25 @@ mod tests {
         disk.prune(0, 0).unwrap();
         assert!(disk.read("default-0").unwrap().is_none());
         fs::remove_file(account_a.join(format!("{}.png", disk_key(embed_key).unwrap()))).unwrap();
+        drop(disk);
+        // Eviction and full directory deletion are disk workloads, not a worker-cancellation
+        // deadline: deleting 4096 files can exceed five seconds on a Windows CI filesystem.
+        let eviction = root.join("eviction");
+        let mut disk = Disk::open(eviction.clone()).unwrap();
         for index in 0..MAX_FILES + 1 {
-            fs::write(account_a.join(format!("synthetic-{index}.png")), []).unwrap();
+            fs::write(eviction.join(format!("synthetic-{index}.png")), []).unwrap();
         }
         disk.prune(0, 0).unwrap();
         assert_eq!(disk.files, MAX_FILES);
         disk.write("default-0", &bytes).unwrap();
         assert_eq!(disk.files, MAX_FILES);
+        drop(disk);
+        clear_directory(Some(&eviction)).unwrap();
+        assert!(!eviction.exists());
+        // A valid cached image keeps the shutdown fixture entirely offline and tiny.
+        let mut disk = Disk::open(account_a.clone()).unwrap();
+        disk.write("default-0", &bytes).unwrap();
+        assert_eq!(disk.files, 1);
         drop(disk);
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let mut worker =
@@ -675,6 +687,15 @@ mod tests {
         for _ in 0..32 {
             assert!(worker.request("default-0".into()));
         }
+        runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while worker.results.len() < 2 {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            })
+            .await
+            .unwrap();
+        });
         worker
             .shutdown_and_clear()
             .recv_timeout(Duration::from_secs(5))
