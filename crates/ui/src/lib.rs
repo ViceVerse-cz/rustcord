@@ -23,6 +23,19 @@ use client_core::{Command, MAX_CONTENT, MAX_DRAFT_BYTES, State};
 use egui::{RichText, TextEdit};
 use model::{Delivery, Freshness, Id};
 
+pub struct VoiceGain {
+    pub input_percent: u16,
+    pub output_percent: u16,
+}
+impl Default for VoiceGain {
+    fn default() -> Self {
+        Self {
+            input_percent: 100,
+            output_percent: 100,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct MessagingUi {
     search: search::SearchUi,
@@ -57,6 +70,7 @@ pub struct MessagingUi {
     pub voice_outputs: Vec<(String, String)>,
     pub voice_input: Option<String>,
     pub voice_output: Option<String>,
+    pub voice_gain: VoiceGain,
     pub voice_refresh_devices: bool,
     pub voice_device_status: &'static str,
     pub voice_push_to_talk: bool,

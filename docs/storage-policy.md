@@ -1,5 +1,10 @@
 # Local storage policy and audit
 
+Microphone gain and speaker volume are session-only bounded integer percentages (0..=200),
+initially 100. They are not written to SQLite or system mixer settings. Two callback atomics
+hold the active levels; device changes and calls in the same session retain them. Logout or
+resetting the preview clears them with the existing UI state. No audio or new queue is retained.
+
 Loaded thread navigation shares the 4,000-entry account navigation and 4 MiB normalized navigation budgets. Incoming thread syncs additionally cap combined parent/thread entries at 4,000 and normalized snapshot metadata at 2 MiB; wire JSON remains capped at 4 MiB. Removed-member arrays are capped at 4,000 and are discarded after checking the owner. Navigation/member lists are session-only; selected thread messages/drafts reuse existing account history/draft storage. Actual accepted thread removals enqueue the existing account-wide history clear, preserving drafts; ignored, empty-scope and rename-only events do not clear disk history. This coarse invalidation trades refetch cost for simpler deletion, without new tables or workers.
 
 The owner explicitly withdrew the no-storage policy on 2026-09-09. Local files, SQLite, saved drafts, settings and caches are permitted. The implementation persists **history with embeds, attachments and mentioned users; avatar/server-icon/banner/preview images; drafts; appearance; and the login token**. Window geometry remains session-local.

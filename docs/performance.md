@@ -1,5 +1,39 @@
 # Initial performance evidence
 
+## Session voice gain - Windows package comparison, September 10, 2026
+
+Baseline 3f9aa0edcd35f82eb83d5576a63d453fc384725c (PR #24) packages were copied and
+hash-verified before edits. The changed branch also integrates the subsequent Linux-only
+GTK v4_10 feature/docs fix. Same Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical
+CPUs), about 31 GiB RAM, Rust 1.98.1, release thin LTO, one codegen unit and wgpu.
+Both unsigned package commands passed. One size measurement per variant; ZIP DEFLATE
+level 9; text excludes the voice subdirectory.
+
+| Metric | Baseline | Gain controls | Delta |
+| --- | ---: | ---: | ---: |
+| text executable bytes | 49,657,344 | 49,776,640 | +119,296 (+0.240%) |
+| text installed bytes | 50,127,753 | 50,255,386 | +127,633 (+0.255%) |
+| text ZIP bytes | 31,117,348 | 31,159,877 | +42,529 (+0.137%) |
+| voice executable bytes | 53,016,064 | 53,128,704 | +112,640 (+0.212%) |
+| voice installed bytes | 53,714,247 | 53,833,119 | +118,872 (+0.221%) |
+| voice ZIP bytes | 32,493,543 | 32,536,920 | +43,377 (+0.133%) |
+
+Packages retain 50/96 files and unchanged dependency notices. Installed totals describe the
+actual staged docs before this measurement addendum; neither package includes PR evidence.
+Shared UI includes the new sliders in both variants; the default build still excludes the
+voice transport. No runtime speed or memory improvement is claimed.
+
+Gain adds two bounded u16 atomics and one snapshot per audio callback, with finite/clipped
+PCM multiplication and no new callback allocation, lock, queue or device restart. Existing
+capture buffering/resampler latency remains. Device-free tests exercise the actual callback
+helpers; no reducer/cache change warrants a replay rerun. Native screenshots, CPU/RSS, frame
+timing, callback latency and physical audio remain unmeasured because native desktop automation
+is paused after owner Escape stops. No account or microphone was used.
+
+SHA256 of measured executables:
+- text: 77FFE0271B1EAFFC7C9431DEB85D8EBE162D89377638C2259779E6E49EF12476
+- voice: 91E61133C2D7FCF0F0BDDFBC2A379102A28F790C3F4FDEA1D293079E8E5830B2
+
 ## Linux login migration - Windows package comparison, September 10, 2026
 
 Baseline 512b5e73fa4abac4a8bbe2233ceb74f56b74cdf8 (PR #23) was copied and hash-verified before

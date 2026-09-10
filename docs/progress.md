@@ -2,10 +2,33 @@
 
 ## Current scope and gates
 
+Latest implementation: session-only microphone gain and speaker volume (SPEC 11). Both Audio
+menu controls range from 0% to 200%, start at 100%, support keyboard input and offer Reset levels.
+Changes apply to an active call without reopening devices, survive device/call changes in the
+session and reset on logout/preview reset. Two bounded integer atomics feed callback-local gain
+snapshots; PCM is finite and clipped. Existing readiness, permission, mute/deafen/PTT and stop
+gates retain priority. No devices are opened by settings, and no protocol or persistence changes
+are introduced. Already-captured input/resampler data keeps its existing bounded latency.
+
+Baseline packages at 3f9aa0edcd35f82eb83d5576a63d453fc384725c (PR #24) were copied and hash-verified
+before edits. The branch also integrates #24's GTK v4_10 CI feature fix; the measured Windows
+baseline predates that Linux-only feature/docs adjustment. Original dirty checkout work is kept.
+Windows cargo xtask check passed 193 offline Rust tests, doctests, formatting, strict all-feature
+Clippy, text-only compilation and policy checks. The three new tests cover keyboard/clamping/reset
+and real callback helpers with 0/100/200% gain, clipping, nonfinite PCM, independent runtime
+changes, stereo playback and readiness/mute/deafen/stopped-buffer behavior without audio devices.
+Independent review found no actionable issue. Native screenshots, real gain perception, callback
+timing and live calls remain unverified; desktop automation remains paused after owner Escape stops.
+Both Windows release packages passed: text executable 49,776,640 bytes (+119,296 / 0.240%);
+voice executable 53,128,704 bytes (+112,640 / 0.212%). Installed/ZIP sizes and executable
+hashes are recorded in docs/performance.md. Packages were measured without launching them.
+
 Linux CI follow-up: both initial builds failed in WebKit6 because GTK4 0.11.4 exports
 Accessible only with its v4_10 feature. Enabled that feature and documented GTK >=4.10;
 the CI apt log confirms GTK 4.14.5. No source API workaround or dependency version changed.
-The repaired Linux compilation/test result remains pending. Both security jobs passed.
+The repaired PR Linux job 102930632100 passed cargo xtask check, login-handoff tests,
+replay and text packaging; voice packaging was still running when recorded. The duplicate
+push job remained in progress. Both security jobs passed. This is CI, not live login evidence.
 
 Latest slice: Linux GTK4/WebKit6 authentication migration from 512b5e7 (PR #23), in a new
 isolated worktree with separately copied/hash-verified text and voice package baselines.
@@ -36,7 +59,7 @@ in performance.md. All 45 Wry backend source files match the pinned registry arc
 The original seven dirty source files were hash-checked unchanged. Linux CI remains pending.
 
 The full SPEC objective remains open. Further implementation gaps found in current sources
-include session voice gain controls and explicit external-open actions for unsupported content;
+include explicit external-open actions for unsupported content;
 native/live acceptance and release evidence remain separate gates. Historical entries follow.
 
 Read the original SPEC.md completely before implementation. Repository initially contained only the tracked two-line README and an untracked SPEC.md; no existing source or agent instructions were removed. The owner explicitly revised authentication and storage during implementation. The final spec now requires the official Discord login in a temporary webview, secure remembered login, and allows bounded local SQLite caches, saved drafts/settings and files. Those changes were applied throughout SPEC.md and AGENTS.md.
