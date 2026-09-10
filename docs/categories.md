@@ -1,5 +1,11 @@
 # Server categories
 
+Unsupported channel rows now include a keyboard-focusable Open in Discord action (the arrow
+button), including Stage/directory/unknown kinds and forum/media containers. It opens the
+shared browser confirmation, even with no active timeline. It does not select history, join
+voice or fetch anything. The action is disabled when current view permission or valid channel
+metadata is unavailable. Loaded forum/media posts and Archive remain separate native actions.
+
 Implemented September 10, 2026. The native sidebar groups server channels by the service's category IDs, sorts categories and their children by position with ID tie-breaking, and leaves channels with missing/non-category parents accessible above the category sections. Category buttons expand/collapse with the mouse or keyboard; they cannot select history. The selected channel remains visible when its category is collapsed. Voice/stage/directory kinds remain identifiable and disabled. Forum/media containers show their loaded thread posts but cannot select history themselves.
 
 The existing READY snapshot supplies initial channel metadata. CHANNEL_CREATE adds navigation within the 4,000-entry account limit and a 4 MiB channel metadata ceiling; CHANNEL_UPDATE preserves absent fields and handles an explicit null parent separately; CHANNEL_DELETE removes the item and loaded child threads. Changes carrying permissions/flags retain the existing permission invalidation and history revalidation behavior. Role-based permission computation remains incomplete; categories confer no authorization. Collapse preferences stay in session memory, pruned against currently known categories. Sidebar rows are virtualized; no new runtime dependency or automatic history fetch is added.
