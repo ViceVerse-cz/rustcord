@@ -800,7 +800,7 @@ impl MessagingUi {
                                         )
                                         .clicked()
                                     {
-                                        state.timeline.clear();
+                                        self.timeline.follow_latest();
                                         commands.push(state.history(None));
                                     }
                                     if ui
@@ -820,9 +820,11 @@ impl MessagingUi {
                         });
                         if state.history_before.is_some() {
                             ui.label(
-                                RichText::new("Browsing older history · Reload returns to latest")
-                                    .size(11.0)
-                                    .color(colors.muted),
+                                RichText::new(
+                                    "Browsing earlier messages · Jump to latest to return",
+                                )
+                                .size(11.0)
+                                .color(colors.muted),
                             );
                         }
                     });
@@ -837,6 +839,13 @@ impl MessagingUi {
                             &mut self.avatars,
                             &mut self.profile,
                         );
+                        if std::mem::take(&mut self.timeline.latest) {
+                            commands.push(state.history(None));
+                        } else if std::mem::take(&mut self.timeline.load_older)
+                            && let Some(command) = state.older_history()
+                        {
+                            commands.push(command);
+                        }
                     });
             });
         if let Some(user) = &self.profile {

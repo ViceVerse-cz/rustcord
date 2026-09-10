@@ -1,6 +1,7 @@
 //! Single UI-thread state owner. Adapters deliver generation-tagged typed events.
 pub mod auth;
 pub mod profile;
+pub mod read_state;
 pub mod voice;
 use model::*;
 use session_cache::Timeline;
@@ -129,6 +130,7 @@ pub struct State {
     pub channels: Vec<Channel>,
     pub selected: Option<Id>,
     pub timeline: Timeline,
+    pub read_state: BTreeMap<Id, read_state::ReadState>,
     pub freshness: Freshness,
     pub status: &'static str,
     pub drafts: BTreeMap<Id, String>,
@@ -158,6 +160,7 @@ impl Default for State {
             channels: vec![],
             selected: None,
             timeline: Timeline::default(),
+            read_state: BTreeMap::new(),
             freshness: Freshness::Stale,
             status: "Disconnected",
             drafts: BTreeMap::new(),
@@ -278,7 +281,7 @@ impl State {
         self.history_before = before;
         self.history_pending = true;
         self.freshness = Freshness::Loading;
-        self.timeline.begin_page();
+        self.timeline.begin_page(before.is_some());
         Command::History {
             channel: self.selected.expect("selected channel"),
             before,
@@ -428,6 +431,9 @@ impl State {
                     self.fail(auth::Failure::Capacity);
                     return;
                 }
+                if !channel.supports_text() {
+                    self.read_state.remove(&channel.id);
+                }
                 if let Some(index) = old {
                     self.channels[index] = channel;
                 } else {
@@ -452,6 +458,9 @@ impl State {
                     }
                     if let Patch::Value(kind) = patch.kind {
                         channel.kind = kind;
+                    }
+                    if !channel.supports_text() {
+                        self.read_state.remove(&channel.id);
                     }
                     if self.selected == Some(channel.id) && !channel.supports_text() {
                         self.selected = None;
@@ -490,6 +499,7 @@ impl State {
             Event::RecipientRemoved { channel, user } => {
                 if self.user.as_ref().is_some_and(|u| u.id == user) {
                     self.channels.retain(|c| c.id != channel);
+                    self.read_state.remove(&channel);
                     if self.selected == Some(channel) {
                         self.invalidate_members();
                         self.timeline.clear();
@@ -557,6 +567,11 @@ impl State {
                 self.user = Some(user);
                 self.guilds = guilds;
                 self.channels = channels;
+                self.read_state.retain(|id, _| {
+                    self.channels
+                        .iter()
+                        .any(|c| c.id == *id && c.supports_text())
+                });
                 self.auth = auth::AuthState::Authenticated;
                 self.gateway_connected = true;
                 self.status = "Connected · unofficial session";
@@ -594,6 +609,9 @@ impl State {
                 let r = self.timeline.finish_page(messages, older);
                 if r.is_ok() && self.gateway_connected {
                     self.freshness = Freshness::Fresh;
+                    if !older {
+                        self.refresh_unread_latest(channel);
+                    }
                 }
                 r
             }
@@ -613,6 +631,7 @@ impl State {
                     self.invalidate_members();
                     self.timeline.clear();
                     self.freshness = Freshness::Unavailable;
+                    self.read_state.remove(&channel);
                     self.status = "Channel unavailable or permission denied";
                 } else {
                     self.fail(failure);
@@ -620,6 +639,7 @@ impl State {
                 Ok(())
             }
             Event::Message(m) => {
+                self.observe_unread(&m);
                 self.confirm(&m);
                 if self.selected == Some(m.channel) && self.freshness != Freshness::Unavailable {
                     self.timeline.insert(m, true, false)
@@ -635,6 +655,7 @@ impl State {
                 }
             }
             Event::Delete { channel, id } => {
+                self.delete_unread(channel, id);
                 if self.selected == Some(channel) {
                     self.timeline.delete(id)
                 } else {
@@ -644,10 +665,15 @@ impl State {
             Event::DeleteBulk { channel, ids } => {
                 if ids.len() > 100 {
                     Err("Bulk deletion exceeds safe capacity")
-                } else if self.selected == Some(channel) {
-                    ids.into_iter().try_for_each(|id| self.timeline.delete(id))
                 } else {
-                    Ok(())
+                    for id in &ids {
+                        self.delete_unread(channel, *id);
+                    }
+                    if self.selected == Some(channel) {
+                        ids.into_iter().try_for_each(|id| self.timeline.delete(id))
+                    } else {
+                        Ok(())
+                    }
                 }
             }
             Event::SendResult { nonce, result } => {
@@ -719,6 +745,7 @@ impl State {
             Event::Unavailable(channel) => {
                 self.clear_profile();
                 self.channels.retain(|c| c.id != channel);
+                self.read_state.remove(&channel);
                 if self
                     .voice
                     .active
@@ -991,6 +1018,133 @@ mod tests {
         }
         assert_eq!(state.channels.len(), MAX_NAV);
         assert_eq!(state.status, auth::Failure::Capacity.label());
+    }
+
+    #[test]
+    fn session_unread_tracks_live_messages_and_requires_viewing_latest() {
+        let mut state = State::default();
+        let mut me = message(1).author;
+        me.id = Id(3);
+        let channel = Channel {
+            id: Id(1),
+            guild: None,
+            parent_id: None,
+            position: 0,
+            name: "Synthetic".into(),
+            kind: 1,
+            recipients: vec![],
+            member_list_id: None,
+        };
+        apply(
+            &mut state,
+            Event::Ready {
+                user: me.clone(),
+                guilds: vec![],
+                channels: vec![channel.clone()],
+            },
+        );
+        state.select(Id(1));
+        let request = state.request;
+        apply(
+            &mut state,
+            Event::History {
+                channel: Id(1),
+                request,
+                older: false,
+                messages: vec![message(10)],
+            },
+        );
+        assert!(!state.has_unread(Id(1))); // History is not a remote unread snapshot.
+        state.mark_read(Id(1));
+        apply(&mut state, Event::Message(message(10))); // Duplicate already read.
+        assert!(!state.has_unread(Id(1)));
+        apply(&mut state, Event::Message(message(12)));
+        apply(&mut state, Event::Message(message(12))); // Duplicate live event.
+        apply(&mut state, Event::Message(message(11))); // Out-of-order arrival.
+        assert_eq!(state.first_unread(Id(1)), Some(Id(11)));
+        let mut own = message(13);
+        own.author = me.clone();
+        apply(&mut state, Event::Message(own));
+        state.select(Id(1)); // Navigation never silently acknowledges unread.
+        state.mark_read(Id(1)); // Loading cannot acknowledge.
+        assert!(state.has_unread(Id(1)));
+        let request = state.request;
+        apply(
+            &mut state,
+            Event::History {
+                channel: Id(1),
+                request,
+                older: false,
+                messages: vec![message(10)],
+            },
+        );
+        state.mark_read(Id(1)); // Retained older window cannot acknowledge newer live messages.
+        assert!(state.has_unread(Id(1)));
+        state.timeline.insert(message(12), false, false).unwrap();
+        state.mark_read(Id(1));
+        assert!(!state.has_unread(Id(1)));
+        let mut own = message(14);
+        own.author = me.clone();
+        apply(&mut state, Event::Message(own));
+        assert!(!state.has_unread(Id(1)));
+        apply(&mut state, Event::Message(message(15)));
+        apply(&mut state, Event::Message(message(16)));
+        apply(
+            &mut state,
+            Event::Delete {
+                channel: Id(1),
+                id: Id(16),
+            },
+        );
+        state.history(None);
+        let request = state.request;
+        apply(
+            &mut state,
+            Event::History {
+                channel: Id(1),
+                request,
+                older: false,
+                messages: vec![message(15)],
+            },
+        );
+        state.mark_read(Id(1));
+        assert!(!state.has_unread(Id(1)));
+        apply(&mut state, Event::Message(message(17)));
+        apply(
+            &mut state,
+            Event::Delete {
+                channel: Id(1),
+                id: Id(17),
+            },
+        );
+        assert!(!state.has_unread(Id(1)));
+        let mut unknown = message(20);
+        unknown.channel = Id(999);
+        apply(&mut state, Event::Message(unknown));
+        assert_eq!(state.read_state.len(), 1);
+        apply(&mut state, Event::Message(message(20)));
+        apply(
+            &mut state,
+            Event::Ready {
+                user: me.clone(),
+                guilds: vec![],
+                channels: vec![],
+            },
+        );
+        assert!(state.read_state.is_empty());
+        apply(&mut state, Event::ChannelCreated(channel));
+        state.freshness = Freshness::Fresh;
+        apply(&mut state, Event::Message(message(21)));
+        assert!(state.has_unread(Id(1)));
+        apply(&mut state, Event::Unavailable(Id(1)));
+        assert!(state.read_state.is_empty());
+        let generation = state.generation;
+        state.logout();
+        state.apply(Envelope {
+            generation,
+            event: Event::Message(message(22)),
+        });
+        assert!(state.read_state.is_empty());
     }
 
     fn apply(state: &mut State, event: Event) {

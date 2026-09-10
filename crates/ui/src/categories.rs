@@ -148,7 +148,10 @@ impl MessagingUi {
                                 15 | 16 => "▤",
                                 _ => "#",
                             };
-                            let name = if channel.supports_text() {
+                            let unread = state.has_unread(channel.id);
+                            let name = if channel.supports_text() && unread {
+                                format!("●  {symbol}   {}", channel.name)
+                            } else if channel.supports_text() {
                                 format!("{symbol}   {}", channel.name)
                             } else {
                                 format!("{symbol}   {} · unavailable", channel.name)
@@ -185,9 +188,14 @@ impl MessagingUi {
                                 })
                                 .inner
                                 .on_hover_text(format!(
-                                    "{} · {}",
+                                    "{} · {}{}",
                                     channel.name,
-                                    kind_label(channel.kind)
+                                    kind_label(channel.kind),
+                                    if unread {
+                                        " · Unread messages this session"
+                                    } else {
+                                        ""
+                                    }
                                 ));
                             if active {
                                 ui.painter().rect_filled(
