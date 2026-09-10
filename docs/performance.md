@@ -1,5 +1,46 @@
 # Initial performance evidence
 
+## Incoming typing indicators - September 10, 2026
+
+Baseline main dff09752cb501aa5243334cd27f87a2c8c514db9 has the exact tested source tree of
+reply-target PR #34. Its text/voice executables were separately copied and hash-verified before
+root integration edits; package directories and the baseline replay executable were preserved.
+Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical CPUs), 31.1 GiB visible RAM,
+Rust 1.98.1, release thin LTO / one codegen unit / wgpu; text and optional voice built separately.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| text executable bytes | 49,956,352 | 49,982,976 | +26,624 (+0.053%) |
+| text installed bytes | 50,502,356 | 50,534,234 | +31,878 (+0.063%) |
+| text ZIP bytes | 31,255,214 | 31,263,624 | +8,410 (+0.027%) |
+| voice executable bytes | 53,314,560 | 53,336,576 | +22,016 (+0.041%) |
+| voice installed bytes | 54,083,337 | 54,111,170 | +27,833 (+0.051%) |
+| voice ZIP bytes | 32,627,919 | 32,640,183 | +12,264 (+0.038%) |
+| initial ordinary replay median, ms / 100,000 events | 36.6831 | 38.9649 | +2.2818 (+6.22%) |
+| follow-up interleaved replay median, ms / 100,000 events | 38.4538 | 37.1408 | -1.3130 (-3.41%) |
+| retained timeline bytes / 500 rows | 228,992..229,477 | 228,992..229,477 | 0 |
+
+Both unsigned Windows packages passed. One package measurement each, ZIP DEFLATE level 9,
+text excluding nested voice; file counts remain 50/96 and no dependencies/notices changed.
+Installed totals describe staged docs before this measurement addendum, not an extra repack.
+Measured executable SHA256: text B22910243E7A9A34FE06F6887E9888284CF19998147FBCF5730ADC127AE53CC1;
+voice 37409800846E9AC55A9B8DB7D07EDFB29A122C9505BC6FBB0F95F1F5D8121DFE.
+
+Replay uses one warmup and five direct executable runs per revision. The initial +6.22%
+prompted one interleaved baseline/after comparison after both package builds had finished,
+also with one warmup each and five measured pairs. Its direction reversed; this short noisy
+workload does not establish a speed improvement or stable regression. Follow-up baseline
+times: 36.8714, 39.9938, 38.4538, 37.2671, 38.7337 ms; after: 37.1408, 36.4049, 37.3242,
+38.0731, 36.9023 ms. This measures the synthetic ordinary reducer, not typing throughput,
+process RSS, UI latency or Discord compatibility.
+
+Typing adds eight fixed identity/deadline slots to State, an eight-entry coalescing gate and
+a separate eight-slot fixed-payload inbox. No disk cache, worker, dependency or polling timer
+was added. The UI uses at most three retained names of 40 characters each plus a remainder,
+and schedules only the next displayed expiry. Native before/after screenshots, idle CPU,
+RSS/GPU, p95 frame/startup timing and accessibility remain unmeasured while desktop automation
+is owner-paused. Headless rendering checks are not native or live-account evidence.
+
 ## Saved reading and layout preferences - September 10, 2026
 
 Baseline dfe9e3f8a657665009ac89bfadb5e1be7cb3f064 (PR #31) unsigned Windows text/voice

@@ -15,6 +15,7 @@ pub use replies::ReplyDeletions;
 pub mod resident;
 pub mod search;
 mod threads;
+pub mod typing;
 pub mod voice;
 use model::*;
 use session_cache::Timeline;
@@ -89,6 +90,7 @@ pub enum Command {
     },
 }
 pub enum Event {
+    Typing(typing::Signal),
     Archives {
         parent: Id,
         request: u64,
@@ -198,6 +200,7 @@ pub struct Pending {
     pub confirmed: Option<Id>,
 }
 pub struct State {
+    pub typing: typing::Typing,
     pub permissions: permissions::Permissions,
     pub archives: Option<archives::View>,
     pub archived_thread: Option<Id>,
@@ -241,6 +244,7 @@ pub struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
+            typing: typing::Typing::default(),
             permissions: permissions::Permissions::default(),
             archives: None,
             archived_thread: None,
@@ -324,6 +328,7 @@ impl State {
             return None;
         }
         self.retire_archived_thread(Some(channel));
+        self.typing.clear();
         self.select_resident(channel);
         self.history_targeted = false;
         self.members = None;
@@ -409,6 +414,7 @@ impl State {
         }
     }
     pub fn history(&mut self, before: Option<Id>) -> Command {
+        self.typing.clear();
         if before.is_none() {
             self.history_targeted = false;
         }
@@ -652,6 +658,14 @@ impl State {
         if envelope.generation != self.generation {
             return;
         }
+        if let Event::Typing(signal) = &envelope.event {
+            self.observe_typing_at(
+                *signal,
+                std::time::SystemTime::now(),
+                std::time::Instant::now(),
+            );
+            return;
+        }
         if let Event::MemberPresence {
             guild,
             channel,
@@ -665,6 +679,10 @@ impl State {
             return;
         }
         let access_changed = envelope.event.changes_access();
+        // Ephemeral names must not outlive navigation identity/permission replacement.
+        if access_changed {
+            self.typing.clear();
+        }
         let previous_access = access_changed.then(|| self.permission_access()).flatten();
         if let Event::ChannelRestored(channel) = &envelope.event
             && (channel.id.0 == 0
@@ -729,6 +747,7 @@ impl State {
             self.clear_search();
         }
         let result = match envelope.event {
+            Event::Typing(_) => unreachable!("typing is handled before timeline invalidation"),
             Event::Permissions(mut event) => {
                 let known = |id: Id| self.guilds.iter().any(|guild| guild.id == id);
                 match &mut event {
@@ -1184,6 +1203,7 @@ impl State {
                 Ok(())
             }
             Event::Message(mut m) => {
+                self.typing_message(&m);
                 if m.reply_deleted && self.accepts_reply_source(&m) {
                     self.record_reply_deletion(&m);
                 }
@@ -1468,6 +1488,7 @@ impl State {
         }
     }
     fn fail(&mut self, failure: auth::Failure) {
+        self.typing.clear();
         self.status = failure.label();
         match failure {
             auth::Failure::Expired => self.auth = auth::AuthState::Expired,
@@ -1489,6 +1510,7 @@ impl State {
         self.freshness = Freshness::Stale;
     }
     fn cancel_history(&mut self) {
+        self.typing.clear();
         self.reactions.reset();
         self.search_target = None;
         self.request += 1;

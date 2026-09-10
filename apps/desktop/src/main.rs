@@ -1286,6 +1286,17 @@ impl Desktop {
                     Err(_) => break,
                 }
             }
+            // Collect reliable events first: their preceding typing signals are now queued.
+            // Apply typing first so messages/access changes retire those older signals.
+            let reliable_count = events.len();
+            for _ in 0..8 {
+                match connection.typing.try_recv() {
+                    Ok(event) => events.push(event),
+                    Err(_) => break,
+                }
+            }
+            let typing_count = events.len() - reliable_count;
+            events.rotate_right(typing_count);
             terminal = *connection.terminal.borrow();
         }
         let mut persist_timeline = false;
@@ -1466,6 +1477,9 @@ impl Desktop {
             }
         }
         // Network and store workers request repaint only when their outcomes change.
+        if let Some(connection) = &self.connection {
+            connection.set_typing_channel(self.state.typing_scope());
+        }
         if !self.state.demo
             && let Some(command) = self.state.next_reaction_read()
         {

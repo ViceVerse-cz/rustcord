@@ -580,6 +580,12 @@ async fn run_inner(
                                             active.presence(update,Instant::now());
                                         }
                                     }
+                                    "TYPING_START" => {
+                                        // Malformed ephemeral signals must not interrupt message delivery.
+                                        if let Ok(typing)=discord_protocol::typing::decode(packet.d.get().as_bytes()) {
+                                            emit(Event::Typing(client_core::typing::Signal { channel:typing.channel_id,user:typing.user_id,timestamp:typing.timestamp }))?;
+                                        }
+                                    }
                                     "CHANNEL_RECIPIENT_ADD" => {let d:RecipientAdded=decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;emit(Event::RecipientAdded {channel:d.channel_id,user:d.user.into_model()})?;}
                                     "CHANNEL_RECIPIENT_REMOVE" => {let d:RecipientRemoved=decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;emit(Event::RecipientRemoved {channel:d.channel_id,user:d.user.id})?;}
                                     "USER_GUILD_SETTINGS_UPDATE" => {
@@ -774,6 +780,53 @@ mod tests {
             "user":{"id":"1","username":"synthetic"}, "session_id":session,
             "resume_gateway_url":"wss://gateway.discord.gg/", "guilds":[], "private_channels":[]
         }})
+    }
+
+    #[tokio::test]
+    async fn local_typing_ignores_bad_ephemeral_payloads_and_keeps_delivering_messages() {
+        timeout(Duration::from_secs(10), async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("ws://{}/", listener.local_addr().unwrap());
+            let server = async {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut socket = accept_async(stream).await.unwrap();
+                send(&mut socket, json!({"op":10,"d":{"heartbeat_interval":1000}})).await;
+                assert_eq!(packet(&mut socket).await["op"], 2);
+                send(&mut socket, ready(1, "synthetic-typing-session")).await;
+                for (sequence, data) in [
+                    (2, json!({"channel_id":"2","user_id":"3","timestamp":1700000000,"member":{"user":{"username":"discarded"}}})),
+                    (3, json!({"channel_id":"2","user_id":"3","timestamp":"invalid"})),
+                    (4, json!({"channel_id":"2","user_id":"3","timestamp":1700000000,"member":{"padding":"x".repeat(discord_protocol::typing::MAX_WIRE)}})),
+                ] {
+                    send(&mut socket, json!({"op":0,"t":"TYPING_START","s":sequence,"d":data})).await;
+                }
+                send(&mut socket, json!({"op":0,"t":"MESSAGE_CREATE","s":5,"d":{"id":"4","channel_id":"2","author":{"id":"3","username":"Synthetic"},"content":"Message after invalid typing"}})).await;
+                acknowledge(&mut socket, 5).await;
+                socket.send(Frame::Close(Some(CloseFrame {
+                    code: CloseCode::from(4004), reason: "synthetic stop".into(),
+                }))).await.unwrap();
+            };
+            let observed = std::sync::Mutex::new(Vec::new());
+            let client = run_inner(
+                Arc::new(SessionSecret::from_owner_input("SYNTHETIC_TYPING_SESSION".into()).unwrap()),
+                "wss://gateway.discord.gg/".into(), watch::channel(None).1,
+                mpsc::channel(1).1,
+                |event| {
+                    match event {
+                        Event::Typing(signal) => observed.lock().unwrap().push((signal.channel, signal.user, signal.timestamp)),
+                        Event::Message(message) => {
+                            assert_eq!(message.content, "Message after invalid typing");
+                            observed.lock().unwrap().push((message.channel, message.author.id, 0));
+                        }
+                        _ => {}
+                    }
+                    Ok(())
+                }, Some(&endpoint),
+            );
+            let ((), result) = tokio::join!(server, client);
+            assert_eq!(result, Err(Failure::Expired));
+            assert_eq!(observed.into_inner().unwrap(), vec![(Id(2), Id(3), 1700000000), (Id(2), Id(3), 0)]);
+        }).await.unwrap();
     }
 
     #[tokio::test]

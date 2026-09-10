@@ -2,6 +2,13 @@
 
 Serein is a desktop protocol client for Discord, with no project messaging service. The final owner revisions permit an authentication-only webview, saved login, and local caches.
 
+Incoming typing has its own eight-slot lossy inbox, separate from reliable message events.
+The producer filters the selected channel and limits duplicate/burst wakeups to eight per two
+seconds. The consumer collects reliable events first, then typing, and applies typing before
+reliable events so queued messages and access changes retire older indicators. Core state is
+eight fixed identity/deadline slots, scoped to fresh readable text history, with no persistence.
+The composer schedules one visible expiry deadline and performs no animation or identity fetch.
+
 - `model`: IDs preserved as strings on the wire / u64 in memory, typed entities and absent/null/value patches. No GUI, filesystem or networking.
 - `discord-protocol`: bounded wire decoding and Discord DTOs, independent of rendering.
 - `client-core`: single UI-thread state owner, generation-tagged events, composer/send lifecycle, navigation and freshness. Network callbacks never mutate it directly.

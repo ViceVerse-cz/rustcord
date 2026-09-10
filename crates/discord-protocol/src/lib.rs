@@ -12,6 +12,7 @@ mod reactions;
 pub mod read_state;
 pub mod search;
 pub mod threads;
+pub mod typing;
 use attachments::AttachmentList;
 use embeds::EmbedList;
 use model::{Channel, Guild, Id, Message, MessagePatch, Patch, User};

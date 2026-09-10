@@ -15,6 +15,10 @@ cargo xtask package-voice          # separate voice build under dist/voice
 
 Rust 1.98.1 is pinned. See [platform build requirements](docs/platform-support.md) before building on Linux or Windows.
 
+The open conversation shows incoming typing with short expiry and names already loaded by the
+client. This is synthetic-tested only; service delivery is unverified, and guild signals may
+depend on the existing People subscription. Serein does not send typing notifications.
+
 The messaging interface is native egui/wgpu. A temporary platform webview displays Discord’s actual login page; after login, an origin-checked handoff accepts the session credential used by that webview’s own Discord requests and closes the webview. Passwords, QR exchange, and challenges are handled by Discord’s page. Acceptance of this embedded login and each authentication method remains **live-unverified**. Unsupported challenges are never bypassed.
 
 The owner revised SPEC.md to **allow local storage**. Login uses the OS credential store. Recent history and drafts use an account-isolated, bounded local SQLite cache. Clear cached history removes cached messages and service images; logout removes the saved credential and that account’s cache/drafts. SQLite content is not encrypted by the application. Light/Dark appearance persists across launches; System removes the override. See [storage policy](docs/storage-policy.md).
