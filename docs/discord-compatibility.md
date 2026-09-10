@@ -447,3 +447,14 @@ unofficial; a public sample application returned HTTP 200 without credentials on
 Synthetic decoder, local HTTP, cache and egui tests cover the implementation, not normal-user
 artwork interoperability. The owner confirmed presence text after launching the prior build;
 new artwork has not been tested against the owner's live session.
+
+
+### Inline audio attachments (September 11, 2026)
+
+MP3 and PCM WAV attachments have local Play/Pause, seek, time and volume controls.
+The existing restricted Discord CDN attachment URL validator is reused; signed URLs
+are neither logged nor sent with account authorization. Download/Open original remain
+available for unsupported formats and clips exceeding preview limits. There is no
+new Discord endpoint or voice protocol. The synthetic demo generates a WAV tone even
+for its MP3-labeled card; a separate original MP3 fixture checks real MP3 decoding.
+Live CDN/account interoperability and native output on other OSes remain unverified.

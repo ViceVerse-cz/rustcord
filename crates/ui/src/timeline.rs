@@ -36,6 +36,7 @@ pub struct TimelineView {
 	revealed: BTreeMap<Id, Revealed>,
 	viewing: Option<(Id, Id)>,
 	pub(super) download: crate::attachments::DownloadUi,
+	pub(super) audio: crate::audio::AudioUi,
 	pub(super) opening: Option<String>,
 	text_size: f32,
 	scale: f32,
@@ -702,6 +703,7 @@ impl TimelineView {
 											&mut self.viewing,
 											&mut self.opening,
 											&mut self.download,
+											&mut self.audio,
 											state.demo,
 										);
 									}

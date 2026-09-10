@@ -314,6 +314,10 @@ fn package(voice: bool) -> Result<(), String> {
 			&resources.join("source/hpke-rs"),
 		)?;
 	}
+	copy_directory(
+		std::path::Path::new("assets/licenses/audio"),
+		&resources.join("licenses/audio"),
+	)?;
 	for file in [
 		"README.md",
 		"LICENSE-MIT",

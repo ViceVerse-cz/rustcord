@@ -25,7 +25,7 @@ class DebianPackageTest(unittest.TestCase):
                          "Twemoji-CC-BY-4.0.txt", "Unicode-LICENSE.txt", "Phosphor-Icons-MIT.txt"]:
                 (staged / "licenses" / name).write_text("synthetic license\n")
             for name in ["licenses/files", "licenses/notifications", "licenses/login",
-                         "licenses/voice", "source/hpke-rs"]:
+                         "licenses/voice", "licenses/audio", "source/hpke-rs"]:
                 source = Path("vendor/hpke-rs") if name.startswith("source/") else Path("assets") / name
                 shutil.copytree(source, staged / name)
                 (staged / name / "stale-nested.log").write_text("synthetic private marker\n")

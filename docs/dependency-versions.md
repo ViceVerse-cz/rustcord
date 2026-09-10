@@ -485,3 +485,11 @@ September 10, 2026 Twemoji rendering: `ui` directly reuses already-locked `image
 Cargo package was added. Bundled Twemoji 17.0.3 artwork is CC BY 4.0, with provenance,
 modifications and full license in `assets/twemoji`. The atlas generator uses Pillow 11.3.0
 only during development; it is not a runtime or Cargo-build requirement.
+
+
+September 11 inline audio: Symphonia 0.6.1 (MPL-2.0) enables only MP3, PCM and WAV,
+with defaults/metadata features disabled. CPAL 0.18.2 (Apache-2.0), already used by
+optional voice, now supplies attachment output in the default build as well. It does
+not initialize devices until Play. DAVE/Opus/microphone integration remains optional.
+Exact unmodified Symphonia source archives and license provenance ship in
+`licenses/audio`; Linux runtime library dependencies are derived by dpkg-shlibdeps.

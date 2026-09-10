@@ -503,6 +503,42 @@ pub fn chat_demo_state() -> State {
 	state.revision += 1;
 	state
 }
+/// Local audio card scenario. Playback generates a quiet tone; never fetches this URL.
+pub fn audio_demo_state() -> State {
+	let mut state = chat_demo_state();
+	state.timeline.clear();
+	for (id, filename, kind) in [
+		(501, "synthetic-melody.wav", "audio/wav"),
+		(
+			502,
+			"a-long-synthetic-audio-filename-for-layout-checks.mp3",
+			"audio/mpeg",
+		),
+	] {
+		let mut message = message(id, Id(20));
+		message.content =
+			"Synthetic audio attachment · click Play to preview a locally generated tone.".into();
+		message.embeds.clear();
+		message.attachments = vec![Attachment {
+			id: Id(id + 200),
+			filename: filename.into(),
+			description: None,
+			content_type: Some(kind.into()),
+			size: 529244,
+			spoiler: false,
+			media: EmbedMedia {
+				url: Some(format!(
+					"https://cdn.discordapp.com/attachments/20/{}/{filename}",
+					id + 200
+				)),
+				..Default::default()
+			},
+		}];
+		state.timeline.insert(message, false, false).unwrap();
+	}
+	state.revision += 1;
+	state
+}
 /// Explicit synthetic permissions, separate from the production unknown-metadata path.
 pub fn permission_snapshot(state: &State) -> model::permissions::Snapshot {
 	use model::permissions as p;

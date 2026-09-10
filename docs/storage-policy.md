@@ -285,3 +285,20 @@ emoji. No font download or font-file copy is added. Upstream fallback can wait
 for enumeration on its first missing glyph; its font/cache memory is framework
 overhead, separate from Serein message/image budgets. OS font availability and
 emoji coverage vary by platform. Bundled text faces and Twemoji remain in use.
+
+
+### Inline MP3/WAV preview (September 11, 2026)
+
+A deliberate Play action starts one lazy output-only worker. One replaceable request
+retains bounded validated attachment URL metadata; no account credential is sent.
+The credential-free downloader refuses redirects and content encoding and requires
+the declared length, capped at 20 MiB with a 60-second deadline. Audio stays in RAM:
+at most 64 MiB of decoded f32 samples and ten minutes, mono/stereo at 8?96 kHz,
+plus bounded decoder/transport buffers. PCM vector reallocation may temporarily
+retain old and new allocations (up to roughly 128 MiB combined), separately from
+the encoded buffer, decoder, audio device and process overhead. MP3 ID3 tags are skipped without decoding;
+WAV metadata is removed before demuxing. No media files or playback preferences
+are persisted. Playback stops when its card leaves view, the attachment changes,
+the conversation changes, the window is minimized/occluded, or the session ends.
+An atomic generation gate mutes obsolete output; the single worker releases its
+stream/buffers on cancellation. Pausing retains the current bounded decoded clip.

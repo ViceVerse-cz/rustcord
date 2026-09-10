@@ -75,3 +75,34 @@ allow = ["MIT", "Apache-2.0", "OFL-1.1", "Ubuntu-font-1.0"]
 name = "libfuzzer-sys"
 version = "=0.4.13"
 allow = ["MIT", "Apache-2.0", "NCSA"]
+
+# Unmodified inline MP3/WAV decoder source archives and MPL notice ship in both packages.
+[[licenses.exceptions]]
+name = "symphonia"
+version = "=0.6.1"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+name = "symphonia-core"
+version = "=0.6.1"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+name = "symphonia-bundle-mp3"
+version = "=0.6.1"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+name = "symphonia-codec-pcm"
+version = "=0.6.1"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+name = "symphonia-format-riff"
+version = "=0.6.1"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+name = "symphonia-metadata"
+version = "=0.6.1"
+allow = ["MPL-2.0"]

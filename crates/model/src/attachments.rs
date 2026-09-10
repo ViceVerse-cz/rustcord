@@ -15,6 +15,26 @@ pub struct Attachment {
 	pub spoiler: bool,
 }
 impl Attachment {
+	pub fn is_audio(&self) -> bool {
+		match self.content_type.as_deref().map(|kind| {
+			kind.split(';')
+				.next()
+				.unwrap_or(kind)
+				.trim()
+				.to_ascii_lowercase()
+		}) {
+			Some(kind) if kind != "application/octet-stream" => matches!(
+				kind.as_str(),
+				"audio/mpeg" | "audio/mp3" | "audio/wav" | "audio/x-wav" | "audio/wave"
+			),
+			_ => self
+				.filename
+				.rsplit_once('.')
+				.is_some_and(|(_, extension)| {
+					matches!(extension.to_ascii_lowercase().as_str(), "mp3" | "wav")
+				}),
+		}
+	}
 	pub fn bytes(&self) -> usize {
 		size_of::<Self>()
 			+ self.filename.capacity()
@@ -55,6 +75,35 @@ pub fn valid_attachments(attachments: &[Attachment]) -> bool {
 					.into_iter()
 					.all(|s| s.as_ref().is_none_or(|s| s.len() <= 2048))
 		})
+}
+
+#[cfg(test)]
+mod audio_tests {
+	use super::*;
+	#[test]
+	fn audio_detection_uses_mime_and_safe_filename_fallback() {
+		let mut file = Attachment {
+			id: Id(1),
+			filename: "TRACK.MP3".into(),
+			description: None,
+			content_type: None,
+			size: 32,
+			media: EmbedMedia::default(),
+			spoiler: false,
+		};
+		assert!(file.is_audio());
+		file.content_type = Some("application/octet-stream".into());
+		assert!(file.is_audio());
+		file.content_type = Some("text/plain".into());
+		assert!(!file.is_audio());
+		file.content_type = Some("Audio/Wav; codec=pcm".into());
+		assert!(file.is_audio());
+		file.content_type = Some("audio/ogg".into());
+		assert!(!file.is_audio());
+		file.content_type = None;
+		file.filename = "track.mp3.exe".into();
+		assert!(!file.is_audio());
+	}
 }
 #[derive(Default)]
 pub struct AttachmentList(pub Vec<Attachment>);

@@ -1876,3 +1876,34 @@ profile status visibly changes from the striped missing-glyph marker to a yellow
 moon. This validates native label rendering on this Mac, not every emoji sequence
 or live Discord behavior. Temporary preview copies used distinct bundle IDs to
 keep automation separate from the owner's running app.
+
+
+### Inline audio attachments ? September 11, 2026
+
+Implemented MP3/WAV message cards with deliberate playback, pause/resume, seek,
+elapsed/total time, volume, loading/cancel/retry and existing download/open actions.
+One bounded credential-free worker decodes outside rendering/audio callbacks;
+obsolete generations are muted. Default builds gain file output, not voice calling
+or microphone initialization. Added `--demo --demo-audio` and an original tiny MP3
+fixture. Generic unsupported-file fallback remains for other formats.
+
+Worktree: `feat/inline-audio-player`, baseline `fd20dc9`. Original main checkout and
+its untracked target-relocation remainder are preserved. Fetch and fast-forward
+merge of origin/main reported already up to date. Before native screenshot captured;
+final native automation was stopped twice with Escape. Owner then requested pulling
+main and pushing, so no more native automation or release measurement was attempted.
+Native output, complete before/after screenshots, final release sizes and live Discord
+validation remain outstanding. This is a reviewable draft, not a verified live client.
+
+Focused verification: `cargo test --locked -p serein audio::tests -- --nocapture`
+passed 3/3, including real MP3/WAV decoding, malformed/oversized input, callback
+controls and cancellation of a stalled credential-free local HTTP transfer.
+
+Final direct checks: `cargo fmt --all`, strict workspace/all-target/all-feature Clippy,
+and `cargo test --locked -p ui -p model -p serein` passed (10 model + 29 desktop +
+92 UI = 131 tests). UI tests include keyboard play/pause/seek/volume and narrow-card
+bounds with timeline spacing. `cargo xtask check` was attempted twice: first encountered
+stale shared-target artifacts from another worktree; retry could not replace the
+shared running xtask.exe (Windows access denied). Direct Clippy and tests above
+then passed. Full workspace test/policy completion and Linux packaging test remain
+unverified; CI will run them. No checks were disabled.
