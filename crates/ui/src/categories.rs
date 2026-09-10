@@ -174,7 +174,13 @@ impl MessagingUi {
                                 }
                                 continue;
                             }
-                            let unread = state.unread(channel.id) == Some(true);
+                            let unread = state.channel_unread(channel) == Some(true)
+                                || state.unread_count(channel.id) > 0;
+                            let count = if channel.guild.is_some() {
+                                state.mention_count(channel.id)
+                            } else {
+                                state.unread_count(channel.id)
+                            };
                             let symbol = match channel.kind {
                                 1 | 3 => "@",
                                 2 | 13 => "♫",
@@ -205,10 +211,16 @@ impl MessagingUi {
                                                 RichText::new(name).color(if active {
                                                     colors.accent
                                                 } else {
-                                                    colors.text
+                                                    if unread { colors.text } else { colors.muted }
                                                 }),
                                             )
-                                            .right_text(if unread { "Unread" } else { "" })
+                                            .right_text(if count > 0 {
+                                                "        "
+                                            } else if unread {
+                                                "●"
+                                            } else {
+                                                ""
+                                            })
                                             .min_size(egui::vec2(ui.available_width(), 36.0))
                                             .corner_radius(7)
                                             .truncate(),
@@ -218,18 +230,33 @@ impl MessagingUi {
                                 })
                                 .inner
                                 .on_hover_text(format!(
-                                    "{} · {}",
+                                    "{} · {}{}",
                                     channel.name,
-                                    kind_label(channel.kind)
+                                    kind_label(channel.kind),
+                                    if unread && state.channel_unread(channel).is_none() {
+                                        " · Session activity; read sync unavailable"
+                                    } else if count > 0 {
+                                        " · Notification count may be a lower bound"
+                                    } else {
+                                        ""
+                                    }
                                 ));
+                            if count > 0 {
+                                crate::notifications::badge(
+                                    ui,
+                                    response.rect.right_center() - egui::vec2(19.0, 0.0),
+                                    count,
+                                );
+                            }
                             response.widget_info(|| {
                                 egui::WidgetInfo::labeled(
                                     egui::WidgetType::Button,
                                     channel.supports_text(),
                                     format!(
-                                        "{}{}",
+                                        "{}{}; {} notifications",
                                         channel.name,
-                                        if unread { ", unread" } else { "" }
+                                        if unread { ", unread" } else { "" },
+                                        count
                                     ),
                                 )
                             });

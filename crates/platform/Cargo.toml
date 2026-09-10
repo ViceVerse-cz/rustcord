@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 client-core.workspace = true
+notify-rust = { version = "=4.18.0", features = ["preview-macos-un"] }
 wry.workspace = true
 winit.workspace = true
 keyring.workspace = true
@@ -19,3 +20,9 @@ gtk = "0.18"
 
 [lints]
 workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "=0.61.3", features = ["UI_Notifications"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+futures-lite = "=2.6.1"

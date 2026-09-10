@@ -9,3 +9,13 @@ Send/edit requests explicitly allow only the user IDs actually present in the su
 Message mention metadata is bounded to 100 user summaries, included in RAM/event budgets, reconciled on partial/null message updates, and cached in SQLite schema 6. Existing histories gain an empty-default column without losing drafts. Cached mention JSON is bounded to 128 KiB per message and included in the existing global disk budget. No extra dependency or remote account action is introduced.
 
 Sources checked September 10, 2026: Discord's [message formatting](https://docs.discord.com/developers/reference#message-formatting) and [message/allowed-mention structures](https://docs.discord.com/developers/resources/message#allowed-mentions-object). These are public developer wire references; this client's normal-user protocol use remains unofficial. Offline tests cover precision/bounds, code/escape safety, keyboard profile activation, Unicode cursor insertion, Enter not sending during selection, partial-update/history ordering, and SQLite migration/round-trip/rejection. Live notification delivery and native accessibility remain unverified.
+
+
+Composer update (September 10, 2026): known mention tokens display as `@name`, Unicode
+emoji use the bundled Twemoji atlas, and custom emoji show static server artwork (or
+`:name:` while unavailable). The native editor keeps the original wire characters for
+copy, sending, draft storage and undo. Arrow navigation and deletion treat each rendered
+mention/emoji as one token; unknown mentions remain editable literal markup. Message
+editing uses this same composer, including mention suggestions and both emoji pickers.
+The ordinary unsent draft remains separate while editing; Save edit and Cancel edit
+return to it. Network failure keeps the edit available for review/retry.

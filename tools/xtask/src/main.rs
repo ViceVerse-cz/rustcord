@@ -126,6 +126,13 @@ fn package(voice: bool) -> Result<(), String> {
     } else {
         root.join(exe)
     };
+    if cfg!(windows) {
+        std::fs::copy(
+            "packaging/windows/install-notifications.ps1",
+            root.join("install-notifications.ps1"),
+        )
+        .map_err(|e| e.to_string())?;
+    }
     let source = PathBuf::from("target/release").join(exe);
     if cfg!(target_os = "macos") {
         // macOS caches code signatures by inode. Replace the executable rather
@@ -176,6 +183,10 @@ fn package(voice: bool) -> Result<(), String> {
     copy_directory(
         std::path::Path::new("assets/licenses/files"),
         &resources.join("licenses/files"),
+    )?;
+    copy_directory(
+        std::path::Path::new("assets/licenses/notifications"),
+        &resources.join("licenses/notifications"),
     )?;
     if voice {
         copy_directory(

@@ -493,3 +493,53 @@ verification. Executables each changed by -32 bytes; installed bundles by +2,963
 Synthetic reducer median 26.474→27.128 ms, with the same retained timeline range;
 this workload does not exercise the changed subscription. No performance improvement
 is claimed. Delivery remains draft pending CI and repaired-build live verification.
+
+
+## Composer, shared editing and notifications — September 10, 2026
+
+Clean baseline `efa724b` on `main`, fetched from existing origin; task branch
+`feat/composer-notifications`, pinned Rust 1.98.1. Known mentions now display as
+`@name` in the native text editor, with bundled Twemoji and static server artwork.
+Wire text remains the draft/send/copy format. Message editing uses the same composer;
+ordinary unsent drafts remain separate, cancel restores them, and confirmation cannot
+discard input typed in the same frame. No separate edit dialog remains.
+
+Incoming DMs get avatar shortcuts with red counts. Servers/channels show unread dots
+and mention badges, with focused latest-view ACKs and replay/self/history deduplication.
+System notifications are session-opt-in, generic-content-only and gated by known
+normal-user mute/DND preferences. Generation changes cancel pending alerts; logout
+requests dismissal. Unknown settings fail closed. The synthetic history generator now
+returns the latest advertised fixture message, so DM badge-clearing is testable offline.
+
+`cargo xtask check` passed formatting, workspace checks, 123 Rust tests (one existing
+ignored performance test), strict Clippy and policy checks. Focused tests cover native
+copy/undo/IME/atomic token movement, edit cancellation/retry/ack races, read-state ordering,
+new-DM first-message handling, zero-entry pruning, queue/item/byte bounds, and mute/DND
+filters. Independent reviews found and fixed stale-alert invalidation, historical-view
+suppression and a notification-map admission issue. Native testing also exposed the
+macOS library's unreliable blocking run-loop check; the worker now awaits its async
+show API without blocking rendering.
+
+Native screenshot evidence lives under `docs/pr-evidence/composer-notifications`.
+Composer/edit comparisons use the same offline chat fixture and viewport; badges use
+a separately labelled incoming-DM/server-mention fixture. OS alert tests require an
+explicit additional demo flag and never contact Discord.
+
+Both release packages built successfully. macOS permission and actual generic
+notification delivery were observed in Notification Center; disabling returned
+the app to off. OS-side dismissal was not conclusively verified because the
+notification window was no longer accessible to automation. Opening the synthetic unread
+DM cleared its rail badge and left the unrelated server mention badge intact.
+Dark and light layouts were inspected; minimum-width resize could not be verified
+with the native automation tool (window/resize errors). Shared editing was exercised
+natively through Save, with the original unsent draft restored.
+
+Validation incident: the UI tool auto-launched a closed temporary app without its
+demo arguments and briefly showed “Checking saved login…” on the sign-in screen.
+It was closed immediately; no credentials or conversations were inspected. We
+cannot assert that no credential-store lookup occurred. Subsequent validation
+copies forced offline mode at startup, used distinct bundle identifiers and were
+not included in shipping artifacts. The source was restored after that temporary
+build. Windows/Linux delivery, minimum-width native inspection and normal-user
+live interoperability remain unverified; this PR stays draft for those gaps.
+See `docs/performance.md` for measured package and runtime deltas.

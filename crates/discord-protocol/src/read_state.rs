@@ -12,7 +12,9 @@ fn cursor<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Id>, D::Error> {
         Some(value) => value.parse().map(Some).map_err(serde::de::Error::custom),
     }
 }
-fn entries<'de, D: Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Vec<T>, D::Error> {
+pub(crate) fn entries<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
+    d: D,
+) -> Result<Vec<T>, D::Error> {
     struct List<T>(std::marker::PhantomData<T>);
     impl<'de, T: Deserialize<'de>> Visitor<'de> for List<T> {
         type Value = Vec<T>;
@@ -39,6 +41,8 @@ pub struct Entry {
     pub kind: u8,
     #[serde(default, deserialize_with = "cursor")]
     pub last_message_id: Option<Id>,
+    #[serde(default, alias = "badge_count")]
+    pub mention_count: u32,
 }
 pub struct Snapshot {
     pub entries: Vec<Entry>,
@@ -90,6 +94,8 @@ pub struct Ack {
     #[serde(default)]
     pub manual: bool,
     #[serde(default)]
+    pub mention_count: Option<u32>,
+    #[serde(default)]
     pub version: Option<u64>,
 }
 #[derive(Deserialize)]
@@ -118,17 +124,20 @@ mod tests {
     }
     #[test]
     fn bounded_snapshots_and_manual_zero_cursors() {
-        let snapshot: Snapshot = crate::decode(br#"{"entries":[{"id":"1","last_message_id":"0"},{"id":"2","last_message_id":"3","type":2}],"version":4,"partial":true}"#).unwrap();
+        let snapshot: Snapshot = crate::decode(br#"{"entries":[{"id":"1","last_message_id":"0","mention_count":7},{"id":"2","last_message_id":"3","type":2}],"version":4,"partial":true}"#).unwrap();
         assert_eq!(snapshot.entries[0].last_message_id, None);
+        assert_eq!(snapshot.entries[0].mention_count, 7);
         assert_eq!(snapshot.entries[1].last_message_id, Some(Id(3)));
         assert_eq!(snapshot.entries[1].kind, 2);
         assert_eq!(snapshot.version, Some(4));
         assert!(snapshot.partial);
         assert!(crate::decode::<Snapshot>(br#"{"version":4}"#).is_err());
-        let ack: Ack =
-            crate::decode(br#"{"channel_id":"1","message_id":"0","manual":true,"version":5}"#)
-                .unwrap();
+        let ack: Ack = crate::decode(
+            br#"{"channel_id":"1","message_id":"0","manual":true,"version":5,"mention_count":3}"#,
+        )
+        .unwrap();
         assert!(ack.manual);
+        assert_eq!(ack.mention_count, Some(3));
         assert_eq!(ack.message_id, None);
         assert!(crate::decode::<Ack>(br#"{"channel_id":"1","message_id":"invalid"}"#).is_err());
         let oversized =

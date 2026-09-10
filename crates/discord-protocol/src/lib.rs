@@ -1,6 +1,7 @@
 //! Discord wire DTOs. JSON values never become application state.
 mod attachments;
 mod embeds;
+pub mod notifications;
 pub mod profile;
 mod reactions;
 pub mod read_state;
@@ -226,6 +227,10 @@ pub struct Ready {
     pub users: Vec<UserDto>,
     #[serde(default)]
     pub read_state: Option<read_state::Snapshot>,
+    #[serde(default)]
+    pub user_guild_settings: Option<notifications::Snapshot>,
+    #[serde(default)]
+    pub sessions: Option<notifications::Sessions>,
     pub user: UserDto,
     pub session_id: String,
     pub resume_gateway_url: String,
