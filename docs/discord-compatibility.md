@@ -169,3 +169,9 @@ view ACKs, session-only native opt-in and fail-closed mute/DND handling. READY r
 counts, settings and session presence use isolated unofficial normal-user wire shapes.
 Synthetic protocol/UI tests are not live Discord validation. Role/everyone mention events,
 blocked relationships and complete protobuf notification preferences remain unsupported.
+
+## September 10: native system-message descriptions
+
+Discord's [documented message type IDs](https://docs.discord.com/developers/resources/message#message-types) were checked on 2026-09-10. The decoder now retains the type through REST/Gateway messages and the local history cache. The timeline describes joins/welcomes, recipient changes, calls, channel name/icon changes, pins, boosts/tiers, channel follows, discovery notices, threads, invite reminders, AutoMod, subscriptions/offers, Stage events, incident alerts, purchases and poll results. Original content/embeds/attachments still render separately. Copy and loaded reply previews include the description. Unknown types keep an explicit placeholder; legacy cached unsupported rows remain unknown until history revalidation.
+
+These are native textual descriptions, not full interactive cards or proof of normal-user protocol compatibility. Call outcome/duration, subscription details, missing thread content and poll votes are not inferred. Search/pins snapshot excerpts remain their existing content-only previews; opening a hit loads the described timeline message. No live account, call or microphone validation was performed. Open PR #27 adds the external fallback and #28 adds unsupported payload markers; neither implemented these descriptions. Integration must retain their controls/markers without restoring a generic system placeholder for recognized types.

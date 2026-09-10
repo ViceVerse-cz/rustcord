@@ -185,6 +185,7 @@ mod tests {
             revision: 0,
             nonce: None,
             reply_to: None,
+            kind: 0,
             unsupported: false,
             embeds: vec![],
             embeds_suppressed: false,

@@ -1,6 +1,7 @@
 //! UI-neutral session entities. No filesystem or network dependencies.
 pub mod archives;
 mod profile;
+mod system_messages;
 pub use profile::*;
 mod attachments;
 pub use attachments::*;
@@ -166,12 +167,27 @@ pub struct Message {
     pub revision: u64,
     pub nonce: Option<String>,
     pub reply_to: Option<Id>,
+    /// Discord message type; 255 denotes an unknown legacy cached type.
+    pub kind: u8,
     pub unsupported: bool,
     pub embeds: Vec<Embed>,
     pub embeds_suppressed: bool,
     pub attachments: Vec<Attachment>,
 }
 impl Message {
+    /// A plain-text description, separate from the original service content.
+    pub fn system_summary(&self) -> Option<String> {
+        system_messages::summary(self)
+    }
+
+    pub fn display_text(&self) -> std::borrow::Cow<'_, str> {
+        match self.system_summary() {
+            Some(summary) if self.content.is_empty() => summary.into(),
+            Some(summary) => format!("{summary}\n{}", self.content).into(),
+            None => self.content.as_str().into(),
+        }
+    }
+
     pub fn bytes(&self) -> usize {
         size_of::<Self>()
             + self.reactions.as_ref().map_or(0, |r| {

@@ -366,6 +366,7 @@ impl MessageDto {
                 Nonce::Number(n) => n.to_string(),
             }),
             reply_to: self.message_reference.and_then(|r| r.message_id),
+            kind: self.kind,
             unsupported: !matches!(self.kind, 0 | 19 | 20 | 23),
             attachments: self.attachments.0,
             embeds: embeds::bounded(self.embeds.0),
@@ -475,6 +476,64 @@ pub struct ErrorBody {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn system_types_keep_original_content_and_describe_known_events() {
+        let wire = |kind| {
+            serde_json::json!({
+                "id":"1", "channel_id":"2", "author":{"id":"3", "username":"Robin"},
+                "type":kind, "content":"original text", "mentions":[{"id":"4", "username":"Casey"}]
+            })
+        };
+        for kind in [
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 21, 22, 24, 25, 26, 27, 28,
+            29, 31, 32, 36, 37, 38, 39, 44, 46,
+        ] {
+            let message = decode::<MessageDto>(&serde_json::to_vec(&wire(kind)).unwrap())
+                .unwrap()
+                .into_model();
+            assert_eq!(message.kind, kind);
+            assert_eq!(message.content, "original text");
+            assert!(message.system_summary().is_some(), "type {kind}");
+            assert!(message.display_text().ends_with("\noriginal text"));
+        }
+        for kind in [0, 19, 20, 23, 222, 255] {
+            let message = decode::<MessageDto>(&serde_json::to_vec(&wire(kind)).unwrap())
+                .unwrap()
+                .into_model();
+            assert_eq!(message.kind, kind);
+            assert!(message.system_summary().is_none());
+            assert_eq!(message.display_text(), "original text");
+            assert_eq!(message.unsupported, matches!(kind, 222 | 255));
+        }
+        let mut message = decode::<MessageDto>(&serde_json::to_vec(&wire(7)).unwrap())
+            .unwrap()
+            .into_model();
+        message.content.clear();
+        assert_eq!(message.display_text(), "Welcome, Robin! Joined the server.");
+        message.kind = 1;
+        assert_eq!(
+            message.system_summary().unwrap(),
+            "Robin added Casey to the conversation."
+        );
+        message.kind = 2;
+        message.mentions[0] = message.author.clone();
+        assert_eq!(
+            message.system_summary().unwrap(),
+            "Robin left the conversation."
+        );
+        message.mentions.clear();
+        assert_eq!(
+            message.system_summary().unwrap(),
+            "Robin removed a member from the conversation."
+        );
+        message.author.name = "界".repeat(1000);
+        assert!(message.system_summary().unwrap().chars().count() < 150);
+        let mut invalid = wire(0);
+        invalid["type"] = serde_json::json!(256);
+        assert!(decode::<MessageDto>(&serde_json::to_vec(&invalid).unwrap()).is_err());
+        invalid["type"] = serde_json::json!(-1);
+        assert!(decode::<MessageDto>(&serde_json::to_vec(&invalid).unwrap()).is_err());
+    }
     #[test]
     fn bounded_message_mentions_and_patch_presence() {
         let message=decode::<MessageDto>(br#"{"id":"1","channel_id":"2","author":{"id":"3","username":"author"},"content":"<@4>","mentions":[{"id":"4","username":"user","global_name":"Display name"}]}"#).unwrap().into_model();

@@ -80,3 +80,7 @@ Logout invalidates queued work and requests dismissal; this does not erase OS re
 See [notification limits and platform behavior](notifications.md). Composer artwork uses
 the existing Twemoji atlas and custom-image cache; saved drafts keep their original wire
 text, with no extra rendered-token storage.
+
+## September 10: message type retention
+
+Schema 7 adds one checked integer `message_kind` (0..255) per cached message, with no new payload or cache. Existing unsupported rows migrate to the unknown sentinel 255; ordinary rows use 0. Reloaded history supplies the actual type. Existing account/item/byte/page limits remain in force. Migration and reopen/roundtrip tests cover retained rows and invalid values. Builds limited to schema 6 cannot reopen this cache. PR #28 independently uses schema 7 for content markers; merge both column-detected migrations and both save/load fields when integrating these branches.
