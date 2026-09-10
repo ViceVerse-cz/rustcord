@@ -48,6 +48,7 @@ pub fn message(id: u64, channel: Id) -> Message {
         nonce: None,
         reply_to: None,
         unsupported: false,
+        extra_content: Default::default(),
         embeds: demo_embeds(id),
         attachments: if id == 500 {
             vec![

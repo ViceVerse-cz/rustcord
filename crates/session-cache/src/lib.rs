@@ -97,6 +97,8 @@ impl Timeline {
                         || previous.mentions != message.mentions
                         || previous.reactions != message.reactions
                         || previous.edited != message.edited
+                        || previous.unsupported != message.unsupported
+                        || previous.extra_content != message.extra_content
                         || previous.embeds != message.embeds
                         || previous.attachments != message.attachments
                         || previous.embeds_suppressed != message.embeds_suppressed,
@@ -192,6 +194,7 @@ impl Timeline {
             if !matches!(patch.embeds_suppressed, Patch::Absent) {
                 merged.embeds_suppressed = patch.embeds_suppressed;
             }
+            merged.extra_content.merge(&patch.extra_content);
             let replaced = self.patches.get(&patch.id).map_or(0, patch_bytes);
             if bytes - replaced + patch_bytes(&merged) > 1024 * 1024 {
                 return Err("Pending patch byte budget exceeded; reload required");
@@ -252,7 +255,8 @@ fn patch_bytes(patch: &MessagePatch) -> usize {
         Patch::Value(value) => value.capacity(),
         _ => 0,
     };
-    content
+    size_of::<MessagePatch>()
+        + content
         + match &patch.reactions {
             Patch::Value(r) => model::reaction_bytes(r),
             _ => 0,
@@ -315,12 +319,115 @@ fn apply_patch(message: &mut Message, patch: &MessagePatch) {
         Patch::Null => message.embeds_suppressed = false,
         Patch::Absent => {}
     }
+    patch.extra_content.apply(&mut message.extra_content);
     message.revision += 1;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn content_markers_reconcile_independent_updates_before_and_after_history() {
+        let update = |extra_content| MessagePatch {
+            id: Id(1),
+            channel: Id(1),
+            extra_content,
+            reactions: Patch::Absent,
+            content: Patch::Absent,
+            mentions: Patch::Absent,
+            edited: Patch::Absent,
+            embeds: Patch::Absent,
+            embeds_suppressed: Patch::Absent,
+            attachments: Patch::Absent,
+        };
+        let mut original = message(1);
+        original.extra_content.sticker_items = true;
+        original.extra_content.poll = true;
+        let mut timeline = Timeline::default();
+        timeline.begin_page(false);
+        timeline
+            .patch(update(model::ExtraContentPatch {
+                components: Patch::Value(true),
+                ..Default::default()
+            }))
+            .unwrap();
+        timeline
+            .patch(update(model::ExtraContentPatch {
+                poll: Patch::Null,
+                components_v2: Patch::Value(true),
+                ..Default::default()
+            }))
+            .unwrap();
+        timeline
+            .patch(update(model::ExtraContentPatch {
+                components: Patch::Value(false),
+                ..Default::default()
+            }))
+            .unwrap();
+        timeline.finish_page(vec![original.clone()], false).unwrap();
+        let current = timeline.get(Id(1)).unwrap();
+        assert!(!current.extra_content.poll && !current.extra_content.components);
+        assert!(current.extra_content.sticker_items && current.extra_content.components_v2);
+
+        timeline.begin_page(false);
+        timeline
+            .patch(update(model::ExtraContentPatch {
+                sticker_items: Patch::Null,
+                stickers: Patch::Value(true),
+                ..Default::default()
+            }))
+            .unwrap();
+        timeline
+            .patch(update(model::ExtraContentPatch {
+                components_v2: Patch::Null,
+                ..Default::default()
+            }))
+            .unwrap();
+        timeline.finish_page(vec![original], false).unwrap();
+        let current = timeline.get(Id(1)).unwrap();
+        assert_eq!(
+            current.extra_content,
+            model::ExtraContent {
+                stickers: true,
+                ..Default::default()
+            }
+        );
+        let mut cleared = update(model::ExtraContentPatch {
+            stickers: Patch::Null,
+            ..Default::default()
+        });
+        cleared.edited = Patch::Value(10);
+        timeline.patch(cleared).unwrap();
+        let mut stale = update(model::ExtraContentPatch {
+            poll: Patch::Value(true),
+            ..Default::default()
+        });
+        stale.edited = Patch::Value(9);
+        timeline.patch(stale).unwrap();
+        assert!(!timeline.get(Id(1)).unwrap().extra_content.any());
+
+        let mut replacement = timeline.get(Id(1)).unwrap().clone();
+        let before = replacement.revision;
+        replacement.extra_content.components = true;
+        timeline.insert(replacement, true, false).unwrap();
+        assert_eq!(timeline.get(Id(1)).unwrap().revision, before + 1);
+        let mut replacement = timeline.get(Id(1)).unwrap().clone();
+        replacement.unsupported = true;
+        timeline.insert(replacement.clone(), true, false).unwrap();
+        assert_eq!(timeline.get(Id(1)).unwrap().revision, before + 2);
+        timeline.begin_page(false);
+        timeline.delete(Id(1)).unwrap();
+        timeline
+            .patch(update(model::ExtraContentPatch {
+                poll: Patch::Value(true),
+                ..Default::default()
+            }))
+            .unwrap();
+        timeline.finish_page(vec![replacement], false).unwrap();
+        assert!(timeline.is_empty());
+        assert_eq!(timeline.bytes(), 0);
+    }
+
     #[test]
     fn mention_patches_survive_stale_pages_and_release_replaced_users() {
         let mut timeline = Timeline::default();
@@ -329,6 +436,7 @@ mod tests {
         timeline.insert(original.clone(), false, false).unwrap();
         let before = timeline.bytes;
         let patch = MessagePatch {
+            extra_content: Default::default(),
             reactions: model::Patch::Absent,
             id: Id(1),
             channel: original.channel,
@@ -366,6 +474,7 @@ mod tests {
             nonce: None,
             reply_to: None,
             unsupported: false,
+            extra_content: Default::default(),
             attachments: Vec::new(),
             embeds: Vec::new(),
             mentions: Vec::new(),
@@ -423,6 +532,7 @@ mod tests {
             spoiler: false,
         };
         let update = |attachments| MessagePatch {
+            extra_content: Default::default(),
             reactions: model::Patch::Absent,
             id: Id(1),
             channel: Id(1),
@@ -497,6 +607,7 @@ mod tests {
             ..Default::default()
         };
         let update = |embeds| MessagePatch {
+            extra_content: Default::default(),
             reactions: model::Patch::Absent,
             id: Id(1),
             channel: Id(1),
@@ -569,6 +680,7 @@ mod tests {
         t.begin_page(false);
         t.delete(Id(1)).unwrap();
         t.patch(MessagePatch {
+            extra_content: Default::default(),
             reactions: model::Patch::Absent,
             id: Id(2),
             channel: Id(1),
@@ -583,6 +695,7 @@ mod tests {
         t.finish_page(vec![message(1), message(2)], false).unwrap();
         assert!(t.get(Id(1)).is_none());
         t.patch(MessagePatch {
+            extra_content: Default::default(),
             reactions: model::Patch::Absent,
             id: Id(1),
             channel: Id(1),
@@ -636,6 +749,7 @@ mod tests {
         for (at, content) in [(20, "new edit"), (10, "old edit")] {
             timeline
                 .patch(MessagePatch {
+                    extra_content: Default::default(),
                     reactions: model::Patch::Absent,
                     id: Id(1),
                     channel: Id(1),

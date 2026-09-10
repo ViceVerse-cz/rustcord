@@ -204,6 +204,7 @@ mod tests {
             nonce: None,
             reply_to: None,
             unsupported: false,
+            extra_content: Default::default(),
             embeds: vec![],
             embeds_suppressed: false,
             reactions: None,

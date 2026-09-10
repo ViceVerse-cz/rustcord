@@ -79,7 +79,7 @@ impl LocalStore {
     fn initialize(connection: Connection) -> Result<Self> {
         connection.busy_timeout(std::time::Duration::from_secs(2))?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 6 {
+        if version > 7 {
             return Err(StoreError::Incompatible);
         }
         connection.execute_batch("PRAGMA page_size=4096; PRAGMA max_page_count=16384; PRAGMA cache_size=-2048; PRAGMA temp_store=MEMORY; PRAGMA journal_mode=DELETE; PRAGMA secure_delete=ON; PRAGMA auto_vacuum=FULL;
@@ -123,6 +123,16 @@ impl LocalStore {
             connection.execute_batch("BEGIN; ALTER TABLE messages ADD COLUMN mentions TEXT NOT NULL DEFAULT '[]'; PRAGMA user_version=6; COMMIT;")?;
         } else {
             connection.pragma_update(None, "user_version", 6)?;
+        }
+        let has_extra_content: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('messages') WHERE name='extra_content')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_extra_content {
+            connection.execute_batch("BEGIN; ALTER TABLE messages ADD COLUMN extra_content INTEGER NOT NULL DEFAULT 0 CHECK(typeof(extra_content)='integer' AND extra_content BETWEEN 0 AND 31); PRAGMA user_version=7; COMMIT;")?;
+        } else {
+            connection.pragma_update(None, "user_version", 7)?;
         }
         Ok(Self(connection))
     }
@@ -192,7 +202,7 @@ impl LocalStore {
                 return Err(StoreError::Capacity);
             }
             transaction.execute(
-                "INSERT INTO messages(account,channel,id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+                "INSERT INTO messages(account,channel,id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions,extra_content) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
                 params![
                     account,
                     channel,
@@ -208,7 +218,8 @@ impl LocalStore {
                     embeds,
                     message.embeds_suppressed,
                     attachments,
-                    mentions
+                    mentions,
+                    message.extra_content.bits()
                 ],
             )?;
         }
@@ -237,11 +248,18 @@ impl LocalStore {
         Ok(())
     }
     pub fn load_channel(&self, account: Id, channel: Id) -> Result<Vec<Message>> {
-        let mut query = self.0.prepare("SELECT id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions FROM messages WHERE account=?1 AND channel=?2 ORDER BY length(id),id LIMIT 500")?;
+        let mut query = self.0.prepare("SELECT id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions,extra_content FROM messages WHERE account=?1 AND channel=?2 ORDER BY length(id),id LIMIT 500")?;
         let mut rows = query.query(params![account.to_string(), channel.to_string()])?;
         let mut messages = Vec::new();
         let mut bytes = 0;
         while let Some(row) = rows.next()? {
+            let extra_content = row
+                .get_ref(13)?
+                .as_i64()
+                .ok()
+                .and_then(|bits| u8::try_from(bits).ok())
+                .and_then(model::ExtraContent::from_bits)
+                .ok_or(StoreError::Incompatible)?;
             // Inspect borrowed SQLite fields before allocating attacker-controlled cache strings.
             for (column, maximum) in [
                 (0, 20),
@@ -317,6 +335,7 @@ impl LocalStore {
                 edited_at: None,
                 reply_to: row.get::<_, Option<String>>(5)?.map(parse).transpose()?,
                 unsupported: row.get(6)?,
+                extra_content,
                 nonce: None,
                 revision: 0,
                 embeds,
@@ -405,6 +424,102 @@ impl LocalStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn schema_six_marker_migration_preserves_rows_and_rejects_invalid_bits() {
+        let root = std::env::temp_dir().join(format!(
+            "serein-synthetic-content-markers-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("test.sqlite3");
+        let mut store = LocalStore::open(&path).unwrap();
+        store.save_draft(Id(1), Id(2), "preserved draft").unwrap();
+        store.save_appearance(Appearance::Dark).unwrap();
+        store
+            .0
+            .execute_batch("ALTER TABLE messages DROP COLUMN extra_content; PRAGMA user_version=6;")
+            .unwrap();
+        store.0.execute("INSERT INTO messages(account,channel,id,author,name,content,edited,unsupported) VALUES('1','2','3','4','Synthetic','preserved body',1,1)", []).unwrap();
+        drop(store);
+        let mut store = LocalStore::open(&path).unwrap();
+        let legacy = store.load_channel(Id(1), Id(2)).unwrap();
+        assert_eq!(legacy.len(), 1);
+        assert_eq!(legacy[0].extra_content, model::ExtraContent::default());
+        assert_eq!(legacy[0].content, "preserved body");
+        assert!(legacy[0].edited && legacy[0].unsupported);
+        assert_eq!(store.load_drafts(Id(1)).unwrap()[&Id(2)], "preserved draft");
+        assert_eq!(store.appearance().unwrap(), Appearance::Dark);
+        let version: u32 = store
+            .0
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 7);
+        let messages: Vec<_> = (0..32_u8)
+            .map(|bits| {
+                let mut message = legacy[0].clone();
+                message.id = Id(100 + u64::from(bits));
+                message.extra_content = model::ExtraContent::from_bits(bits).unwrap();
+                message
+            })
+            .collect();
+        store.save_channel(Id(1), Id(2), &messages).unwrap();
+        drop(store);
+        let store = LocalStore::open(&path).unwrap();
+        let reopened = store.load_channel(Id(1), Id(2)).unwrap();
+        assert_eq!(reopened.len(), 32);
+        for (actual, expected) in reopened.iter().zip(&messages) {
+            assert_eq!(actual.id, expected.id);
+            assert_eq!(actual.extra_content, expected.extra_content);
+            assert_eq!(actual.content, "preserved body");
+            assert!(actual.edited && actual.unsupported);
+        }
+        assert!(store.load_channel(Id(9), Id(2)).unwrap().is_empty());
+        for value in [
+            rusqlite::types::Value::Integer(-1),
+            rusqlite::types::Value::Integer(32),
+            rusqlite::types::Value::Integer(256),
+            rusqlite::types::Value::Real(1.5),
+            rusqlite::types::Value::Text("invalid".into()),
+        ] {
+            assert!(
+                store
+                    .0
+                    .execute(
+                        "UPDATE messages SET extra_content=?1 WHERE id='131'",
+                        [&value]
+                    )
+                    .is_err()
+            );
+            // A tampered local database still cannot introduce unknown marker bits.
+            store
+                .0
+                .execute_batch("PRAGMA ignore_check_constraints=ON;")
+                .unwrap();
+            store
+                .0
+                .execute(
+                    "UPDATE messages SET extra_content=?1 WHERE id='131'",
+                    [&value],
+                )
+                .unwrap();
+            assert!(matches!(
+                store.load_channel(Id(1), Id(2)),
+                Err(StoreError::Incompatible)
+            ));
+            store
+                .0
+                .execute("UPDATE messages SET extra_content=31 WHERE id='131'", [])
+                .unwrap();
+            store
+                .0
+                .execute_batch("PRAGMA ignore_check_constraints=OFF;")
+                .unwrap();
+        }
+        assert_eq!(store.load_drafts(Id(1)).unwrap()[&Id(2)], "preserved draft");
+        assert_eq!(store.appearance().unwrap(), Appearance::Dark);
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn schema_five_mentions_round_trip_and_reject_oversized_metadata() {
         let mut store = LocalStore::initialize(Connection::open_in_memory().unwrap()).unwrap();
@@ -526,7 +641,7 @@ mod tests {
             .0
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 6);
+        assert_eq!(version, 7);
         for (json, error) in [
             ("broken JSON".to_owned(), StoreError::Incompatible),
             (
@@ -624,6 +739,7 @@ mod tests {
                 edited_at: None,
                 reply_to: None,
                 unsupported: false,
+                extra_content: model::ExtraContent::default(),
                 embeds: vec![model::Embed {
                     title: Some("Cached synthetic embed".into()),
                     ..Default::default()

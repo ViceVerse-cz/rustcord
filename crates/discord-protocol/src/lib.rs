@@ -2,6 +2,7 @@
 pub mod archives;
 mod attachments;
 mod embeds;
+mod extra_content;
 pub mod notifications;
 pub mod permissions;
 pub mod pins;
@@ -402,6 +403,14 @@ pub struct MentionList(#[serde(deserialize_with = "model::deserialize_mentions")
 #[derive(Deserialize)]
 pub struct MessageDto {
     #[serde(default)]
+    pub poll: Option<extra_content::Object>,
+    #[serde(default)]
+    pub sticker_items: Option<extra_content::Array>,
+    #[serde(default)]
+    pub stickers: Option<extra_content::Array>,
+    #[serde(default)]
+    pub components: Option<extra_content::Array>,
+    #[serde(default)]
     pub reactions: reactions::ReactionList,
     pub id: Id,
     pub channel_id: Id,
@@ -438,6 +447,13 @@ pub struct Reference {
 impl MessageDto {
     pub fn into_model(self) -> Message {
         Message {
+            extra_content: model::ExtraContent {
+                poll: self.poll.is_some(),
+                sticker_items: self.sticker_items.is_some_and(|a| a.0),
+                stickers: self.stickers.is_some_and(|a| a.0),
+                components: self.components.is_some_and(|a| a.0),
+                components_v2: self.flags & (1 << 15) != 0,
+            },
             reactions: Some(self.reactions.0),
             id: self.id,
             channel: self.channel_id,
@@ -467,6 +483,14 @@ impl MessageDto {
 #[derive(Deserialize)]
 pub struct PatchDto {
     #[serde(default)]
+    pub poll: Patch<extra_content::Object>,
+    #[serde(default)]
+    pub sticker_items: Patch<extra_content::Array>,
+    #[serde(default)]
+    pub stickers: Patch<extra_content::Array>,
+    #[serde(default)]
+    pub components: Patch<extra_content::Array>,
+    #[serde(default)]
     pub reactions: Patch<reactions::ReactionList>,
     pub id: Id,
     pub channel_id: Id,
@@ -486,6 +510,17 @@ pub struct PatchDto {
 impl PatchDto {
     pub fn into_model(self) -> MessagePatch {
         MessagePatch {
+            extra_content: model::ExtraContentPatch {
+                poll: extra_content::object_patch(self.poll),
+                sticker_items: extra_content::array_patch(self.sticker_items),
+                stickers: extra_content::array_patch(self.stickers),
+                components: extra_content::array_patch(self.components),
+                components_v2: match &self.flags {
+                    Patch::Absent => Patch::Absent,
+                    Patch::Null => Patch::Null,
+                    Patch::Value(flags) => Patch::Value(flags & (1 << 15) != 0),
+                },
+            },
             reactions: match self.reactions {
                 Patch::Absent => Patch::Absent,
                 Patch::Null => Patch::Null,

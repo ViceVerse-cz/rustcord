@@ -1,5 +1,43 @@
 # Initial performance evidence
 
+## Unsupported-content markers - September 10, 2026
+
+Baseline 8c6976edc85cc0d5b5e86b636cfd331b4063c747 (PR #27) packages were copied and
+hash-verified before edits. Same Windows 11 Home 10.0.26200 / Ryzen 7 7800X3D (16 logical CPUs) /
+about 31 GiB RAM / Rust 1.98.1, release thin LTO, one codegen unit, wgpu.
+Both unsigned Windows packages passed. One size measurement each; ZIP DEFLATE level 9;
+text excludes the voice folder.
+
+| Metric | Baseline | Markers | Delta |
+| --- | ---: | ---: | ---: |
+| text executable bytes | 49,798,144 | 49,810,944 | +12,800 (+0.026%) |
+| text installed bytes | 50,286,162 | 50,304,421 | +18,259 (+0.036%) |
+| text ZIP bytes | 31,169,312 | 31,173,706 | +4,394 (+0.014%) |
+| voice executable bytes | 53,150,720 | 53,163,520 | +12,800 (+0.024%) |
+| voice installed bytes | 53,861,511 | 53,879,770 | +18,259 (+0.034%) |
+| voice ZIP bytes | 32,541,063 | 32,543,824 | +2,761 (+0.008%) |
+| replay median ms / 100,000 events | 37.0330 | 38.3804 | +1.3474 (+3.64%) |
+| replay retained estimated bytes | 220,992..221,477 | 220,992..221,477 | 0 |
+
+Replay: one warmup and five measured direct executable runs per revision, 500 retained records.
+Baseline samples: 35.7539, 37.0330, 37.1835, 36.2793, 38.5828 ms. Changed samples:
+37.4959, 38.3804, 36.7489, 39.1534, 38.6181 ms. The measured median is slower, with overlapping
+ranges and a small sample; no speed improvement or acceptance-latency claim is made.
+This existing workload measures ordinary synthetic reducer events, not poll payload decoding,
+SQLite migration, process RSS or UI latency.
+
+RAM retains five booleans; SQLite stores one integer (0..31). Presence-only parsing discards
+payloads, capped at 100 array objects / 64 direct fields per object within the 4 MiB wire limit.
+Pending patch accounting now includes the fixed MessagePatch struct as well as retained payloads.
+No new worker, network request, runtime dependency or notices. Package file counts remain 50/96;
+installed totals include staged docs before this measurement addendum, with no PR evidence files.
+Native screenshots, CPU/RSS, frame timing and live behavior remain unmeasured while desktop
+automation is owner-paused. No browser/account/microphone action was used.
+
+SHA256 of measured executables:
+- text: B6B6E6BCA86F29F6ECBE1B5C5AF0FA9EFD4F9ED2C480C23E02EDCB0E7C70D5DA
+- voice: 06E843CBAA0ECCB099D405153CB293EC5B09CB75B4936BC2A0AC2FCB555E02DD
+
 ## Unsupported-content fallback - Windows packages, September 10, 2026
 
 Baseline 36ab5e729571d7e42650b02ec3feefb9418652c3 (PR #26) packages were separately

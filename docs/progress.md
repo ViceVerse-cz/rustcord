@@ -2,6 +2,26 @@
 
 ## Current scope and gates
 
+Current work: preserve unsupported-content presence in ordinary message types (SPEC 9.1).
+Polls, sticker_items, legacy stickers, components and the Components V2 flag have independently
+patchable markers. Missing fields preserve state; explicit null/empty values clear only their
+own source. The decoder discards the payload; SQLite schema 7 stores only five presence bits.
+Native labels and the existing confirmed Open in Discord fallback accompany supported text/media.
+Marker-only replacements invalidate timeline layout, and pending patches reconcile before history
+without resurrecting deleted messages. Baseline 8c6976e (PR #27) packages were copied/hash-verified;
+one warmup and five baseline reducer replay samples were recorded before edits. Windows
+cargo xtask check passed 205 offline Rust tests, doctests, formatting, strict all-feature Clippy,
+text-only compilation and policy checks. Seven new tests cover model bit validation/patches,
+bounded presence decoding, absent/null/source independence, pending and stale-page reconciliation,
+deletions, revision changes, schema migration/cache reopen/corruption/account isolation, and headless
+egui layout with labels and explicit fallback. Independent review found no actionable issue.
+The synthetic 100,000-event replay median changed from 37.0330 to 38.3804 ms across five measured
+runs each, with overlapping ranges; both retain 500 records / 220,992..221,477 estimated bytes.
+Both unsigned Windows release packages passed: text executable 49,810,944 bytes (+12,800),
+voice 53,163,520 bytes (+12,800). Installed/ZIP measurements and hashes are in performance.md.
+The seven original dirty files remain hash-identical. Native automation remains owner-paused; no live service,
+browser, microphone or account action is part of this implementation testing.
+
 Current implementation: SPEC 9.1 external fallback for unsupported channel/message content.
 Unsupported channel rows gain a keyboard-focusable Open in Discord arrow; message placeholders
 gain a labeled button. The existing timeline link confirmation is shared at the messaging-view
@@ -86,8 +106,7 @@ in performance.md. All 45 Wry backend source files match the pinned registry arc
 The original seven dirty source files were hash-checked unchanged. Linux CI remains pending.
 
 The full SPEC objective remains open. Further implementation gaps found in current sources
-include visible deletion state and detection of unrendered payloads in ordinary message types
-(such as polls/stickers/components), beyond the existing unsupported-type marker;
+include visible deletion state;
 native/live acceptance and release evidence remain separate gates. Historical entries follow.
 
 Read the original SPEC.md completely before implementation. Repository initially contained only the tracked two-line README and an untracked SPEC.md; no existing source or agent instructions were removed. The owner explicitly revised authentication and storage during implementation. The final spec now requires the official Discord login in a temporary webview, secure remembered login, and allows bounded local SQLite caches, saved drafts/settings and files. Those changes were applied throughout SPEC.md and AGENTS.md.

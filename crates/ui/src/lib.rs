@@ -1380,6 +1380,7 @@ mod composer_tests {
                     nonce: None,
                     reply_to: None,
                     unsupported: false,
+                    extra_content: Default::default(),
                     embeds: vec![],
                     attachments: vec![],
                     mentions: vec![],

@@ -1,5 +1,17 @@
 # Discord compatibility — checked 2026-09-10
 
+Unsupported ordinary-message content (September 10): the [Discord message resource](https://docs.discord.com/developers/resources/message)
+documents poll, sticker_items, deprecated stickers, components and IS_COMPONENTS_V2 (1 << 15).
+The decoder now preserves only independent presence markers for these sources through full
+messages, absent/null partial updates and bounded local cache reloads. It keeps no poll answer,
+sticker or component payload. Native static Poll/Sticker/Components placeholders accompany any
+supported text/media and share one confirmed Open in Discord action. This implements recognition
+and a fallback, not poll voting, sticker rendering or interactive components. Old cache rows
+cannot recover metadata previously discarded and gain markers during ordinary history refresh.
+The local decoder caps arrays at 100 objects, each direct object at 64 fields, within the existing
+4 MiB wire limit; these are application bounds, not Discord quotas. Native/live behavior remains
+unverified; the source documentation does not establish normal-account API acceptance.
+
 External fallback (September 10): unsupported channel rows and message placeholders offer
 Open in Discord through an explicit browser confirmation. URLs use the fixed Discord HTTPS
 origin and typed guild/channel/message IDs; DMs use @me with the conversation ID. No content,

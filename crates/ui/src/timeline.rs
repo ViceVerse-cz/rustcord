@@ -80,6 +80,7 @@ fn layout_key(message: &Message) -> u64 {
     message.edited.hash(&mut key);
     message.reply_to.hash(&mut key);
     message.unsupported.hash(&mut key);
+    message.extra_content.hash(&mut key);
     message.attachments.hash(&mut key);
     message.embeds.hash(&mut key);
     message.embeds_suppressed.hash(&mut key);
@@ -96,6 +97,8 @@ fn grouped(previous: Option<&Message>, message: &Message, boundary: Option<Id>) 
             && message.reply_to.is_none()
             && !message.unsupported
             && !previous.unsupported
+            && !message.extra_content.any()
+            && !previous.extra_content.any()
             && boundary != Some(message.id)
             && timestamp(previous.id).date() == timestamp(message.id).date()
             && (timestamp(message.id) - timestamp(previous.id)).whole_seconds() < 300
@@ -486,8 +489,15 @@ impl TimelineView {
                                     if message.edited {
                                         ui.label(RichText::new("(edited)").small().color(colors.muted));
                                     }
-                                    if message.unsupported {
-                                        ui.label(RichText::new("System content · Preview unavailable").small().color(colors.muted));
+                                    if message.unsupported || message.extra_content.any() {
+                                        for (present, label) in [
+                                            (message.unsupported, "System content · Preview unavailable"),
+                                            (message.extra_content.poll, "Poll · Preview unavailable"),
+                                            (message.extra_content.sticker_items || message.extra_content.stickers, "Sticker · Preview unavailable"),
+                                            (message.extra_content.components || message.extra_content.components_v2, "Components · Preview unavailable"),
+                                        ] {
+                                            if present { ui.label(RichText::new(label).small().color(colors.muted)); }
+                                        }
                                         let target = state.channels.iter().find(|c| c.id == message.channel && state.can_view(c.id))
                                             .and_then(|c| discord_url(c, Some(message.id)));
                                         if ui.add_enabled(target.is_some(), egui::Button::new("Open in Discord")).clicked() { self.opening = target; }
@@ -651,6 +661,7 @@ mod tests {
             nonce: None,
             reply_to: None,
             unsupported: false,
+            extra_content: Default::default(),
             embeds: vec![],
             attachments: vec![],
             mentions: vec![],
@@ -767,6 +778,163 @@ mod tests {
                     None
                 }
             );
+        }
+    }
+
+    #[test]
+    fn extra_content_markers_update_layout_and_keep_supported_text() {
+        fn collect(shape: &egui::Shape, texts: &mut Vec<(String, egui::Rect)>) {
+            match shape {
+                egui::Shape::Text(t) => texts.push((
+                    t.galley.job.text.clone(),
+                    t.galley.rect.translate(t.pos.to_vec2()),
+                )),
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        collect(shape, texts);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut state = test_support::demo_state();
+        state.read_state.reset();
+        let channel = state
+            .channels
+            .iter()
+            .find(|c| Some(c.id) == state.selected)
+            .unwrap()
+            .clone();
+        let mut message = text_message(42);
+        message.channel = channel.id;
+        message.content = "Supported text remains".into();
+        let plain_key = layout_key(&message);
+        let ctx = egui::Context::default();
+        let mut view = TimelineView::default();
+        let mut avatars = crate::avatars::Avatars::default();
+        let mut render = |view: &mut TimelineView, state: &mut State, events| {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(380.0, 650.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| view.show(ui, state, &mut None, &mut None, &mut avatars, &mut None),
+            );
+            assert!(
+                output.platform_output.commands.is_empty(),
+                "Markers only offer explicit external confirmation"
+            );
+            let mut texts = vec![];
+            for shape in &output.shapes {
+                collect(&shape.shape, &mut texts);
+            }
+            output.drop_without_applying_deltas();
+            texts
+        };
+        let all = model::ExtraContent {
+            poll: true,
+            sticker_items: true,
+            stickers: true,
+            components: true,
+            components_v2: true,
+        };
+        let mut full_height = None;
+        for extra in [
+            all,
+            model::ExtraContent {
+                sticker_items: true,
+                ..Default::default()
+            },
+            model::ExtraContent {
+                stickers: true,
+                ..Default::default()
+            },
+            model::ExtraContent {
+                components_v2: true,
+                ..Default::default()
+            },
+            model::ExtraContent::default(),
+        ] {
+            message.extra_content = extra;
+            assert_eq!(layout_key(&message) == plain_key, !extra.any());
+            let mut previous = message.clone();
+            previous.id = Id(41);
+            assert_eq!(grouped(Some(&previous), &message, None), !extra.any());
+            state.timeline.clear();
+            state
+                .timeline
+                .insert(message.clone(), false, false)
+                .unwrap();
+            state.revision += 1;
+            for _ in 0..3 {
+                render(&mut view, &mut state, vec![]);
+            }
+            let texts = render(&mut view, &mut state, vec![]);
+            assert!(
+                texts
+                    .iter()
+                    .any(|(text, _)| text.trim_end() == "Supported text remains")
+            );
+            for (label, present) in [
+                ("Poll · Preview unavailable", extra.poll),
+                (
+                    "Sticker · Preview unavailable",
+                    extra.sticker_items || extra.stickers,
+                ),
+                (
+                    "Components · Preview unavailable",
+                    extra.components || extra.components_v2,
+                ),
+                ("Open in Discord", extra.any()),
+            ] {
+                assert_eq!(
+                    texts.iter().filter(|(text, _)| text == label).count(),
+                    usize::from(present),
+                    "{label}"
+                );
+            }
+            assert!(
+                !texts
+                    .iter()
+                    .any(|(text, _)| text == "System content · Preview unavailable")
+            );
+            assert!(view.opening.is_none());
+            if extra == all {
+                full_height = Some(view.heights[&message.id].1);
+                let point = texts
+                    .iter()
+                    .find(|(text, _)| text == "Open in Discord")
+                    .unwrap()
+                    .1
+                    .center();
+                for pressed in [true, false] {
+                    render(
+                        &mut view,
+                        &mut state,
+                        vec![
+                            egui::Event::PointerMoved(point),
+                            egui::Event::PointerButton {
+                                pos: point,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                    );
+                }
+                assert_eq!(view.opening, discord_url(&channel, Some(message.id)));
+                view.opening = None;
+            }
+            if !extra.any() {
+                assert!(
+                    view.heights[&message.id].1 < full_height.unwrap(),
+                    "Removing marker-only metadata must shrink the row"
+                );
+            }
         }
     }
 
@@ -1070,6 +1238,7 @@ mod tests {
             nonce: None,
             reply_to: None,
             unsupported: false,
+            extra_content: Default::default(),
             embeds: vec![],
             embeds_suppressed: false,
             attachments: vec![],
@@ -1205,6 +1374,7 @@ mod tests {
             nonce: None,
             reply_to: None,
             unsupported: false,
+            extra_content: Default::default(),
             embeds: vec![],
             attachments: vec![],
             mentions: Vec::new(),
@@ -1290,6 +1460,7 @@ mod tests {
             nonce: None,
             reply_to: None,
             unsupported: false,
+            extra_content: Default::default(),
             attachments: vec![],
             mentions: Vec::new(),
             embeds_suppressed: false,

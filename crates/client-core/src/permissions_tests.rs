@@ -48,6 +48,7 @@ fn message(id: u64, channel: Id) -> Message {
         nonce: None,
         reply_to: None,
         unsupported: false,
+        extra_content: Default::default(),
         embeds: vec![],
         attachments: vec![],
         mentions: vec![],
@@ -198,6 +199,7 @@ fn revoked_view_cannot_return_through_stale_gateway_content_or_old_history() {
         apply(
             &mut state,
             Event::Patch(MessagePatch {
+                extra_content: Default::default(),
                 id: Id(203),
                 channel: Id(20),
                 content: Patch::Value("Late inaccessible edit".into()),

@@ -731,6 +731,7 @@ impl Desktop {
                     message,
                     content,
                 } => Event::Patch(model::MessagePatch {
+                    extra_content: Default::default(),
                     reactions: model::Patch::Absent,
                     embeds: model::Patch::Absent,
                     attachments: model::Patch::Absent,

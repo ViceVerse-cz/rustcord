@@ -7,6 +7,8 @@ mod attachments;
 pub use attachments::*;
 mod embeds;
 pub use embeds::*;
+mod extra_content;
+pub use extra_content::{ExtraContent, ExtraContentPatch};
 mod mentions;
 pub use mentions::*;
 mod reactions;
@@ -168,6 +170,7 @@ pub struct Message {
     pub nonce: Option<String>,
     pub reply_to: Option<Id>,
     pub unsupported: bool,
+    pub extra_content: ExtraContent,
     pub embeds: Vec<Embed>,
     pub embeds_suppressed: bool,
     pub attachments: Vec<Attachment>,
@@ -207,6 +210,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Patch<T> {
 }
 #[derive(Clone)]
 pub struct MessagePatch {
+    pub extra_content: ExtraContentPatch,
     pub reactions: Patch<Vec<Reaction>>,
     pub id: Id,
     pub channel: Id,

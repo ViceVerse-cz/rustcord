@@ -1,5 +1,13 @@
 # Local storage policy and audit
 
+Schema 7 adds one integer extra_content column (0..31) for presence of polls, sticker_items,
+legacy stickers, component arrays and the Components V2 flag. RAM uses five booleans; partial
+updates preserve each source independently. Poll answers, sticker data, component payloads and
+their URLs are not retained. Existing cached rows default to no known markers until normal
+service revalidation because older builds discarded that metadata. Account isolation, existing
+database/cache limits and logout deletion remain unchanged; unsupported content is not rendered
+or executed from SQLite. Invalid stored marker bits reject the cached page.
+
 Microphone gain and speaker volume are session-only bounded integer percentages (0..=200),
 initially 100. They are not written to SQLite or system mixer settings. Two callback atomics
 hold the active levels; device changes and calls in the same session retain them. Logout or
@@ -29,7 +37,7 @@ Typical database directories: macOS `~/Library/Application Support/serein`, Wind
 
 The app writes no background log, analytics, crash upload, saved password, MFA ticket, or plaintext credential file. A separate credential-free CDN downloader loads visible avatars, server icons, profile banners and validated service-proxied message images. Build outputs, this documentation, synthetic test databases and package files are development artifacts.
 
-SQLite work is serialized on a worker. Normal startup opens the database to load appearance before authentication; `--demo` does not open the database, credential store or network. Schema version 6 preserves author metadata, embeds/suppression and attachments while adding mentioned-user metadata; older history and drafts remain readable. Embed and attachment JSON are each capped at 256 KiB per message; mentioned users are capped at 100 entries and 128 KiB JSON. All three contribute to eviction accounting. Signed original/preview URLs and mention names/avatar hashes may be retained in unencrypted cached message metadata. Draft save status is visible; a full queue or disk failure is reported and must not be described as saved. An interrupted send may leave a saved draft for content Discord already accepted: recovered text never automatically sends. Normal close waits for queued store work if necessary; logout orders one transactional account deletion after earlier writes. Deletion is not a forensic erasure guarantee.
+SQLite work is serialized on a worker. Normal startup opens the database to load appearance before authentication; `--demo` does not open the database, credential store or network. Schema version 7 preserves author metadata, embeds/suppression, attachments and mentioned users while adding unsupported-content presence bits; older history and drafts remain readable. Embed and attachment JSON are each capped at 256 KiB per message; mentioned users are capped at 100 entries and 128 KiB JSON. All three contribute to eviction accounting. Signed original/preview URLs and mention names/avatar hashes may be retained in unencrypted cached message metadata. Draft save status is visible; a full queue or disk failure is reported and must not be described as saved. An interrupted send may leave a saved draft for content Discord already accepted: recovered text never automatically sends. Normal close waits for queued store work if necessary; logout orders one transactional account deletion after earlier writes. Deletion is not a forensic erasure guarantee.
 
 Saved recovery text prefers the current nonempty draft, otherwise the most recent unresolved send in that channel. Only a matching own-author/channel/nonce confirmation updates this recovery record. This is one recovery draft per channel, not a durable multi-message outbox; additional unresolved sends remain in RAM and the close prompt warns before discarding them. Incoming hidden-channel events do not rewrite the active cache; accepted active-view changes are coalesced into at most one snapshot per event-drain pass.
 
