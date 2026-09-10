@@ -327,3 +327,7 @@ codesign verification. The generator reproduced the atlas/index from a hash-veri
 upstream archive. Staged diff review passed except preserved upstream license whitespace.
 Text executable +6,170,256 bytes; compressed .app +6,075,785 bytes; median sampled RSS
 +16,256 KiB. See `docs/performance.md` for full results and measurement limits.
+
+Delivery: [PR #6](https://github.com/ViceVerse-cz/rustcord/pull/6) is a draft while
+GitHub's macOS/Windows/Linux native jobs and security job are pending. Local checks
+and both host packages passed; pending CI is not reported as success.
