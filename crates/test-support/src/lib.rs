@@ -12,7 +12,7 @@ pub fn message(id: u64, channel: Id) -> Message {
         _ => "**Synthetic history** — this is an offline fixture, never a Discord reply.".into(),
     };
     if id == 500 {
-        content = format!("Hey <@2> — {content}");
+        content = format!("Hey <@2> — see <#21>. {content}");
     }
     Message {
         reactions: Some(if id == 500 {
@@ -50,23 +50,40 @@ pub fn message(id: u64, channel: Id) -> Message {
         unsupported: false,
         embeds: demo_embeds(id),
         attachments: if id == 500 {
-            vec![Attachment {
-                id: Id(700),
-                filename: "synthetic-landscape.png".into(),
-                description: Some("Original synthetic landscape · offline preview".into()),
-                content_type: Some("image/png".into()),
-                size: 2048,
-                spoiler: false,
-                media: EmbedMedia {
-                    url: Some(
-                        "https://cdn.discordapp.com/attachments/1/700/synthetic-landscape.png"
-                            .into(),
-                    ),
-                    proxy_url: None,
-                    width: 640,
-                    height: 240,
+            vec![
+                Attachment {
+                    id: Id(700),
+                    filename: "synthetic-landscape.png".into(),
+                    description: Some("Original synthetic landscape · offline preview".into()),
+                    content_type: Some("image/png".into()),
+                    size: 2048,
+                    spoiler: false,
+                    media: EmbedMedia {
+                        url: Some(
+                            "https://cdn.discordapp.com/attachments/1/700/synthetic-landscape.png"
+                                .into(),
+                        ),
+                        proxy_url: None,
+                        width: 640,
+                        height: 240,
+                    },
                 },
-            }]
+                Attachment {
+                    id: Id(701),
+                    filename: "synthetic-notes.txt".into(),
+                    description: None,
+                    content_type: Some("text/plain".into()),
+                    size: 128,
+                    spoiler: false,
+                    media: EmbedMedia {
+                        url: Some(
+                            "https://cdn.discordapp.com/attachments/1/701/synthetic-notes.txt"
+                                .into(),
+                        ),
+                        ..Default::default()
+                    },
+                },
+            ]
         } else {
             vec![]
         },
@@ -202,6 +219,39 @@ pub fn demo_state() -> State {
                     name: "hangout".into(),
                     kind: 2,
                     recipients: vec![],
+                    member_list_id: None,
+                },
+                Channel {
+                    id: Id(26),
+                    guild: Some(Id(10)),
+                    parent_id: Some(Id(24)),
+                    position: 2,
+                    name: "ideas".into(),
+                    kind: 15,
+                    recipients: vec![],
+                    last_message: None,
+                    member_list_id: None,
+                },
+                Channel {
+                    id: Id(27),
+                    guild: Some(Id(10)),
+                    parent_id: Some(Id(26)),
+                    position: 0,
+                    name: "A synthetic forum post".into(),
+                    kind: 11,
+                    recipients: vec![],
+                    last_message: None,
+                    member_list_id: None,
+                },
+                Channel {
+                    id: Id(28),
+                    guild: Some(Id(10)),
+                    parent_id: Some(Id(20)),
+                    position: 0,
+                    name: "Introductions thread".into(),
+                    kind: 11,
+                    recipients: vec![],
+                    last_message: None,
                     member_list_id: None,
                 },
             ],
@@ -692,6 +742,137 @@ mod tests {
         assert_eq!(state.unread_count(channel), 0);
     }
     #[test]
+    fn pin_snapshots_are_scoped_cancellable_and_open_revalidated_history() {
+        use client_core::{Command, search::Outcome};
+        let mut state = demo_state();
+        let page = || SearchPage {
+            hits: [480, 499]
+                .into_iter()
+                .map(|id| SearchHit {
+                    id: Id(id),
+                    channel: Id(20),
+                    author: "Synthetic".into(),
+                    excerpt: "pin".into(),
+                })
+                .collect(),
+            total: 0,
+            partial: true,
+            pin_cursor: Some(100),
+        };
+        assert!(state.request_older_pins().is_none());
+        let Command::Pins { request: old, .. } = state.request_pins().unwrap() else {
+            panic!()
+        };
+        let Command::Pins { request, .. } = state.request_pins().unwrap() else {
+            panic!()
+        };
+        state.apply_search(Id(20), old, Ok(Outcome::Pins(page())));
+        assert!(state.search.as_ref().unwrap().loading);
+        state.apply_search(Id(20), request, Ok(Outcome::Page(page())));
+        assert!(state.search.as_ref().unwrap().page.is_none());
+        let Command::Pins { request, .. } = state.request_pins().unwrap() else {
+            panic!()
+        };
+        state.apply_search(Id(21), request, Ok(Outcome::Pins(page())));
+        assert!(state.search.as_ref().unwrap().loading);
+        state.apply_search(Id(20), request, Ok(Outcome::Pins(page())));
+        assert_eq!(
+            state.search.as_ref().unwrap().page.as_ref().unwrap().hits[0].id,
+            Id(480)
+        );
+        let Command::Pins {
+            before, request, ..
+        } = state.request_older_pins().unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(before, Some(100));
+        assert!(state.search.as_ref().unwrap().page.is_none());
+        assert!(
+            state.request_older_pins().is_none(),
+            "Do not queue duplicate page requests"
+        );
+        state.apply_search(Id(20), request, Ok(Outcome::Pins(page())));
+        assert!(
+            state.search.as_ref().unwrap().error.is_some(),
+            "Reject a nonprogressing cursor"
+        );
+        let retry = state.request_older_pins().unwrap();
+        assert!(matches!(
+            retry,
+            Command::Pins {
+                before: Some(100),
+                ..
+            }
+        ));
+        state.command_rejected(retry);
+        let Command::Pins {
+            before, request, ..
+        } = state.request_older_pins().unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            before,
+            Some(100),
+            "Retry the failed page without returning to newest"
+        );
+        let mut older_page = page();
+        older_page.hits[0].id = Id(420);
+        older_page.hits[1].id = Id(455);
+        older_page.partial = false;
+        older_page.pin_cursor = None;
+        state.apply_search(Id(20), request, Ok(Outcome::Pins(older_page)));
+        let loaded = state.search.as_ref().unwrap().page.as_ref().unwrap();
+        assert_eq!(loaded.hits.len(), 2, "Pages replace rather than accumulate");
+        assert_eq!(loaded.hits[0].id, Id(420));
+        assert!(
+            state.request_older_pins().is_none(),
+            "Exhaustion stops pagination"
+        );
+        assert!(
+            state.open_search_hit(Id(480)).is_none(),
+            "An old page is no longer actionable"
+        );
+        let Command::Pins {
+            before,
+            request: newest,
+            ..
+        } = state.request_pins().unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(before, None);
+        state.apply_search(Id(20), request, Ok(Outcome::Pins(page())));
+        assert!(
+            state.search.as_ref().unwrap().loading,
+            "A late older page cannot replace Reload"
+        );
+        state.apply_search(Id(20), newest, Ok(Outcome::Pins(page())));
+        assert!(state.open_search_hit(Id(478)).is_none());
+        assert!(matches!(
+            state.open_search_hit(Id(480)),
+            Some(Command::History {
+                before: Some(Id(481)),
+                ..
+            })
+        ));
+        load_page(&mut state, Some(Id(481)));
+        assert!(state.timeline.get(Id(480)).is_some());
+        let command = state.request_pins().unwrap();
+        state.command_rejected(command);
+        assert!(!state.search.as_ref().unwrap().loading);
+        assert!(state.search.as_ref().unwrap().error.is_some());
+        let Command::Pins { request, .. } = state.request_pins().unwrap() else {
+            panic!()
+        };
+        state.clear_search();
+        state.apply_search(Id(20), request, Ok(Outcome::Pins(page())));
+        assert!(state.search.is_none());
+        state.gateway_connected = false;
+        assert!(state.request_pins().is_none());
+    }
+    #[test]
     fn search_pages_reject_late_results_and_open_only_revalidated_history() {
         use client_core::{Command, auth::Failure, search::Outcome};
         let mut state = demo_state();
@@ -705,6 +886,7 @@ mod tests {
                 }],
                 total: 50,
                 partial: false,
+                pin_cursor: None,
             })
         };
         assert!(state.request_search("x".into(), Some(Id(500))).is_none());

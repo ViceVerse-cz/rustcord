@@ -139,7 +139,7 @@ mod catalog_tests {
             "user":{"id":"1","username":"Synthetic"},"session_id":"synthetic","resume_gateway_url":"wss://gateway.discord.gg",
             "guilds":[{"id":"2","emojis":[emoji.clone()]},{"id":"3"},{"id":"5","emojis":[]}]
         })).unwrap()).unwrap();
-        let (guilds, _) = ready.navigation();
+        let (guilds, _) = ready.navigation().unwrap();
         let custom = &guilds[0].emojis.as_ref().unwrap()[0];
         assert_eq!(custom.markup(), "<a:party_parrot:4>");
         assert!(custom.usable());

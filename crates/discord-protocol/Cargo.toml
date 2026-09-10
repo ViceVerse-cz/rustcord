@@ -7,7 +7,7 @@ license.workspace = true
 [dependencies]
 model.workspace = true
 serde.workspace = true
-time.workspace = true
+time = { workspace = true, features = ["formatting"] }
 serde_json.workspace = true
 thiserror.workspace = true
 

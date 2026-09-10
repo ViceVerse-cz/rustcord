@@ -1,4 +1,5 @@
 //! Native egui views; emits commands without owning transports or session credentials.
+mod archives;
 mod attachments;
 pub use attachments::DownloadUi;
 mod avatars;
@@ -24,6 +25,8 @@ use model::{Delivery, Freshness, Id};
 #[derive(Default)]
 pub struct MessagingUi {
     search: search::SearchUi,
+    archives: archives::ArchivesUi,
+    archive_parent: Option<Id>,
     timeline: timeline::TimelineView,
     avatars: avatars::Avatars,
     profile: Option<model::User>,
@@ -38,6 +41,12 @@ pub struct MessagingUi {
     pub reconnect_requested: bool,
     pub draft_changes: Vec<Id>,
     pub draft_restore_pending: bool,
+    pub attachment: Option<(String, u64)>,
+    pub attach_requested: bool,
+    pub remove_attachment_requested: bool,
+    pub cancel_upload_requested: bool,
+    pub upload_busy: bool,
+    pub upload_status: Option<String>,
     pub clear_cache_requested: bool,
     pub voice_available: bool,
     pub voice_inputs: Vec<(String, String)>,
@@ -224,6 +233,15 @@ impl MessagingUi {
         }
         let mut cancel_edit = false;
         let mut discard = None;
+        if ctx.input(|input| !input.raw.hovered_files.is_empty()) {
+            ui.label(if self.upload_busy || self.attachment.is_some() {
+                "Remove the current attachment or wait before dropping another file"
+            } else if state.gateway_connected && state.freshness == Freshness::Fresh {
+                "Drop one file up to 20 MB to attach it here; Send starts the upload"
+            } else {
+                "Reconnect and reload this conversation before attaching a file"
+            });
+        }
         for (index, pending) in state
             .pending
             .iter()
@@ -239,6 +257,9 @@ impl MessagingUi {
                 });
                 let preview: String = pending.content.chars().take(80).collect();
                 ui.label(preview);
+                if let Some(filename) = &pending.attachment {
+                    ui.label(format!("File: {filename}"));
+                }
                 if pending.delivery != Delivery::Sending && ui.small_button("Restore to draft").on_hover_text("For an unknown outcome, check the official client first; sending again can duplicate it.").clicked() { discard = Some(index); }
             });
         }
@@ -248,6 +269,9 @@ impl MessagingUi {
                     "Draft budget full. Clear an existing draft before restoring pending text";
             } else if state.drafts.get(&channel).is_none_or(String::is_empty) {
                 let pending = state.pending.remove(index);
+                if pending.attachment.is_some() {
+                    state.status = "Text restored; reselect the attachment before sending again";
+                }
                 state.drafts.insert(channel, pending.content);
                 self.draft_changes.push(channel);
             } else {
@@ -283,6 +307,32 @@ impl MessagingUi {
                 }
             });
             ui.add_space(6.0);
+        }
+        if !editing_here && let Some((filename, bytes)) = &self.attachment {
+            if state.demo {
+                ui.label("Uploads are disabled in offline preview");
+            }
+            ui.horizontal_wrapped(|ui| {
+                ui.label(format!("{filename} · {bytes} bytes"));
+                if ui
+                    .add_enabled(!self.upload_busy, egui::Button::new("Remove attachment"))
+                    .clicked()
+                {
+                    self.remove_attachment_requested = true;
+                }
+            });
+        }
+        if !editing_here && (self.upload_busy || self.upload_status.is_some()) {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    self.upload_status
+                        .as_deref()
+                        .unwrap_or("Preparing attachment…"),
+                );
+                if self.upload_busy && ui.button("Cancel upload").clicked() {
+                    self.cancel_upload_requested = true;
+                }
+            });
         }
         let full = state.draft_bytes() >= MAX_DRAFT_BYTES
             || (!state.drafts.contains_key(&channel) && state.drafts.len() >= 64);
@@ -350,6 +400,7 @@ impl MessagingUi {
             composer_content,
             cursor.filter(|_| mention_enabled),
             &mention_users,
+            &state.channels,
         );
         let mention_pick = if mention_enabled {
             self.mention_menu.keys(ctx)
@@ -457,7 +508,7 @@ impl MessagingUi {
                     .desired_rows(2)
                     .desired_width(f32::INFINITY)
                     .frame(egui::Frame::NONE)
-                    .hint_text("Write a message… @ to mention")
+                    .hint_text("Write a message… @ person or # channel")
                     .show(ui);
                 rich_layout.paint(ui, &output);
                 if !self.ime_active && !ime_this_frame {
@@ -472,7 +523,7 @@ impl MessagingUi {
                     .map(|r| r.primary.index.0)
                     .filter(|_| mention_enabled);
                 self.mention_menu
-                    .refresh(channel, draft, mention_cursor, &mention_users);
+                    .refresh(channel, draft, mention_cursor, &mention_users, &state.channels);
                 if let Some(pick) = self.mention_menu.show(ui)
                     && let Some(cursor) = mentions::insert(draft, pick)
                 {
@@ -507,7 +558,12 @@ impl MessagingUi {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
                             .add_enabled(
-                                state.freshness == Freshness::Fresh && count > 0,
+                                state.freshness == Freshness::Fresh
+                                    && if editing_here { count > 0 } else {
+                                        !self.upload_busy
+                                            && !(state.demo && self.attachment.is_some())
+                                            && (count > 0 || self.attachment.is_some())
+                                    },
                                 egui::Button::new(
                                     RichText::new(if editing_here { "Save edit" } else { "Send" }).strong().color(colors.accent_text),
                                 )
@@ -525,6 +581,9 @@ impl MessagingUi {
                                 .color(colors.muted),
                         );
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            if ui.add_enabled(!editing_here && state.gateway_connected && state.freshness == Freshness::Fresh && !self.upload_busy && self.attachment.is_none(), egui::Button::new("Attach file")).on_hover_text("Choose or drop one file up to 20 MB. Upload starts only when you press Send.").clicked() {
+                                self.attach_requested = true;
+                            }
                             ui.add(
                                 egui::Label::new(
                                     RichText::new(if editing_here { "Enter to save · Esc to cancel · Shift+Enter for a new line" } else { "Enter to send · Shift+Enter for a new line" })
@@ -548,7 +607,8 @@ impl MessagingUi {
                         } else {
                             state.status = "Edit kept. Wait for your current message and connection, and enter nonempty text.";
                         }
-                    } else if let Some(command) = state.prepare_send() {
+                    } else if !self.upload_busy && !(state.demo && self.attachment.is_some())
+                        && let Some(command) = state.prepare_send_with_attachment(self.attachment.as_ref().map(|(name, _)| name.as_str())) {
                         commands.push(command);
                     }
                     edit.request_focus();
@@ -747,6 +807,14 @@ impl MessagingUi {
                 {
                     commands.push(command);
                 }
+                if let Some(parent) = self.archive_parent.take()
+                    && let Some(command) =
+                        state.request_archives(parent, model::archives::Kind::Public, None)
+                {
+                    self.search.open = false;
+                    self.archives.focus = true;
+                    commands.push(command);
+                }
             });
         let selected_voice = state
             .channels
@@ -914,6 +982,7 @@ impl MessagingUi {
                                 self.reconnect_requested = true;
                             }
                         });
+                        self.timeline.download.show_status(ui);
                     });
                 self.call_bar(ui, state, &mut commands);
                 let Some(channel) = state.selected else {
@@ -976,7 +1045,21 @@ impl MessagingUi {
                                         )
                                         .clicked()
                                     {
-                                        self.search.toggle();
+                                        if state.archives.is_some() {
+                                            commands.push(state.clear_archives());
+                                        }
+                                        self.search.toggle(false);
+                                    }
+                                    if ui
+                                        .add_enabled(
+                                            state.can_search(),
+                                            egui::Button::new("Pins").small().frame(false),
+                                        )
+                                        .clicked()
+                                        && self.search.toggle(true)
+                                        && let Some(command) = state.request_pins()
+                                    {
+                                        commands.push(command);
                                     }
                                     if ui
                                         .add_enabled(
@@ -1005,6 +1088,15 @@ impl MessagingUi {
                         });
                         if let Some(status) = state.read_state.status {
                             ui.label(RichText::new(status).small().color(colors.muted));
+                        }
+                        if state.archived_thread.is_some()
+                            && state.archived_thread == state.selected
+                        {
+                            ui.label(
+                                RichText::new("Opened from archive")
+                                    .small()
+                                    .color(colors.muted),
+                            );
                         }
                         if state.history_before.is_some() {
                             ui.label(
@@ -1036,7 +1128,26 @@ impl MessagingUi {
                         }
                     });
             });
+        if state
+            .archives
+            .as_ref()
+            .is_some_and(|view| self.guild != Some(view.guild))
+        {
+            commands.push(state.clear_archives());
+        }
         self.search.show(&ctx, state, &mut commands);
+        self.archives.show(&ctx, state, &mut commands);
+        if let Some(id) = self.timeline.channel_reference.take()
+            && let Some(target) = state
+                .channels
+                .iter()
+                .find(|c| c.id == id && c.guild.is_some() && c.supports_text())
+        {
+            self.guild = target.guild;
+            if let Some(command) = state.select(id) {
+                commands.push(command);
+            }
+        }
         if let Some(message) = self.timeline.mark_read.take()
             && let Some(command) = state.prepare_mark_read(message)
         {
@@ -1489,6 +1600,85 @@ mod composer_tests {
             );
             assert_eq!(state.profile.as_ref().unwrap().guild, guild);
             output.drop_without_applying_deltas();
+        }
+    }
+
+    #[test]
+    fn inline_edit_keeps_the_pending_draft_attachment_separate() {
+        let ctx = egui::Context::default();
+        let mut state = edit_state();
+        let mut view = MessagingUi {
+            editing: Some((Id(10), Id(20), "Replacement".into())),
+            attachment: Some(("draft.txt".into(), 32)),
+            upload_busy: true,
+            ..Default::default()
+        };
+        edit_frame(&ctx, &mut view, &mut state, vec![]);
+        let commands = edit_frame(
+            &ctx,
+            &mut view,
+            &mut state,
+            vec![edit_key(egui::Key::Enter)],
+        );
+        assert!(
+            matches!(commands.as_slice(), [Command::Edit { content, .. }] if content == "Replacement")
+        );
+        assert_eq!(state.drafts[&Id(10)], "Unsent draft 👋");
+        assert_eq!(view.attachment, Some(("draft.txt".into(), 32)));
+        assert!(
+            !view.attach_requested
+                && !view.remove_attachment_requested
+                && !view.cancel_upload_requested
+        );
+    }
+
+    #[test]
+    fn attachment_only_enter_sends_once_and_busy_upload_blocks_resending() {
+        for busy in [true, false] {
+            let ctx = egui::Context::default();
+            let mut state = State {
+                selected: Some(Id(1)),
+                auth: client_core::auth::AuthState::Authenticated,
+                freshness: Freshness::Fresh,
+                ..Default::default()
+            };
+            let mut messaging = MessagingUi {
+                attachment: Some(("synthetic.txt".into(), 32)),
+                upload_busy: busy,
+                ..Default::default()
+            };
+            let mut commands = Vec::new();
+            let mut editor = egui::Id::NULL;
+            ctx.run_ui(Default::default(), |ui| {
+                editor = ui.make_persistent_id("message-input");
+                messaging.composer(ui, &mut state, Id(1), &ctx, &mut commands);
+            })
+            .drop_without_applying_deltas();
+            ctx.memory_mut(|m| m.request_focus(editor));
+            ctx.run_ui(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key: egui::Key::Enter,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                    ..Default::default()
+                },
+                |ui| messaging.composer(ui, &mut state, Id(1), &ctx, &mut commands),
+            )
+            .drop_without_applying_deltas();
+            assert_eq!(commands.len(), usize::from(!busy));
+            if !busy {
+                assert!(
+                    matches!(&commands[0], Command::Send { content, .. } if content.is_empty())
+                );
+                assert_eq!(
+                    state.pending[0].attachment.as_deref(),
+                    Some("synthetic.txt")
+                );
+            }
         }
     }
 

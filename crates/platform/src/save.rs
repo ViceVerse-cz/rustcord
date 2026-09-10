@@ -1,13 +1,27 @@
 //! Native destination selection; never interprets an attachment name as a path.
 use std::{path::PathBuf, sync::Arc};
 
+pub fn attachment_source(
+    parent: Arc<winit::window::Window>,
+) -> impl std::future::Future<Output = Option<PathBuf>> + Send + 'static {
+    let dialog = rfd::AsyncFileDialog::new()
+        .set_parent(parent.as_ref())
+        .set_title("Choose attachment")
+        .pick_file();
+    async move {
+        let file = dialog.await?;
+        drop(parent);
+        Some(file.path().to_owned())
+    }
+}
+
 pub fn attachment_destination(
     parent: Arc<winit::window::Window>,
     filename: &str,
 ) -> impl std::future::Future<Output = Option<PathBuf>> + Send + 'static {
     let dialog = rfd::AsyncFileDialog::new()
         .set_parent(parent.as_ref())
-        .set_title("Save original image")
+        .set_title("Save attachment")
         .set_file_name(safe_filename(filename))
         .save_file();
     async move {
@@ -28,7 +42,7 @@ fn safe_filename(filename: &str) -> String {
     let name = name.trim_matches(['.', ' ']);
     let stem = name.split('.').next().unwrap_or("").to_ascii_uppercase();
     if name.is_empty() {
-        "attachment.png".into()
+        "attachment".into()
     } else if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
         || stem
             .strip_prefix("COM")
@@ -60,6 +74,9 @@ mod tests {
             assert!(!matches!(safe.as_str(), "." | ".." | "CON.png" | "NUL"));
         }
         assert_eq!(super::safe_filename("photo.png"), "photo.png");
+        assert_eq!(super::safe_filename("report.pdf"), "report.pdf");
+        assert_eq!(super::safe_filename("archive.bin"), "archive.bin");
+        assert_eq!(super::safe_filename("..."), "attachment");
         for prefix in ["COM", "LPT", "com", "lpt"] {
             for digit in ["1", "9", "¹", "²", "³"] {
                 let name = format!("{prefix}{digit}.png");

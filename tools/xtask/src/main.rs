@@ -88,6 +88,10 @@ fn copy_directory(source: &std::path::Path, destination: &std::path::Path) -> Re
     std::fs::create_dir_all(destination).map_err(|e| e.to_string())?;
     for entry in std::fs::read_dir(source).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
+        // PR screenshots are development evidence, not installed application assets.
+        if entry.file_name() == "pr-evidence" {
+            continue;
+        }
         let target = destination.join(entry.file_name());
         if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
             copy_directory(&entry.path(), &target)?;
@@ -133,7 +137,10 @@ fn package(voice: bool) -> Result<(), String> {
         )
         .map_err(|e| e.to_string())?;
     }
-    let source = PathBuf::from("target/release").join(exe);
+    let source = std::env::var_os("CARGO_TARGET_DIR")
+        .map_or_else(|| PathBuf::from("target"), PathBuf::from)
+        .join("release")
+        .join(exe);
     if cfg!(target_os = "macos") {
         // macOS caches code signatures by inode. Replace the executable rather
         // than overwrite a previously launched, signed file in place.

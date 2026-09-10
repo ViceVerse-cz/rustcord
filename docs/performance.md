@@ -55,6 +55,169 @@ Native macOS offline checks exercised mention insertion/profile activation, bann
 
 Final staged executable sizes: text **38,374,272 bytes** (36.60 MiB), +344,208 bytes over the preceding attachment build; voice **41,248,800 bytes** (39.34 MiB), +346,720 bytes. Both variants passed strict local ad-hoc signature verification; these are development packages, not notarized releases.
 
+## September 10: reaction refresh and pinned-message browsing (Windows)
+
+Baseline 74c0d79 versus this reaction/pins change; both text and voice packages rebuilt with pinned Rust 1.98.1, the existing release profile and lockfile on Windows 11 Home 10.0.26200, AMD Ryzen 7 7800X3D (16 logical processors), approximately 31 GiB visible RAM. No dependencies changed. These are unsigned local packages, excluding the separate OS WebView2 runtime and drivers. Full package and ZIP sizes below were measured immediately after packaging, before this measurement note was added to repository documentation. Text packaging excludes the sibling voice directory; both exclude docs/pr-evidence. ZIP uses Python zipfile DEFLATE level 9 over the entire respective package.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable, bytes | 41,813,504 | 41,835,008 | +21,504 (+0.051%) |
+| Voice executable, bytes | 45,160,448 | 45,182,976 | +22,528 (+0.050%) |
+| Text installed package, bytes | 42,033,731 | 42,060,801 | +27,070 (+0.064%) |
+| Voice installed package, bytes | 45,604,233 | 45,632,327 | +28,094 (+0.062%) |
+| Text ZIP, bytes | 24,370,088 | 24,380,566 | +10,478 (+0.043%) |
+| Voice ZIP, bytes | 25,737,983 | 25,746,892 | +8,909 (+0.035%) |
+| Reducer replay median, milliseconds | 26.2139 | 26.3168 | +0.1029 (+0.39%) |
+| Retained timeline estimated bytes | 220,992-221,477 | 220,992-221,477 | Unchanged, 500 records |
+
+Replay method: `cargo build --release --locked -p replay-bench`, then run the produced executable once for warmup and five measured times on each revision. Baseline runs: 26.4021, 26.2139, 25.7050, 26.6599, 25.9837 ms; after: 26.1046, 28.5302, 26.8548, 26.3168, 26.2875 ms. Each run reduces 100,000 synthetic events and checks bounded state/logout. The small median difference is noise, not an optimization claim. This workload does not measure the pins endpoint, actual network latency, UI frame time, process RSS or voice audio.
+
+Native baseline only: rebuilt text --demo, default dark 1122x792 captured window, wgpu renderer; selected adapter and display scale were not independently measured. After more than 30 seconds settling and one synthetic reaction toggle, 16 Get-Process samples at one-second intervals covered 15.247 seconds. Working set stayed 198,946,816 bytes, private bytes 412,827,648; CPU delta was 0.046875 seconds (0.307% of one core). This baseline exceeds the initial 150 MiB active-text working-set target. Whole-system contention, GPU allocations, helper-process usage, startup/frame p95 and voice memory were not measured. The owner stopped Computer Use before after-build interaction; no comparable after native-memory/CPU sample or performance improvement is claimed.
+
+## September 10: single-file uploads (Windows)
+
+Baseline e99bc8817454335789b84140c2998394bca899cf versus this attachment change. Same Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical processors), approximately 31 GiB visible RAM, pinned Rust 1.98.1 and release profile. The baseline text/voice packages were copied separately after their executable hashes matched the reviewed baseline builds. Both changed variants were packaged successfully. New native tokio-util 0.7.19 comes from enabling reqwest streaming; its MIT license is included. No fonts/codecs changed. These unsigned development-package measurements exclude the OS WebView2 runtime and drivers. Installed totals and ZIPs reflect staging before this final progress/performance note was added; text excludes its sibling voice directory and both exclude PR evidence. ZIP: all respective package files, Python zipfile DEFLATE level 9.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable, bytes | 41,835,008 | 42,109,440 | +274,432 (+0.656%) |
+| Voice executable, bytes | 45,182,976 | 45,423,616 | +240,640 (+0.533%) |
+| Text installed package, bytes | 42,060,801 | 42,345,271 | +284,470 (+0.676%) |
+| Voice installed package, bytes | 45,632,327 | 45,884,089 | +251,762 (+0.552%) |
+| Text ZIP, bytes | 24,380,566 | 24,476,080 | +95,514 (+0.392%) |
+| Voice ZIP, bytes | 25,746,892 | 25,829,810 | +82,918 (+0.322%) |
+| Reducer replay median, milliseconds | 26.8048 | 26.5324 | -0.2724 (-1.02%, noise) |
+| Retained timeline estimated bytes | 220,992-221,477 | 220,992-221,477 | Unchanged, 500 records |
+
+Replay: build release replay-bench once per revision; one warmup plus five direct executable runs, 100,000 synthetic events each. Baseline: 26.5979, 28.1066, 26.8048, 26.5815, 27.4200 ms. After: 26.2354, 26.3576, 27.3465, 28.1847, 26.5324 ms. This reducer workload does not measure file transfers, network throughput, process memory, UI latency or voice.
+
+Native baseline only: text --demo, dark 1122x792 window, wgpu; selected adapter/display scale unmeasured. After more than 30 seconds idle settling, 16 Get-Process samples at one-second intervals covered 15.273 seconds. Working set peaked at 158,564,352 bytes and settled at 158,547,968; private bytes peaked at 394,444,800 and settled at 394,412,032. CPU delta was 0.046875 seconds (0.307% of one core). The baseline was idle, with no picker/upload interaction. The owner stopped Computer Use before changed-build inspection, so no comparable after sample, upload-load memory, frame/startup p95, GPU/helper-process or voice-memory measurement is available. No native performance improvement is claimed.
+
+Resource ceilings: one selected file/job, file <=20,000,000 bytes, 64 KiB application chunks, latest-value progress, staging/storage responses <=64 KiB, local path <=4096 encoded bytes and filename <=256 UTF-8 bytes. Library, TLS, OS and driver buffers are additional. This avoids a deliberate whole-file allocation but is not a measured process-memory ceiling. Pending filename metadata shares existing draft/pending admission budgets; no upload disk snapshot or new database table exists.
+
+### Updated attachment packages including drag-and-drop
+
+Same reference host, Rust profile and original e99bc88 baseline above; both Windows package variants rebuilt after adding drop selection. No dependency or reducer source changed in this continuation. Incremental executable growth over picker-only b83b41a is 28,160 bytes text (0.067%) and 26,624 bytes voice (0.059%). The complete PR comparison is:
+
+| Metric | Original baseline | Picker and drop | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable, bytes | 41,835,008 | 42,137,600 | +302,592 (+0.723%) |
+| Voice executable, bytes | 45,182,976 | 45,450,240 | +267,264 (+0.592%) |
+| Text installed package, bytes | 42,060,801 | 42,382,555 | +321,754 (+0.765%) |
+| Voice installed package, bytes | 45,632,327 | 45,918,753 | +286,426 (+0.628%) |
+| Text ZIP, bytes | 24,380,566 | 24,486,146 | +105,580 (+0.433%) |
+| Voice ZIP, bytes | 25,746,892 | 25,838,616 | +91,724 (+0.356%) |
+| Reducer replay median, milliseconds | 26.8048 | 27.9813 | +1.1765 (+4.39%, noisy) |
+
+Package totals use the same full-file/DEFLATE-9 method and exclusions, measured before this final progress/performance addendum was staged. After release builds finished, the existing release replay executable (reducer source unchanged) was run once for warmup plus five samples: 26.2423, 28.5555, 32.6936, 27.9813, 26.8632 ms. Retained state remains 500 messages and 220,992-221,477 estimated bytes. The spread and unchanged reducer make this a noisy observation, not an algorithmic regression or optimization claim; drop throughput and UI latency were not measured.
+
+The native picker-only parent composer was inspected, then Computer Use stopped with physical Escape before chooser interaction. No native drop-build process sample, final screenshot or actual OS drag/drop measurement is available. Admission moves egui handles once, retains at most one bounded local path, and reuses asynchronous metadata validation; it never calls the handle's whole-file bytes method. All original upload resource ceilings remain unchanged.
+
+## September 10: channel references (Windows)
+
+Baseline 14dd066abf2c15b5dc07fca9fb2d14a2a651a99c versus this channel-reference change. Baseline packages were copied separately from the verified parent builds before edits. Both changed text and voice packages passed packaging on Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical processors), approximately 31 GiB visible RAM, pinned Rust 1.98.1 and the existing release profile. No dependency/font/codec change. Unsigned development packages exclude WebView2 and drivers. Installed/ZIP totals were measured after packaging, before this final progress/performance note was staged; text excludes the sibling voice directory, both exclude PR evidence. ZIP includes all respective package files using Python zipfile DEFLATE level 9.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable, bytes | 42,137,600 | 42,149,888 | +12,288 (+0.029%) |
+| Voice executable, bytes | 45,450,240 | 45,462,528 | +12,288 (+0.027%) |
+| Text installed package, bytes | 42,382,555 | 42,403,234 | +20,679 (+0.049%) |
+| Voice installed package, bytes | 45,918,753 | 45,939,432 | +20,679 (+0.045%) |
+| Text ZIP, bytes | 24,486,146 | 24,491,835 | +5,689 (+0.023%) |
+| Voice ZIP, bytes | 25,838,616 | 25,845,493 | +6,877 (+0.027%) |
+| Reducer replay median, milliseconds | 26.7122 | 27.6904 | +0.9782 (+3.66%, noisy) |
+| Retained timeline estimated bytes | 220,992-221,477 | 220,992-221,477 | Unchanged, 500 records |
+
+Replay: release replay-bench built per revision, one warmup plus five direct executable runs after compilation finished, 100,000 synthetic events per run. Baseline: 25.8563, 26.7122, 25.7093, 27.1198, 27.2082 ms; after: 26.3900, 27.3277, 27.6904, 27.8245, 35.7749 ms. The demo's generated message 500 gained a channel token; reducer logic is unchanged. The spread makes the timing difference inconclusive, with no optimization claim. This workload does not measure reference parsing/rendering, network, process memory or voice.
+
+Native automation remains paused after the owner's preceding physical Escape stops. No comparable current-task native process samples, idle CPU, peak/settled memory, helper/GPU usage, actual adapter/display scale or startup/frame p95 are available. The application uses wgpu, but no renderer timing claim is made. Required native before/after screenshots and changed-build interaction remain draft blockers.
+
+Resource limits: eight locally loaded same-server channel suggestions, 120-character suggestion labels, 64-character queries; user/channel links share 100 interactive references per formatted part. Existing 8 KiB formatter input, event/depth/link and cache limits remain unchanged. A bounded channel-label hash is calculated on state revision changes to invalidate row heights, never on unchanged idle frames. No new cache or directory lookup was introduced.
+
+## September 10: general attachment downloads (Windows)
+
+Baseline ae360f3f912ff15e99af5d1fe0d4f330b2545414 versus this general-file download change. The verified parent text/voice packages were copied separately before edits. Host: Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical processors), approximately 31 GiB visible RAM; pinned Rust 1.98.1, existing release profile and feature split. No dependencies/fonts/codecs changed. Both unsigned packages passed packaging. Installed/ZIP totals were taken before this final measurement/progress addendum was staged; text excludes its sibling voice directory and both exclude PR evidence. ZIP uses all respective package files with Python zipfile DEFLATE level 9. WebView2 and drivers are external.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable, bytes | 42,149,888 | 42,150,400 | +512 (+0.001%) |
+| Voice executable, bytes | 45,462,528 | 45,463,552 | +1,024 (+0.002%) |
+| Text installed package, bytes | 42,403,234 | 42,411,458 | +8,224 (+0.019%) |
+| Voice installed package, bytes | 45,939,432 | 45,948,168 | +8,736 (+0.019%) |
+| Text ZIP, bytes | 24,491,835 | 24,495,907 | +4,072 (+0.017%) |
+| Voice ZIP, bytes | 25,845,493 | 25,848,999 | +3,506 (+0.014%) |
+| Reducer replay median, milliseconds | 26.7206 | 27.7784 | +1.0578 (+3.96%, noisy) |
+| Retained timeline estimated bytes | 220,992-221,477 | 220,992-221,477 | Unchanged, 500 records |
+
+Release replay-bench: one warmup plus five direct executable samples per revision, 100,000 synthetic events each, after compilation finished. Baseline: 26.4996, 26.7206, 26.4924, 26.8281, 28.4031 ms. After: 31.0129, 27.7784, 27.5397, 27.0537, 28.2892 ms. Reducer logic is unchanged; only generated demo message 500 gained file-attachment metadata. The small timing difference is inconclusive; this workload measures neither downloads nor UI latency.
+
+Native automation remains paused after the owner's earlier physical Escape stops. Comparable native process-memory/CPU samples, actual Save dialog/transfer-load measurements, GPU/helpers, display scale/adapter and startup/frame p95 remain unmeasured. No screenshot or runtime performance improvement is claimed; native evidence remains a draft blocker.
+
+The existing one-dialog/transfer slot, 100 MiB original-file cap, at-most-32-KiB disk writes, expected-length checking, latest-value progress and 15/30/300-second connection/read/overall timeouts are unchanged. General files are streamed without decoding or deliberately retaining a complete file buffer. Transport/TLS/OS buffers are additional; this is a component policy, not a measured process-memory ceiling.
+
+## September 10: loaded thread navigation (Windows)
+
+Baseline 985bfc6ded2740a660abeeb496720b6fd0cb8489 versus this thread-navigation change. Baseline packages were copied separately before edits and verified against parent executable hashes. Both changed unsigned Windows packages passed. Host: Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical processors), approximately 31 GiB visible RAM; pinned Rust 1.98.1, existing release profile and text/voice feature split. No dependency/font/codec change. Full installed/ZIP totals reflect documentation staged by each package invocation before this final measurement/progress addendum; the voice package also includes the latest progress text. Text excludes its sibling voice directory, and both exclude PR evidence. ZIP: all respective package files, Python zipfile DEFLATE level 9. External WebView2 and drivers are excluded.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable, bytes | 42,150,400 | 42,330,624 | +180,224 (+0.428%) |
+| Voice executable, bytes | 45,463,552 | 45,643,264 | +179,712 (+0.395%) |
+| Text installed package, bytes | 42,411,458 | 42,598,237 | +186,779 (+0.440%) |
+| Voice installed package, bytes | 45,948,168 | 46,138,097 | +189,929 (+0.413%) |
+| Text ZIP, bytes | 24,495,907 | 24,571,118 | +75,211 (+0.307%) |
+| Voice ZIP, bytes | 25,848,999 | 25,924,133 | +75,134 (+0.291%) |
+| Reducer replay median, milliseconds | 26.5772 | 28.3909 | +1.8137 (+6.82%, noisy) |
+| Retained timeline estimated bytes | 220,992-221,477 | 220,992-221,477 | Unchanged, 500 records |
+
+Release replay-bench built per revision, one warmup plus five direct samples after compilation finished, 100,000 synthetic events each. Baseline: 28.8253, 26.1273, 29.2089, 26.4214, 26.5772 ms. After: 26.8821, 29.8107, 26.7173, 31.2080, 28.3909 ms. The overlapping spread makes the median increase inconclusive; it is reported rather than called an improvement. This existing message reducer workload does not measure thread-snapshot throughput, sidebar rendering, network, process RSS or voice. Dedicated thread reconciliation is covered behaviorally by bounded offline tests.
+
+Native automation remains paused after the owner's preceding physical Escape stops. Before/after process samples, idle CPU, peak/settled memory, actual display scale/adapter, GPU/helpers and startup/frame p95 are unavailable. The app uses wgpu; no native performance claim or screenshot is manufactured. Native evidence remains a draft blocker.
+
+Threads share the 4,000-entry navigation ceiling; sync metadata is capped at 2 MiB inside the 4 MiB wire cap. Reconciliation and sidebar grouping use temporary bounded ordered maps/sets without an additional persistent cache. Snapshot omission/removal clears existing account history conservatively; frequent thread churn may cause extra refetches. No background thread directory, polling loop, new database table or subscription expansion is included.
+
+## September 10: older pinned-message pages (Windows)
+
+Baseline 188c5557a024d8ce2e1ca2ca965289a6c7dd5559 versus this pin-pagination change. The verified parent release packages and reducer executable were copied separately before edits. Both changed unsigned packages passed on Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical processors), approximately 31 GiB visible RAM, Rust 1.98.1 and the existing release profile/text-voice split. The existing time 0.3.55 formatting feature serializes pin cursors; Cargo.lock and versions are unchanged. Installed/ZIP totals reflect package-staged documentation before this final measurement/progress addendum; text excludes the sibling voice directory and both exclude PR evidence and external WebView2/drivers. ZIP includes all respective package files with Python zipfile DEFLATE level 9.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable, bytes | 42,330,624 | 42,341,888 | +11,264 (+0.027%) |
+| Voice executable, bytes | 45,643,264 | 45,655,040 | +11,776 (+0.026%) |
+| Text installed package, bytes | 42,598,237 | 42,620,650 | +22,413 (+0.053%) |
+| Voice installed package, bytes | 46,138,097 | 46,157,505 | +19,408 (+0.042%) |
+| Text ZIP, bytes | 24,571,118 | 24,580,394 | +9,276 (+0.038%) |
+| Voice ZIP, bytes | 25,924,133 | 25,933,749 | +9,616 (+0.037%) |
+| Reducer replay median, milliseconds | 27.5110 | 28.2131 | +0.7021 (+2.55%, noisy) |
+| Retained timeline estimated bytes | 220,992-221,477 | 220,992-221,477 | Unchanged, 500 records |
+
+Replay: one release build per revision, one warmup plus five direct samples after compilation finished, 100,000 synthetic events each. Baseline: 30.9570, 29.3369, 27.0244, 27.5110, 27.2474 ms. After: 26.7628, 29.5610, 28.2131, 26.8470, 28.5889 ms. Samples overlap; the small median increase is inconclusive. This existing reducer workload does not measure pin HTTP requests, parser throughput, UI latency, process RSS or voice.
+
+Native automation remains paused after the owner's prior physical Escape stops. Comparable process-memory/CPU samples, actual display scale/adapter, GPU/helpers, and startup/frame p95 are unavailable. No native performance or visual-inspection claim is made. Runtime ceilings remain one replaceable 25-item / 64 KiB result page, 512 KiB response body and existing shared request task. Fixed-size timestamp cursors add no growing history or query cache. Pagination only occurs after a deliberate action.
+
+## September 10: archived-thread browsing (Windows)
+
+Baseline 293c72b3ab3570e904cf23b52b479509d8ee75bc versus this archive-browser change. Baseline text/voice packages and reducer executable were copied before edits; parent package hashes were reverified. Both changed unsigned packages passed. Host: Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical processors), approximately 31 GiB visible RAM; Rust 1.98.1, existing release profile and text/voice split. No dependency/font/codec change. Disk pressure moved changed build and test-temporary output to a separate E: directory; packaging now honors CARGO_TARGET_DIR, and the final voice package hash matches that target's executable. Installed/ZIP totals reflect documentation staged by packaging before this final evidence addendum. Text excludes its sibling voice directory; both exclude PR evidence and external WebView2/drivers. ZIP: all respective package files, Python zipfile DEFLATE level 9.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable, bytes | 42,341,888 | 42,437,632 | +95,744 (+0.226%) |
+| Text installed package, bytes | 42,620,650 | 42,726,195 | +105,545 (+0.248%) |
+| Text ZIP, bytes | 24,580,394 | 24,615,435 | +35,041 (+0.143%) |
+| Voice executable, bytes | 45,655,040 | 45,750,784 | +95,744 (+0.210%) |
+| Voice installed package, bytes | 46,157,505 | 46,262,905 | +105,400 (+0.228%) |
+| Voice ZIP, bytes | 25,933,749 | 25,969,231 | +35,482 (+0.137%) |
+| Initial replay median, ms | 27.2874 | 30.2790 | +2.9916 (+10.96%) |
+| Interleaved replay median, ms | 27.9277 | 27.2380 | -0.6897 (-2.47%) |
+| Retained timeline estimated bytes | 220,992-221,477 | 220,992-221,477 | Unchanged, 500 records |
+
+Replay: one release build per revision and one warmup plus five direct samples after builds finished, 100,000 synthetic events each. The initial median increase warranted a second comparison: both executables were warmed again, then sampled five times each with alternating execution order. The interleaved result did not reproduce the initial increase, and its samples overlap. No speed improvement or established regression is claimed from these short runs. This reducer workload does not measure archive transport/parser throughput, native rendering, process RSS or voice.
+
+Initial replay median: baseline [26.1177, 29.5278, 26.0407, 28.8295, 27.2874]; after [30.279, 29.9318, 33.3689, 30.5462, 29.9439] ms.
+
+Interleaved replay median: baseline [27.9277, 26.1154, 27.0548, 28.2489, 29.8243]; after [29.7797, 27.238, 26.9207, 30.8193, 26.5756] ms.
+
+Native automation remains paused after the owner's prior physical Escape stops. Comparable native CPU/memory samples, actual adapter/display scale, GPU/helpers and startup/frame p95 are unavailable. No native screenshot or performance claim is made. Runtime limits are one replaceable 25-entry / 64 KiB archive page, a 512 KiB response, existing shared read worker and at most one transient channel within the account navigation budget. No growing archive cache or automatic pagination was added.
 
 ## September 10 — chat timeline comparison
 
@@ -368,3 +531,21 @@ had two samples at 1.7% and 2.1% (mean 0.38%), baseline all 0.0%. This shows hig
 retained process memory for the rich composer scenario; no memory improvement is
 claimed. The package measurements precede these final evidence paragraphs; bundled
 documentation/archive metadata can change the distribution total slightly.
+## September 10: integration of all open PRs (Windows)
+
+The owner explicitly requested merging every open PR into main. Baseline is the verified feature-stack tree 0f67e69757983c52e1a45c03030a09e7c16a3b30 (same tree as consolidated 9e069ca), copied before integration. After combines that stack with main efa724b, including the already-merged Twemoji artwork/picker, grouped/hover timeline, guild voice and People subscription repair. These deltas measure the combined feature set against the incoming stack, not an individual feature or a comparison against main alone.
+
+Both unsigned Windows packages passed. Same Windows 11 Home 10.0.26200, Ryzen 7 7800X3D / 16 logical processors, about 31 GiB RAM, Rust 1.98.1 and existing release profile; artifacts and test temporary files used the E: build directory. Text excludes the sibling voice directory; both exclude PR evidence and external WebView2/drivers. Installed/ZIP sizes reflect packaging before this final evidence addendum; ZIP uses all respective files with Python DEFLATE level 9. License files from both branches are preserved and packaged.
+
+| Metric | Feature stack before integration | Integrated | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable, bytes | 42,437,632 | 49,067,008 | +6,629,376 (+15.621%) |
+| Text installed package, bytes | 42,726,195 | 49,431,699 | +6,705,504 (+15.694%) |
+| Text ZIP, bytes | 24,615,435 | 30,843,886 | +6,228,451 (+25.303%) |
+| Voice executable, bytes | 45,750,784 | 52,400,128 | +6,649,344 (+14.534%) |
+| Voice installed package, bytes | 46,262,905 | 52,988,377 | +6,725,472 (+14.538%) |
+| Voice ZIP, bytes | 25,969,231 | 32,209,427 | +6,240,196 (+24.029%) |
+| Reducer median, ms | 27.5046 | 26.5682 | -0.9364 (-3.40%) |
+| Retained timeline estimate | 220,992-221,477 bytes | Same | 500 records |
+
+One release reducer executable per revision, one warmup plus five direct measured runs, 100,000 synthetic events each. Baseline samples: [27.4948, 27.5046, 26.2998, 28.5269, 29.6689] ms. Integrated: [26.4394, 27.3291, 27.4944, 26.3761, 26.5682] ms. This short reducer benchmark is not native frame time, process RSS, network or audio performance; no user-visible speed claim is made. Existing per-feature native evidence is retained from its original PRs. New combined native inspection/process samples remain unverified while this session's desktop automation is paused.

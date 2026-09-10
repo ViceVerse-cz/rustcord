@@ -18,6 +18,8 @@ pub struct SearchPage {
     pub hits: Vec<SearchHit>,
     pub total: u64,
     pub partial: bool,
+    /// Oldest pin timestamp in nanoseconds, only when more pins are available.
+    pub pin_cursor: Option<i128>,
 }
 impl SearchPage {
     pub fn bytes(&self) -> usize {
@@ -29,15 +31,25 @@ impl SearchPage {
                 .sum::<usize>()
     }
     pub fn valid(&self, channel: Id, before: Option<Id>) -> bool {
+        self.valid_pins(channel)
+            && self.pin_cursor.is_none()
+            && self.hits.iter().all(|h| before.is_none_or(|b| h.id < b))
+            && self.hits.windows(2).all(|w| w[0].id > w[1].id)
+    }
+    /// Pin order follows pin time, not message creation time.
+    pub fn valid_pins(&self, channel: Id) -> bool {
         self.hits.len() <= SEARCH_PAGE_SIZE
             && self.bytes() <= MAX_SEARCH_BYTES
             && self.hits.iter().all(|h| {
                 h.id.0 > 0
                     && h.channel == channel
-                    && before.is_none_or(|b| h.id < b)
                     && h.author.len() <= 512
                     && h.excerpt.len() <= 1024
             })
-            && self.hits.windows(2).all(|w| w[0].id > w[1].id)
+            && self
+                .hits
+                .iter()
+                .enumerate()
+                .all(|(i, h)| self.hits[..i].iter().all(|other| other.id != h.id))
     }
 }

@@ -9,6 +9,8 @@ use std::{
 
 #[derive(Default)]
 pub struct TimelineView {
+    pub(super) channel_reference: Option<Id>,
+    channel_labels: u64,
     pub(super) mark_read: Option<Id>,
     auto_read_attempt: Option<Id>,
     at_current_latest: bool,
@@ -253,6 +255,7 @@ impl TimelineView {
             *self = Self {
                 channel: state.selected,
                 following: true,
+                download: std::mem::take(&mut self.download),
                 jump: true,
                 ..Self::default()
             };
@@ -273,8 +276,28 @@ impl TimelineView {
         }
         let text_size = egui::TextStyle::Body.resolve(ui.style()).size;
         let scale = ui.ctx().pixels_per_point();
-        let dimensions_changed =
-            (self.width - width).abs() > 1.0 || self.text_size != text_size || self.scale != scale;
+        let mut labels_changed = false;
+        if self.revision != state.revision {
+            // ponytail: hash bounded channel labels per state update; use a dedicated
+            // navigation revision only if profiling shows this scan is significant.
+            let mut labels = DefaultHasher::new();
+            for channel in state
+                .channels
+                .iter()
+                .filter(|c| c.guild.is_some() && c.supports_text())
+            {
+                channel.id.hash(&mut labels);
+                channel.guild.hash(&mut labels);
+                channel.name.hash(&mut labels);
+            }
+            let labels = labels.finish();
+            labels_changed = self.channel_labels != labels;
+            self.channel_labels = labels;
+        }
+        let dimensions_changed = (self.width - width).abs() > 1.0
+            || self.text_size != text_size
+            || self.scale != scale
+            || labels_changed;
         let changed = self.revision != state.revision || dimensions_changed;
         let mut offset = None;
         if changed {
@@ -432,12 +455,12 @@ impl TimelineView {
                                             self.revealed.insert(*id, (message.content.clone(), message.embeds.clone(), message.attachments.clone()));
                                         }
                                     } else {
-                                        formatted.show_with_images(ui, &mut self.opening, &message.mentions, profile, avatars, state.demo);
+                                        formatted.show_references(ui, &mut self.opening, &message.mentions, profile, (&state.channels, &mut self.channel_reference), (avatars, state.demo));
                                         if formatted.limited {
                                             ui.label(RichText::new("Display limited · Copy message for the full text").small().color(colors.muted));
                                         }
                                         crate::embeds::show(ui, message, &mut self.formatted, avatars, &mut self.opening, profile, state.demo);
-                                        crate::attachments::show(ui, message, avatars, &mut self.viewing, &mut self.opening, state.demo);
+                                        crate::attachments::show(ui, message, avatars, &mut self.viewing, &mut self.opening, &mut self.download, state.demo);
                                         if spoilers && ui.small_button("Hide spoiler").clicked() {
                                             self.revealed.remove(id);
                                         }
@@ -938,6 +961,142 @@ mod tests {
         assert_eq!(anchor_offset(&neighbors, Id(3), 25.0), 65.0);
         assert_eq!(anchor_offset(&neighbors, Id(3), 200.0), 140.0);
         assert_eq!(anchor_offset(&[], Id(2), 25.0), 0.0);
+    }
+    #[test]
+    fn channel_rename_invalidates_offscreen_reference_heights() {
+        let message = Message {
+            id: Id(1),
+            channel: Id(2),
+            author: model::User {
+                id: Id(3),
+                name: "Synthetic".into(),
+                avatar: None,
+                discriminator: 0,
+            },
+            content: "<#4> ".repeat(12),
+            mentions: vec![],
+            reactions: Some(vec![]),
+            edited: false,
+            edited_at: None,
+            revision: 0,
+            nonce: None,
+            reply_to: None,
+            unsupported: false,
+            embeds: vec![],
+            embeds_suppressed: false,
+            attachments: vec![],
+        };
+        let message_key = layout_key(&message);
+        let mut tail = message.clone();
+        tail.id = Id(2);
+        tail.content = "ordinary text ".repeat(350);
+        let mut state = State {
+            demo: true,
+            selected: Some(Id(2)),
+            revision: 1,
+            ..Default::default()
+        };
+        state.channels.push(model::Channel {
+            id: Id(4),
+            guild: Some(Id(5)),
+            name: "a".into(),
+            kind: 0,
+            parent_id: None,
+            position: 0,
+            recipients: vec![],
+            member_list_id: None,
+            last_message: None,
+        });
+        state.timeline.insert(message, false, false).unwrap();
+        state.timeline.insert(tail, false, false).unwrap();
+        let mut view = TimelineView {
+            channel: state.selected,
+            anchor: Some((Id(1), 0.0)),
+            ..Default::default()
+        };
+        let mut images = crate::avatars::Avatars::default();
+        let context = egui::Context::default();
+        let render =
+            |view: &mut TimelineView, state: &mut State, images: &mut crate::avatars::Avatars| {
+                context
+                    .run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(360.0, 300.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| view.show(ui, state, &mut None, &mut None, images, &mut None),
+                    )
+                    .drop_without_applying_deltas();
+            };
+        for _ in 0..3 {
+            render(&mut view, &mut state, &mut images);
+        }
+        let short_height = view.heights[&Id(1)].1;
+        view.following = false;
+        view.anchor = Some((Id(2), 400.0));
+        state.revision += 1;
+        for _ in 0..3 {
+            render(&mut view, &mut state, &mut images);
+        }
+        assert_eq!(view.heights[&Id(1)].1, short_height);
+        assert_eq!(view.anchor.unwrap().0, Id(2));
+        state.apply(client_core::Envelope {
+            generation: state.generation,
+            event: client_core::Event::ChannelChanged(model::ChannelPatch {
+                id: Id(4),
+                name: model::Patch::Value("a-much-longer-channel-reference".into()),
+                last_message: model::Patch::Absent,
+                parent_id: model::Patch::Absent,
+                position: model::Patch::Absent,
+                kind: model::Patch::Absent,
+            }),
+        });
+        assert_eq!(layout_key(state.timeline.get(Id(1)).unwrap()), message_key);
+        render(&mut view, &mut state, &mut images);
+        assert!(
+            !view.heights.contains_key(&Id(1)),
+            "An offscreen row must lose its old label-dependent height even though its message did not change"
+        );
+        view.following = false;
+        view.anchor = Some((Id(1), 0.0));
+        state.revision += 1;
+        for _ in 0..3 {
+            render(&mut view, &mut state, &mut images);
+        }
+        assert!(
+            view.heights[&Id(1)].1 > short_height + 20.0,
+            "The renamed references must be measured with their new wrapped labels"
+        );
+        assert!(images.take_requests().is_empty());
+    }
+    #[test]
+    fn navigation_preserves_active_download_controls() {
+        let mut view = TimelineView::default();
+        view.download.active = true;
+        view.download.status = "Downloading: 1 / 2 KiB".into();
+        view.download.cancel_requested = true;
+        let mut state = State::default();
+        let context = egui::Context::default();
+        for channel in [Some(Id(2)), Some(Id(3)), None] {
+            state.selected = channel;
+            context
+                .run_ui(Default::default(), |ui| {
+                    view.show(
+                        ui,
+                        &mut state,
+                        &mut None,
+                        &mut None,
+                        &mut crate::avatars::Avatars::default(),
+                        &mut None,
+                    );
+                })
+                .drop_without_applying_deltas();
+            assert!(view.download.active && view.download.cancel_requested);
+            assert_eq!(view.download.status, "Downloading: 1 / 2 KiB");
+        }
     }
     #[test]
     fn same_id_revision_reset_does_not_reuse_reveal_or_height() {

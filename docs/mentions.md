@@ -1,4 +1,4 @@
-# User mentions
+# User mentions and channel references
 
 Implemented September 10, 2026. Type `@` in the native composer to search names/IDs already present in the selected conversation: recipients, the loaded member pane, and the retained timeline. The candidate set is capped at 256 users and the menu at eight suggestions. Arrow keys select, Tab/Enter inserts the exact `<@id>` token without sending, and Escape dismisses. IME composition never invokes mention shortcuts. This makes no directory-search request and does not scrape members; people not loaded locally cannot be discovered through autocomplete.
 
@@ -19,3 +19,10 @@ mention/emoji as one token; unknown mentions remain editable literal markup. Mes
 editing uses this same composer, including mention suggestions and both emoji pickers.
 The ordinary unsent draft remains separate while editing; Save edit and Cancel edit
 return to it. Network failure keeps the edit available for review/retry.
+## Channel references - September 10 continuation
+
+Type `#` at a word boundary to suggest already-loaded text, announcement and thread channels from the current server. DMs, group DMs, voice channels, categories and forum containers are excluded. The existing menu shows at most eight suggestions with 120-character labels and a 64-character query. Arrow keys select, Tab/Enter inserts the exact `<#id>` token without sending, and Escape dismisses; Unicode cursor and IME handling are shared with user mentions. No channel directory request is made.
+
+In message bodies, valid `<#id>` references to loaded server text channels display a native `#name` link. Activation uses normal channel selection and history validation, including links to another loaded server. Unknown/unsupported channels remain literal and inert. Channel references in embeds remain literal in this slice. User and channel links share the existing 100-reference limit per formatted part. Code, escaped syntax, entities and Markdown-link labels stay literal; entity-expanded text cannot borrow the identity of a later raw reference. Renaming or removing a loaded channel invalidates cached message heights so offscreen rows are measured again.
+
+Discord's [message formatting reference](https://docs.discord.com/developers/reference#message-formatting), checked September 10, documents the channel token. Send/edit user-notification allowlists, storage schema and all cache limits are unchanged. Synthetic tests cover insertion, navigation-link activation, literal safety and offscreen layout invalidation. The demo's generated message 500 now includes a channel reference. Native screenshots, screen-reader behavior and owner-controlled live interoperability remain unverified.

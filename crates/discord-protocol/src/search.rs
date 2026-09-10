@@ -24,7 +24,7 @@ struct Groups(#[serde(deserialize_with = "list::<_,_,25>")] Vec<Group>);
 #[derive(Deserialize)]
 struct Group(#[serde(deserialize_with = "list::<_,_,5>")] Vec<Hit>);
 #[derive(Deserialize)]
-struct Hit {
+pub(crate) struct Hit {
     id: Id,
     channel_id: Id,
     author: UserDto,
@@ -33,7 +33,7 @@ struct Hit {
     #[serde(default)]
     hit: Option<bool>,
 }
-fn list<'de, D: Deserializer<'de>, T: Deserialize<'de>, const N: usize>(
+pub(crate) fn list<'de, D: Deserializer<'de>, T: Deserialize<'de>, const N: usize>(
     d: D,
 ) -> Result<Vec<T>, D::Error> {
     struct Bounded<T, const N: usize>(std::marker::PhantomData<T>);
@@ -68,29 +68,36 @@ impl Reply {
             if matches.next().is_some() {
                 return Err("Ambiguous search hit");
             }
-            // No Markdown, media fetch or spoiler reveal in result previews.
-            let excerpt = if hit.content.contains("||") {
-                "Spoiler content - open message to reveal".into()
-            } else {
-                hit.content.chars().take(256).collect()
-            };
-            hits.push(SearchHit {
-                id: hit.id,
-                channel: hit.channel_id,
-                author: hit.author.into_model().name,
-                excerpt,
-            });
+            hits.push(hit.into_hit());
         }
         hits.sort_unstable_by_key(|h| std::cmp::Reverse(h.id));
         let page = SearchPage {
             hits,
             total,
             partial: self.doing_deep_historical_index,
+            pin_cursor: None,
         };
         if !page.valid(channel, before) {
             return Err("Invalid search results");
         }
         Ok(page)
+    }
+}
+
+impl Hit {
+    pub(crate) fn into_hit(self) -> SearchHit {
+        // No Markdown, media fetch or spoiler reveal in snapshot previews.
+        let excerpt = if self.content.contains("||") {
+            "Spoiler content - open message to reveal".into()
+        } else {
+            self.content.chars().take(256).collect()
+        };
+        SearchHit {
+            id: self.id,
+            channel: self.channel_id,
+            author: self.author.into_model().name,
+            excerpt,
+        }
     }
 }
 

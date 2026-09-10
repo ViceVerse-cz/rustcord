@@ -16,6 +16,7 @@ use tokio::{
 
 pub struct Connection {
     pub commands: mpsc::Sender<Command>,
+    pub uploads: mpsc::Sender<crate::uploads::UploadRequest>,
     pub events: mpsc::Receiver<Envelope>,
     pub terminal: watch::Receiver<Option<Failure>>,
     task: JoinHandle<()>,
@@ -40,6 +41,7 @@ impl Connection {
         ctx: egui::Context,
     ) -> Self {
         let (commands, mut receive) = mpsc::channel(COMMAND_SLOTS);
+        let (uploads, mut upload_receive) = mpsc::channel::<crate::uploads::UploadRequest>(1);
         let (send, events) = mpsc::channel(EVENT_SLOTS);
         let (finished, terminal) = watch::channel(None);
         let wake = ctx.clone();
@@ -97,6 +99,8 @@ impl Connection {
                 let mut search:Option<AbortTask>=None;
                 let mut reaction_read:Option<AbortTask>=None;
                 let mut ringing:Option<AbortTask>=None;
+                let mut upload:Option<AbortTask>=None;
+                let mut upload_cancel:Option<watch::Sender<bool>>=None;
                 let mut voice_request=None;
                 loop {
                     tokio::select! {
@@ -104,17 +108,45 @@ impl Connection {
                         _=&mut writes.0=>{break;}
                         changed=voice_availability.changed()=> {
                             if changed.is_err() {break;}
-                            if !*voice_availability.borrow_and_update() {drop(ringing.take());drop(profile.take());drop(search.take());voice_request=None;}
+                            if !*voice_availability.borrow_and_update() {drop(ringing.take());drop(profile.take());drop(search.take());voice_request=None;if let Some(cancel)=&upload_cancel {let _=cancel.send(true);}}
+                        }
+                        request=upload_receive.recv()=>{
+                            let Some(request)=request else {break;};
+                            if !*voice_availability.borrow() || upload.as_ref().is_some_and(|job|!job.0.is_finished()) {
+                                if let Command::Send{nonce,..}=request.command {
+                                    emit(Event::SendResult{nonce,result:Err(Failure::ProtocolAt("Upload unavailable; reselect the file to retry"))})?;
+                                }
+                                request.progress.send_replace(discord_api::upload::Status::Failed("Upload unavailable; reselect the file to retry"));
+                                continue;
+                            }
+                            upload_cancel=Some(request.cancel.clone());
+                            let api=api.clone();let emit=emit.clone();let finished=finished.clone();let wake=wake.clone();
+                            upload=Some(AbortTask(tokio::spawn(async move {
+                                let mut updates=request.progress.subscribe();
+                                let operation=api.upload_message(request.command,request.source,request.progress,request.cancel.subscribe());
+                                tokio::pin!(operation);
+                                let mut observing=true;
+                                let event=loop {
+                                    tokio::select! {
+                                        event=&mut operation=>break event,
+                                        changed=updates.changed(), if observing=>{observing=changed.is_ok();wake.request_repaint();}
+                                    }
+                                };
+                                let failure=match &event {Event::SendResult{result:Err(f),..} if f.ends_session()=>Some(*f),_=>None};
+                                let error=emit(event).err().or(failure);
+                                if let Some(error)=error {api.stop();let _=finished.send(Some(error));}
+                                wake.request_repaint();
+                            })));
                         }
                         command=receive.recv()=>{
                             let Some(command)=command else {break;};
                             if matches!(command,Command::CancelSearch) {drop(search.take());continue;}
-                            if matches!(command,Command::Search{..}) {
+                            if matches!(command,Command::Search{..}|Command::Pins{..}|Command::Archives{..}) {
                                 drop(search.take());
                                 let api=api.clone();let emit=emit.clone();let finished=finished.clone();let wake=wake.clone();
                                 search=Some(AbortTask(tokio::spawn(async move {
                                     let event=api.execute(command).await;
-                                    let failure=match &event {Event::Search{result:Err(f),..} if f.ends_session() && *f!=Failure::Capacity=>Some(*f),_=>None};
+                                    let failure=match &event {Event::Search{result:Err(f),..}|Event::Archives{result:Err(f),..} if f.ends_session() && *f!=Failure::Capacity=>Some(*f),_=>None};
                                     let error=emit(event).err().or(failure);
                                     if let Some(error)=error {api.stop();let _=finished.send(Some(error));}
                                     wake.request_repaint();
@@ -199,6 +231,7 @@ impl Connection {
         });
         Self {
             commands,
+            uploads,
             events,
             terminal,
             task,
