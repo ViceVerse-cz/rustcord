@@ -374,3 +374,8 @@ Measured text executable +224,240 bytes (+0.50%); compressed package +65,520 byt
 Reducer median 27.093 → 26.771 ms is a noisy difference. See `docs/performance.md` for
 methods, full package comparisons and limits. Draft delivery is required for the native
 evidence gap and inherited dependency audit failure; no live Discord test was performed.
+
+Delivery: [PR #8](https://github.com/ViceVerse-cz/rustcord/pull/8), stacked on #6,
+contains the implementation and verified commit-pinned before/after images. New macOS,
+Windows, Linux and security checks are pending at handoff; local success does not
+represent CI success. The PR remains draft for the evidence/audit blockers above.
