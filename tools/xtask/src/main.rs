@@ -101,7 +101,83 @@ fn licenses() -> Result<(), String> {
         "--all-features",
         "check",
         "licenses",
+    ])?;
+    run(&[
+        "deny",
+        "--locked",
+        "--offline",
+        "--all-features",
+        "--manifest-path",
+        "fuzz/Cargo.toml",
+        "--config",
+        "deny.toml",
+        "check",
+        "licenses",
     ])
+}
+fn fuzz() -> Result<(), String> {
+    let version = Command::new("cargo-fuzz")
+        .arg("--version")
+        .output()
+        .map_err(|_| "Install the checker: cargo install cargo-fuzz --version 0.13.2 --locked")?;
+    if !version.status.success()
+        || String::from_utf8_lossy(&version.stdout).trim() != "cargo-fuzz 0.13.2"
+    {
+        return Err("Fuzz smoke requires cargo-fuzz 0.13.2".into());
+    }
+    let lock = std::fs::read("fuzz/Cargo.lock").map_err(|e| e.to_string())?;
+    run(&[
+        "fetch",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "fuzz/Cargo.toml",
+    ])?;
+    let root = PathBuf::from("target/fuzz-smoke");
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    let root = root.canonicalize().map_err(|e| e.to_string())?;
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_nanos();
+    let corpus = root.join(format!("corpus-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&corpus).map_err(|e| e.to_string())?;
+    let result = (|| {
+        for (target, max_len) in [("decode", "4194306"), ("state_transitions", "16384")] {
+            let seeds = corpus.join(target);
+            copy_directory(&PathBuf::from("fuzz/seeds").join(target), &seeds)?;
+            let artifact = root.join(format!("{target}.crash"));
+            let status = Command::new("cargo")
+                .args(["+nightly-2026-09-09", "fuzz", "run", target])
+                .arg(&seeds)
+                .args([
+                    "--",
+                    "-max_total_time=30",
+                    "-runs=1000000",
+                    "-timeout=5",
+                    "-rss_limit_mb=512",
+                ])
+                .arg(format!("-max_len={max_len}"))
+                .arg(format!("-exact_artifact_path={}", artifact.display()))
+                .env("CARGO_NET_OFFLINE", "true")
+                .status()
+                .map_err(|e| e.to_string())?;
+            if !status.success() {
+                return Err(format!("{target} fuzz smoke failed"));
+            }
+        }
+        Ok(())
+    })();
+    // Delete only this invocation's generated corpus, never the committed seeds.
+    let resolved = corpus.canonicalize().map_err(|e| e.to_string())?;
+    if resolved.parent() != Some(root.as_path()) {
+        return Err("Unexpected fuzz corpus location".into());
+    }
+    std::fs::remove_dir_all(resolved).map_err(|e| e.to_string())?;
+    if std::fs::read("fuzz/Cargo.lock").map_err(|e| e.to_string())? != lock {
+        return Err("Fuzzing changed fuzz/Cargo.lock; review the dependency resolution".into());
+    }
+    result
 }
 fn copy_directory(source: &std::path::Path, destination: &std::path::Path) -> Result<(), String> {
     std::fs::create_dir_all(destination).map_err(|e| e.to_string())?;
@@ -297,9 +373,10 @@ fn main() -> ExitCode {
             .and_then(|_| policy()),
         "policy" => policy(),
         "licenses" => licenses(),
+        "fuzz" => fuzz(),
         "package" => package(false),
         "package-voice" => package(true),
-        _ => Err("Use cargo xtask [check|policy|licenses|package|package-voice]".into()),
+        _ => Err("Use cargo xtask [check|policy|licenses|fuzz|package|package-voice]".into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

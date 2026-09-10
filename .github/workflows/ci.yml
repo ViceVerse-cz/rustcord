@@ -45,8 +45,34 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-deny --version 0.20.2 --locked
       - run: cargo fetch --locked
+      - run: cargo fetch --locked --manifest-path fuzz/Cargo.toml
       - run: cargo xtask licenses
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - run: node tests/license-policy.cjs
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            fuzz -> target
+      - run: rustup toolchain install nightly-2026-09-09 --profile minimal
+      - run: cargo install cargo-fuzz --version 0.13.2 --locked
+      - run: cargo fetch --locked --manifest-path fuzz/Cargo.toml
+      - run: cargo fmt --manifest-path fuzz/Cargo.toml --all -- --check
+      - run: cargo xtask fuzz
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: synthetic-fuzz-failures
+          path: target/fuzz-smoke/*.crash
+          if-no-files-found: ignore
+          retention-days: 7
