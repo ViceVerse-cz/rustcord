@@ -1,6 +1,17 @@
-//! Vector glyphs painted with egui primitives; no icon font or bitmap assets.
+//! Phosphor Icons (MIT) rasterized once into one bundled atlas and tinted at draw time.
+//!
+//! `assets/icons/atlas.png` holds white glyphs on transparency in fixed 64px cells;
+//! `index.tsv` maps upstream icon names to cells. See `assets/icons/README.md` for provenance.
 use crate::design;
-use egui::{Color32, Pos2, Rect, Response, Sense, Shape, Stroke, StrokeKind, Vec2, vec2};
+use egui::emath::GuiRounding;
+use egui::{Color32, Rect, Response, Sense, TextureHandle, Vec2};
+use std::sync::OnceLock;
+
+const ATLAS: &[u8] = include_bytes!("../../../assets/icons/atlas.png");
+const INDEX: &str = include_str!("../../../assets/icons/index.tsv");
+const COLUMNS: usize = 8;
+const CELL: f32 = 64.0;
+const TEXTURE_KEY: &str = "phosphor-icons";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Icon {
@@ -8,15 +19,25 @@ pub enum Icon {
     ChevronRight,
     Gear,
     Microphone,
+    MicrophoneSlash,
     Headphones,
+    HeadphonesSlash,
     Pin,
     People,
+    AddPeople,
+    Profile,
     Search,
     Plus,
     Smile,
     Bell,
     Phone,
+    InCall,
+    HangUp,
     Video,
+    VideoSlash,
+    ScreenShare,
+    Activities,
+    Soundboard,
     Reply,
     Pencil,
     More,
@@ -33,322 +54,157 @@ pub enum Icon {
     External,
 }
 
+impl Icon {
+    pub const ALL: [Icon; 37] = [
+        Icon::ChevronDown,
+        Icon::ChevronRight,
+        Icon::Gear,
+        Icon::Microphone,
+        Icon::MicrophoneSlash,
+        Icon::Headphones,
+        Icon::HeadphonesSlash,
+        Icon::Pin,
+        Icon::People,
+        Icon::AddPeople,
+        Icon::Profile,
+        Icon::Search,
+        Icon::Plus,
+        Icon::Smile,
+        Icon::Bell,
+        Icon::Phone,
+        Icon::InCall,
+        Icon::HangUp,
+        Icon::Video,
+        Icon::VideoSlash,
+        Icon::ScreenShare,
+        Icon::Activities,
+        Icon::Soundboard,
+        Icon::Reply,
+        Icon::Pencil,
+        Icon::More,
+        Icon::Inbox,
+        Icon::Help,
+        Icon::Reload,
+        Icon::Threads,
+        Icon::Speaker,
+        Icon::Hash,
+        Icon::Forum,
+        Icon::Send,
+        Icon::Attach,
+        Icon::Close,
+        Icon::External,
+    ];
+    /// Upstream Phosphor name recorded in `index.tsv`.
+    fn asset(self) -> &'static str {
+        match self {
+            Icon::ChevronDown => "caret-down",
+            Icon::ChevronRight => "caret-right",
+            Icon::Gear => "gear",
+            Icon::Microphone => "microphone",
+            Icon::MicrophoneSlash => "microphone-slash",
+            Icon::Headphones => "headphones",
+            Icon::HeadphonesSlash => "headphones-slash",
+            Icon::Pin => "push-pin",
+            Icon::People => "users",
+            Icon::AddPeople => "user-plus",
+            Icon::Profile => "user-circle",
+            Icon::Search => "magnifying-glass",
+            Icon::Plus => "plus",
+            Icon::Smile => "smiley",
+            Icon::Bell => "bell",
+            Icon::Phone => "phone",
+            Icon::InCall => "phone-call",
+            Icon::HangUp => "phone-disconnect",
+            Icon::Video => "video-camera",
+            Icon::VideoSlash => "video-camera-slash",
+            Icon::ScreenShare => "monitor-arrow-up",
+            Icon::Activities => "rocket-launch",
+            Icon::Soundboard => "waveform",
+            Icon::Reply => "arrow-bend-up-left",
+            Icon::Pencil => "pencil-simple",
+            Icon::More => "dots-three",
+            Icon::Inbox => "tray",
+            Icon::Help => "question",
+            Icon::Reload => "arrow-clockwise",
+            Icon::Threads => "chats",
+            Icon::Speaker => "speaker-high",
+            Icon::Hash => "hash",
+            Icon::Forum => "chat-centered-text",
+            Icon::Send => "paper-plane-right",
+            Icon::Attach => "plus-circle",
+            Icon::Close => "x",
+            Icon::External => "arrow-square-out",
+        }
+    }
+    fn cell(self) -> usize {
+        static CELLS: OnceLock<Vec<(&'static str, usize)>> = OnceLock::new();
+        let cells = CELLS.get_or_init(|| {
+            INDEX
+                .lines()
+                .map(|line| {
+                    let (name, cell) = line.split_once('\t').expect("bundled icon index");
+                    (name, cell.parse().expect("bundled icon cell"))
+                })
+                .collect()
+        });
+        cells
+            .iter()
+            .find(|(name, _)| *name == self.asset())
+            .map(|(_, cell)| *cell)
+            .expect("every icon is in the bundled atlas")
+    }
+}
+
+fn decoded() -> &'static egui::ColorImage {
+    static IMAGE: OnceLock<egui::ColorImage> = OnceLock::new();
+    IMAGE.get_or_init(|| {
+        let image = image::load_from_memory_with_format(ATLAS, image::ImageFormat::Png)
+            .expect("bundled icon atlas")
+            .into_rgba8();
+        let size = [image.width() as usize, image.height() as usize];
+        egui::ColorImage::from_rgba_unmultiplied(size, &image)
+    })
+}
+
+/// Upload the atlas for `ctx` during application creation, outside the render callback.
+pub fn install(ctx: &egui::Context) {
+    let _ = texture(ctx);
+}
+
+fn texture(ctx: &egui::Context) -> TextureHandle {
+    let id = egui::Id::new(TEXTURE_KEY);
+    if let Some(texture) = ctx.data(|data| data.get_temp::<TextureHandle>(id)) {
+        return texture;
+    }
+    let texture = ctx.load_texture(
+        "Phosphor Icons 2.1.1",
+        decoded().clone(),
+        egui::TextureOptions {
+            mipmap_mode: Some(egui::TextureFilter::Linear),
+            ..egui::TextureOptions::LINEAR
+        },
+    );
+    ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
+    texture
+}
+
 /// Paint `icon` centred in `rect` with `color`.
 pub fn paint(painter: &egui::Painter, icon: Icon, rect: Rect, color: Color32) {
     let size = rect.width().min(rect.height());
-    let rect = Rect::from_center_size(rect.center(), Vec2::splat(size));
-    let p = |x: f32, y: f32| -> Pos2 { rect.min + vec2(size * x, size * y) };
-    let width = (size / 12.0).clamp(1.4, 2.2);
-    let stroke = Stroke::new(width, color);
-    let line = |points: Vec<Pos2>| Shape::line(points, stroke);
-    match icon {
-        Icon::ChevronDown => painter.add(line(vec![p(0.25, 0.38), p(0.5, 0.63), p(0.75, 0.38)])),
-        Icon::ChevronRight => painter.add(line(vec![p(0.38, 0.25), p(0.63, 0.5), p(0.38, 0.75)])),
-        Icon::Gear => {
-            let c = rect.center();
-            for i in 0..8 {
-                let angle = std::f32::consts::TAU * i as f32 / 8.0;
-                let dir = vec2(angle.cos(), angle.sin());
-                painter.line_segment(
-                    [c + dir * size * 0.28, c + dir * size * 0.44],
-                    Stroke::new(width * 1.6, color),
-                );
-            }
-            painter.circle_stroke(c, size * 0.3, Stroke::new(width * 1.4, color));
-            painter.circle_stroke(c, size * 0.11, stroke)
-        }
-        Icon::Microphone => {
-            painter.rect_filled(
-                Rect::from_min_max(p(0.36, 0.08), p(0.64, 0.56)),
-                (size * 0.14) as u8,
-                color,
-            );
-            painter.add(line(vec![
-                p(0.22, 0.45),
-                p(0.24, 0.62),
-                p(0.5, 0.74),
-                p(0.76, 0.62),
-                p(0.78, 0.45),
-            ]));
-            painter.line_segment([p(0.5, 0.74), p(0.5, 0.9)], stroke);
-            painter.line_segment([p(0.32, 0.9), p(0.68, 0.9)], stroke)
-        }
-        Icon::Headphones => {
-            painter.add(line(vec![
-                p(0.15, 0.62),
-                p(0.15, 0.45),
-                p(0.25, 0.25),
-                p(0.5, 0.15),
-                p(0.75, 0.25),
-                p(0.85, 0.45),
-                p(0.85, 0.62),
-            ]));
-            for x in [0.1, 0.7] {
-                painter.rect_filled(
-                    Rect::from_min_max(p(x, 0.55), p(x + 0.2, 0.86)),
-                    (size * 0.08) as u8,
-                    color,
-                );
-            }
-            painter.add(Shape::Noop)
-        }
-        Icon::Pin => {
-            painter.add(Shape::convex_polygon(
-                vec![
-                    p(0.38, 0.12),
-                    p(0.62, 0.12),
-                    p(0.62, 0.42),
-                    p(0.78, 0.58),
-                    p(0.22, 0.58),
-                    p(0.38, 0.42),
-                ],
-                color,
-                Stroke::NONE,
-            ));
-            painter.line_segment([p(0.5, 0.58), p(0.5, 0.9)], Stroke::new(width * 1.3, color))
-        }
-        Icon::People => {
-            painter.circle_filled(p(0.38, 0.32), size * 0.14, color);
-            painter.add(Shape::convex_polygon(
-                vec![
-                    p(0.1, 0.82),
-                    p(0.14, 0.62),
-                    p(0.3, 0.52),
-                    p(0.46, 0.52),
-                    p(0.62, 0.62),
-                    p(0.66, 0.82),
-                ],
-                color,
-                Stroke::NONE,
-            ));
-            painter.circle_stroke(p(0.7, 0.34), size * 0.11, stroke);
-            painter.add(line(vec![p(0.72, 0.52), p(0.84, 0.6), p(0.9, 0.8)]))
-        }
-        Icon::Search => {
-            painter.circle_stroke(p(0.44, 0.44), size * 0.26, Stroke::new(width * 1.2, color));
-            painter.line_segment(
-                [p(0.64, 0.64), p(0.88, 0.88)],
-                Stroke::new(width * 1.5, color),
-            )
-        }
-        Icon::Plus => {
-            painter.line_segment([p(0.5, 0.2), p(0.5, 0.8)], Stroke::new(width * 1.3, color));
-            painter.line_segment([p(0.2, 0.5), p(0.8, 0.5)], Stroke::new(width * 1.3, color))
-        }
-        Icon::Close => {
-            painter.line_segment(
-                [p(0.25, 0.25), p(0.75, 0.75)],
-                Stroke::new(width * 1.3, color),
-            );
-            painter.line_segment(
-                [p(0.75, 0.25), p(0.25, 0.75)],
-                Stroke::new(width * 1.3, color),
-            )
-        }
-        Icon::Smile => {
-            painter.circle_stroke(rect.center(), size * 0.38, Stroke::new(width * 1.2, color));
-            painter.circle_filled(p(0.37, 0.4), size * 0.055, color);
-            painter.circle_filled(p(0.63, 0.4), size * 0.055, color);
-            painter.add(line(vec![
-                p(0.3, 0.58),
-                p(0.4, 0.68),
-                p(0.5, 0.71),
-                p(0.6, 0.68),
-                p(0.7, 0.58),
-            ]))
-        }
-        Icon::Bell => {
-            painter.add(Shape::convex_polygon(
-                vec![
-                    p(0.2, 0.7),
-                    p(0.26, 0.62),
-                    p(0.28, 0.4),
-                    p(0.36, 0.22),
-                    p(0.5, 0.15),
-                    p(0.64, 0.22),
-                    p(0.72, 0.4),
-                    p(0.74, 0.62),
-                    p(0.8, 0.7),
-                ],
-                color,
-                Stroke::NONE,
-            ));
-            painter.add(line(vec![
-                p(0.42, 0.8),
-                p(0.46, 0.86),
-                p(0.54, 0.86),
-                p(0.58, 0.8),
-            ]))
-        }
-        Icon::Phone => painter.add(Shape::line(
-            vec![
-                p(0.2, 0.3),
-                p(0.3, 0.2),
-                p(0.42, 0.36),
-                p(0.36, 0.46),
-                p(0.54, 0.64),
-                p(0.64, 0.58),
-                p(0.8, 0.7),
-                p(0.7, 0.8),
-                p(0.44, 0.7),
-                p(0.3, 0.56),
-            ],
-            Stroke::new(width * 1.4, color),
-        )),
-        Icon::Video => {
-            painter.rect_filled(
-                Rect::from_min_max(p(0.12, 0.28), p(0.62, 0.72)),
-                (size * 0.08) as u8,
-                color,
-            );
-            painter.add(Shape::convex_polygon(
-                vec![p(0.64, 0.45), p(0.88, 0.3), p(0.88, 0.7), p(0.64, 0.55)],
-                color,
-                Stroke::NONE,
-            ))
-        }
-        Icon::Reply => {
-            painter.add(line(vec![p(0.4, 0.25), p(0.15, 0.45), p(0.4, 0.65)]));
-            painter.add(line(vec![
-                p(0.15, 0.45),
-                p(0.6, 0.45),
-                p(0.78, 0.55),
-                p(0.85, 0.78),
-            ]))
-        }
-        Icon::Pencil => {
-            painter.add(Shape::closed_line(
-                vec![
-                    p(0.15, 0.85),
-                    p(0.2, 0.62),
-                    p(0.66, 0.16),
-                    p(0.84, 0.34),
-                    p(0.38, 0.8),
-                ],
-                stroke,
-            ));
-            painter.line_segment([p(0.56, 0.26), p(0.74, 0.44)], stroke)
-        }
-        Icon::More => {
-            for x in [0.25, 0.5, 0.75] {
-                painter.circle_filled(p(x, 0.5), size * 0.07, color);
-            }
-            painter.add(Shape::Noop)
-        }
-        Icon::Inbox => {
-            painter.add(line(vec![
-                p(0.15, 0.55),
-                p(0.22, 0.2),
-                p(0.78, 0.2),
-                p(0.85, 0.55),
-            ]));
-            painter.add(line(vec![
-                p(0.15, 0.55),
-                p(0.15, 0.82),
-                p(0.85, 0.82),
-                p(0.85, 0.55),
-                p(0.66, 0.55),
-                p(0.6, 0.66),
-                p(0.4, 0.66),
-                p(0.34, 0.55),
-                p(0.15, 0.55),
-            ]))
-        }
-        Icon::Help => {
-            painter.circle_stroke(rect.center(), size * 0.38, Stroke::new(width * 1.2, color));
-            painter.add(line(vec![
-                p(0.38, 0.4),
-                p(0.42, 0.3),
-                p(0.5, 0.27),
-                p(0.6, 0.32),
-                p(0.6, 0.42),
-                p(0.5, 0.5),
-                p(0.5, 0.58),
-            ]));
-            painter.circle_filled(p(0.5, 0.7), size * 0.05, color)
-        }
-        Icon::Reload => {
-            let c = rect.center();
-            let points: Vec<Pos2> = (0..20)
-                .map(|i| {
-                    let angle = -1.2 + 5.0 * i as f32 / 19.0;
-                    c + vec2(angle.cos(), angle.sin()) * size * 0.3
-                })
-                .collect();
-            painter.add(line(points));
-            painter.add(Shape::convex_polygon(
-                vec![p(0.6, 0.12), p(0.78, 0.2), p(0.62, 0.36)],
-                color,
-                Stroke::NONE,
-            ))
-        }
-        Icon::Threads => {
-            painter.line_segment([p(0.25, 0.2), p(0.25, 0.8)], stroke);
-            painter.line_segment([p(0.25, 0.45), p(0.75, 0.45)], stroke);
-            painter.line_segment([p(0.5, 0.25), p(0.5, 0.65)], stroke);
-            painter.line_segment([p(0.25, 0.8), p(0.75, 0.8)], stroke)
-        }
-        Icon::Speaker => {
-            painter.add(Shape::convex_polygon(
-                vec![
-                    p(0.08, 0.36),
-                    p(0.28, 0.36),
-                    p(0.5, 0.15),
-                    p(0.5, 0.85),
-                    p(0.28, 0.64),
-                    p(0.08, 0.64),
-                ],
-                color,
-                Stroke::NONE,
-            ));
-            for x in [0.62, 0.76] {
-                painter.add(line(vec![p(x, 0.3), p(x + 0.08, 0.5), p(x, 0.7)]));
-            }
-            painter.add(Shape::Noop)
-        }
-        Icon::Hash => {
-            let heavy = Stroke::new(width * 1.25, color);
-            painter.line_segment([p(0.2, 0.36), p(0.85, 0.36)], heavy);
-            painter.line_segment([p(0.15, 0.64), p(0.8, 0.64)], heavy);
-            painter.line_segment([p(0.42, 0.12), p(0.3, 0.88)], heavy);
-            painter.line_segment([p(0.7, 0.12), p(0.58, 0.88)], heavy)
-        }
-        Icon::Forum => {
-            painter.rect_stroke(
-                Rect::from_min_max(p(0.15, 0.18), p(0.85, 0.7)),
-                (size * 0.1) as u8,
-                stroke,
-                StrokeKind::Inside,
-            );
-            painter.line_segment([p(0.3, 0.36), p(0.7, 0.36)], stroke);
-            painter.line_segment([p(0.3, 0.52), p(0.58, 0.52)], stroke);
-            painter.add(line(vec![p(0.3, 0.7), p(0.3, 0.86), p(0.48, 0.7)]))
-        }
-        Icon::Send => painter.add(Shape::convex_polygon(
-            vec![p(0.15, 0.15), p(0.88, 0.5), p(0.15, 0.85), p(0.3, 0.5)],
-            color,
-            Stroke::NONE,
-        )),
-        Icon::External => {
-            painter.add(line(vec![p(0.55, 0.18), p(0.82, 0.18), p(0.82, 0.45)]));
-            painter.line_segment(
-                [p(0.82, 0.18), p(0.46, 0.54)],
-                Stroke::new(width * 1.2, color),
-            );
-            painter.add(line(vec![
-                p(0.7, 0.6),
-                p(0.7, 0.82),
-                p(0.18, 0.82),
-                p(0.18, 0.3),
-                p(0.4, 0.3),
-            ]))
-        }
-        Icon::Attach => {
-            painter.circle_stroke(rect.center(), size * 0.38, Stroke::new(width * 1.2, color));
-            painter.line_segment([p(0.5, 0.3), p(0.5, 0.7)], Stroke::new(width * 1.2, color));
-            painter.line_segment([p(0.3, 0.5), p(0.7, 0.5)], Stroke::new(width * 1.2, color))
-        }
-    };
+    let rect = Rect::from_center_size(rect.center(), Vec2::splat(size))
+        .round_to_pixels(painter.pixels_per_point());
+    let texture = texture(painter.ctx());
+    let [width, height] = texture.size();
+    let cell = icon.cell();
+    let x = (cell % COLUMNS) as f32 * CELL;
+    let y = (cell / COLUMNS) as f32 * CELL;
+    let uv = Rect::from_min_max(
+        egui::pos2(x / width as f32, y / height as f32),
+        egui::pos2((x + CELL) / width as f32, (y + CELL) / height as f32),
+    );
+    // Glyphs occupy 56 of every 64 cell pixels; draw the cell slightly larger so the visible
+    // glyph fills `rect` like the previous painted icons did.
+    painter.image(texture.id(), rect.expand(size * 4.0 / 56.0), uv, color);
 }
 
 /// Square icon button that highlights on hover and exposes `label` to accessibility.
@@ -402,44 +258,48 @@ pub fn inline(ui: &mut egui::Ui, icon: Icon, size: f32, color: Color32) -> Rect 
 mod tests {
     use super::*;
     #[test]
-    fn every_icon_paints_inside_its_rect() {
+    fn atlas_covers_every_icon_once_and_paints_inside_its_rect() {
+        let image = decoded();
+        let rows = Icon::ALL.len().div_ceil(COLUMNS);
+        assert_eq!(image.size, [COLUMNS * CELL as usize, rows * CELL as usize]);
+        assert!(
+            ATLAS.len() < 256 * 1024,
+            "atlas stays a small bundled asset"
+        );
+        let mut cells: Vec<usize> = Icon::ALL.iter().map(|icon| icon.cell()).collect();
+        cells.sort_unstable();
+        cells.dedup();
+        assert_eq!(cells.len(), Icon::ALL.len(), "icons map to distinct cells");
+        assert_eq!(
+            INDEX.lines().count(),
+            Icon::ALL.len(),
+            "index has no unused cells"
+        );
+        for icon in Icon::ALL {
+            // Every cell holds visible glyph pixels.
+            let cell = icon.cell();
+            let (x0, y0) = (
+                (cell % COLUMNS) * CELL as usize,
+                (cell / COLUMNS) * CELL as usize,
+            );
+            let opaque = (0..CELL as usize)
+                .flat_map(|dy| (0..CELL as usize).map(move |dx| (dx, dy)))
+                .filter(|(dx, dy)| image[(x0 + dx, y0 + dy)].a() > 128)
+                .count();
+            assert!(opaque > 40, "{icon:?} cell is blank");
+        }
         let ctx = egui::Context::default();
-        let icons = [
-            Icon::ChevronDown,
-            Icon::ChevronRight,
-            Icon::Gear,
-            Icon::Microphone,
-            Icon::Headphones,
-            Icon::Pin,
-            Icon::People,
-            Icon::Search,
-            Icon::Plus,
-            Icon::Smile,
-            Icon::Bell,
-            Icon::Phone,
-            Icon::Video,
-            Icon::Reply,
-            Icon::Pencil,
-            Icon::More,
-            Icon::Inbox,
-            Icon::Help,
-            Icon::Reload,
-            Icon::Threads,
-            Icon::Speaker,
-            Icon::Hash,
-            Icon::Forum,
-            Icon::Send,
-            Icon::Attach,
-            Icon::Close,
-            Icon::External,
-        ];
         let output = ctx.run_ui(Default::default(), |ui| {
-            for icon in icons {
+            for icon in Icon::ALL {
                 let rect = Rect::from_min_size(egui::pos2(10.0, 10.0), Vec2::splat(24.0));
                 paint(ui.painter(), icon, rect, Color32::WHITE);
                 assert!(button(ui, icon, 32.0, "icon").rect.width() == 32.0);
             }
         });
+        assert!(
+            output.textures_delta.set.len() <= 2,
+            "fonts plus one atlas upload"
+        );
         for shape in &output.shapes {
             let bounds = shape.shape.visual_bounding_rect();
             assert!(bounds.is_negative() || bounds.min.x >= -1.0, "{:?}", bounds);

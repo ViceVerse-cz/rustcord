@@ -1619,7 +1619,6 @@ tests, `cargo xtask check`, and `cargo build --locked -p serein` passed against 
   Official bot-facing message documentation supplies protocol evidence, not normal-user proof.
 
 
-
 ## Rich presence in members, DMs and profiles (September 10, 2026)
 
 Implemented from clean main `5f11cb92644d06e2302678211ac21d9445fad692` on
@@ -1695,8 +1694,41 @@ The pre-existing coalescing, recipient filtering and bounded multi-batch tests a
 Workspace check passed 352 tests; the subsequently added loopback test passed separately.
 No owner account session was used, so this establishes a startup parsing defect rather than
 confirming the exact cause of every missing live activity. Native capture remains paused by
-the owner's earlier Escape stop; the follow-up PR stays draft without that evidence.
+the owner's earlier Escape stop; the initial follow-up PR was delivered as draft without it.
 Both release packages and replay passed; each executable grows 512 bytes. Five-pair replay
 medians were 40.5364 -> 39.6790 ms (noise), with unchanged retained bounds. Final formatting
 and strict all-feature Gateway Clippy passed after adding the loopback regression. Package and
 replay measurements are in performance.md. Unrelated `target-relocation-remainder/` was preserved.
+
+The owner subsequently authorized merging PR #50. Integrated main `4325dd1`, retaining the
+voice UI/icon atlas changes and both sets of progress/performance notes. Only the appended
+documentation sections conflicted. The combined tree passed `cargo xtask check` (353 tests,
+strict Clippy and policy); owner-paused native evidence and unverified live behavior remain
+explicit limitations of the authorized merge.
+Both integrated release packages passed: text 51,126,272 bytes and voice 54,479,360 bytes.
+These include main's new voice UI and atlas; earlier paired presence measurements remain
+historical evidence of the isolated fix, not the combined UI change. Remote CI is pending.
+
+## Discord-style voice UI and Phosphor icon atlas (September 10, 2026)
+
+- Baseline: main `c4ae54d`, clean tree; branch `t3code/improve-voice-chat-ui`.
+- Owner rejected the primitive-painted glyphs. `crates/ui/src/icons.rs` now draws Phosphor
+  Icons 2.1.1 (MIT) from one bundled 512×320 atlas (`assets/icons/`), tinted at draw time and
+  uploaded once at startup; the `Icon` API is unchanged and gains slashed mic/headphones, camera,
+  screen share, activities, soundboard, hang-up, in-call, add-people and profile glyphs.
+  `tools/generate-icons.py` pins every upstream SVG hash and rasterizes with `resvg` 0.45.1.
+  License staged as `licenses/Phosphor-Icons-MIT.txt`; notices, asset README and design doc updated.
+- Voice views follow Discord: DM calls show a black stage above the conversation with 80px
+  participant avatars and mute/deafen badges; guild voice channels show 16:9 participant tiles
+  with name badges in a virtualized grid and a green Join Voice button when not connected. The
+  bottom control bar is Discord's pill layout (mute + settings chevron, camera, screen share,
+  activities, soundboard, more, red hang-up). Unsupported controls are disabled with hints.
+  Header shows a green "In a call" badge; the account card gains mute/deafen toggles; a
+  "Voice Connected" panel with disconnect sits above it while a call is active; incoming calls
+  use a compact banner with round answer/decline actions.
+- New offline fixture `--demo --demo-call` (synthetic DM call, one muted peer) for screenshots.
+- `cargo xtask check` passed: 304 offline tests, formatting, strict all-feature Clippy, text-only
+  compile and policy. Both macOS packages built; sizes and single-run demo memory/CPU samples are
+  in docs/performance.md. Native `--demo-call`/`--demo-voice` captures (dark and light) inspected;
+  evidence in docs/pr-evidence/voice-call-ui. No live call, microphone or account action occurred;
+  Windows/Linux rendering and real call behaviour with the new controls remain unverified.
