@@ -34,6 +34,12 @@ Both Windows release packages passed: text executable 49,776,640 bytes (+119,296
 voice executable 53,128,704 bytes (+112,640 / 0.212%). Installed/ZIP sizes and executable
 hashes are recorded in docs/performance.md. Packages were measured without launching them.
 
+PR #26 macOS CI exposed a pre-existing synthetic Gateway race: dropping TCP immediately
+after invalid-session could discard that frame when a heartbeat reply remained unread.
+The fixture now injects that heartbeat and waits for the client's post-Resume Disconnected
+event before dropping the socket, under the existing 45-second test deadline. The focused
+local test passed; no runtime or gain code changed. Repaired CI remains pending.
+
 Linux CI follow-up: both initial builds failed in WebKit6 because GTK4 0.11.4 exports
 Accessible only with its v4_10 feature. Enabled that feature and documented GTK >=4.10;
 the CI apt log confirms GTK 4.14.5. No source API workaround or dependency version changed.
