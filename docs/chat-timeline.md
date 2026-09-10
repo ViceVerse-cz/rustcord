@@ -1,7 +1,7 @@
 # Chat timeline
 
 Messages now show UTC times and date separators. Consecutive messages from the same author
-within five minutes share a compact layout, except replies, edited messages, unsupported
+within five minutes share a compact layout, except replies, unsupported
 content and unread boundaries. Each message retains its copy/reply/edit/delete/read actions
 and the existing reaction controls. Reply previews use only loaded content, truncate at
 120 characters and conceal spoilers; missing originals show an explicit history placeholder.
@@ -36,13 +36,15 @@ September 10, 2026; the five-minute grouping threshold is a local presentation c
   edited-label preservation and spoiler invalidation. Cache tests exercise live arrivals during
   pending/canceled older requests and restoring recent-page retention.
 
-Native screenshot/interaction verification is blocked: the installed computer-use tool returns
-`Sky Computer Use native pipe startup failed`, including after a session reset. An inherited
-before-only image from e9fb3e4 was inspected and preserved locally in
-`target/chat-original-before.png`; it is not a valid comparison against the updated 74c0d79
-baseline and is excluded from the PR. No final screenshot or visual parity claim is fabricated.
-The first tool selection auto-launched the login gate; it was closed without login interaction.
-Subsequent preview launches explicitly use `--demo`.
+September 10 hover update: continuation timestamps appear in the avatar gutter only on hover
+or keyboard focus. Rows use the shared subtle surface color; an overlay at the upper right
+provides Add reaction, Reply, own-message Edit and the existing More menu. Tab focuses a
+message and then its actions. Open menus remain available while the pointer leaves the row.
+Hover does not change wrapping or cached heights. Edited continuations stay grouped and keep
+an explicit edited label. Empty reaction rows no longer reserve space.
+
+Native synthetic before/after evidence is in `docs/pr-evidence/message-hover/`; this supersedes
+the earlier computer-use capture blocker. See `docs/performance.md` for the measured comparison.
 
 Windows/Linux presentation, actual screen-reader/IME behavior and live Discord exchange remain
 unverified for this slice. The previously recorded owner report that reacting can lose chat

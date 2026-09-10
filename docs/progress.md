@@ -379,3 +379,32 @@ Delivery: [PR #8](https://github.com/ViceVerse-cz/rustcord/pull/8), stacked on #
 contains the implementation and verified commit-pinned before/after images. New macOS,
 Windows, Linux and security checks are pending at handoff; local success does not
 represent CI success. The PR remains draft for the evidence/audit blockers above.
+
+## September 10, 2026 — message hover controls
+
+Implemented `feat/message-hover` from clean `main` at `d802b2a` (fetched origin/main;
+Rust 1.98.1). Consecutive same-author messages hide continuation times until hover/focus,
+share aligned content, retain edited labels and highlight with the existing theme surface.
+The upper-right hover toolbar provides reactions, reply, own-message edit and More;
+copy/delete/mark-read stay in the existing menu. Empty reaction rows take no space.
+Keyboard focus and open menus retain the toolbar without reflowing message content.
+No dependencies, network commands, storage policy or cache budgets changed.
+
+Verification: `cargo xtask check` passed workspace tests, formatting, strict Clippy and
+policy checks. A new offline egui check covers hidden/revealed timestamps, edited grouped
+messages, unchanged row heights, pointer reply and keyboard reply at 900-point dark and
+360-point light widths. Existing reaction toggle/disabled and virtualizer tests pass.
+Native macOS synthetic screenshots compare the unchanged `--demo --demo-chat` fixture
+at the top of history: `docs/pr-evidence/message-hover/before.png` and `after.png`.
+`own-message.png` shows the additional Edit control. Native checks verified reply context,
+adding/removing a reaction without losing other messages, the edit dialog/cancel, More menu
+and light-theme hover contrast. Window resize automation did not alter native dimensions;
+narrow and long-text layout is covered by the 360-point offline egui test.
+Release text and optional-voice packages are built locally; measurements are recorded in
+`docs/performance.md`. Screenshot evidence proves only offline presentation, not live
+Discord compatibility. Windows/Linux and screen-reader verification remain unperformed.
+
+Delivery: [PR #11](https://github.com/ViceVerse-cz/rustcord/pull/11), draft while macOS,
+Windows, Linux and security CI checks are pending. Implementation/evidence commit
+`7cb25ba`; commit-pinned screenshot paths verified on origin. Local checks and both
+release packages passed; remote CI is not yet a success claim.

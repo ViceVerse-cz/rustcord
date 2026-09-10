@@ -188,3 +188,43 @@ soak remain unmeasured. Native automation intermittently failed to activate cont
 preventing reliable completion of picker/light/narrow interaction evidence.
 Raw local samples: `target/custom-{before,after,replay,sizes}.json`;
 script: `target/measure-custom-emoji.py`.
+
+
+## September 10, 2026 — message hover controls
+
+Baseline: clean `d802b2a`, rebuilt before UI edits; after: `feat/message-hover`.
+Rust 1.98.1, macOS 27.0 (26A428), Apple M1 Pro, 16 GiB RAM, release text-only
+(`--no-default-features`) and separate `--features voice` packages. Native runtime samples
+use text-only `--demo --demo-chat`, unchanged nine-message synthetic fixture, default window
+size, dark/system appearance, scroll two pages upward to the first message, pointer over
+the conversation. wgpu configured; actual backend, GPU allocations and display scale
+were not instrumented. Captures share the same 1087×768 window-image size.
+
+| Metric | Baseline | After | Delta |
+| --- | --- | --- | --- |
+| Text executable, bytes | 45,017,184 | 45,033,392 | +16,208 (+0.036%) |
+| Text package, bytes | 45,316,618 | 45,332,937 | +16,319 (+0.036%) |
+| Text gzip, bytes | 29,438,513 | 29,444,125 | +5,612 (+0.019%) |
+| Voice executable, bytes | 47,875,680 | 47,875,472 | -208 (-0.000%) |
+| Voice package, bytes | 48,406,075 | 48,405,978 | -97 (-0.000%) |
+| Voice gzip, bytes | 30,757,714 | 30,759,656 | +1,942 (+0.006%) |
+| Median sampled RSS, KiB | 124,088.00 | 116,720.00 | -7,368.00 |
+| Peak sampled RSS, KiB | 124,112.00 | 116,848.00 | -7,264.00 |
+| Mean sampled CPU, % | 0.36 | 4.37 | +4.01 |
+
+Process samples: ten `ps -p PID -o %cpu=,rss=` samples at one-second intervals,
+at least ten seconds after interaction. RSS is resident memory, not physical footprint;
+peaks cover only this sample window, not startup or a soak. Baseline PID 49815, after
+PID 52432; no authentication webview/audio helper was launched by either demo. Other
+app instances and system processes are excluded. Sampling occurred on a shared desktop
+while voice packaging could still run. The after CPU samples range 0–14%, versus 0–3.6%
+baseline: this noisy sample does not establish idle-CPU improvement or steady-state
+regression. Lower sampled RSS is not a whole-process memory budget guarantee. Startup,
+p95 frames, GPU memory, live account and voice-call performance remain unmeasured.
+
+Package sizes sum all regular files in Serein.app plus the four accompanying root
+README/license/notice files. Compressed sizes use `tar -czf` on those same paths, excluding
+other distribution variants and pre-existing archives. Snapshots precede this measurement
+report; packaging source and runtime assets are unchanged. Raw samples, sizes and archives
+remain under ignored `target/message-hover-*`. Text grows by 16,208 executable bytes;
+voice changes by −208 bytes. No new dependencies or cache/queue budgets.
