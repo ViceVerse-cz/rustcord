@@ -1131,6 +1131,31 @@ impl eframe::App for Desktop {
             upload_allowed,
             &ctx,
         );
+        // Move native handles once; never load dropped bytes on the rendering thread.
+        let dropped = ctx.input_mut(|input| std::mem::take(&mut input.raw.dropped_files));
+        if !dropped.is_empty() {
+            if upload_allowed
+                && self.login.is_none()
+                && !self.confirming_close
+                && !self.confirming_logout
+                && !self.messaging.has_edit()
+                && !self.downloads.is_active()
+                && let Some(channel) = self.state.selected
+            {
+                if let Err(error) = self.uploads.start_drop(
+                    self.state.generation,
+                    channel,
+                    self.runtime.handle(),
+                    &ctx,
+                    dropped,
+                ) {
+                    self.state.status = error;
+                }
+            } else {
+                self.state.status =
+                    "File not attached; return to a connected conversation and drop it again";
+            }
+        }
         self.messaging.attachment = self
             .uploads
             .selection()

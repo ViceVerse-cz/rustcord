@@ -202,6 +202,15 @@ impl MessagingUi {
     ) {
         let colors = crate::design::palette(ui);
         let mut discard = None;
+        if ctx.input(|input| !input.raw.hovered_files.is_empty()) {
+            ui.label(if self.upload_busy || self.attachment.is_some() {
+                "Remove the current attachment or wait before dropping another file"
+            } else if state.gateway_connected && state.freshness == Freshness::Fresh {
+                "Drop one file up to 20 MB to attach it here; Send starts the upload"
+            } else {
+                "Reconnect and reload this conversation before attaching a file"
+            });
+        }
         for (index, pending) in state
             .pending
             .iter()
@@ -420,7 +429,7 @@ impl MessagingUi {
                                 .color(colors.muted),
                         );
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            if ui.add_enabled(state.gateway_connected && state.freshness == Freshness::Fresh && !self.upload_busy && self.attachment.is_none(), egui::Button::new("Attach file")).on_hover_text("Choose one file up to 20 MB. Upload starts only when you press Send.").clicked() {
+                            if ui.add_enabled(state.gateway_connected && state.freshness == Freshness::Fresh && !self.upload_busy && self.attachment.is_none(), egui::Button::new("Attach file")).on_hover_text("Choose or drop one file up to 20 MB. Upload starts only when you press Send.").clicked() {
                                 self.attach_requested = true;
                             }
                             ui.add(

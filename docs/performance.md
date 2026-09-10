@@ -94,3 +94,21 @@ Replay: build release replay-bench once per revision; one warmup plus five direc
 Native baseline only: text --demo, dark 1122x792 window, wgpu; selected adapter/display scale unmeasured. After more than 30 seconds idle settling, 16 Get-Process samples at one-second intervals covered 15.273 seconds. Working set peaked at 158,564,352 bytes and settled at 158,547,968; private bytes peaked at 394,444,800 and settled at 394,412,032. CPU delta was 0.046875 seconds (0.307% of one core). The baseline was idle, with no picker/upload interaction. The owner stopped Computer Use before changed-build inspection, so no comparable after sample, upload-load memory, frame/startup p95, GPU/helper-process or voice-memory measurement is available. No native performance improvement is claimed.
 
 Resource ceilings: one selected file/job, file <=20,000,000 bytes, 64 KiB application chunks, latest-value progress, staging/storage responses <=64 KiB, local path <=4096 encoded bytes and filename <=256 UTF-8 bytes. Library, TLS, OS and driver buffers are additional. This avoids a deliberate whole-file allocation but is not a measured process-memory ceiling. Pending filename metadata shares existing draft/pending admission budgets; no upload disk snapshot or new database table exists.
+
+### Updated attachment packages including drag-and-drop
+
+Same reference host, Rust profile and original e99bc88 baseline above; both Windows package variants rebuilt after adding drop selection. No dependency or reducer source changed in this continuation. Incremental executable growth over picker-only b83b41a is 28,160 bytes text (0.067%) and 26,624 bytes voice (0.059%). The complete PR comparison is:
+
+| Metric | Original baseline | Picker and drop | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable, bytes | 41,835,008 | 42,137,600 | +302,592 (+0.723%) |
+| Voice executable, bytes | 45,182,976 | 45,450,240 | +267,264 (+0.592%) |
+| Text installed package, bytes | 42,060,801 | 42,382,555 | +321,754 (+0.765%) |
+| Voice installed package, bytes | 45,632,327 | 45,918,753 | +286,426 (+0.628%) |
+| Text ZIP, bytes | 24,380,566 | 24,486,146 | +105,580 (+0.433%) |
+| Voice ZIP, bytes | 25,746,892 | 25,838,616 | +91,724 (+0.356%) |
+| Reducer replay median, milliseconds | 26.8048 | 27.9813 | +1.1765 (+4.39%, noisy) |
+
+Package totals use the same full-file/DEFLATE-9 method and exclusions, measured before this final progress/performance addendum was staged. After release builds finished, the existing release replay executable (reducer source unchanged) was run once for warmup plus five samples: 26.2423, 28.5555, 32.6936, 27.9813, 26.8632 ms. Retained state remains 500 messages and 220,992-221,477 estimated bytes. The spread and unchanged reducer make this a noisy observation, not an algorithmic regression or optimization claim; drop throughput and UI latency were not measured.
+
+The native picker-only parent composer was inspected, then Computer Use stopped with physical Escape before chooser interaction. No native drop-build process sample, final screenshot or actual OS drag/drop measurement is available. Admission moves egui handles once, retains at most one bounded local path, and reuses asynchronous metadata validation; it never calls the handle's whole-file bytes method. All original upload resource ceilings remain unchanged.

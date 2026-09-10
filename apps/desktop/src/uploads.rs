@@ -48,13 +48,53 @@ impl Uploads {
         }
         // Construct on the native UI thread; await and inspect outside rendering.
         let dialog = platform::save::attachment_source(parent);
+        self.start_selection(generation, channel, runtime, context, dialog);
+        Ok(())
+    }
+    pub fn start_drop(
+        &mut self,
+        generation: u64,
+        channel: Id,
+        runtime: &tokio::runtime::Handle,
+        context: &egui::Context,
+        files: Vec<egui::DroppedFileHandle>,
+    ) -> Result<(), &'static str> {
+        if self.busy() || self.selected.is_some() {
+            return Err("Remove the current attachment or wait for its operation to finish");
+        }
+        if files.len() != 1 {
+            return Err("Drop exactly one local file");
+        }
+        // Native egui handles expose a local path. Never call their whole-file bytes API.
+        let path = files[0].path();
+        if !path.is_absolute() || path.as_os_str().as_encoded_bytes().len() > 4096 {
+            return Err("Drop a local file with a supported path");
+        }
+        let path = path.to_owned();
+        self.start_selection(
+            generation,
+            channel,
+            runtime,
+            context,
+            async move { Some(path) },
+        );
+        Ok(())
+    }
+    fn start_selection(
+        &mut self,
+        generation: u64,
+        channel: Id,
+        runtime: &tokio::runtime::Handle,
+        context: &egui::Context,
+        selection: impl std::future::Future<Output = Option<std::path::PathBuf>> + Send + 'static,
+    ) {
         let cancelled = Arc::new(AtomicBool::new(false));
         let flag = cancelled.clone();
         let (send, result) = mpsc::sync_channel(1);
         let context = context.clone();
         runtime.spawn(async move {
             let result = async {
-                let path = dialog.await;
+                let path = selection.await;
                 if flag.load(Ordering::Acquire) {
                     return Ok(None);
                 }
@@ -70,7 +110,6 @@ impl Uploads {
         self.scope = Some((generation, channel));
         self.last = None;
         self.choosing = Some(Choosing { result, cancelled });
-        Ok(())
     }
     pub fn poll(
         &mut self,
@@ -89,7 +128,7 @@ impl Uploads {
             let result = match choosing.result.try_recv() {
                 Ok(result) => Some(result),
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    Some(Err("Attachment chooser interrupted"))
+                    Some(Err("Attachment selection interrupted"))
                 }
                 Err(mpsc::TryRecvError::Empty) => None,
             };
@@ -153,9 +192,9 @@ impl Uploads {
         if let Some(choosing) = &self.choosing {
             return Some(
                 if choosing.cancelled.load(Ordering::Acquire) {
-                    "Attachment selection cancelled; close the file chooser"
+                    "Attachment selection cancelled; close any open file chooser"
                 } else {
-                    "Choosing attachment..."
+                    "Selecting attachment..."
                 }
                 .into(),
             );
@@ -220,6 +259,104 @@ impl Drop for Uploads {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn file_drop_is_single_scoped_selection_and_never_reads_handle_bytes() {
+        struct SyntheticDrop(std::path::PathBuf);
+        impl std::fmt::Debug for SyntheticDrop {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("SyntheticDrop([REDACTED])")
+            }
+        }
+        impl egui::DroppedFile for SyntheticDrop {
+            fn path(&self) -> &std::path::Path {
+                &self.0
+            }
+            fn bytes(&self) -> Result<Vec<u8>, String> {
+                panic!("Drop admission must never read whole-file bytes")
+            }
+        }
+        async fn settle(uploads: &mut Uploads, context: &egui::Context, channel: Id) {
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while uploads.busy() {
+                    uploads.poll(1, Some(channel), true, context);
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+        }
+        let context = egui::Context::default();
+        let runtime = tokio::runtime::Handle::current();
+        let mut uploads = Uploads::default();
+        let path = std::env::temp_dir().join(format!(
+            "serein-drop-{}-{}.txt",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let handle =
+            |path: std::path::PathBuf| -> egui::DroppedFileHandle { Arc::new(SyntheticDrop(path)) };
+        for files in [
+            vec![],
+            vec![handle(path.clone()), handle(path.clone())],
+            vec![handle(std::path::PathBuf::new())],
+            vec![handle("memory-only.txt".into())],
+            vec![handle(std::env::temp_dir().join("x".repeat(4097)))],
+        ] {
+            assert!(
+                uploads
+                    .start_drop(1, Id(2), &runtime, &context, files)
+                    .is_err()
+            );
+            assert!(!uploads.busy());
+        }
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .await
+            .unwrap();
+        tokio::io::AsyncWriteExt::write_all(&mut file, b"synthetic drop")
+            .await
+            .unwrap();
+        tokio::io::AsyncWriteExt::flush(&mut file).await.unwrap();
+        drop(file);
+        assert!(
+            uploads
+                .start_drop(1, Id(2), &runtime, &context, vec![handle(path.clone())])
+                .is_ok()
+        );
+        assert!(
+            uploads
+                .start_drop(1, Id(2), &runtime, &context, vec![handle(path.clone())])
+                .is_err()
+        );
+        settle(&mut uploads, &context, Id(2)).await;
+        assert_eq!(
+            uploads.selection(),
+            Some((path.file_name().unwrap().to_str().unwrap(), 14))
+        );
+        assert!(
+            uploads
+                .start_drop(1, Id(2), &runtime, &context, vec![handle(path.clone())])
+                .is_err()
+        );
+        assert!(uploads.selection().is_some());
+        assert!(uploads.take_source(1, Id(3)).is_none());
+        uploads.remove();
+        assert!(
+            uploads
+                .start_drop(1, Id(2), &runtime, &context, vec![handle(path.clone())])
+                .is_ok()
+        );
+        // A result inspected before or after navigation must never enter the new conversation.
+        uploads.poll(1, Some(Id(3)), true, &context);
+        settle(&mut uploads, &context, Id(3)).await;
+        assert!(uploads.selection().is_none());
+        tokio::fs::remove_file(path).await.unwrap();
+    }
     #[test]
     fn cancelled_chooser_and_upload_keep_the_single_slot_until_the_worker_finishes() {
         let context = egui::Context::default();
