@@ -1,5 +1,8 @@
 //! Discord wire DTOs. JSON values never become application state.
+mod attachments;
 mod embeds;
+pub mod profile;
+use attachments::AttachmentList;
 use embeds::EmbedList;
 use model::{Channel, Guild, Id, Message, MessagePatch, Patch, User};
 use serde::Deserialize;
@@ -260,6 +263,8 @@ impl Ready {
         (guilds, channels)
     }
 }
+#[derive(Deserialize, Default)]
+pub struct MentionList(#[serde(deserialize_with = "model::deserialize_mentions")] pub Vec<UserDto>);
 #[derive(Deserialize)]
 pub struct MessageDto {
     pub id: Id,
@@ -268,13 +273,15 @@ pub struct MessageDto {
     #[serde(default)]
     pub content: String,
     #[serde(default)]
+    pub mentions: MentionList,
+    #[serde(default)]
     pub edited_timestamp: Option<Timestamp>,
     #[serde(default)]
     pub nonce: Option<Nonce>,
     #[serde(default)]
     pub message_reference: Option<Reference>,
     #[serde(default)]
-    pub attachments: Vec<Box<RawValue>>,
+    pub attachments: AttachmentList,
     #[serde(default)]
     pub embeds: EmbedList,
     #[serde(default)]
@@ -299,6 +306,12 @@ impl MessageDto {
             channel: self.channel_id,
             author: self.author.into_model(),
             content: self.content,
+            mentions: self
+                .mentions
+                .0
+                .into_iter()
+                .map(UserDto::into_model)
+                .collect(),
             edited: self.edited_timestamp.is_some(),
             edited_at: self.edited_timestamp.map(|t| t.0),
             revision: 0,
@@ -307,7 +320,8 @@ impl MessageDto {
                 Nonce::Number(n) => n.to_string(),
             }),
             reply_to: self.message_reference.and_then(|r| r.message_id),
-            unsupported: !self.attachments.is_empty() || !matches!(self.kind, 0 | 19 | 20 | 23),
+            unsupported: !matches!(self.kind, 0 | 19 | 20 | 23),
+            attachments: self.attachments.0,
             embeds: embeds::bounded(self.embeds.0),
             embeds_suppressed: self.flags & 4 != 0,
         }
@@ -320,9 +334,13 @@ pub struct PatchDto {
     #[serde(default)]
     pub content: Patch<String>,
     #[serde(default)]
+    pub mentions: Patch<MentionList>,
+    #[serde(default)]
     pub edited_timestamp: Patch<Timestamp>,
     #[serde(default)]
     pub embeds: Patch<EmbedList>,
+    #[serde(default)]
+    pub attachments: Patch<AttachmentList>,
     #[serde(default)]
     pub flags: Patch<u64>,
 }
@@ -332,6 +350,18 @@ impl PatchDto {
             id: self.id,
             channel: self.channel_id,
             content: self.content,
+            mentions: match self.mentions {
+                Patch::Absent => Patch::Absent,
+                Patch::Null => Patch::Null,
+                Patch::Value(users) => {
+                    Patch::Value(users.0.into_iter().map(UserDto::into_model).collect())
+                }
+            },
+            attachments: match self.attachments {
+                Patch::Absent => Patch::Absent,
+                Patch::Null => Patch::Null,
+                Patch::Value(values) => Patch::Value(values.0),
+            },
             embeds: match self.embeds {
                 Patch::Absent => Patch::Absent,
                 Patch::Null => Patch::Null,
@@ -392,6 +422,28 @@ pub struct ErrorBody {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bounded_message_mentions_and_patch_presence() {
+        let message=decode::<MessageDto>(br#"{"id":"1","channel_id":"2","author":{"id":"3","username":"author"},"content":"<@4>","mentions":[{"id":"4","username":"user","global_name":"Display name"}]}"#).unwrap().into_model();
+        assert_eq!(message.mentions[0].id, Id(4));
+        assert_eq!(message.mentions[0].name, "Display name");
+        assert!(matches!(
+            decode::<PatchDto>(br#"{"id":"1","channel_id":"2"}"#)
+                .unwrap()
+                .into_model()
+                .mentions,
+            Patch::Absent
+        ));
+        assert!(matches!(
+            decode::<PatchDto>(br#"{"id":"1","channel_id":"2","mentions":null}"#)
+                .unwrap()
+                .into_model()
+                .mentions,
+            Patch::Null
+        ));
+        let large = serde_json::json!({"id":"1","channel_id":"2","mentions":(1..=101).map(|id|serde_json::json!({"id":id.to_string(),"username":"synthetic"})).collect::<Vec<_>>()});
+        assert!(decode::<PatchDto>(&serde_json::to_vec(&large).unwrap()).is_err());
+    }
     #[test]
     fn precision_patches_and_hostile_payloads() {
         let id: Id = decode(br#""18446744073709551615""#).unwrap();

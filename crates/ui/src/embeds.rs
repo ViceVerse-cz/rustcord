@@ -4,10 +4,14 @@ use crate::{
     markdown::{FormatCache, external_url},
 };
 use egui::RichText;
-use model::{Embed, Id, Message};
+use model::{Embed, Message};
 
 pub fn has_spoilers(message: &Message) -> bool {
-    message.content.contains("||")
+    message.attachments.iter().any(|a| {
+        a.spoiler
+            || a.filename.starts_with("SPOILER_")
+            || a.description.as_deref().is_some_and(|s| s.contains("||"))
+    }) || message.content.contains("||")
         || message.embeds.iter().any(|e| {
             [&e.title, &e.description]
                 .into_iter()
@@ -54,14 +58,15 @@ fn link(
 }
 fn text(
     ui: &mut egui::Ui,
-    id: Id,
+    message: &Message,
     part: u16,
     source: &str,
     cache: &mut FormatCache,
     opening: &mut Option<String>,
+    profile: &mut Option<model::User>,
 ) {
-    let formatted = cache.get_part(id, part, source);
-    formatted.show(ui, opening);
+    let formatted = cache.get_part(message.id, part, source);
+    formatted.show_mentions(ui, opening, &message.mentions, profile);
     if formatted.limited {
         ui.small("Text display limited");
     }
@@ -72,6 +77,7 @@ pub fn show(
     cache: &mut FormatCache,
     images: &mut Avatars,
     opening: &mut Option<String>,
+    profile: &mut Option<model::User>,
     demo: bool,
 ) {
     if message.embeds_suppressed {
@@ -141,7 +147,15 @@ pub fn show(
                                         link(ui, title, embed.url.as_deref(), opening, true);
                                     }
                                     if let Some(description) = &embed.description {
-                                        text(ui, message.id, part, description, cache, opening);
+                                        text(
+                                            ui,
+                                            message,
+                                            part,
+                                            description,
+                                            cache,
+                                            opening,
+                                            profile,
+                                        );
                                     }
                                 });
                                 if let Some(image) = thumbnail {
@@ -176,11 +190,12 @@ pub fn show(
                                         );
                                         text(
                                             column,
-                                            message.id,
+                                            message,
                                             part + 1 + (field + offset) as u16,
                                             &f.value,
                                             cache,
                                             opening,
+                                            profile,
                                         );
                                     }
                                 });

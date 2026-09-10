@@ -1,10 +1,14 @@
 //! Native egui views; emits commands without owning transports or session credentials.
+mod attachments;
+pub use attachments::DownloadUi;
 mod avatars;
 mod categories;
 pub mod design;
 mod embeds;
 pub mod fonts;
 mod markdown;
+mod mentions;
+mod profiles;
 mod timeline;
 mod voice;
 use client_core::{Command, MAX_CONTENT, MAX_DRAFT_BYTES, State};
@@ -16,6 +20,7 @@ pub struct MessagingUi {
     timeline: timeline::TimelineView,
     avatars: avatars::Avatars,
     profile: Option<model::User>,
+    profile_link: Option<String>,
     members_hidden: bool,
     members_narrow_open: bool,
     member_reload_requested: bool,
@@ -41,9 +46,13 @@ pub struct MessagingUi {
     editing: Option<(Id, Id, String)>,
     deleting: Option<(Id, Id)>,
     ime_active: bool,
+    mention_menu: mentions::Menu,
 }
 
 impl MessagingUi {
+    pub fn downloads(&mut self) -> &mut DownloadUi {
+        &mut self.timeline.download
+    }
     pub fn clear_avatars(&mut self) {
         self.avatars = avatars::Avatars::default();
     }
@@ -254,6 +263,28 @@ impl MessagingUi {
             }
         });
         let composer_id = ui.make_persistent_id("message-input");
+        let mention_enabled =
+            !self.ime_active && !ime_this_frame && ctx.memory(|m| m.has_focus(composer_id));
+        let mention_users = if mention_enabled {
+            mentions::known_users(state, channel)
+        } else {
+            Vec::new()
+        };
+        let cursor = egui::text_edit::TextEditState::load(ctx, composer_id)
+            .and_then(|s| s.cursor.char_range())
+            .filter(|r| r.is_empty())
+            .map(|r| r.primary.index.0);
+        self.mention_menu.refresh(
+            channel,
+            state.drafts.get(&channel).map_or("", String::as_str),
+            cursor.filter(|_| mention_enabled),
+            &mention_users,
+        );
+        let mention_pick = if mention_enabled {
+            self.mention_menu.keys(ctx)
+        } else {
+            None
+        };
         let enter = !self.ime_active
             && !ime_this_frame
             && ctx.memory(|m| m.has_focus(composer_id))
@@ -266,18 +297,52 @@ impl MessagingUi {
             .show(ui, |ui| {
                 let mut new_draft = String::new();
                 let draft = state.drafts.get_mut(&channel).unwrap_or(&mut new_draft);
-                let edit = ui.add(
-                    TextEdit::multiline(draft)
-                        .id(composer_id)
-                        .char_limit(MAX_CONTENT)
-                        .desired_rows(2)
-                        .desired_width(f32::INFINITY)
-                        .frame(egui::Frame::NONE)
-                        .hint_text("Write a message…"),
-                );
+                let mut mention_changed = false;
+                if let Some(pick) = mention_pick
+                    && let Some(cursor) = mentions::insert(draft, pick)
+                {
+                    let mut edit_state =
+                        egui::text_edit::TextEditState::load(ctx, composer_id).unwrap_or_default();
+                    edit_state
+                        .cursor
+                        .set_char_range(Some(egui::text::CCursorRange::one(
+                            egui::text::CCursor::new(cursor),
+                        )));
+                    edit_state.store(ctx, composer_id);
+                    mention_changed = true;
+                }
+                let mut output = TextEdit::multiline(draft)
+                    .id(composer_id)
+                    .char_limit(MAX_CONTENT)
+                    .desired_rows(2)
+                    .desired_width(f32::INFINITY)
+                    .frame(egui::Frame::NONE)
+                    .hint_text("Write a message… @ to mention")
+                    .show(ui);
+                let mention_cursor = output
+                    .cursor_range
+                    .filter(|r| r.is_empty())
+                    .map(|r| r.primary.index.0)
+                    .filter(|_| mention_enabled);
+                self.mention_menu
+                    .refresh(channel, draft, mention_cursor, &mention_users);
+                if let Some(pick) = self.mention_menu.show(ui)
+                    && let Some(cursor) = mentions::insert(draft, pick)
+                {
+                    output
+                        .state
+                        .cursor
+                        .set_char_range(Some(egui::text::CCursorRange::one(
+                            egui::text::CCursor::new(cursor),
+                        )));
+                    output.state.store(ctx, composer_id);
+                    output.response.request_focus();
+                    mention_changed = true;
+                }
+                let edit = output.response;
                 let count = draft.chars().count();
                 let cleared = draft.is_empty();
-                if edit.changed() {
+                if edit.changed() || mention_changed {
                     if cleared {
                         self.clear_draft(state, channel);
                     } else {
@@ -775,24 +840,62 @@ impl MessagingUi {
                     });
             });
         if let Some(user) = &self.profile {
-            let mut open = true;
-            egui::Window::new("Profile")
-                .open(&mut open)
-                .collapsible(false)
-                .resizable(false)
-                .default_width(264.0)
-                .show(&ctx, |ui| {
-                    self.avatars.show(ui, user, 72.0, state.demo);
-                    ui.add_space(8.0);
-                    ui.heading(&user.name);
-                    ui.label(RichText::new("USER ID").size(10.0).color(colors.muted));
-                    ui.add(egui::Label::new(user.id.to_string()).selectable(true));
-                    if ui.button("Copy user ID").clicked() {
-                        ctx.copy_text(user.id.to_string());
+            let profile_guild = state
+                .channels
+                .iter()
+                .find(|channel| Some(channel.id) == state.selected)
+                .and_then(|channel| channel.guild);
+            if state
+                .profile
+                .as_ref()
+                .is_none_or(|p| p.user != user.id || p.guild != profile_guild)
+            {
+                self.profile_link = None;
+                if state.demo {
+                    state.profile = Some(client_core::profile::ProfileView {
+                        user: user.id,
+                        guild: profile_guild,
+                        request: 0,
+                        loading: false,
+                        error: None,
+                        data: Some(profiles::synthetic(user, profile_guild)),
+                    });
+                } else if let Some(command) = state.request_profile(user.id, profile_guild) {
+                    commands.push(command);
+                }
+            }
+            match profiles::show(
+                ui,
+                user,
+                state.profile.as_ref(),
+                state,
+                &mut self.avatars,
+                &mut self.profile_link,
+            ) {
+                Some(profiles::Action::Profile(user)) => {
+                    self.profile = Some(user);
+                    self.profile_link = None;
+                    commands.push(state.clear_profile());
+                }
+                Some(profiles::Action::Close) => {
+                    self.profile = None;
+                    self.profile_link = None;
+                    commands.push(state.clear_profile());
+                }
+                Some(profiles::Action::Retry) => {
+                    if let Some(command) = state.request_profile(user.id, profile_guild) {
+                        commands.push(command);
                     }
-                });
-            if !open {
-                self.profile = None;
+                }
+                Some(profiles::Action::Message(channel)) => {
+                    self.profile = None;
+                    self.profile_link = None;
+                    commands.push(state.clear_profile());
+                    if let Some(command) = state.select(channel) {
+                        commands.push(command);
+                    }
+                }
+                None => {}
             }
         }
         if let Some((channel, message, content)) = &mut self.editing {
@@ -925,6 +1028,53 @@ mod composer_tests {
             "Offscreen members must not upload textures"
         );
         output.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn profile_uses_open_conversation_not_browsed_sidebar_server() {
+        for guild in [None, Some(Id(10))] {
+            let user = model::User {
+                id: Id(2),
+                name: "Synthetic".into(),
+                avatar: None,
+                discriminator: 0,
+            };
+            let mut state = State {
+                demo: true,
+                selected: Some(Id(1)),
+                channels: vec![model::Channel {
+                    id: Id(1),
+                    guild,
+                    parent_id: None,
+                    position: 0,
+                    name: "Open conversation".into(),
+                    kind: if guild.is_some() { 0 } else { 1 },
+                    recipients: vec![user.clone()],
+                    member_list_id: None,
+                }],
+                ..Default::default()
+            };
+            let mut messaging = MessagingUi {
+                navigation_channel: state.selected,
+                guild: Some(Id(99)),
+                profile: Some(user),
+                ..Default::default()
+            };
+            let output = egui::Context::default().run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1120.0, 900.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    messaging.show(ui, &mut state);
+                },
+            );
+            assert_eq!(state.profile.as_ref().unwrap().guild, guild);
+            output.drop_without_applying_deltas();
+        }
     }
 
     #[test]

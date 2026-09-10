@@ -118,3 +118,7 @@ Repeated `cargo tree --locked --workspace --all-features --target all -i PACKAGE
 Consequently all six vulnerability-class findings are on **unselected optional packages** in this final configuration. The old `proc-macro-error2` warning is also unselected; its `cfg(hax)` parent chain is no longer selected after removal of active libcrux. `instant` remains selected for voice, and the pre-existing GLib/proc-macro-error findings remain relevant to the supported Linux authentication build. This is dependency-selection evidence, not a promise of exploit-free software or a reason to mark the strict audit passed.
 
 Further remediation needs a released or reviewed coordinated OpenMLS/Davey dependency update, removal of the unnecessary native `js` timer feature upstream, and the Linux authentication migration described above. Until then the six/five lockfile audit failure remains explicit in CI and release reporting. No audit ignore list, altered vulnerability version label, or hidden backend switch was introduced.
+
+## Mentions, profiles and native save follow-up
+
+The September 10 follow-up reran `target/audit-tool/bin/cargo-audit audit --json` after adding rfd 0.17.2 and pollster 0.4.0. It still reports six vulnerability-class findings and five warnings (four unmaintained, one unsound); none is attributed to the two added packages. The strict audit remains failing; the existing findings above are not waived. Output: `target/mentions-profiles-audit.json`.

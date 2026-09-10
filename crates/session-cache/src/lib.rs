@@ -61,7 +61,9 @@ impl Timeline {
         }
         if message.bytes() > MAX_BYTES
             || message.content.len() > 64 * 1024
+            || !model::valid_mentions(&message.mentions)
             || !model::valid_embeds(&message.embeds)
+            || !model::valid_attachments(&message.attachments)
         {
             return Err("Message exceeds safe capacity");
         }
@@ -84,8 +86,10 @@ impl Timeline {
             message.revision = previous.revision
                 + u64::from(
                     previous.content != message.content
+                        || previous.mentions != message.mentions
                         || previous.edited != message.edited
                         || previous.embeds != message.embeds
+                        || previous.attachments != message.attachments
                         || previous.embeds_suppressed != message.embeds_suppressed,
                 );
         }
@@ -132,7 +136,9 @@ impl Timeline {
             return Ok(());
         }
         if matches!(&patch.content, Patch::Value(s) if s.len() > 64 * 1024)
+            || matches!(&patch.mentions, Patch::Value(users) if !model::valid_mentions(users))
             || matches!(&patch.embeds, Patch::Value(embeds) if !model::valid_embeds(embeds))
+            || matches!(&patch.attachments, Patch::Value(attachments) if !model::valid_attachments(attachments))
         {
             return Err("Message patch exceeds capacity");
         }
@@ -158,11 +164,17 @@ impl Timeline {
             if !matches!(patch.content, Patch::Absent) {
                 merged.content = patch.content;
             }
+            if !matches!(patch.mentions, Patch::Absent) {
+                merged.mentions = patch.mentions;
+            }
             if !matches!(patch.edited, Patch::Absent) {
                 merged.edited = patch.edited;
             }
             if !matches!(patch.embeds, Patch::Absent) {
                 merged.embeds = patch.embeds;
+            }
+            if !matches!(patch.attachments, Patch::Absent) {
+                merged.attachments = patch.attachments;
             }
             if !matches!(patch.embeds_suppressed, Patch::Absent) {
                 merged.embeds_suppressed = patch.embeds_suppressed;
@@ -197,14 +209,27 @@ fn patch_bytes(patch: &MessagePatch) -> usize {
         _ => 0,
     };
     content
+        + match &patch.mentions {
+            Patch::Value(users) => model::mention_bytes(users),
+            _ => 0,
+        }
         + match &patch.embeds {
             Patch::Value(value) => model::embed_bytes(value),
+            _ => 0,
+        }
+        + match &patch.attachments {
+            Patch::Value(value) => model::attachment_bytes(value),
             _ => 0,
         }
 }
 fn apply_patch(message: &mut Message, patch: &MessagePatch) {
     if matches!(patch.edited,Patch::Value(new) if message.edited_at.is_some_and(|old|new<old)) {
         return;
+    }
+    match &patch.mentions {
+        Patch::Value(users) => message.mentions.clone_from(users),
+        Patch::Null => message.mentions.clear(),
+        Patch::Absent => {}
     }
     match &patch.content {
         Patch::Value(s) => message.content.clone_from(s),
@@ -227,6 +252,11 @@ fn apply_patch(message: &mut Message, patch: &MessagePatch) {
         Patch::Null => message.embeds.clear(),
         Patch::Absent => {}
     }
+    match &patch.attachments {
+        Patch::Value(attachments) => message.attachments.clone_from(attachments),
+        Patch::Null => message.attachments.clear(),
+        Patch::Absent => {}
+    }
     match patch.embeds_suppressed {
         Patch::Value(suppressed) => message.embeds_suppressed = suppressed,
         Patch::Null => message.embeds_suppressed = false,
@@ -238,6 +268,32 @@ fn apply_patch(message: &mut Message, patch: &MessagePatch) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mention_patches_survive_stale_pages_and_release_replaced_users() {
+        let mut timeline = Timeline::default();
+        let mut original = message(1);
+        original.mentions = vec![original.author.clone()];
+        timeline.insert(original.clone(), false, false).unwrap();
+        let before = timeline.bytes;
+        let patch = MessagePatch {
+            id: Id(1),
+            channel: original.channel,
+            content: Patch::Absent,
+            mentions: Patch::Value(vec![]),
+            edited: Patch::Absent,
+            embeds: Patch::Absent,
+            embeds_suppressed: Patch::Absent,
+            attachments: Patch::Absent,
+        };
+        timeline.patch(patch.clone()).unwrap();
+        assert!(timeline.get(Id(1)).unwrap().mentions.is_empty());
+        assert!(timeline.bytes < before);
+        timeline.clear();
+        timeline.begin_page();
+        timeline.patch(patch).unwrap();
+        timeline.finish_page(vec![original], false).unwrap();
+        assert!(timeline.get(Id(1)).unwrap().mentions.is_empty());
+    }
     fn message(id: u64) -> Message {
         Message {
             id: Id(id),
@@ -255,9 +311,96 @@ mod tests {
             nonce: None,
             reply_to: None,
             unsupported: false,
+            attachments: Vec::new(),
             embeds: Vec::new(),
+            mentions: Vec::new(),
             embeds_suppressed: false,
         }
+    }
+    #[test]
+    fn attachment_only_mutations_clear_without_late_history_resurrection() {
+        let attachment = |id| model::Attachment {
+            id: Id(id),
+            filename: "synthetic.png".into(),
+            description: None,
+            content_type: Some("image/png".into()),
+            size: 1024,
+            media: model::EmbedMedia {
+                url: Some(format!(
+                    "https://cdn.discordapp.com/attachments/1/{id}/synthetic.png"
+                )),
+                width: 640,
+                height: 480,
+                ..Default::default()
+            },
+            spoiler: false,
+        };
+        let update = |attachments| MessagePatch {
+            id: Id(1),
+            channel: Id(1),
+            content: Patch::Absent,
+            edited: Patch::Absent,
+            embeds: Patch::Absent,
+            mentions: Patch::Absent,
+            embeds_suppressed: Patch::Absent,
+            attachments,
+        };
+        let mut timeline = Timeline::default();
+        timeline.begin_page();
+        timeline
+            .patch(update(Patch::Value(vec![attachment(10)])))
+            .unwrap();
+        timeline.patch(update(Patch::Absent)).unwrap();
+        timeline.insert(message(1), true, false).unwrap();
+        assert_eq!(timeline.get(Id(1)).unwrap().attachments[0].id, Id(10));
+        let revision = timeline.get(Id(1)).unwrap().revision;
+        timeline
+            .patch(update(Patch::Value(vec![attachment(11)])))
+            .unwrap();
+        timeline.finish_page(vec![message(1)], false).unwrap();
+        assert_eq!(timeline.get(Id(1)).unwrap().attachments[0].id, Id(11));
+        assert!(timeline.get(Id(1)).unwrap().revision > revision);
+        for clear in [Patch::Null, Patch::Value(Vec::new())] {
+            timeline.begin_page();
+            let mut old = message(1);
+            old.attachments = vec![attachment(10)];
+            timeline.patch(update(clear)).unwrap();
+            timeline.finish_page(vec![old], false).unwrap();
+            assert!(timeline.get(Id(1)).unwrap().attachments.is_empty());
+            assert_eq!(
+                timeline.bytes(),
+                timeline.iter().map(Message::bytes).sum::<usize>()
+            );
+        }
+        timeline.begin_page();
+        timeline.delete(Id(1)).unwrap();
+        timeline
+            .patch(update(Patch::Value(vec![attachment(12)])))
+            .unwrap();
+        timeline.finish_page(vec![message(1)], false).unwrap();
+        assert!(timeline.is_empty());
+        timeline.clear();
+        timeline.begin_page();
+        let mut large = attachment(10);
+        large.media.url = Some(format!("https://cdn.discordapp.com/{}", "x".repeat(1900)));
+        large.media.proxy_url = large.media.url.clone();
+        let mut rejected = false;
+        for id in 1..100 {
+            let mut patch = update(Patch::Value(vec![large.clone(); model::MAX_ATTACHMENTS]));
+            patch.id = Id(id);
+            if timeline.patch(patch).is_err() {
+                rejected = true;
+                break;
+            }
+        }
+        assert!(
+            rejected,
+            "Pending attachments share the one MiB mutation budget"
+        );
+        assert!(
+            !timeline.patches.is_empty(),
+            "The budget test uses valid attachments"
+        );
     }
     #[test]
     fn embed_only_mutations_merge_clear_and_survive_late_history() {
@@ -271,7 +414,9 @@ mod tests {
             content: Patch::Absent,
             edited: Patch::Absent,
             embeds,
+            mentions: Patch::Absent,
             embeds_suppressed: Patch::Absent,
+            attachments: Patch::Absent,
         };
         let mut timeline = Timeline::default();
         timeline.begin_page();
@@ -340,7 +485,9 @@ mod tests {
             content: Patch::Value("after".into()),
             edited: Patch::Value(1),
             embeds: Patch::Absent,
+            mentions: Patch::Absent,
             embeds_suppressed: Patch::Absent,
+            attachments: Patch::Absent,
         })
         .unwrap();
         t.finish_page(vec![message(1), message(2)], false).unwrap();
@@ -351,7 +498,9 @@ mod tests {
             content: Patch::Value("late edit".into()),
             edited: Patch::Absent,
             embeds: Patch::Absent,
+            mentions: Patch::Absent,
             embeds_suppressed: Patch::Absent,
+            attachments: Patch::Absent,
         })
         .unwrap();
         t.insert(message(1), false, false).unwrap();
@@ -401,7 +550,9 @@ mod tests {
                     content: Patch::Value(content.into()),
                     edited: Patch::Value(at),
                     embeds: Patch::Absent,
+                    mentions: Patch::Absent,
                     embeds_suppressed: Patch::Absent,
+                    attachments: Patch::Absent,
                 })
                 .unwrap();
         }

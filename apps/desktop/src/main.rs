@@ -3,6 +3,7 @@ mod avatars;
 mod cache;
 mod connection;
 mod credentials;
+mod downloads;
 #[cfg(feature = "voice")]
 mod voice;
 use client_core::{
@@ -38,6 +39,8 @@ struct Desktop {
     connection: Option<connection::Connection>,
     state: State,
     messaging: ui::MessagingUi,
+    downloads: downloads::Downloads,
+    download_close_pending: bool,
     window: Arc<winit::window::Window>,
     avatars: Option<avatars::AvatarWorker>,
     avatar_start_failed: bool,
@@ -157,6 +160,8 @@ impl Desktop {
             connection: None,
             state,
             messaging: ui::MessagingUi::default(),
+            downloads: downloads::Downloads::default(),
+            download_close_pending: false,
             window: cc
                 .winit_window()
                 .ok_or("Native window unavailable")?
@@ -218,6 +223,7 @@ impl Desktop {
         ));
     }
     fn logout(&mut self, ctx: &egui::Context) {
+        self.downloads.cancel();
         #[cfg(feature = "voice")]
         self.voice.stop();
         let was_demo = self.state.demo;
@@ -336,7 +342,17 @@ impl Desktop {
         }
         if self.state.demo {
             let event = match command {
-                Command::Voice(_) => return,
+                Command::Voice(_) | Command::CancelProfile => return,
+                Command::Profile {
+                    user,
+                    guild,
+                    request,
+                } => Event::Profile {
+                    user,
+                    guild,
+                    request,
+                    result: Err(Failure::Protocol),
+                },
                 Command::Members {
                     guild,
                     channel,
@@ -393,6 +409,8 @@ impl Desktop {
                     content,
                 } => Event::Patch(model::MessagePatch {
                     embeds: model::Patch::Absent,
+                    attachments: model::Patch::Absent,
+                    mentions: model::Patch::Absent,
                     embeds_suppressed: model::Patch::Absent,
                     id: message,
                     channel,
@@ -890,6 +908,33 @@ impl eframe::App for Desktop {
     }
     fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        if self.state.user.is_none() {
+            self.downloads.cancel();
+        }
+        let download_status = match self.downloads.poll() {
+            downloads::Status::Idle => String::new(),
+            downloads::Status::Choosing => "Choose where to save the image…".into(),
+            downloads::Status::Downloading { received, total } => {
+                format!("Downloading: {} / {} KiB", received / 1024, total / 1024)
+            }
+            downloads::Status::Saved => "Image downloaded".into(),
+            downloads::Status::Cancelled => "Download cancelled".into(),
+            downloads::Status::Failed(error) => (*error).into(),
+        };
+        self.messaging.downloads().active = self.downloads.is_active();
+        self.messaging.downloads().status = download_status;
+        if ctx.input(|i| i.viewport().close_requested()) && self.downloads.is_active() {
+            self.downloads.cancel();
+            self.download_close_pending = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        }
+        if self.download_close_pending
+            && !self.downloads.is_active()
+            && (!self.confirming_close || self.close_approved)
+        {
+            self.download_close_pending = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
         self.poll_avatars(&ctx);
         #[cfg(feature = "voice")]
         self.poll_voice(&ctx);
@@ -922,6 +967,22 @@ impl eframe::App for Desktop {
         } else if self.state.user.is_some() {
             self.messaging.storage_status = self.cache_status;
             let commands = self.messaging.show(ui, &mut self.state);
+            if std::mem::take(&mut self.messaging.downloads().cancel_requested) {
+                self.downloads.cancel();
+            }
+            if let Some(attachment) = self.messaging.downloads().request.take()
+                && !self.state.demo
+                && !self.fixture_only
+                && let Err(error) = self.downloads.start(
+                    attachment,
+                    self.runtime.handle(),
+                    &ctx,
+                    self.window.clone(),
+                )
+            {
+                self.state.status = error;
+            }
+
             for key in self.messaging.take_avatar_requests() {
                 if !self
                     .avatars
@@ -982,9 +1043,9 @@ impl eframe::App for Desktop {
                 ui.label("Saved drafts survive exit. Logout removes local account data. Edits and uncertain sends need your attention.");
                 if self.forgetting{ui.label("Wait for saved-login removal to finish.");}
                 ui.horizontal(|ui|{
-                    if ui.button("Keep working").clicked(){self.confirming_close=false;self.confirming_logout=false;}
+                    if ui.button("Keep working").clicked(){self.confirming_close=false;self.confirming_logout=false;self.download_close_pending=false;}
                     if ui.add_enabled(!self.forgetting,egui::Button::new("Discard and continue")).clicked(){
-                        if self.confirming_close{self.close_approved=true;ctx.send_viewport_cmd(egui::ViewportCommand::Close);}else{self.logout(&ctx);}
+                        if self.confirming_close{self.close_approved=true;if self.downloads.is_active(){self.downloads.cancel();self.download_close_pending=true;}else{ctx.send_viewport_cmd(egui::ViewportCommand::Close);}}else{self.logout(&ctx);}
                     }
                 });
             });

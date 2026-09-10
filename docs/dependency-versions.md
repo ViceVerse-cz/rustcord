@@ -151,7 +151,7 @@ Rust toolchain: 1.98.1, edition 2024. Host resolution: aarch64-apple-darwin. Car
 | hex-literal | 0.3.4 | MIT OR Apache-2.0 |
 | hkdf | 0.12.4 | MIT OR Apache-2.0 |
 | hmac | 0.12.1 | MIT OR Apache-2.0 |
-| hpke-rs | 0.6.1 (local MPL security patch) | MPL-2.0 |
+| hpke-rs | 0.6.1 | MPL-2.0 |
 | hpke-rs-crypto | 0.6.1 | MPL-2.0 |
 | hpke-rs-libcrux | 0.6.1 | MPL-2.0 |
 | hpke-rs-rust-crypto | 0.6.1 | MPL-2.0 |
@@ -311,6 +311,7 @@ Rust toolchain: 1.98.1, edition 2024. Host resolution: aarch64-apple-darwin. Car
 | renderdoc-sys | 1.1.0 | MIT OR Apache-2.0 |
 | reqwest | 0.13.5 | MIT OR Apache-2.0 |
 | rfc6979 | 0.4.0 | Apache-2.0 OR MIT |
+| rfd | 0.17.2 | MIT |
 | ring | 0.17.14 | Apache-2.0 AND ISC |
 | rtrb | 0.4.0 | MIT OR Apache-2.0 |
 | rusqlite | 0.40.2 | MIT |

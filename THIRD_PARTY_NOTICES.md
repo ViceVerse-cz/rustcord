@@ -17,3 +17,5 @@ The voice dependency tree also contains the locally patched **hpke-rs 0.6.1**, l
 Bundled fallback fonts are unmodified and licensed under SIL OFL 1.1: **Noto Sans CJK JP Regular 2.004**, © 2014–2021 Adobe (http://www.adobe.com/), and **Noto Sans Arabic 2.012**, Copyright 2022 The Noto Project Authors (https://github.com/notofonts/arabic). The complete license texts are `assets/fonts/NotoSansCJK-LICENSE.txt` and `assets/fonts/NotoSansArabic-OFL.txt` in source, and are staged alongside distribution notices. Provenance, hashes, sizes and coverage limitations are in [assets/README.md](assets/README.md). Their font licenses remain separate from Serein's source-code license.
 
 The initial packaging command stages original licenses and this inventory notice. Complete per-artifact transitive license-text assembly and platform redistribution review remain a release-hardening gate; do not treat a development package as a completed legal/distribution review.
+
+Native Save As uses rfd 0.17.2 (MIT) and its pollster 0.4.0 dependency (MIT OR Apache-2.0). Their unmodified license texts are in `assets/licenses/files` and are staged in `licenses/files` in both package variants.

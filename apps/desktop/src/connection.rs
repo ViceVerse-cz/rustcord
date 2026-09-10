@@ -93,6 +93,7 @@ impl Connection {
                     }
                 }));
                 let mut history:Option<AbortTask>=None;
+                let mut profile:Option<AbortTask>=None;
                 let mut ringing:Option<AbortTask>=None;
                 let mut voice_request=None;
                 loop {
@@ -101,7 +102,7 @@ impl Connection {
                         _=&mut writes.0=>{break;}
                         changed=voice_availability.changed()=> {
                             if changed.is_err() {break;}
-                            if !*voice_availability.borrow_and_update() {drop(ringing.take());voice_request=None;}
+                            if !*voice_availability.borrow_and_update() {drop(ringing.take());drop(profile.take());voice_request=None;}
                         }
                         command=receive.recv()=>{
                             let Some(command)=command else {break;};
@@ -127,6 +128,19 @@ impl Connection {
                                         }
                                     })));
                                 }
+                                continue;
+                            }
+                            if matches!(command,Command::CancelProfile) {drop(profile.take());continue;}
+                            if matches!(command,Command::Profile{..}) {
+                                drop(profile.take());
+                                let api=api.clone();let emit=emit.clone();let finished=finished.clone();let wake=wake.clone();
+                                profile=Some(AbortTask(tokio::spawn(async move {
+                                    let event=api.execute(command).await;
+                                    let failure=match &event {Event::Profile{result:Err(failure),..} if failure.ends_session() && *failure!=Failure::Capacity=>Some(*failure),_=>None};
+                                    let error=emit(event).err().or(failure);
+                                    if let Some(error)=error {api.stop();let _=finished.send(Some(error));}
+                                    wake.request_repaint();
+                                })));
                                 continue;
                             }
                             if let Command::Members {guild,channel,request,list_id} = command {

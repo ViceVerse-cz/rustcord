@@ -121,6 +121,24 @@ fn clear_directory(root: Option<&Path>) -> Result<(), &'static str> {
 
 // Build, rather than accept, URLs. Even malformed service metadata cannot choose a host/path.
 fn cdn_url(key: &str) -> Option<String> {
+    if let Some(value) = key.strip_prefix("banner-") {
+        let (id, hash) = value.split_once('-')?;
+        let id: Id = id.parse().ok()?;
+        return model::valid_avatar_hash(hash)
+            .then(|| format!("https://cdn.discordapp.com/banners/{id}/{hash}.png?size=512"));
+    }
+    for (prefix, kind, size) in [
+        ("member-avatar-", "avatars", 128),
+        ("member-banner-", "banners", 512),
+    ] {
+        if let Some(value) = key.strip_prefix(prefix) {
+            let (guild, value) = value.split_once('-')?;
+            let (user, hash) = value.split_once('-')?;
+            let guild: Id = guild.parse().ok()?;
+            let user: Id = user.parse().ok()?;
+            return model::valid_avatar_hash(hash).then(||format!("https://cdn.discordapp.com/guilds/{guild}/users/{user}/{kind}/{hash}.png?size={size}"));
+        }
+    }
     if let Some(source) = key.strip_prefix("embed:") {
         return embed_url(source);
     }
@@ -261,7 +279,9 @@ async fn run(
                 None
             }
         });
-        let embed = key.starts_with("embed:");
+        let embed = key.starts_with("embed:")
+            || key.starts_with("banner-")
+            || key.starts_with("member-banner-");
         let mut image = cached.as_deref().and_then(|bytes| decode(bytes, embed));
         if image.is_none()
             && Instant::now() >= cooldown
@@ -519,6 +539,20 @@ mod tests {
     #[test]
     fn bounded_images_cache_reopen_eviction_and_cancelled_cleanup() {
         assert!(cdn_url("../token").is_none());
+        assert_eq!(
+            cdn_url("banner-1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
+            "https://cdn.discordapp.com/banners/1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png?size=512"
+        );
+        assert_eq!(
+            cdn_url("member-banner-2-1-a_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
+            "https://cdn.discordapp.com/guilds/2/users/1/banners/a_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png?size=512"
+        );
+        assert_eq!(
+            cdn_url("member-avatar-2-1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
+            "https://cdn.discordapp.com/guilds/2/users/1/avatars/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png?size=128"
+        );
+        assert!(cdn_url("member-banner-2-0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").is_none());
+        assert!(cdn_url("banner-1-../../invalid").is_none());
         assert!(cdn_url("default-6").is_none());
         assert!(cdn_url("0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").is_none());
         assert!(cdn_url("1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/").is_none());

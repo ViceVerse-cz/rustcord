@@ -2,7 +2,7 @@
 use client_core::{Envelope, Event, State};
 use model::*;
 pub fn message(id: u64, channel: Id) -> Message {
-    let content = match id % 6 {
+    let mut content = match id % 6 {
         0 => "A short synthetic message.".into(),
         1 => "A longer synthetic message which wraps at smaller window sizes. ".repeat(8),
         2 => "Unicode: 日本語 · čeština · العربية · e\u{301} · 👩🏽‍💻".into(),
@@ -11,6 +11,9 @@ pub fn message(id: u64, channel: Id) -> Message {
             .into(),
         _ => "**Synthetic history** — this is an offline fixture, never a Discord reply.".into(),
     };
+    if id == 500 {
+        content = format!("Hey <@2> — {content}");
+    }
     Message {
         id: Id(id),
         channel,
@@ -33,6 +36,37 @@ pub fn message(id: u64, channel: Id) -> Message {
         reply_to: None,
         unsupported: false,
         embeds: demo_embeds(id),
+        attachments: if id == 500 {
+            vec![Attachment {
+                id: Id(700),
+                filename: "synthetic-landscape.png".into(),
+                description: Some("Original synthetic landscape · offline preview".into()),
+                content_type: Some("image/png".into()),
+                size: 2048,
+                spoiler: false,
+                media: EmbedMedia {
+                    url: Some(
+                        "https://cdn.discordapp.com/attachments/1/700/synthetic-landscape.png"
+                            .into(),
+                    ),
+                    proxy_url: None,
+                    width: 640,
+                    height: 240,
+                },
+            }]
+        } else {
+            vec![]
+        },
+        mentions: if id == 500 {
+            vec![User {
+                id: Id(2),
+                name: "Robin (synthetic)".into(),
+                avatar: None,
+                discriminator: 0,
+            }]
+        } else {
+            Vec::new()
+        },
         embeds_suppressed: false,
     }
 }

@@ -1,6 +1,12 @@
 //! UI-neutral session entities. No filesystem or network dependencies.
+mod profile;
+pub use profile::*;
+mod attachments;
+pub use attachments::*;
 mod embeds;
 pub use embeds::*;
+mod mentions;
+pub use mentions::*;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{fmt, str::FromStr};
 
@@ -36,7 +42,7 @@ impl<'de> Deserialize<'de> for Id {
             .map_err(serde::de::Error::custom)
     }
 }
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct User {
     pub id: Id,
     pub name: String,
@@ -138,6 +144,7 @@ pub struct Message {
     pub channel: Id,
     pub author: User,
     pub content: String,
+    pub mentions: Vec<User>,
     pub edited: bool,
     pub edited_at: Option<i128>,
     pub revision: u64,
@@ -146,13 +153,21 @@ pub struct Message {
     pub unsupported: bool,
     pub embeds: Vec<Embed>,
     pub embeds_suppressed: bool,
+    pub attachments: Vec<Attachment>,
 }
 impl Message {
     pub fn bytes(&self) -> usize {
         size_of::<Self>()
             + self.content.capacity()
             + self.author.heap_bytes()
+            + mention_bytes(&self.mentions)
             + self.nonce.as_ref().map_or(0, String::capacity)
+            + attachment_bytes(&self.attachments)
+            + self
+                .attachments
+                .capacity()
+                .saturating_sub(self.attachments.len())
+                * size_of::<Attachment>()
             + embed_bytes(&self.embeds)
             + self.embeds.capacity().saturating_sub(self.embeds.len()) * size_of::<Embed>()
     }
@@ -175,9 +190,11 @@ pub struct MessagePatch {
     pub id: Id,
     pub channel: Id,
     pub content: Patch<String>,
+    pub mentions: Patch<Vec<User>>,
     pub edited: Patch<i128>,
     pub embeds: Patch<Vec<Embed>>,
     pub embeds_suppressed: Patch<bool>,
+    pub attachments: Patch<Vec<Attachment>>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Freshness {

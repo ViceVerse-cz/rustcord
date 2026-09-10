@@ -12,6 +12,7 @@ keyring.workspace = true
 url.workspace = true
 zeroize.workspace = true
 getrandom.workspace = true
+rfd = { version = "=0.17.2", default-features = false, features = ["xdg-portal", "wayland"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"

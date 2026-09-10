@@ -1,5 +1,6 @@
 //! Single UI-thread state owner. Adapters deliver generation-tagged typed events.
 pub mod auth;
+pub mod profile;
 pub mod voice;
 use model::*;
 use session_cache::Timeline;
@@ -13,6 +14,12 @@ pub const EVENT_SLOTS: usize = 8; // <= 32 MiB wire-derived data, not including 
 pub const COMMAND_SLOTS: usize = 16; // each admitted command <= 16 KiB
 
 pub enum Command {
+    Profile {
+        user: Id,
+        guild: Option<Id>,
+        request: u64,
+    },
+    CancelProfile,
     Voice(voice::Command),
     Members {
         guild: Option<Id>,
@@ -42,6 +49,12 @@ pub enum Command {
     },
 }
 pub enum Event {
+    Profile {
+        user: Id,
+        guild: Option<Id>,
+        request: u64,
+        result: Result<UserProfile, auth::Failure>,
+    },
     Voice(voice::Event),
     ChannelCreated(Channel),
     ChannelChanged(ChannelPatch),
@@ -104,6 +117,8 @@ pub struct Pending {
     pub confirmed: Option<Id>,
 }
 pub struct State {
+    pub profile: Option<profile::ProfileView>,
+    pub profile_request: u64,
     pub voice: voice::State,
     pub generation: u64,
     pub auth: auth::AuthState,
@@ -131,6 +146,8 @@ pub struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
+            profile: None,
+            profile_request: 0,
             voice: voice::State::default(),
             generation: 1,
             auth: auth::AuthState::Unauthenticated,
@@ -320,6 +337,19 @@ impl State {
         })
     }
     pub fn command_rejected(&mut self, command: Command) {
+        if let Command::Profile {
+            user,
+            guild,
+            request,
+        } = command
+        {
+            self.apply_profile(user, guild, request, Err(auth::Failure::Capacity));
+            return;
+        }
+        if matches!(command, Command::CancelProfile) {
+            return;
+        }
+
         if let Command::Voice(control) = command {
             match control {
                 voice::Command::Join {
@@ -357,6 +387,16 @@ impl State {
         }
         self.revision += 1;
         let result = match envelope.event {
+            Event::Profile {
+                user,
+                guild,
+                request,
+                result,
+            } => {
+                self.apply_profile(user, guild, request, result);
+                Ok(())
+            }
+
             Event::GuildChanged(patch) => {
                 if let Some(guild) = self.guilds.iter_mut().find(|guild| guild.id == patch.id) {
                     match patch.name {
@@ -513,6 +553,7 @@ impl State {
                     return;
                 }
                 self.members = None;
+                self.clear_profile();
                 self.user = Some(user);
                 self.guilds = guilds;
                 self.channels = channels;
@@ -648,6 +689,7 @@ impl State {
                 Ok(())
             }
             Event::Disconnected => {
+                self.clear_profile();
                 self.disconnect_voice();
                 self.invalidate_members();
                 self.gateway_connected = false;
@@ -665,6 +707,7 @@ impl State {
                 Ok(())
             }
             Event::Resync | Event::PermissionsChanged => {
+                self.clear_profile();
                 self.disconnect_voice();
                 self.invalidate_members();
                 self.timeline.clear();
@@ -674,6 +717,7 @@ impl State {
                 Ok(())
             }
             Event::Unavailable(channel) => {
+                self.clear_profile();
                 self.channels.retain(|c| c.id != channel);
                 if self
                     .voice
@@ -725,6 +769,7 @@ impl State {
             _ => {}
         }
         if failure.ends_session() {
+            self.clear_profile();
             self.disconnect_voice();
             self.gateway_connected = false;
             self.invalidate_members();
@@ -744,6 +789,7 @@ impl Event {
     pub fn bytes(&self) -> usize {
         size_of::<Self>()
             + match self {
+                Self::Profile { result, .. } => result.as_ref().map_or(0, UserProfile::bytes),
                 Self::Voice(event) => event.bytes(),
                 Self::GuildChanged(patch) => [&patch.name, &patch.icon]
                     .into_iter()
@@ -786,6 +832,14 @@ impl Event {
                         _ => 0,
                     };
                     content
+                        + match &p.mentions {
+                            Patch::Value(users) => model::mention_bytes(users),
+                            _ => 0,
+                        }
+                        + match &p.attachments {
+                            Patch::Value(attachments) => model::attachment_bytes(attachments),
+                            _ => 0,
+                        }
                         + match &p.embeds {
                             Patch::Value(embeds) => model::embed_bytes(embeds),
                             _ => 0,
@@ -963,6 +1017,8 @@ mod tests {
             reply_to: None,
             unsupported: false,
             embeds: vec![],
+            attachments: vec![],
+            mentions: Vec::new(),
             embeds_suppressed: false,
         }
     }

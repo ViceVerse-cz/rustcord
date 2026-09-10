@@ -1,7 +1,7 @@
 //! Bounded native text formatting. No HTML renderer, image loader, or automatic URL access.
 use egui::{FontId, Stroke, TextFormat, text::LayoutJob};
 use model::Id;
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, TextMergeStream};
+use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, TextMergeWithOffset};
 use std::collections::VecDeque;
 
 const MAX_INPUT: usize = 8192;
@@ -17,10 +17,12 @@ struct Style {
     strike: bool,
     quote: bool,
     link: Option<usize>,
+    mention: Option<Id>,
     no_autolink: bool,
 }
 pub struct Formatted {
     spans: Vec<(String, Style)>,
+    mention_count: usize,
     pub links: Vec<String>,
     pub limited: bool,
     pub spoilers: bool,
@@ -92,6 +94,7 @@ impl Formatted {
         let input = &source[..end];
         let mut output = Self {
             spans: Vec::new(),
+            mention_count: 0,
             links: Vec::new(),
             limited: end < source.len(),
             // ponytail: conceal the entire message for spoiler syntax, including code literals;
@@ -100,8 +103,10 @@ impl Formatted {
         };
         let mut stack = Vec::new();
         let mut style = Style::default();
-        for (count, event) in
-            TextMergeStream::new(Parser::new_ext(input, Options::ENABLE_STRIKETHROUGH)).enumerate()
+        for (count, (event, range)) in TextMergeWithOffset::new(
+            Parser::new_ext(input, Options::ENABLE_STRIKETHROUGH).into_offset_iter(),
+        )
+        .enumerate()
         {
             if count >= MAX_EVENTS || stack.len() > MAX_DEPTH {
                 // Complexity overflow displays bounded literal text, never a partial misleading parse.
@@ -150,7 +155,7 @@ impl Formatted {
                     if style.code || style.no_autolink {
                         output.push(&text, style);
                     } else {
-                        output.push_autolinks(&text, style);
+                        output.push_mentions(&text, style, &input[range]);
                     }
                 }
                 Event::Html(text) | Event::InlineHtml(text) => {
@@ -210,7 +215,56 @@ impl Formatted {
         }
         self.push(&text[consumed..], style);
     }
+    fn push_mentions(&mut self, text: &str, style: Style, source: &str) {
+        let mut consumed = 0;
+        let mut raw_cursor = 0;
+        for (start, _) in text.match_indices("<@") {
+            let Some((id, len)) = model::user_mention_prefix(&text[start..]) else {
+                continue;
+            };
+            if self.mention_count >= model::MAX_MENTIONS {
+                self.limited = true;
+                break;
+            }
+            let token = &text[start..start + len];
+            let Some(raw_start) = source[raw_cursor..].find(token).map(|i| i + raw_cursor) else {
+                continue;
+            };
+            raw_cursor = raw_start + len;
+            if source[..raw_start]
+                .bytes()
+                .rev()
+                .take_while(|b| *b == b'\\')
+                .count()
+                % 2
+                == 1
+            {
+                continue;
+            }
+            self.push_autolinks(&text[consumed..start], style);
+            self.push(
+                token,
+                Style {
+                    mention: Some(id),
+                    ..style
+                },
+            );
+            self.mention_count += 1;
+            consumed = start + len;
+        }
+        self.push_autolinks(&text[consumed..], style);
+    }
+    #[cfg(test)]
     pub fn show(&self, ui: &mut egui::Ui, opening: &mut Option<String>) {
+        self.show_mentions(ui, opening, &[], &mut None);
+    }
+    pub fn show_mentions(
+        &self,
+        ui: &mut egui::Ui,
+        opening: &mut Option<String>,
+        users: &[model::User],
+        profile: &mut Option<model::User>,
+    ) {
         ui.allocate_ui_with_layout(
             egui::vec2(ui.available_width(), 0.0),
             egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true),
@@ -219,10 +273,37 @@ impl Formatted {
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
                 let mut start = 0;
                 while start < self.spans.len() {
+                    if let Some(id) = self.spans[start].1.mention {
+                        let user = users.iter().find(|user| user.id == id);
+                        let label = format!(
+                            "@{}",
+                            user.map_or_else(|| id.to_string(), |u| u.name.clone())
+                        );
+                        let response = ui
+                            .add(egui::Link::new(egui::RichText::new(&label).strong()))
+                            .on_hover_text("Open user profile");
+                        response.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::WidgetType::Link,
+                                ui.is_enabled(),
+                                format!("{label}, user profile"),
+                            )
+                        });
+                        if response.clicked() {
+                            *profile = Some(user.cloned().unwrap_or(model::User {
+                                id,
+                                name: format!("User {id}"),
+                                avatar: None,
+                                discriminator: 0,
+                            }));
+                        }
+                        start += 1;
+                        continue;
+                    }
                     let target = self.spans[start].1.link;
                     let count = self.spans[start..]
                         .iter()
-                        .take_while(|(_, style)| style.link == target)
+                        .take_while(|(_, style)| style.link == target && style.mention.is_none())
                         .count();
                     let job = Self::layout(&self.spans[start..start + count], ui);
                     if let Some(index) = target {
@@ -310,6 +391,55 @@ impl Formatted {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn user_mentions_preserve_literals_and_open_native_profiles() {
+        let parsed = Formatted::parse(
+            "Hello **<@42>** <@!42> `<@43>` \\<@44> &lt;@45&gt; [<@46>](https://example.com) <@&47>",
+        );
+        assert_eq!(
+            parsed
+                .spans
+                .iter()
+                .filter_map(|(_, style)| style.mention)
+                .collect::<Vec<_>>(),
+            vec![Id(42), Id(42)]
+        );
+        assert!(
+            parsed
+                .spans
+                .iter()
+                .any(|(_, style)| style.mention == Some(Id(42)) && style.strong)
+        );
+        let parsed = Formatted::parse("<@42>");
+        let ctx = egui::Context::default();
+        let mut profile = None;
+        let mut opening = None;
+        let users = vec![model::User {
+            id: Id(42),
+            name: "Synthetic Robin".into(),
+            avatar: None,
+            discriminator: 0,
+        }];
+        for key in [egui::Key::Tab, egui::Key::Enter] {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                    ..Default::default()
+                },
+                |ui| parsed.show_mentions(ui, &mut opening, &users, &mut profile),
+            );
+            assert!(output.platform_output.commands.is_empty());
+            output.textures_delta.clear();
+        }
+        assert_eq!(profile.unwrap().name, "Synthetic Robin");
+        assert!(opening.is_none());
+    }
     #[test]
     fn inline_links_preserve_markdown_and_activate_their_own_destinations() {
         let source = "Before [**Markdown** *label*](https://example.com/masked) then (https://example.org/a_(b)). `https://code.test` [https://label.test](javascript:bad)";

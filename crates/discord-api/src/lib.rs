@@ -17,7 +17,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    sync::Mutex,
+    sync::{Mutex, Semaphore},
     time::{Instant, sleep_until},
 };
 
@@ -25,6 +25,7 @@ pub struct DiscordApi {
     client: Client,
     secret: Arc<SessionSecret>,
     cooldown: Mutex<Instant>,
+    requests: Semaphore,
     stopped: AtomicBool,
     #[cfg(test)]
     base: String,
@@ -43,6 +44,7 @@ impl DiscordApi {
             client,
             secret,
             cooldown: Mutex::new(Instant::now()),
+            requests: Semaphore::new(4),
             stopped: AtomicBool::new(false),
             #[cfg(test)]
             base: "https://discord.com/api/v10".into(),
@@ -60,6 +62,15 @@ impl DiscordApi {
         path: &str,
         body: Option<serde_json::Value>,
     ) -> Result<Vec<u8>, Failure> {
+        self.request_limited(method, path, body, MAX_WIRE).await
+    }
+    async fn request_limited(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<serde_json::Value>,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, Failure> {
         // Only typed adapter methods construct paths. Never accept a URL or route from UI/content.
         if !path.starts_with('/')
             || path.contains("://")
@@ -68,9 +79,20 @@ impl DiscordApi {
         {
             return Err(Failure::Protocol);
         }
-        // ponytail: serialize REST and conservatively share every service cooldown; split by bucket only if measured latency requires it.
-        let mut next = self.cooldown.lock().await;
-        sleep_until(*next).await;
+        let _permit = self
+            .requests
+            .acquire()
+            .await
+            .map_err(|_| Failure::Network)?;
+        // Four permits bound concurrent REST work. A slow profile body must not hold the
+        // cooldown mutex and delay a message write; only service rate admission is shared.
+        loop {
+            let next = *self.cooldown.lock().await;
+            sleep_until(next).await;
+            if Instant::now() >= *self.cooldown.lock().await {
+                break;
+            }
+        }
         if self.stopped() {
             return Err(Failure::Expired);
         }
@@ -113,7 +135,8 @@ impl DiscordApi {
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.parse::<f64>().ok());
         if exhausted || status == StatusCode::TOO_MANY_REQUESTS {
-            *next = Instant::now() + safe_delay(reset.or(retry_header))?;
+            let mut next = self.cooldown.lock().await;
+            *next = (*next).max(Instant::now() + safe_delay(reset.or(retry_header))?);
         }
         if status == StatusCode::UNAUTHORIZED {
             self.stop();
@@ -121,7 +144,7 @@ impl DiscordApi {
         }
         if response
             .content_length()
-            .is_some_and(|n| n > MAX_WIRE as u64)
+            .is_some_and(|n| n > max_bytes as u64)
         {
             return Err(Failure::Capacity);
         }
@@ -133,7 +156,7 @@ impl DiscordApi {
                 Failure::Network
             }
         })? {
-            if bytes.len() + chunk.len() > MAX_WIRE {
+            if bytes.len() + chunk.len() > max_bytes {
                 return Err(Failure::Capacity);
             }
             bytes.extend_from_slice(&chunk);
@@ -145,6 +168,7 @@ impl DiscordApi {
                 return Err(Failure::Challenged);
             }
             if status == StatusCode::TOO_MANY_REQUESTS {
+                let mut next = self.cooldown.lock().await;
                 *next =
                     (*next).max(Instant::now() + safe_delay(error.retry_after.or(retry_header))?);
                 return Err(Failure::RateLimited);
@@ -197,6 +221,36 @@ impl DiscordApi {
     }
     pub async fn execute(&self, command: Command) -> Event {
         match command {
+            Command::Profile {
+                user,
+                guild,
+                request,
+            } => {
+                let mut path = format!(
+                    "/users/{user}/profile?with_mutual_guilds=true&with_mutual_friends=false&with_mutual_friends_count=false"
+                );
+                if let Some(guild) = guild {
+                    path.push_str(&format!("&guild_id={guild}"));
+                }
+                let result = self
+                    .request_limited(Method::GET, &path, None, profile::MAX_PROFILE_WIRE)
+                    .await
+                    .and_then(|bytes| {
+                        let profile = profile::decode_profile(&bytes, guild)
+                            .map_err(|_| Failure::Protocol)?;
+                        if profile.user.id != user {
+                            return Err(Failure::Protocol);
+                        }
+                        Ok(profile)
+                    });
+                Event::Profile {
+                    user,
+                    guild,
+                    request,
+                    result,
+                }
+            }
+            Command::CancelProfile => Event::Failure(Failure::Protocol),
             Command::Voice(_) | Command::Members { .. } => Event::Failure(Failure::Protocol),
             Command::History {
                 channel,
@@ -236,7 +290,7 @@ impl DiscordApi {
                         result: Err(Failure::Capacity),
                     };
                 }
-                let mut body = serde_json::json!({ "content": content, "nonce": nonce, "allowed_mentions": {"parse": [], "replied_user": false} });
+                let mut body = serde_json::json!({ "content": content, "nonce": nonce, "allowed_mentions": allowed_mentions(&content) });
                 if let Some(reply) = reply {
                     body["message_reference"] =
                         serde_json::json!({"message_id": reply, "channel_id": channel});
@@ -264,7 +318,7 @@ impl DiscordApi {
                 if content.trim().is_empty() || content.chars().count() > client_core::MAX_CONTENT {
                     return Event::Failure(Failure::Capacity);
                 }
-                let body = serde_json::json!({"content": content, "allowed_mentions": {"parse": [], "replied_user": false}});
+                let body = serde_json::json!({"content": content, "allowed_mentions": allowed_mentions(&content)});
                 match self
                     .request(
                         Method::PATCH,
@@ -322,6 +376,141 @@ mod tests {
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
     };
+    #[tokio::test]
+    async fn profiles_are_scoped_capped_and_do_not_block_message_writes() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut api = DiscordApi::new(Arc::new(
+            SessionSecret::from_owner_input("SYNTHETIC_PROFILE_TOKEN".into()).unwrap(),
+        ))
+        .unwrap();
+        api.base = format!("http://{}", listener.local_addr().unwrap());
+        let api = Arc::new(api);
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let server_started = started.clone();
+        let server_release = release.clone();
+        let server = tokio::spawn(async move {
+            let (mut profile, _) = listener.accept().await.unwrap();
+            let mut buffer = [0; 4096];
+            let n = profile.read(&mut buffer).await.unwrap();
+            let request = std::str::from_utf8(&buffer[..n]).unwrap();
+            assert!(request.starts_with("GET /users/5/profile?with_mutual_guilds=true&with_mutual_friends=false&with_mutual_friends_count=false&guild_id=2 HTTP/1.1"));
+            assert!(request.contains("SYNTHETIC_PROFILE_TOKEN"));
+            let body = r#"{"user":{"id":"5","username":"Synthetic"},"user_profile":{"bio":"About","banner":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"#;
+            profile
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            server_started.notify_one();
+            let (mut write, _) = listener.accept().await.unwrap();
+            let n = write.read(&mut buffer).await.unwrap();
+            assert!(
+                std::str::from_utf8(&buffer[..n])
+                    .unwrap()
+                    .starts_with("POST /channels/2/messages HTTP/1.1")
+            );
+            let sent = r#"{"id":"6","channel_id":"2","author":{"id":"1","username":"Synthetic"},"content":"Synthetic local test"}"#;
+            write
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{sent}",
+                        sent.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            server_release.notified().await;
+            profile.write_all(body.as_bytes()).await.unwrap();
+            for response in [
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    profile::MAX_PROFILE_WIRE + 1
+                ),
+                {
+                    let body = r#"{"user":{"id":"7","username":"Wrong identity"}}"#;
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                },
+            ] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let _ = stream.read(&mut buffer).await.unwrap();
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        let profile_api = api.clone();
+        let pending = tokio::spawn(async move {
+            profile_api
+                .execute(Command::Profile {
+                    user: model::Id(5),
+                    guild: Some(model::Id(2)),
+                    request: 9,
+                })
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), started.notified())
+            .await
+            .unwrap();
+        let sent = tokio::time::timeout(
+            Duration::from_secs(2),
+            api.execute(Command::Send {
+                channel: model::Id(2),
+                content: "Synthetic local test".into(),
+                nonce: "local".into(),
+                reply: None,
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(sent, Event::SendResult { result: Ok(_), .. }));
+        release.notify_one();
+        assert!(matches!(
+            pending.await.unwrap(),
+            Event::Profile {
+                user: model::Id(5),
+                guild: Some(model::Id(2)),
+                request: 9,
+                result: Ok(_)
+            }
+        ));
+        assert!(matches!(
+            api.execute(Command::Profile {
+                user: model::Id(5),
+                guild: None,
+                request: 10
+            })
+            .await,
+            Event::Profile {
+                result: Err(Failure::Capacity),
+                request: 10,
+                ..
+            }
+        ));
+        assert!(!api.stopped());
+        assert!(matches!(
+            api.execute(Command::Profile {
+                user: model::Id(5),
+                guild: None,
+                request: 11
+            })
+            .await,
+            Event::Profile {
+                result: Err(Failure::Protocol),
+                request: 11,
+                ..
+            }
+        ));
+        server.await.unwrap();
+        assert_eq!(api.requests.available_permits(), 4);
+    }
     #[tokio::test]
     async fn explicit_dm_ring_and_decline_use_only_scoped_routes() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -402,5 +591,23 @@ mod tests {
         }
         assert!(safe_delay(Some(f64::NAN)).is_err());
         assert!(safe_delay(Some(-1.0)).is_err());
+    }
+}
+
+fn allowed_mentions(content: &str) -> serde_json::Value {
+    serde_json::json!({"parse":[],"users":model::mentioned_user_ids(content),"replied_user":false})
+}
+#[cfg(test)]
+mod mention_tests {
+    #[test]
+    fn send_and_edit_only_allow_explicit_user_mentions() {
+        assert_eq!(
+            super::allowed_mentions("@everyone <@&4> <@7> <@!7> <@9>"),
+            serde_json::json!({"parse":[],"users":["7","9"],"replied_user":false})
+        );
+        assert_eq!(
+            super::allowed_mentions("@here"),
+            serde_json::json!({"parse":[],"users":[],"replied_user":false})
+        );
     }
 }

@@ -41,8 +41,24 @@ impl Avatars {
         let Some(image) = image.filter(|image| {
             image.size[0] > 0
                 && image.size[1] > 0
-                && image.size[0] <= if key.starts_with("embed:") { 512 } else { 128 }
-                && image.size[1] <= if key.starts_with("embed:") { 512 } else { 128 }
+                && image.size[0]
+                    <= if key.starts_with("embed:")
+                        || key.starts_with("banner-")
+                        || key.starts_with("member-banner-")
+                    {
+                        512
+                    } else {
+                        128
+                    }
+                && image.size[1]
+                    <= if key.starts_with("embed:")
+                        || key.starts_with("banner-")
+                        || key.starts_with("member-banner-")
+                    {
+                        512
+                    } else {
+                        128
+                    }
                 && image.pixels.len() == image.size[0] * image.size[1]
         }) else {
             if let Some(attempt) = self.attempts.get_mut(&key) {
@@ -65,6 +81,85 @@ impl Avatars {
         }
         let texture = ctx.load_texture("service-image", image, egui::TextureOptions::LINEAR);
         self.textures.push_back((key, texture));
+    }
+    pub fn show_banner(
+        &mut self,
+        ui: &mut egui::Ui,
+        profile: &model::UserProfile,
+        size: egui::Vec2,
+        demo: bool,
+    ) -> egui::Response {
+        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
+        let color = profile
+            .accent_color
+            .map(|rgb| egui::Color32::from_rgb((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8))
+            .unwrap_or(crate::design::palette(ui).accent.gamma_multiply(0.4));
+        ui.painter().rect_filled(rect, 8, color);
+        if ui.is_rect_visible(rect)
+            && let Some(key) = profile.banner_key()
+        {
+            if demo && !self.textures.iter().any(|(stored, _)| stored == &key) {
+                let mut image = ColorImage::filled([128, 48], color);
+                for y in 0..48 {
+                    for x in 0..128 {
+                        if (x + y) % 48 < 9 {
+                            image.pixels[y * 128 + x] = color.gamma_multiply(0.65);
+                        }
+                    }
+                }
+                self.attempts.insert(key.clone(), (Instant::now(), false));
+                self.accept(ui.ctx(), key.clone(), Some(image));
+            }
+            if let Some(index) = self.textures.iter().position(|(stored, _)| stored == &key) {
+                let entry = self.textures.remove(index).expect("located texture");
+                let source = entry.1.size_vec2();
+                let scale = (rect.width() / source.x).max(rect.height() / source.y);
+                let uv_size = rect.size() / (source * scale);
+                let uv = egui::Rect::from_center_size(egui::pos2(0.5, 0.5), uv_size);
+                egui::Image::new((entry.1.id(), rect.size()))
+                    .uv(uv)
+                    .corner_radius(8)
+                    .paint_at(ui, rect);
+                self.textures.push_back(entry);
+            } else if !demo {
+                self.request(key);
+            }
+        }
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Image, ui.is_enabled(), "Profile banner")
+        });
+        response
+    }
+    pub fn show_profile_avatar(
+        &mut self,
+        ui: &mut egui::Ui,
+        profile: &model::UserProfile,
+        size: f32,
+        demo: bool,
+    ) -> egui::Response {
+        if profile.guild.as_ref().is_none_or(|g| g.avatar.is_none()) {
+            return self.show(ui, &profile.user, size, demo);
+        }
+        let response = crate::design::avatar(ui, &profile.user.name, size);
+        if ui.is_rect_visible(response.rect) {
+            let key = profile.avatar_key();
+            if demo && !self.textures.iter().any(|(stored, _)| stored == &key) {
+                let image = ColorImage::filled([32, 32], crate::design::palette(ui).accent);
+                self.attempts.insert(key.clone(), (Instant::now(), false));
+                self.accept(ui.ctx(), key.clone(), Some(image));
+            }
+            if !self.paint(ui, &key, response.rect, (size * 0.5) as u8) && !demo {
+                self.request(key);
+            }
+        }
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Image,
+                ui.is_enabled(),
+                "Server profile picture",
+            )
+        });
+        response
     }
     fn paint(&mut self, ui: &mut egui::Ui, key: &str, rect: egui::Rect, radius: u8) -> bool {
         let Some(index) = self.textures.iter().position(|(stored, _)| stored == key) else {
@@ -139,10 +234,32 @@ impl Avatars {
         max_size: egui::Vec2,
         demo: bool,
     ) -> egui::Response {
+        self.show_media(ui, media, max_size, demo, false)
+    }
+    pub fn show_large(
+        &mut self,
+        ui: &mut egui::Ui,
+        media: &model::EmbedMedia,
+        max_size: egui::Vec2,
+        demo: bool,
+    ) -> egui::Response {
+        self.show_media(ui, media, max_size, demo, true)
+    }
+    fn show_media(
+        &mut self,
+        ui: &mut egui::Ui,
+        media: &model::EmbedMedia,
+        max_size: egui::Vec2,
+        demo: bool,
+        large: bool,
+    ) -> egui::Response {
         // Reserve geometry from bounded metadata so image arrivals do not move the reading anchor.
         let max_size = egui::vec2(
-            max_size.x.min(ui.available_width()).clamp(1.0, 512.0),
-            max_size.y.clamp(1.0, 512.0),
+            max_size
+                .x
+                .min(ui.available_width())
+                .clamp(1.0, if large { 4096.0 } else { 512.0 }),
+            max_size.y.clamp(1.0, if large { 4096.0 } else { 512.0 }),
         );
         let original = if media.width > 0 && media.height > 0 {
             egui::vec2(
@@ -154,7 +271,7 @@ impl Avatars {
         };
         let scale = (max_size.x / original.x)
             .min(max_size.y / original.y)
-            .min(1.0);
+            .min(if large { f32::INFINITY } else { 1.0 });
         let size = (original * scale).max(egui::vec2(1.0, 1.0));
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
         if ui.is_rect_visible(rect) {

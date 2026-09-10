@@ -3,8 +3,10 @@ use model::{Id, Message, User};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::{collections::BTreeMap, path::Path};
 
-const MAX_EMBED_JSON: usize = 256 * 1024;
+const MAX_MEDIA_JSON: usize = 256 * 1024;
 const MAX_WINDOW_BYTES: usize = 4 * 1024 * 1024;
+#[derive(serde::Deserialize)]
+struct CachedMentions(#[serde(deserialize_with = "model::deserialize_mentions")] Vec<User>);
 pub struct LocalStore(Connection);
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Appearance {
@@ -77,7 +79,7 @@ impl LocalStore {
     fn initialize(connection: Connection) -> Result<Self> {
         connection.busy_timeout(std::time::Duration::from_secs(2))?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 4 {
+        if version > 6 {
             return Err(StoreError::Incompatible);
         }
         connection.execute_batch("PRAGMA page_size=4096; PRAGMA max_page_count=16384; PRAGMA cache_size=-2048; PRAGMA temp_store=MEMORY; PRAGMA journal_mode=DELETE; PRAGMA secure_delete=ON; PRAGMA auto_vacuum=FULL;
@@ -101,8 +103,26 @@ impl LocalStore {
         )?;
         if !has_embeds {
             connection.execute_batch("BEGIN; ALTER TABLE messages ADD COLUMN embeds TEXT NOT NULL DEFAULT '[]'; ALTER TABLE messages ADD COLUMN embeds_suppressed INTEGER NOT NULL DEFAULT 0; PRAGMA user_version=4; COMMIT;")?;
+        }
+        let has_attachments: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('messages') WHERE name='attachments')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_attachments {
+            connection.execute_batch("BEGIN; ALTER TABLE messages ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'; PRAGMA user_version=5; COMMIT;")?;
         } else {
-            connection.pragma_update(None, "user_version", 4)?;
+            connection.pragma_update(None, "user_version", 5)?;
+        }
+        let has_mentions: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('messages') WHERE name='mentions')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_mentions {
+            connection.execute_batch("BEGIN; ALTER TABLE messages ADD COLUMN mentions TEXT NOT NULL DEFAULT '[]'; PRAGMA user_version=6; COMMIT;")?;
+        } else {
+            connection.pragma_update(None, "user_version", 6)?;
         }
         Ok(Self(connection))
     }
@@ -141,9 +161,12 @@ impl LocalStore {
     pub fn save_channel(&mut self, account: Id, channel: Id, messages: &[Message]) -> Result<()> {
         if messages.len() > 500
             || messages.iter().map(Message::bytes).sum::<usize>() > MAX_WINDOW_BYTES
-            || messages
-                .iter()
-                .any(|m| m.channel != channel || !model::valid_embeds(&m.embeds))
+            || messages.iter().any(|m| {
+                m.channel != channel
+                    || !model::valid_mentions(&m.mentions)
+                    || !model::valid_embeds(&m.embeds)
+                    || !model::valid_attachments(&m.attachments)
+            })
         {
             return Err(StoreError::Capacity);
         }
@@ -156,13 +179,20 @@ impl LocalStore {
             params![account, channel],
         )?;
         for message in messages {
+            let mentions =
+                serde_json::to_string(&message.mentions).map_err(|_| StoreError::Incompatible)?;
+            if mentions.len() > 128 * 1024 {
+                return Err(StoreError::Capacity);
+            }
             let embeds =
                 serde_json::to_string(&message.embeds).map_err(|_| StoreError::Incompatible)?;
-            if embeds.len() > MAX_EMBED_JSON {
+            let attachments = serde_json::to_string(&message.attachments)
+                .map_err(|_| StoreError::Incompatible)?;
+            if embeds.len() > MAX_MEDIA_JSON || attachments.len() > MAX_MEDIA_JSON {
                 return Err(StoreError::Capacity);
             }
             transaction.execute(
-                "INSERT INTO messages(account,channel,id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+                "INSERT INTO messages(account,channel,id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
                 params![
                     account,
                     channel,
@@ -176,14 +206,16 @@ impl LocalStore {
                     message.author.avatar,
                     message.author.discriminator,
                     embeds,
-                    message.embeds_suppressed
+                    message.embeds_suppressed,
+                    attachments,
+                    mentions
                 ],
             )?;
         }
         transaction.execute("INSERT INTO channels VALUES(?1,?2,unixepoch('subsec')*1000) ON CONFLICT(account,channel) DO UPDATE SET touched=excluded.touched",params![account,channel])?;
         // Global limit: 20 channel windows, 10000 messages AND 48 MiB content, below the 64 MiB database page ceiling.
         loop {
-            let (channels,bytes):(i64,i64)=transaction.query_row("SELECT (SELECT count(*) FROM channels),(SELECT coalesce(sum(length(CAST(content AS BLOB))+length(CAST(name AS BLOB))+length(CAST(embeds AS BLOB))+256),0) FROM messages)",[],|r|Ok((r.get(0)?,r.get(1)?)))?;
+            let (channels,bytes):(i64,i64)=transaction.query_row("SELECT (SELECT count(*) FROM channels),(SELECT coalesce(sum(length(CAST(content AS BLOB))+length(CAST(name AS BLOB))+length(CAST(embeds AS BLOB))+length(CAST(attachments AS BLOB))+length(CAST(mentions AS BLOB))+256),0) FROM messages)",[],|r|Ok((r.get(0)?,r.get(1)?)))?;
             if channels <= 20 && bytes <= 48 * 1024 * 1024 {
                 break;
             }
@@ -205,7 +237,7 @@ impl LocalStore {
         Ok(())
     }
     pub fn load_channel(&self, account: Id, channel: Id) -> Result<Vec<Message>> {
-        let mut query = self.0.prepare("SELECT id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed FROM messages WHERE account=?1 AND channel=?2 ORDER BY length(id),id LIMIT 500")?;
+        let mut query = self.0.prepare("SELECT id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions FROM messages WHERE account=?1 AND channel=?2 ORDER BY length(id),id LIMIT 500")?;
         let mut rows = query.query(params![account.to_string(), channel.to_string()])?;
         let mut messages = Vec::new();
         let mut bytes = 0;
@@ -216,7 +248,9 @@ impl LocalStore {
                 (1, 20),
                 (2, 512),
                 (3, 64 * 1024),
-                (9, MAX_EMBED_JSON),
+                (9, MAX_MEDIA_JSON),
+                (11, MAX_MEDIA_JSON),
+                (12, 128 * 1024),
             ] {
                 if row
                     .get_ref(column)?
@@ -247,7 +281,24 @@ impl LocalStore {
             )
             .map_err(|_| StoreError::Incompatible)?
             .0;
-            if !model::valid_embeds(&embeds) {
+            let attachments = serde_json::from_str::<model::AttachmentList>(
+                row.get_ref(11)?
+                    .as_str()
+                    .map_err(|_| StoreError::Incompatible)?,
+            )
+            .map_err(|_| StoreError::Incompatible)?
+            .0;
+            let mentions = serde_json::from_str::<CachedMentions>(
+                row.get_ref(12)?
+                    .as_str()
+                    .map_err(|_| StoreError::Incompatible)?,
+            )
+            .map_err(|_| StoreError::Incompatible)?
+            .0;
+            if !model::valid_mentions(&mentions)
+                || !model::valid_embeds(&embeds)
+                || !model::valid_attachments(&attachments)
+            {
                 return Err(StoreError::Capacity);
             }
             let parse = |value: String| value.parse::<Id>().map_err(|_| StoreError::Incompatible);
@@ -268,7 +319,9 @@ impl LocalStore {
                 nonce: None,
                 revision: 0,
                 embeds,
+                mentions,
                 embeds_suppressed: row.get(10)?,
+                attachments,
             };
             bytes += message.bytes();
             if bytes > MAX_WINDOW_BYTES {
@@ -352,6 +405,112 @@ impl LocalStore {
 mod tests {
     use super::*;
     #[test]
+    fn schema_five_mentions_round_trip_and_reject_oversized_metadata() {
+        let mut store = LocalStore::initialize(Connection::open_in_memory().unwrap()).unwrap();
+        store.save_draft(Id(1), Id(2), "kept draft").unwrap();
+        store
+            .0
+            .execute_batch("ALTER TABLE messages DROP COLUMN mentions; PRAGMA user_version=5;")
+            .unwrap();
+        store.0.execute("INSERT INTO messages(account,channel,id,author,name,content,edited,unsupported) VALUES('1','2','3','4','Synthetic','<@5>',0,0)",[]).unwrap();
+        let mut store = LocalStore::initialize(store.0).unwrap();
+        let mut messages = store.load_channel(Id(1), Id(2)).unwrap();
+        assert!(messages[0].mentions.is_empty());
+        assert_eq!(store.load_drafts(Id(1)).unwrap()[&Id(2)], "kept draft");
+        messages[0].mentions = vec![User {
+            id: Id(5),
+            name: "Mentioned user".into(),
+            avatar: None,
+            discriminator: 0,
+        }];
+        store.save_channel(Id(1), Id(2), &messages).unwrap();
+        assert_eq!(
+            store.load_channel(Id(1), Id(2)).unwrap()[0].mentions[0].name,
+            "Mentioned user"
+        );
+        let excessive = serde_json::to_string(&vec![messages[0].mentions[0].clone(); 101]).unwrap();
+        store
+            .0
+            .execute("UPDATE messages SET mentions=?1", [excessive])
+            .unwrap();
+        assert!(matches!(
+            store.load_channel(Id(1), Id(2)),
+            Err(StoreError::Incompatible)
+        ));
+        store
+            .0
+            .execute(
+                "UPDATE messages SET mentions=?1",
+                [" ".repeat(128 * 1024 + 1)],
+            )
+            .unwrap();
+        assert!(matches!(
+            store.load_channel(Id(1), Id(2)),
+            Err(StoreError::Capacity)
+        ));
+    }
+    #[test]
+    fn schema_four_attachment_migration_reopen_and_limits() {
+        let root = std::env::temp_dir().join(format!(
+            "serein-synthetic-attachments-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("test.sqlite3");
+        let mut store = LocalStore::open(&path).unwrap();
+        store.save_draft(Id(1), Id(2), "synthetic draft").unwrap();
+        store
+            .0
+            .execute_batch("ALTER TABLE messages DROP COLUMN attachments; PRAGMA user_version=4;")
+            .unwrap();
+        store.0.execute(r#"INSERT INTO messages(account,channel,id,author,name,content,edited,unsupported,embeds,embeds_suppressed) VALUES('1','2','3','4','Synthetic','body',0,0,'[{"title":"kept embed"}]',1)"#, []).unwrap();
+        drop(store);
+        let mut store = LocalStore::open(&path).unwrap();
+        let mut loaded = store.load_channel(Id(1), Id(2)).unwrap();
+        assert!(loaded[0].attachments.is_empty());
+        assert_eq!(loaded[0].embeds[0].title.as_deref(), Some("kept embed"));
+        assert!(loaded[0].embeds_suppressed);
+        assert_eq!(store.load_drafts(Id(1)).unwrap()[&Id(2)], "synthetic draft");
+        loaded[0].attachments = vec![model::Attachment {
+            id: Id(5),
+            filename: "SPOILER_synthetic.png".into(),
+            description: Some("Synthetic alt text".into()),
+            content_type: Some("image/png".into()),
+            size: 2048,
+            spoiler: true,
+            media: model::EmbedMedia {
+                url: Some("https://cdn.discordapp.com/attachments/2/5/synthetic.png".into()),
+                width: 640,
+                height: 480,
+                ..Default::default()
+            },
+        }];
+        store.save_channel(Id(1), Id(2), &loaded).unwrap();
+        drop(store);
+        let store = LocalStore::open(&path).unwrap();
+        assert_eq!(
+            store.load_channel(Id(1), Id(2)).unwrap()[0].attachments,
+            loaded[0].attachments
+        );
+        assert!(store.load_channel(Id(9), Id(2)).unwrap().is_empty());
+        for (json, error) in [
+            ("invalid JSON".to_owned(), StoreError::Incompatible),
+            (
+                serde_json::to_string(&vec![loaded[0].attachments[0].clone(); 11]).unwrap(),
+                StoreError::Incompatible,
+            ),
+            (" ".repeat(MAX_MEDIA_JSON + 1), StoreError::Capacity),
+        ] {
+            store
+                .0
+                .execute("UPDATE messages SET attachments=?1", [json])
+                .unwrap();
+            assert!(matches!(store.load_channel(Id(1), Id(2)), Err(actual) if actual == error));
+        }
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn schema_three_and_untrusted_cached_embeds_remain_bounded() {
         let store = LocalStore::initialize(Connection::open_in_memory().unwrap()).unwrap();
         store.0.execute_batch("ALTER TABLE messages DROP COLUMN embeds; ALTER TABLE messages DROP COLUMN embeds_suppressed; PRAGMA user_version=3;").unwrap();
@@ -365,7 +524,7 @@ mod tests {
             .0
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 4);
+        assert_eq!(version, 6);
         for (json, error) in [
             ("broken JSON".to_owned(), StoreError::Incompatible),
             (
@@ -376,7 +535,7 @@ mod tests {
                 serde_json::json!([{"fields": vec![model::EmbedField::default(); 26]}]).to_string(),
                 StoreError::Incompatible,
             ),
-            (" ".repeat(MAX_EMBED_JSON + 1), StoreError::Capacity),
+            (" ".repeat(MAX_MEDIA_JSON + 1), StoreError::Capacity),
         ] {
             store
                 .0
@@ -466,7 +625,9 @@ mod tests {
                     title: Some("Cached synthetic embed".into()),
                     ..Default::default()
                 }],
+                mentions: Vec::new(),
                 embeds_suppressed: true,
+                attachments: Vec::new(),
                 nonce: None,
                 revision: 0,
             };

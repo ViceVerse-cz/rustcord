@@ -19,7 +19,9 @@ pub struct TimelineView {
     formatted: FormatCache,
     // Exact revealed content prevents a reload that resets model revisions from revealing edits.
     // Pruned with the active window: at most its 500 records / 4 MiB content budget.
-    revealed: BTreeMap<Id, (String, Vec<model::Embed>)>,
+    revealed: BTreeMap<Id, (String, Vec<model::Embed>, Vec<model::Attachment>)>,
+    viewing: Option<(Id, Id)>,
+    pub(super) download: crate::attachments::DownloadUi,
     opening: Option<String>,
     text_size: f32,
     scale: f32,
@@ -58,10 +60,15 @@ fn layout_key(message: &Message) -> u64 {
     // A layout fingerprint only; spoiler visibility uses exact text instead.
     let mut key = DefaultHasher::new();
     message.content.hash(&mut key);
+    for user in &message.mentions {
+        user.id.hash(&mut key);
+        user.name.hash(&mut key);
+    }
     message.author.name.hash(&mut key);
     message.edited.hash(&mut key);
     message.reply_to.hash(&mut key);
     message.unsupported.hash(&mut key);
+    message.attachments.hash(&mut key);
     message.embeds.hash(&mut key);
     message.embeds_suppressed.hash(&mut key);
     key.finish()
@@ -101,10 +108,9 @@ impl TimelineView {
                 .retain(|id, _| state.timeline.get(*id).is_some());
             self.formatted.retain(|id| state.timeline.get(id).is_some());
             self.revealed.retain(|id, content| {
-                state
-                    .timeline
-                    .get(*id)
-                    .is_some_and(|m| m.content == content.0 && m.embeds == content.1)
+                state.timeline.get(*id).is_some_and(|m| {
+                    m.content == content.0 && m.embeds == content.1 && m.attachments == content.2
+                })
             });
             self.rows = state
                 .timeline
@@ -114,7 +120,8 @@ impl TimelineView {
                         0.0
                     } else {
                         crate::embeds::estimated_height(&m.embeds)
-                    }) + 58.0
+                    }) + crate::attachments::estimated_height(&m.attachments)
+                        + 58.0
                         + 18.0
                             * (m.content
                                 .lines()
@@ -245,23 +252,24 @@ impl TimelineView {
                                     let formatted = self.formatted.get(*id, &message.content);
                                     let spoilers = formatted.spoilers || crate::embeds::has_spoilers(message);
                                     if spoilers
-                                        && !self.revealed.get(id).is_some_and(|(content, embeds)| content == &message.content && embeds == &message.embeds)
+                                        && !self.revealed.get(id).is_some_and(|(content, embeds, attachments)| content == &message.content && embeds == &message.embeds && attachments == &message.attachments)
                                     {
                                         if ui.button("Reveal spoiler").clicked() {
-                                            self.revealed.insert(*id, (message.content.clone(), message.embeds.clone()));
+                                            self.revealed.insert(*id, (message.content.clone(), message.embeds.clone(), message.attachments.clone()));
                                         }
                                     } else {
-                                        formatted.show(ui, &mut self.opening);
+                                        formatted.show_mentions(ui, &mut self.opening, &message.mentions, profile);
                                         if formatted.limited {
                                             ui.label(RichText::new("Display limited · Copy message for the full text").small().color(colors.muted));
                                         }
-                                        crate::embeds::show(ui, message, &mut self.formatted, avatars, &mut self.opening, state.demo);
+                                        crate::embeds::show(ui, message, &mut self.formatted, avatars, &mut self.opening, profile, state.demo);
+                                        crate::attachments::show(ui, message, avatars, &mut self.viewing, &mut self.opening, state.demo);
                                         if spoilers && ui.small_button("Hide spoiler").clicked() {
                                             self.revealed.remove(id);
                                         }
                                     }
                                     if message.unsupported {
-                                        ui.label(RichText::new("Attachment or system content · Preview unavailable").small().color(colors.muted));
+                                        ui.label(RichText::new("System content · Preview unavailable").small().color(colors.muted));
                                     }
                                 });
                             });
@@ -292,6 +300,32 @@ impl TimelineView {
         if !self.following && ui.button("↓ Jump to latest loaded").clicked() {
             self.following = true;
             ui.ctx().request_repaint();
+        }
+        if let Some((message_id, attachment_id)) = self.viewing {
+            let attachment = state
+                .timeline
+                .get(message_id)
+                .filter(|m| {
+                    !crate::embeds::has_spoilers(m)
+                        || self
+                            .revealed
+                            .get(&m.id)
+                            .is_some_and(|(content, embeds, attachments)| {
+                                content == &m.content
+                                    && embeds == &m.embeds
+                                    && attachments == &m.attachments
+                            })
+                })
+                .and_then(|m| {
+                    m.attachments
+                        .iter()
+                        .find(|a| a.id == attachment_id && a.is_image())
+                });
+            if attachment.is_none_or(|a| {
+                !crate::attachments::viewer(ui, a, avatars, &mut self.download, state.demo)
+            }) {
+                self.viewing = None;
+            }
         }
         if let Some(url) = &self.opening {
             let mut close = false;
@@ -357,6 +391,8 @@ mod tests {
             reply_to: None,
             unsupported: false,
             embeds: vec![],
+            attachments: vec![],
+            mentions: Vec::new(),
             embeds_suppressed: false,
         };
         let mut view = TimelineView {
@@ -365,7 +401,11 @@ mod tests {
         };
         view.revealed.insert(
             message.id,
-            (message.content.clone(), message.embeds.clone()),
+            (
+                message.content.clone(),
+                message.embeds.clone(),
+                message.attachments.clone(),
+            ),
         );
         view.heights
             .insert(message.id, (layout_key(&message), 4000.0));
@@ -431,6 +471,8 @@ mod tests {
             nonce: None,
             reply_to: None,
             unsupported: false,
+            attachments: vec![],
+            mentions: Vec::new(),
             embeds_suppressed: false,
             embeds: vec![model::Embed {
                 kind: "rich".into(),
@@ -461,6 +503,7 @@ mod tests {
                     &message,
                     &mut FormatCache::default(),
                     &mut crate::avatars::Avatars::default(),
+                    &mut None,
                     &mut None,
                     true,
                 );
@@ -513,7 +556,11 @@ mod tests {
         assert!(!concealed.contains("Embed description"));
         view.revealed.insert(
             message.id,
-            (message.content.clone(), message.embeds.clone()),
+            (
+                message.content.clone(),
+                message.embeds.clone(),
+                message.attachments.clone(),
+            ),
         );
         let revealed = render(&mut view, &mut state, &mut images);
         assert!(revealed.contains("Hidden title"));
@@ -532,10 +579,65 @@ mod tests {
         assert!(!changed.contains("Changed secret"));
         message.embeds[0].title = Some("Visible title".into());
         message.embeds_suppressed = true;
-        state.timeline.insert(message, true, false).unwrap();
+        state.timeline.insert(message.clone(), true, false).unwrap();
         state.revision += 1;
         let suppressed = render(&mut view, &mut state, &mut images);
         assert!(!suppressed.contains("Visible title"));
         assert!(!suppressed.contains("Embed description"));
+        // Attachments are independent of SUPPRESS_EMBEDS, but never of spoiler consent.
+        message.embeds.clear();
+        message.content.clear();
+        message.attachments = vec![model::Attachment {
+            id: Id(7),
+            filename: "SPOILER_hidden.png".into(),
+            description: None,
+            content_type: Some("image/png".into()),
+            size: 100,
+            spoiler: true,
+            media: model::EmbedMedia {
+                url: Some("https://cdn.discordapp.com/attachments/2/7/hidden.png".into()),
+                width: 320,
+                height: 120,
+                ..Default::default()
+            },
+        }];
+        assert!(message.attachments[0].is_image());
+        state.demo = false; // Only collects image request keys; there is no network worker in this test.
+        state.timeline.insert(message.clone(), true, false).unwrap();
+        state.revision += 1;
+        view.viewing = Some((message.id, Id(7)));
+        let hidden = render(&mut view, &mut state, &mut images);
+        assert!(!hidden.contains("SPOILER_hidden.png"));
+        assert!(view.viewing.is_none());
+        assert!(
+            images
+                .take_requests()
+                .iter()
+                .all(|key| !key.starts_with("embed:")),
+            "Hidden attachments must not request media; the visible author avatar is independent"
+        );
+        view.revealed.insert(
+            message.id,
+            (
+                message.content.clone(),
+                message.embeds.clone(),
+                message.attachments.clone(),
+            ),
+        );
+        view.viewing = Some((message.id, Id(7)));
+        render(&mut view, &mut state, &mut images); // Modal sizing pass precedes visible paint.
+        let shown = render(&mut view, &mut state, &mut images);
+        assert!(shown.contains("SPOILER_hidden.png"));
+        assert!(shown.contains("Download"));
+        assert_eq!(images.take_requests().len(), 1);
+        let previous_key = layout_key(&message);
+        message.attachments[0].description = Some("Changed attachment".into());
+        assert_ne!(previous_key, layout_key(&message));
+        state.timeline.insert(message, true, false).unwrap();
+        state.revision += 1;
+        let hidden_again = render(&mut view, &mut state, &mut images);
+        assert!(view.viewing.is_none() && view.revealed.is_empty());
+        assert!(!hidden_again.contains("SPOILER_hidden.png"));
+        assert!(images.take_requests().is_empty());
     }
 }

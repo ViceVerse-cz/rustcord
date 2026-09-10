@@ -163,6 +163,10 @@ fn package(voice: bool) -> Result<(), String> {
         )
         .map_err(|e| e.to_string())?;
     }
+    copy_directory(
+        std::path::Path::new("assets/licenses/files"),
+        &resources.join("licenses/files"),
+    )?;
     if voice {
         copy_directory(
             std::path::Path::new("assets/licenses/voice"),
