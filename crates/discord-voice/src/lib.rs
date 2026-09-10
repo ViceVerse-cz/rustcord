@@ -5,8 +5,11 @@ mod capture;
 mod crypto;
 mod jitter;
 mod mixer;
+pub mod screen;
 mod transport;
-pub use transport::run;
+mod video;
+pub use crypto::Identity;
+pub use transport::{run, run_stream, run_with_identity};
 
 pub type Frame = [f32; 960];
 #[derive(Clone, Copy, Default)]

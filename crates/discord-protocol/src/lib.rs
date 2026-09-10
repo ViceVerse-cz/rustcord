@@ -11,6 +11,7 @@ pub mod profile;
 mod reactions;
 pub mod read_state;
 pub mod search;
+pub mod stream;
 pub mod threads;
 pub mod typing;
 use attachments::AttachmentList;

@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const ADMINISTRATOR: u128 = 1 << 3;
 pub const MANAGE_CHANNELS: u128 = 1 << 4;
 pub const ADD_REACTIONS: u128 = 1 << 6;
+pub const STREAM: u128 = 1 << 9;
 pub const VIEW_CHANNEL: u128 = 1 << 10;
 pub const SEND_MESSAGES: u128 = 1 << 11;
 pub const SEND_TTS_MESSAGES: u128 = 1 << 12;

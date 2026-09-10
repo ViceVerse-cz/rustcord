@@ -10,7 +10,7 @@ use discord_voice::{
 use eframe::egui;
 use model::Id;
 use std::{
-	sync::mpsc,
+	sync::{Arc, mpsc},
 	time::{Duration, Instant},
 };
 use tokio::{runtime::Runtime, sync::watch, task::JoinHandle};
@@ -73,8 +73,11 @@ struct Live {
 	generation: u64,
 	channel: Id,
 	request: u64,
+	user: Id,
+	peer: Option<Id>,
 	ring_pending: bool,
 	session: Zeroizing<String>,
+	identity: Arc<discord_voice::Identity>,
 	audio: Audio,
 	controls: watch::Sender<Controls>,
 	events: mpsc::Receiver<Notice>,
@@ -85,6 +88,7 @@ struct Live {
 }
 #[derive(Default)]
 pub struct Voice {
+	screen: crate::screen::Screen,
 	pending: Option<Pending>,
 	live: Option<Live>,
 	retiring: Option<mpsc::Receiver<()>>,
@@ -92,6 +96,7 @@ pub struct Voice {
 }
 impl Voice {
 	pub fn stop(&mut self) {
+		self.screen.stop();
 		self.pending = None;
 		if let Some(live) = self.live.take() {
 			live.audio.set_ready(false);
@@ -150,6 +155,7 @@ impl Voice {
 	}
 	/// Take negotiation secrets before reducing the UI event. Nothing is persisted.
 	pub fn observe(&mut self, state: &State, event: &mut Event) -> Option<&'static str> {
+		self.screen.observe(state, event);
 		let Event::Voice(event) = event else {
 			return None;
 		};
@@ -486,11 +492,24 @@ impl Voice {
 					.map(Id),
 			);
 		}
-		if let Some(error) = failure {
+		let command = if let Some(error) = failure {
 			self.fail(state, error)
 		} else {
 			command
+		};
+		if command.is_some() {
+			return command;
 		}
+		let call = self.live.as_ref().map(|live| crate::screen::Call {
+			generation: live.generation,
+			channel: live.channel,
+			request: live.request,
+			user: live.user,
+			peer: live.peer,
+			session: live.session.as_str(),
+			identity: live.identity.clone(),
+		});
+		self.screen.poll(runtime, state, ui, ctx, call)
 	}
 	fn start_media(
 		&mut self,
@@ -544,11 +563,13 @@ impl Voice {
 			token,
 			endpoint,
 		};
+		let identity = discord_voice::Identity::generate();
+		let media_identity = identity.clone();
 		let wake = ctx.clone();
 		let task = runtime.spawn(async move {
 			let status = send.clone();
 			let status_wake = wake.clone();
-			let result = discord_voice::run(
+			let result = discord_voice::run_with_identity(
 				credentials,
 				capture,
 				playback,
@@ -577,6 +598,7 @@ impl Voice {
 					status_wake.request_repaint();
 					Ok(())
 				},
+				media_identity,
 			)
 			.await;
 			if let Err(error) = result {
@@ -588,7 +610,10 @@ impl Voice {
 			generation: pending.generation,
 			channel: pending.channel,
 			request: pending.request,
+			user: pending.user,
+			peer: pending.peer,
 			session: session_copy,
+			identity,
 			ring_pending: pending.ring,
 			audio,
 			controls,

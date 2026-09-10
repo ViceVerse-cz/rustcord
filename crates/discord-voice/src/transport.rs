@@ -1,6 +1,6 @@
 use crate::{
 	Controls, Frame, Status,
-	crypto::{Dave, Encryption, MAX_PACKET, MAX_SIGNAL, MODE},
+	crypto::{Dave, Encryption, Identity, MAX_PACKET, MAX_SIGNAL, MODE},
 };
 use client_core::voice::VoiceConnection;
 use futures_util::{SinkExt, StreamExt};
@@ -8,7 +8,11 @@ use opus2::{Application, Bitrate, Channels, Encoder};
 use serde_json::{Value, json};
 use std::{
 	net::{IpAddr, SocketAddr},
-	sync::mpsc::{Receiver, SyncSender},
+	sync::{
+		Arc,
+		atomic::{AtomicBool, Ordering},
+		mpsc::{Receiver, SyncSender},
+	},
 	time::Duration,
 };
 use tokio::{
@@ -109,6 +113,11 @@ fn id(data: &Value, key: &str) -> Result<u64, &'static str> {
 fn transition(data: &Value) -> Result<u16, &'static str> {
 	u16::try_from(number(data, "transition_id")?).map_err(|_| "Invalid voice transition")
 }
+fn h264_negotiated(data: &Value) -> bool {
+	data["video_codec"]
+		.as_str()
+		.is_some_and(|codec| codec.eq_ignore_ascii_case("H264"))
+}
 fn discovery(packet: &[u8], ssrc: u32) -> Result<(IpAddr, u16), &'static str> {
 	if packet.len() != 74 || packet[..4] != [0, 2, 0, 70] || packet[4..8] != ssrc.to_be_bytes() {
 		return Err("Invalid voice UDP discovery reply");
@@ -137,15 +146,46 @@ pub async fn run(
 	controls: watch::Receiver<Controls>,
 	emit: impl Fn(Status) -> Result<(), ()>,
 ) -> Result<(), &'static str> {
-	let url = endpoint(&credentials.endpoint)?;
-	run_inner(credentials, capture, playback, controls, emit, url, false).await
+	run_with_identity(
+		credentials,
+		capture,
+		playback,
+		controls,
+		emit,
+		Identity::generate(),
+	)
+	.await
 }
+/// Run voice media using a call-scoped identity shared with active Go Live streams.
+pub async fn run_with_identity(
+	credentials: VoiceConnection,
+	capture: Receiver<Frame>,
+	playback: SyncSender<Frame>,
+	controls: watch::Receiver<Controls>,
+	emit: impl Fn(Status) -> Result<(), ()>,
+	identity: Arc<Identity>,
+) -> Result<(), &'static str> {
+	let url = endpoint(&credentials.endpoint)?;
+	run_inner(
+		credentials,
+		capture,
+		playback,
+		controls,
+		emit,
+		identity,
+		url,
+		false,
+	)
+	.await
+}
+#[allow(clippy::too_many_arguments)] // Public media inputs plus the loopback-only test endpoint.
 async fn run_inner(
 	credentials: VoiceConnection,
 	capture: Receiver<Frame>,
 	playback: SyncSender<Frame>,
 	mut controls: watch::Receiver<Controls>,
 	emit: impl Fn(Status) -> Result<(), ()>,
+	identity: Arc<Identity>,
 	url: String,
 	local_test: bool,
 ) -> Result<(), &'static str> {
@@ -164,10 +204,11 @@ async fn run_inner(
 	.map_err(|_| "Voice TLS connection failed")?;
 	// Only voice-scoped credentials go to this validated endpoint; no account Authorization header.
 	json_send(&mut ws,json!({"op":0,"d":{"server_id":credentials.guild.unwrap_or(credentials.channel).to_string(),"user_id":credentials.user.to_string(),"session_id":credentials.session.expose(),"token":credentials.token.expose(),"video":false,"max_dave_protocol_version":1}})).await?;
-	let mut dave = Dave::new(
+	let mut dave = Dave::with_identity(
 		credentials.user.0,
 		credentials.peer.map(|peer| peer.0),
 		credentials.channel.0,
+		identity,
 	)?;
 	let mut encryption: Option<Encryption> = None;
 	let mut udp: Option<UdpSocket> = None;
@@ -409,6 +450,194 @@ async fn run_inner(
 	}
 }
 
+struct StreamReady(Arc<AtomicBool>);
+impl StreamReady {
+	fn new(ready: Arc<AtomicBool>) -> Self {
+		ready.store(false, Ordering::Release);
+		Self(ready)
+	}
+	fn set(&self, value: bool) {
+		self.0.store(value, Ordering::Release);
+	}
+}
+impl Drop for StreamReady {
+	fn drop(&mut self) {
+		self.set(false);
+	}
+}
+fn invalidate_stream(video: &mut crate::screen::Video) {
+	video.ready.store(false, Ordering::Release);
+	video.keyframe.store(true, Ordering::Release);
+	while video.frames.try_recv().is_ok() {}
+}
+
+/// Send one unofficial Discord Go Live H.264 stream on its own voice gateway.
+///
+/// `credentials.guild` is the stream RTC server ID and `credentials.channel` is
+/// its RTC channel ID. Discord has not documented the stream MLS group mapping;
+/// the `rtc_server_id - 1` mapping is public implementation evidence only.
+pub async fn run_stream(
+	credentials: VoiceConnection,
+	identity: Arc<Identity>,
+	mut video: crate::screen::Video,
+	emit: impl Fn(Status) -> Result<(), ()>,
+) -> Result<(), &'static str> {
+	let stream_server = credentials
+		.guild
+		.ok_or("Stream is missing its RTC server")?
+		.0;
+	let group = stream_server
+		.checked_sub(1)
+		.filter(|id| *id != 0)
+		.ok_or("Unsupported Discord stream media-session identifier")?;
+	let url = endpoint(&credentials.endpoint)?;
+	let _ready = StreamReady::new(video.ready.clone());
+	emit(Status::Connecting).map_err(|_| "Stream interface closed")?;
+	let config = WebSocketConfig::default()
+		.max_message_size(Some(MAX_SIGNAL))
+		.max_frame_size(Some(MAX_SIGNAL))
+		.write_buffer_size(0)
+		.max_write_buffer_size(MAX_SIGNAL * 2);
+	let (mut ws, _) = timeout(
+		Duration::from_secs(15),
+		tokio_tungstenite::connect_async_with_config(&url, Some(config), false),
+	)
+	.await
+	.map_err(|_| "Stream connection timed out")?
+	.map_err(|_| "Stream TLS connection failed")?;
+	json_send(
+		&mut ws,
+		json!({"op":0,"d":{
+			"server_id":stream_server.to_string(),"user_id":credentials.user.to_string(),
+			"session_id":credentials.session.expose(),"token":credentials.token.expose(),
+			"video":true,"streams":[{"type":"video","rid":"100","quality":100}],
+			"max_dave_protocol_version":1
+		}}),
+	)
+	.await?;
+	let mut dave = Dave::with_identity(
+		credentials.user.0,
+		credentials.peer.map(|id| id.0),
+		group,
+		identity,
+	)?;
+	let mut encryption: Option<Encryption> = None;
+	let mut udp: Option<UdpSocket> = None;
+	let mut discovering = false;
+	let mut discovery_deadline = Instant::now();
+	let mut audio_ssrc = 0u32;
+	let mut video_ssrc = 0u32;
+	let mut random = [0; 2];
+	getrandom::fill(&mut random).map_err(|_| "Stream random initialization failed")?;
+	let mut sequence = u16::from_be_bytes(random);
+	let mut heartbeat_ms = None;
+	let mut heartbeat_at = Instant::now();
+	let mut heartbeat_nonce = 0u64;
+	let mut awaiting_ack = None;
+	let mut seq_ack = -1i64;
+	let mut deadline = Some(Instant::now() + Duration::from_secs(90));
+	let mut announced = false;
+	let mut awaiting_keyframe = true;
+	let mut packet = [0u8; MAX_PACKET + 1];
+	let mut tick = tokio::time::interval(Duration::from_millis(20));
+	tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+	loop {
+		tokio::select! {
+			_=tick.tick()=>{
+				let now=Instant::now();
+				if deadline.is_some_and(|at| now>=at) {return Err(negotiation_timeout(heartbeat_ms.is_some(),udp.is_some(),encryption.is_some(),&dave,false));}
+				if discovering && now>=discovery_deadline {return Err("Discord stream UDP discovery timed out");}
+				if let Some(interval)=heartbeat_ms && now>=heartbeat_at {
+					if awaiting_ack.is_some() {return Err("Discord stream heartbeat was not acknowledged");}
+					heartbeat_nonce=heartbeat_nonce.wrapping_add(1);
+					json_send(&mut ws,json!({"op":3,"d":{"t":heartbeat_nonce,"seq_ack":seq_ack}})).await?;
+					awaiting_ack=Some(heartbeat_nonce); heartbeat_at=now+Duration::from_millis(interval);
+				}
+				let secure=dave.ready&&dave.session.is_ready()&&dave.pending.is_none()&&encryption.is_some()&&!discovering;
+				if secure && !announced {
+					let streams=json!([{"type":"video","rid":"100","ssrc":video_ssrc,"active":true,"quality":100,"rtx_ssrc":0,"max_bitrate":video.settings.bit_rate(),"max_framerate":video.settings.fps,"max_resolution":{"type":"fixed","width":video.settings.width,"height":video.settings.height}}]);
+					json_send(&mut ws,json!({"op":12,"d":{"audio_ssrc":audio_ssrc,"video_ssrc":video_ssrc,"rtx_ssrc":0,"streams":streams}})).await?;
+					awaiting_keyframe=true;video.keyframe.store(true, Ordering::Release); video.ready.store(true, Ordering::Release);
+					announced=true; deadline=None;
+
+				}
+				if !secure && announced {announced=false;awaiting_keyframe=true;invalidate_stream(&mut video);emit(Status::Securing).map_err(|_|"Stream interface closed")?;}
+			},
+			frame=video.frames.recv()=>{
+				let Some(frame)=frame else {return Ok(());};
+				if frame.data.len()>2*1024*1024 {return Err("Encoded stream frame exceeds the sharing limit");}
+				let secure=announced&&dave.ready&&dave.session.is_ready()&&dave.pending.is_none()&&encryption.is_some()&&!discovering;
+				if !secure {awaiting_keyframe=true;invalidate_stream(&mut video);continue;}
+				if awaiting_keyframe && !frame.keyframe {continue;}
+				crate::video::validate_source(&frame.data)?;
+				let encrypted=dave.session.encrypt(davey::MediaType::VIDEO,davey::Codec::H264,&frame.data).map_err(|_|"DAVE H264 encryption failed")?;
+				let packets=crate::video::packetize(&encrypted,&mut sequence,frame.timestamp,video_ssrc)?;
+				let crypto=encryption.as_mut().ok_or("Missing stream transport key")?;
+				let socket=udp.as_ref().ok_or("Missing stream UDP socket")?;
+				for (index, packet) in packets.into_iter().enumerate() {
+					socket.send(&crypto.seal(&packet.header,&packet.payload)?).await.map_err(|_|"Stream UDP send failed")?;
+					if index % 32 == 31 {tokio::task::yield_now().await;}
+				}
+				if frame.keyframe {
+					if awaiting_keyframe {emit(Status::Ready{privacy_code:dave.session.voice_privacy_code().unwrap_or_default().into()}).map_err(|_|"Stream interface closed")?;}
+					awaiting_keyframe=false;
+				}
+			},
+			result=async {match &udp {Some(socket) if discovering=>socket.recv(&mut packet).await,_=>std::future::pending().await}}=>{
+				let length=result.map_err(|_|"Stream UDP receive failed")?;
+				let (address,port)=discovery(&packet[..length],audio_ssrc)?;
+				json_send(&mut ws,json!({"op":1,"d":{"protocol":"udp","data":{"address":address.to_string(),"port":port,"mode":MODE},"codecs":[{"name":"opus","type":"audio","priority":1000,"payload_type":120},{"name":"H264","type":"video","priority":1000,"payload_type":101}]}})).await?;
+				discovering=false;
+			},
+			event=ws.next()=>{
+				let Some(Ok(event))=event else {return Err("Discord stream socket failed");};
+				match event {
+					Message::Text(text)=>{
+						let mut event:Value=serde_json::from_str(&text).map_err(|_|"Invalid stream JSON")?;
+						if let Some(seq)=event["seq"].as_i64(){seq_ack=seq;}
+						let op=number(&event,"op")?;
+						let data=&mut event["d"];
+						match op {
+							8=>{let interval=data["heartbeat_interval"].as_f64().filter(|v|v.is_finite()&&*v>=100.&&*v<=120000.).ok_or("Invalid stream heartbeat")? as u64; heartbeat_ms=Some(interval.min(5000));heartbeat_at=Instant::now();},
+							6=>{if awaiting_ack.is_none()||data["t"].as_u64()!=awaiting_ack{return Err("Invalid stream heartbeat acknowledgement");}awaiting_ack=None;},
+							2=>{
+								if udp.is_some(){return Err("Unexpected stream transport replacement");}
+								audio_ssrc=u32::try_from(number(data,"ssrc")?).map_err(|_|"Invalid stream SSRC")?;
+								let stream=data["streams"].as_array().and_then(|v|v.first()).ok_or("Discord did not assign a stream SSRC")?;
+								video_ssrc=u32::try_from(number(stream,"ssrc")?).map_err(|_|"Invalid stream video SSRC")?;
+								let address:IpAddr=data["ip"].as_str().ok_or("Missing stream server address")?.parse().map_err(|_|"Invalid stream server address")?;
+								if !public_ip(address){return Err("Stream server advertised a nonpublic address");}
+								let port=u16::try_from(number(data,"port")?).ok().filter(|port|*port>0).ok_or("Invalid stream server port")?;
+								if !data["modes"].as_array().is_some_and(|m|m.iter().any(|mode|mode.as_str()==Some(MODE))){return Err("Required stream transport encryption is unavailable");}
+								let socket=UdpSocket::bind(if address.is_ipv4(){"0.0.0.0:0"}else{"[::]:0"}).await.map_err(|_|"Could not bind stream UDP socket")?;
+								socket.connect(SocketAddr::new(address,port)).await.map_err(|_|"Could not connect stream UDP socket")?;
+								let mut probe=[0;74];probe[..4].copy_from_slice(&[0,1,0,70]);probe[4..8].copy_from_slice(&audio_ssrc.to_be_bytes());socket.send(&probe).await.map_err(|_|"Stream UDP discovery failed")?;
+								udp=Some(socket);discovering=true;discovery_deadline=Instant::now()+Duration::from_secs(8);emit(Status::Discovering).map_err(|_|"Stream interface closed")?;
+							},
+							4=>{
+								if encryption.is_some()||udp.is_none()||discovering{return Err("Unexpected stream session description");}
+								if data["mode"].as_str()!=Some(MODE)||data["dave_protocol_version"].as_u64()!=Some(1)||!h264_negotiated(data){return Err("Discord did not negotiate DAVE H264 stream media");}
+								let values=data["secret_key"].take();let values=values.as_array().ok_or("Missing stream transport key")?;if values.len()!=32{return Err("Invalid stream transport key");}
+								let mut key=Zeroizing::new([0;32]);for(out,value)in key.iter_mut().zip(values){*out=value.as_u64().and_then(|value|u8::try_from(value).ok()).ok_or("Invalid stream transport key")?;}
+								encryption=Some(Encryption::new(&key));send(&mut ws,Message::Binary(dave.key_package()?.into())).await?;emit(Status::TransportReady).map_err(|_|"Stream interface closed")?;emit(Status::Securing).map_err(|_|"Stream interface closed")?;
+							},
+							11=>{let ids=data["user_ids"].as_array().ok_or("Missing stream participants")?;if ids.len()>crate::crypto::MAX_PARTICIPANTS{return Err("Too many stream participants");}let ids=ids.iter().map(|value|value.as_str().and_then(|value|value.parse().ok()).filter(|id|*id!=0).ok_or("Malformed stream participant")).collect::<Result<Vec<_>,_>>()?;if dave.connect(&ids)?{deadline=Some(Instant::now()+Duration::from_secs(90));announced=false;awaiting_keyframe=true;invalidate_stream(&mut video);}},
+							13=>{let user=id(data,"user_id")?;if dave.disconnect(user)?{deadline=Some(Instant::now()+Duration::from_secs(30));announced=false;awaiting_keyframe=true;invalidate_stream(&mut video);}},
+							21=>{if number(data,"protocol_version")?!=1{return Err("Discord requested a stream encryption downgrade");}announced=false;awaiting_keyframe=true;invalidate_stream(&mut video);dave.pending=Some(transition(data)?);if dave.pending==Some(0){if dave.session.is_ready(){dave.execute(0)?;}else if credentials.peer.is_none(){dave.wait_for_peer()?;}else{dave.pending=None;dave.ready=false;}}else{json_send(&mut ws,json!({"op":23,"d":{"transition_id":dave.pending}})).await?;}},
+							22=>{dave.execute(transition(data)?)?;},
+							24=>{if number(data,"protocol_version")?!=1{return Err("Unsupported stream DAVE version");}
+							if number(data,"epoch")?==1{announced=false;awaiting_keyframe=true;invalidate_stream(&mut video);dave.reinitialize()?;send(&mut ws,Message::Binary(dave.key_package()?.into())).await?;}},
+							14..=20=>{}, _=>return Err("Unsupported stream signaling opcode"),
+						}
+					},
+					Message::Binary(bytes)=>{if bytes.len()<3{return Err("Truncated stream DAVE signaling");}seq_ack=i64::from(u16::from_be_bytes([bytes[0],bytes[1]]));match bytes[2]{25=>dave.session.set_external_sender(&bytes[3..]).map_err(|_|"Stream DAVE external sender validation failed")?,27=>if let Some(response)=dave.proposals(&bytes[3..])?{send(&mut ws,Message::Binary(response.into())).await?;},29|30=>{announced=false;awaiting_keyframe=true;invalidate_stream(&mut video);match dave.group_changed(bytes[2],&bytes[3..]){Ok(id)=>if id!=0{json_send(&mut ws,json!({"op":23,"d":{"transition_id":id}})).await?;},Err(_)=>{if bytes.len()<5{return Err("Truncated stream DAVE transition");}let id=u16::from_be_bytes([bytes[3],bytes[4]]);json_send(&mut ws,json!({"op":31,"d":{"transition_id":id}})).await?;dave.reset()?;send(&mut ws,Message::Binary(dave.key_package()?.into())).await?;}}},_=>return Err("Unsupported stream DAVE opcode")}},
+					Message::Ping(data)=>send(&mut ws,Message::Pong(data)).await?, Message::Close(_)=>return Err("Discord stream connection closed"), _=>{}
+				}
+			}
+		}
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -449,6 +678,14 @@ mod tests {
 			negotiation_timeout(false, true, true, &alice, true),
 			"Discord voice resume acknowledgement timed out; rejoin the call"
 		);
+	}
+	#[test]
+	fn requires_h264_in_the_session_description() {
+		assert!(h264_negotiated(&json!({"video_codec":"H264"})));
+		assert!(!h264_negotiated(&json!({"video_codec":"VP8"})));
+		assert!(!h264_negotiated(
+			&json!({"sdp":"a=rtpmap:101 H264/90000\\r\\n"})
+		));
 	}
 	#[test]
 	fn validated_endpoints_discovery_and_real_opus() {
@@ -753,6 +990,7 @@ mod tests {
 				}
 				status_tx.try_send(status).map_err(|_| ())
 			},
+			Identity::generate(),
 			format!("ws://{address}"),
 			true,
 		));

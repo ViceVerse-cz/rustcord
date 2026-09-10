@@ -1,0 +1,146 @@
+{
+  "baseline": "609f8bf",
+  "platform": "macOS 27.0 (26A428), Apple M1 Pro, 16 GiB RAM",
+  "renderer": "wgpu Metal; built-in 3024x1964 Retina display; default reading scale",
+  "viewport": "1120x760 native window exports",
+  "idle_method": "30 second launch warmup; then 10 ps samples at 1 second intervals; --demo --demo-voice, no capture, no concurrent compiler",
+  "before": {
+    "idle": {
+      "warmup_seconds": 30,
+      "interval_seconds": 1,
+      "samples": [
+        [
+          0.8,
+          159584
+        ],
+        [
+          1.0,
+          159584
+        ],
+        [
+          0.0,
+          159584
+        ],
+        [
+          0.0,
+          159584
+        ],
+        [
+          0.0,
+          159584
+        ],
+        [
+          0.0,
+          143456
+        ],
+        [
+          0.0,
+          143456
+        ],
+        [
+          0.0,
+          143456
+        ],
+        [
+          0.0,
+          143456
+        ],
+        [
+          0.0,
+          143456
+        ]
+      ]
+    },
+    "replay": {
+      "warmup": "Synthetic reducer replay: 100000 events in 37.382291ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "runs": [
+        "Synthetic reducer replay: 100000 events in 37.741625ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+        "Synthetic reducer replay: 100000 events in 52.396042ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+        "Synthetic reducer replay: 100000 events in 37.576916ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+        "Synthetic reducer replay: 100000 events in 37.787833ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+        "Synthetic reducer replay: 100000 events in 37.247541ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility."
+      ]
+    },
+    "replay_median_ms": 37.741625,
+    "text": {
+      "binary_bytes": 48494496,
+      "installed_bytes": 49645543,
+      "archive_bytes": 31319339
+    },
+    "voice": {
+      "binary_bytes": 52318592,
+      "installed_bytes": 53784318,
+      "archive_bytes": 33159474
+    }
+  },
+  "after": {
+    "idle": {
+      "warmup_seconds": 30,
+      "interval_seconds": 1,
+      "samples": [
+        [
+          1.0,
+          141120
+        ],
+        [
+          1.1,
+          141136
+        ],
+        [
+          0.2,
+          141152
+        ],
+        [
+          0.1,
+          141152
+        ],
+        [
+          0.0,
+          141152
+        ],
+        [
+          0.0,
+          141152
+        ],
+        [
+          0.0,
+          141152
+        ],
+        [
+          0.0,
+          141152
+        ],
+        [
+          0.0,
+          141152
+        ],
+        [
+          0.0,
+          141104
+        ]
+      ]
+    },
+    "replay": {
+      "warmup": "Synthetic reducer replay: 100000 events in 37.558708ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "runs": [
+        "Synthetic reducer replay: 100000 events in 37.563541ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+        "Synthetic reducer replay: 100000 events in 37.772ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+        "Synthetic reducer replay: 100000 events in 37.673ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+        "Synthetic reducer replay: 100000 events in 38.106125ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+        "Synthetic reducer replay: 100000 events in 39.314875ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility."
+      ]
+    },
+    "replay_median_ms": 37.772,
+    "text": {
+      "binary_bytes": 48532208,
+      "installed_bytes": 49696554,
+      "archive_bytes": 31345030
+    },
+    "voice": {
+      "binary_bytes": 53702000,
+      "installed_bytes": 55292726,
+      "archive_bytes": 33672043
+    }
+  },
+  "package_method": "Executable plus current xtask outputs: Serein.app, LICENSE-APACHE, LICENSE-MIT, README.md, THIRD_PARTY_NOTICES.md. Excludes pre-existing zip archives and sibling voice directory. Distribution uses Python tarfile gzip level 6."
+}

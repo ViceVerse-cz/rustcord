@@ -85,3 +85,7 @@ worker-owned denoiser consumes the existing 10 ms AEC output blocks before gain
 and Opus. It does not gate packets or reset AEC when toggled. The offline echo
 example covers synthetic noise reduction, voiced-signal retention and bypass;
 actual keyboard/breath/wind rejection still requires owner-operated listening.
+
+## Optional outgoing screen video
+
+`screen::Worker` owns the selected native capture guard and OpenH264 encoder on a worker thread. `run_stream` owns a separate Discord RTC connection, shares the parent call's ephemeral `Identity`, and enables capture readiness only after DAVE is ready. Frame queues are each capacity one. `video` handles bounded Annex-B/FU-A RTP packetization after DAVE frame encryption. The first sender is video-only, without RTX/RTCP feedback or congestion adaptation. Native and wire behavior, bounds and the unverified live gate are in [the compatibility addendum](../../docs/discord-compatibility.md#outgoing-screen-sharing--september-11-2026).

@@ -22,6 +22,8 @@ rtrb = "=0.4.0"
 cpal = { version = "=0.18.2", default-features = false }
 sonora = { version = "=0.2.0", default-features = false }
 nnnoiseless = { version = "=0.5.2", default-features = false }
+openh264 = "=0.9.8"
+image = { version = "=0.25.10", default-features = false }
 
 [dev-dependencies]
 sha3 = { version = "=0.10.9", default-features = false }
@@ -30,6 +32,7 @@ openmls_basic_credential = "=0.5.0"
 model.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
+screencapturekit = { version = "=10.0.3", default-features = false, features = ["macos_14_0"] }
 objc2 = "=0.6.4"
 block2 = "=0.6.2"
 objc2-av-foundation = { version = "=0.3.2", default-features = false, features = ["std", "AVCaptureDevice", "AVMediaFormat", "block2"] }
@@ -37,3 +40,6 @@ objc2-av-foundation = { version = "=0.3.2", default-features = false, features =
 # The macOS permission module alone permits the documented Objective-C calls.
 [lints.rust]
 unsafe_code = "deny"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-capture = "=2.0.1"

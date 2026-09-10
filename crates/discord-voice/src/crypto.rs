@@ -8,13 +8,30 @@ use openmls::prelude::{
 	SenderExtensionIndex,
 	tls_codec::{DeserializeBytes, VLBytes},
 };
-use std::num::NonZeroU16;
+use std::{num::NonZeroU16, sync::Arc};
 use zeroize::Zeroize;
 
 pub(crate) const MODE: &str = "aead_xchacha20_poly1305_rtpsize";
 pub(crate) const MAX_PACKET: usize = 4096;
 pub(crate) const MAX_SIGNAL: usize = 64 * 1024;
 pub(crate) use client_core::voice::MAX_PARTICIPANTS;
+
+/// Ephemeral DAVE identity shared by the call and its Go Live streams.
+///
+/// Discord requires one identity keypair across simultaneous media sessions in
+/// a voice channel. It is never persisted or formatted for diagnostics.
+pub struct Identity(SigningKeyPair);
+impl Identity {
+	pub fn generate() -> Arc<Self> {
+		Arc::new(Self(SigningKeyPair::generate()))
+	}
+}
+impl Drop for Identity {
+	fn drop(&mut self) {
+		self.0.private.zeroize();
+		self.0.public.zeroize();
+	}
+}
 
 pub(crate) struct Encryption {
 	cipher: XChaCha20Poly1305,
@@ -111,14 +128,22 @@ pub(crate) struct Dave {
 	pub ready: bool,
 	pub resets: u8,
 	epochs: u16,
-	identity: SigningKeyPair,
+	identity: Arc<Identity>,
 	pending_commit: Option<Vec<u8>>,
 }
 impl Dave {
+	#[cfg(test)]
 	pub fn new(own: u64, peer: Option<u64>, channel: u64) -> Result<Self, &'static str> {
-		let identity = SigningKeyPair::generate();
+		Self::with_identity(own, peer, channel, Identity::generate())
+	}
+	pub fn with_identity(
+		own: u64,
+		peer: Option<u64>,
+		channel: u64,
+		identity: Arc<Identity>,
+	) -> Result<Self, &'static str> {
 		Ok(Self {
-			session: DaveSession::new(NonZeroU16::new(1).unwrap(), own, channel, Some(&identity))
+			session: DaveSession::new(NonZeroU16::new(1).unwrap(), own, channel, Some(&identity.0))
 				.map_err(|_| "DAVE initialization failed")?,
 			own,
 			peer,
@@ -208,7 +233,7 @@ impl Dave {
 				NonZeroU16::new(1).unwrap(),
 				self.own,
 				self.channel,
-				Some(&self.identity),
+				Some(&self.identity.0),
 			)
 			.map_err(|_| "DAVE reset failed")
 	}
@@ -370,7 +395,6 @@ impl Dave {
 
 impl Drop for Dave {
 	fn drop(&mut self) {
-		self.identity.private.zeroize();
 		let _ = self.session.reset();
 	}
 }

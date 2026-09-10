@@ -539,9 +539,17 @@ async fn run_inner(
 				command=voice_controls.recv(), if voice_open && ready_at.is_some() => {
 					let Some(command)=command else {voice_open=false;continue;};
 					let connect=if let client_core::voice::Command::Join{channel,..}=command {Some(channel)}else{None};
-					let packet=match calls.packet(command) {
+					let stream=matches!(command,client_core::voice::Command::StartStream{..}|client_core::voice::Command::StopStream{..});
+					let packet=match if stream {calls.stream_packet(command,owner_id)} else {calls.packet(command)} {
 						Ok(packet)=>packet,
-						Err(_) => {if let client_core::voice::Command::Join{channel,request,..}=command {emit(Event::Voice(client_core::voice::Event::Failed{channel,request,message:"Previous call is still leaving, or the channel is unavailable; wait for departure or reconnect"}))?;}continue;}
+						Err(_) => {
+							match command {
+								client_core::voice::Command::Join{channel,request,..} => emit(Event::Voice(client_core::voice::Event::Failed{channel,request,message:"Previous call is still leaving, or the channel is unavailable; wait for departure or reconnect"}))?,
+								client_core::voice::Command::StartStream{channel,request,stream_request} => emit(Event::Voice(client_core::voice::Event::Stream{channel,request,stream_request,event:client_core::screen::Event::Failed("A screen share is already active, stopping, or the call is unavailable")}))?,
+								_=>{}
+							}
+							continue;
+						}
 					};
 					if let Some(channel)=connect && calls.allowed.get(&channel) == Some(&None) {
 						let packet=Frame::Text(serde_json::json!({"op":13,"d":{"channel_id":channel}}).to_string().into());
@@ -659,7 +667,7 @@ async fn run_inner(
 										calls.users.clear();
 									}
 									"RESUMED" => { emit(Event::Resumed)?; ready_at = Some(Instant::now()); },
-									"CALL_CREATE" | "CALL_UPDATE" | "CALL_DELETE" | "VOICE_STATE_UPDATE" | "VOICE_SERVER_UPDATE" => calls.dispatch(packet.t.as_deref().unwrap_or(""),packet.d.get().as_bytes(),owner_id,&emit)?,
+									"CALL_CREATE" | "CALL_UPDATE" | "CALL_DELETE" | "VOICE_STATE_UPDATE" | "VOICE_SERVER_UPDATE" | "STREAM_CREATE" | "STREAM_SERVER_UPDATE" | "STREAM_DELETE" => calls.dispatch(packet.t.as_deref().unwrap_or(""),packet.d.get().as_bytes(),owner_id,&emit)?,
 									"GUILD_MEMBER_LIST_UPDATE" => {
 										if let Some(active)=&mut active_members {
 											let decoded = decode::<MemberUpdate>(packet.d.get().as_bytes());
@@ -721,13 +729,13 @@ async fn run_inner(
 									"MESSAGE_DELETE" => { let d: Deleted = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?; emit(Event::Delete { channel:d.channel_id, id:d.id })?; }
 									"MESSAGE_DELETE_BULK" => { let d: BulkDeleted = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?; if d.ids.len() > 100 { return Err(Failure::Capacity); } emit(Event::DeleteBulk { channel:d.channel_id, ids: d.ids })?; }
 									"AUTH_SESSION_CHANGE" => return Err(Failure::Expired),
-									"CHANNEL_DELETE" => { let c: ChannelDto = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?; calls.allowed.remove(&c.id); emit(Event::Unavailable(c.id))?; }
+									"CHANNEL_DELETE" => { let c: ChannelDto = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?; calls.invalidate(c.id); emit(Event::Unavailable(c.id))?; }
 									"CHANNEL_CREATE" => {
 										let permissions=owner_id.map(|owner|channel_events::permission_metadata(packet.d.get().as_bytes(),owner)).transpose()?.flatten();
 										let event=channel_events::create(packet.d.get().as_bytes())?;
 										match &event {
 											Event::ChannelCreated(c) => channel_events::admit_call(c,&known_guilds,&mut calls),
-											Event::Unavailable(id) => {calls.allowed.remove(id);}
+											Event::Unavailable(id) => calls.invalidate(*id),
 											_=>{}
 										}
 										emit(event)?;
@@ -737,8 +745,8 @@ async fn run_inner(
 										let permissions=owner_id.map(|owner|channel_events::permission_metadata(packet.d.get().as_bytes(),owner)).transpose()?.flatten();
 										let update=channel_events::update(packet.d.get().as_bytes())?;
 										if let Some(channel)=update.restored {channel_events::admit_call(&channel,&known_guilds,&mut calls);emit(Event::ChannelRestored(channel))?;}
-										if let Event::Unavailable(id)=&update.event {calls.allowed.remove(id);}
-										if let Event::ChannelChanged(patch)=&update.event && let model::Patch::Value(kind)=patch.kind && kind != 2 && kind != 1 {calls.allowed.remove(&patch.id);}
+										if let Event::Unavailable(id)=&update.event {calls.invalidate(*id);}
+										if let Event::ChannelChanged(patch)=&update.event && let model::Patch::Value(kind)=patch.kind && kind != 2 && kind != 1 {calls.invalidate(patch.id);}
 										emit(update.event)?;
 										if let Some(permissions)=permissions {emit(permissions)?;}
 									}
@@ -761,7 +769,7 @@ async fn run_inner(
 											let event=if matches!(channel.kind,10..=12) && channel.parent_id.is_some_and(|id|hidden.contains(&id)) {Event::Unavailable(channel.id)} else {channel_events::created(channel)};
 											match &event {
 												Event::ChannelCreated(channel)=>channel_events::admit_call(channel,&known_guilds,&mut calls),
-												Event::Unavailable(id)=>{calls.allowed.remove(id);}
+												Event::Unavailable(id)=>calls.invalidate(*id),
 												_=>{}
 											}
 											emit(event)?;
@@ -782,7 +790,7 @@ async fn run_inner(
 									"GUILD_DELETE" => {
 										let guild: GuildDto = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?;
 										let removed: Vec<_> = calls.allowed.iter().filter_map(|(channel, id)| (*id == Some(guild.id)).then_some(*channel)).collect();
-										for channel in removed { calls.allowed.remove(&channel); emit(Event::Unavailable(channel))?; }
+										for channel in removed { calls.invalidate(channel); emit(Event::Unavailable(channel))?; }
 										emit(Event::GuildEmojis { guild: guild.id, emojis: Vec::new() })?;
 										emit(Event::Permissions(client_core::permissions::Event::UnavailableGuild(guild.id)))?;
 									}

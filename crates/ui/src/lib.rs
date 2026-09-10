@@ -19,6 +19,7 @@ mod notifications;
 mod profiles;
 mod reactions;
 mod reading;
+pub mod screen;
 mod search;
 mod switcher;
 mod timeline;
@@ -82,6 +83,7 @@ pub struct MessagingUi {
 	pub upload_status: Option<String>,
 	pub clear_cache_requested: bool,
 	pub voice_available: bool,
+	pub screen: screen::ScreenUi,
 	pub voice_inputs: Vec<(String, String)>,
 	pub voice_outputs: Vec<(String, String)>,
 	pub voice_input: Option<String>,
@@ -1845,6 +1847,7 @@ impl MessagingUi {
 		}
 		self.search.show(&ctx, state, &mut commands);
 		self.archives.show(&ctx, state, &mut commands);
+		self.screen.show(&ctx, state);
 		if let Some(id) = self.timeline.channel_reference.take()
 			&& let Some(target) = state
 				.channels

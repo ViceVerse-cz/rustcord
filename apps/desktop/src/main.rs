@@ -6,6 +6,8 @@ mod connection;
 mod credentials;
 mod downloads;
 mod reading_settings;
+#[cfg(feature = "voice")]
+mod screen;
 mod uploads;
 #[cfg(feature = "voice")]
 mod voice;
