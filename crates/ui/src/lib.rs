@@ -16,6 +16,7 @@ mod notifications;
 mod profiles;
 mod reactions;
 mod search;
+mod switcher;
 mod timeline;
 mod voice;
 use client_core::{Command, MAX_CONTENT, MAX_DRAFT_BYTES, State};
@@ -25,6 +26,9 @@ use model::{Delivery, Freshness, Id};
 #[derive(Default)]
 pub struct MessagingUi {
     search: search::SearchUi,
+    switcher: switcher::Switcher,
+    focus_switched_composer: bool,
+    switcher_frame: bool,
     archives: archives::ArchivesUi,
     archive_parent: Option<Id>,
     timeline: timeline::TimelineView,
@@ -219,9 +223,15 @@ impl MessagingUi {
             .filter(|(c, _, _)| *c == channel)
             .map(|(c, id, _)| (*c, *id));
         let editing_here = editing_key.is_some();
-        let focus_edit = editing_key.is_some() && self.composer_edit != editing_key;
-        let focus_composer = self.composer_edit != editing_key
-            && (editing_here || self.composer_edit.is_some_and(|(c, _)| c == channel));
+        let keyboard_enabled = !self.switcher_frame
+            && !self.switcher.is_open()
+            && ctx.memory(|memory| memory.top_modal_layer().is_none());
+        let focus_edit =
+            keyboard_enabled && editing_key.is_some() && self.composer_edit != editing_key;
+        let focus_composer = keyboard_enabled
+            && (std::mem::take(&mut self.focus_switched_composer)
+                || (self.composer_edit != editing_key
+                    && (editing_here || self.composer_edit.is_some_and(|(c, _)| c == channel))));
         if self.composer_edit != editing_key {
             self.composer_edit = editing_key;
             self.edit_sent = false;
@@ -341,19 +351,23 @@ impl MessagingUi {
             }
             return;
         }
-        let ime_this_frame =
-            ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Ime(_))));
-        ctx.input(|i| {
-            for event in &i.events {
-                if let egui::Event::Ime(event) = event {
-                    match event {
-                        egui::ImeEvent::Preedit { text, .. } => self.ime_active = !text.is_empty(),
-                        egui::ImeEvent::Commit(_) => self.ime_active = false,
-                        _ => {}
+        let ime_this_frame = keyboard_enabled
+            && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Ime(_))));
+        if keyboard_enabled {
+            ctx.input(|i| {
+                for event in &i.events {
+                    if let egui::Event::Ime(event) = event {
+                        match event {
+                            egui::ImeEvent::Preedit { text, .. } => {
+                                self.ime_active = !text.is_empty()
+                            }
+                            egui::ImeEvent::Commit(_) => self.ime_active = false,
+                            _ => {}
+                        }
                     }
                 }
-            }
-        });
+            });
+        }
         let composer_id = ui.make_persistent_id(if editing_here {
             "message-edit"
         } else {
@@ -382,8 +396,10 @@ impl MessagingUi {
         } else {
             state.drafts.get(&channel).map_or("", String::as_str)
         };
-        let mention_enabled =
-            !self.ime_active && !ime_this_frame && ctx.memory(|m| m.has_focus(composer_id));
+        let mention_enabled = keyboard_enabled
+            && !self.ime_active
+            && !ime_this_frame
+            && ctx.memory(|m| m.has_focus(composer_id));
         let mention_users = if mention_enabled || composer_content.contains("<@") {
             mentions::known_users(state, channel)
         } else {
@@ -411,7 +427,8 @@ impl MessagingUi {
             None
         };
         let demo = state.demo;
-        let enter = !self.ime_active
+        let enter = keyboard_enabled
+            && !self.ime_active
             && !ime_this_frame
             && ctx.memory(|m| m.has_focus(composer_id))
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
@@ -427,7 +444,7 @@ impl MessagingUi {
                             .show(ui, state, channel, &mut self.avatars)
                     })
                     .inner;
-                cancel_edit |= editing_here && !self.ime_active && !ime_this_frame
+                cancel_edit |= keyboard_enabled && editing_here && !self.ime_active && !ime_this_frame
                     && ctx.memory(|m| m.has_focus(composer_id) || m.had_focus_last_frame(composer_id))
                     && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
                 let remaining = if editing_here { MAX_CONTENT * 4 } else { MAX_DRAFT_BYTES.saturating_sub(state.draft_bytes()) };
@@ -496,6 +513,7 @@ impl MessagingUi {
                     )
                 };
                 let mut output = TextEdit::multiline(draft)
+                    .interactive(keyboard_enabled)
                     .layouter(&mut layouter)
                     .id(composer_id)
                     .event_filter(egui::EventFilter {
@@ -648,6 +666,32 @@ impl MessagingUi {
         let mut commands = Vec::new();
         let ctx = ui.ctx().clone();
         let colors = crate::design::palette(ui);
+        if !self.switcher.is_open()
+            && !self.ime_active
+            && ctx.input(|input| {
+                input.focused
+                    && !input
+                        .events
+                        .iter()
+                        .any(|event| matches!(event, egui::Event::Ime(_)))
+            })
+            && ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::K))
+        {
+            self.switcher.open(&ctx);
+        }
+        self.switcher_frame = self.switcher.is_open();
+        if let Some(channel) = self.switcher.show(&ctx, state) {
+            if state.selected != Some(channel)
+                && let Some(command) = state.select(channel)
+            {
+                commands.push(command);
+            }
+            self.focus_switched_composer = state.selected == Some(channel)
+                && state
+                    .channels
+                    .iter()
+                    .any(|known| known.id == channel && known.supports_text());
+        }
         if self.navigation_channel != state.selected {
             self.navigation_channel = state.selected;
             self.guild = state.selected.and_then(|id| {
@@ -688,7 +732,16 @@ impl MessagingUi {
                     .size(10.0)
                     .color(colors.muted),
                 );
-                ui.add_space(14.0);
+                ui.add_space(10.0);
+                let find = ui.add_enabled_ui(!self.ime_active && !ctx.input(|input| input.events.iter().any(|event| matches!(event, egui::Event::Ime(_)))), |ui| ui.add_sized(
+                    [ui.available_width(), 30.0],
+                    egui::Button::new("Find conversation").truncate(),
+                )).inner.on_hover_text("Search loaded conversations (Ctrl/Cmd+K)");
+                find.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Find conversation, Ctrl or Command K"));
+                if find.clicked() {
+                    self.switcher.open(&ctx);
+                }
+                ui.add_space(10.0);
                 egui::Panel::bottom("account-footer")
                     .frame(
                         egui::Frame::new()
@@ -1353,6 +1406,217 @@ mod composer_tests {
             repeat: false,
             modifiers: egui::Modifiers::NONE,
         }
+    }
+
+    #[test]
+    fn conversation_shortcut_preserves_edits_and_drafts_and_never_sends() {
+        fn frame(
+            ctx: &egui::Context,
+            view: &mut MessagingUi,
+            state: &mut State,
+            events: Vec<egui::Event>,
+        ) -> Vec<Command> {
+            let mut commands = Vec::new();
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200.0, 800.0),
+                    )),
+                    focused: true,
+                    events,
+                    ..Default::default()
+                },
+                |ui| commands.extend(view.show(ui, state)),
+            );
+            output.drop_without_applying_deltas();
+            assert!(!commands.iter().any(|command| matches!(
+                command,
+                Command::Send { .. } | Command::Edit { .. } | Command::Voice(_)
+            )));
+            commands
+        }
+        let shortcut = || egui::Event::Key {
+            key: egui::Key::K,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+        let ctx = egui::Context::default();
+        let mut state = edit_state();
+        let mut other = state.channels[0].clone();
+        other.id = Id(11);
+        other.name = "Other conversation".into();
+        state.channels.push(other);
+        state.drafts.insert(Id(11), "Another unsent draft".into());
+        let drafts = state.drafts.clone();
+        let mut view = MessagingUi {
+            editing: Some((Id(10), Id(20), "Keep this unfinished edit".into())),
+            ..Default::default()
+        };
+        frame(&ctx, &mut view, &mut state, vec![]);
+        view.ime_active = true;
+        frame(&ctx, &mut view, &mut state, vec![shortcut()]);
+        assert!(
+            !view.switcher.is_open(),
+            "Do not interrupt an active composition"
+        );
+        view.ime_active = false;
+        frame(&ctx, &mut view, &mut state, vec![shortcut()]);
+        assert!(view.switcher.is_open());
+        frame(&ctx, &mut view, &mut state, vec![]);
+        frame(
+            &ctx,
+            &mut view,
+            &mut state,
+            vec![edit_key(egui::Key::Escape)],
+        );
+        assert!(!view.switcher.is_open());
+        assert_eq!(state.selected, Some(Id(10)));
+        assert_eq!(
+            view.editing.as_ref().unwrap().2,
+            "Keep this unfinished edit"
+        );
+        frame(&ctx, &mut view, &mut state, vec![shortcut()]);
+        frame(&ctx, &mut view, &mut state, vec![]);
+        frame(
+            &ctx,
+            &mut view,
+            &mut state,
+            vec![edit_key(egui::Key::ArrowDown)],
+        );
+        let commands = frame(
+            &ctx,
+            &mut view,
+            &mut state,
+            vec![edit_key(egui::Key::Enter)],
+        );
+        assert_eq!(state.selected, Some(Id(11)));
+        assert!(commands.iter().any(|command| matches!(
+            command,
+            Command::History {
+                channel: Id(11),
+                ..
+            }
+        )));
+        assert!(!view.switcher.is_open());
+        assert_eq!(state.drafts, drafts);
+        assert_eq!(
+            view.editing.as_ref().unwrap().2,
+            "Keep this unfinished edit"
+        );
+        for _ in 0..3 {
+            frame(&ctx, &mut view, &mut state, vec![]);
+        }
+        assert!(!view.focus_switched_composer);
+        frame(
+            &ctx,
+            &mut view,
+            &mut state,
+            vec![egui::Event::Text(" typed".into())],
+        );
+        assert_eq!(state.drafts[&Id(11)], "Another unsent draft typed");
+        assert_eq!(state.drafts[&Id(10)], drafts[&Id(10)]);
+        assert_eq!(
+            view.editing.as_ref().unwrap().2,
+            "Keep this unfinished edit"
+        );
+    }
+
+    #[test]
+    fn switcher_pointer_close_during_ime_cannot_commit_into_the_composer() {
+        let ctx = egui::Context::default();
+        let mut state = edit_state();
+        let drafts = state.drafts.clone();
+        let mut view = MessagingUi {
+            editing: Some((Id(10), Id(20), "Keep this edit".into())),
+            ..Default::default()
+        };
+        let frame = |view: &mut MessagingUi, state: &mut State, events| {
+            let mut commands = Vec::new();
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200.0, 800.0),
+                    )),
+                    focused: true,
+                    events,
+                    ..Default::default()
+                },
+                |ui| commands.extend(view.show(ui, state)),
+            );
+            assert!(
+                !commands
+                    .iter()
+                    .any(|command| matches!(command, Command::Send { .. } | Command::Edit { .. }))
+            );
+            output
+        };
+        frame(&mut view, &mut state, vec![]).drop_without_applying_deltas();
+        view.switcher.open(&ctx);
+        frame(&mut view, &mut state, vec![]).drop_without_applying_deltas();
+        let output = frame(&mut view, &mut state, vec![]);
+        let close = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == "Close" => {
+                    Some(text.pos + text.galley.size() / 2.0)
+                }
+                _ => None,
+            })
+            .expect("Rendered picker Close control");
+        output.drop_without_applying_deltas();
+        frame(
+            &mut view,
+            &mut state,
+            vec![egui::Event::Ime(egui::ImeEvent::Preedit {
+                text: "Query composition".into(),
+                active_range_chars: None,
+            })],
+        )
+        .drop_without_applying_deltas();
+        for pressed in [true, false] {
+            frame(
+                &mut view,
+                &mut state,
+                vec![
+                    egui::Event::PointerMoved(close),
+                    egui::Event::PointerButton {
+                        pos: close,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            )
+            .drop_without_applying_deltas();
+        }
+        assert!(
+            view.switcher.is_open(),
+            "Pointer close must wait for the query composition"
+        );
+        frame(
+            &mut view,
+            &mut state,
+            vec![egui::Event::Ime(egui::ImeEvent::Commit(
+                "Query composition".into(),
+            ))],
+        )
+        .drop_without_applying_deltas();
+        frame(&mut view, &mut state, vec![edit_key(egui::Key::Escape)])
+            .drop_without_applying_deltas();
+        frame(&mut view, &mut state, vec![]).drop_without_applying_deltas();
+        assert!(!view.switcher.is_open());
+        assert!(
+            !view.ime_active,
+            "Query IME state must not leak into the composer"
+        );
+        assert_eq!(state.selected, Some(Id(10)));
+        assert_eq!(state.drafts, drafts);
+        assert_eq!(view.editing.as_ref().unwrap().2, "Keep this edit");
     }
 
     #[test]

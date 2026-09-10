@@ -718,3 +718,43 @@ unchanged, but no native repaint-rate or physical account delivery claim is made
 Measured executable SHA256:
 - text: BB8FA32318B2FC16CBBA41FD46124C499363DDF8EEFA70BF7DB24D0C11DF8AE0
 - voice: E403D2AFA448FDC8B78327FACFC3B87F4AEE99D26AC53A25FC10951B658E6AC9
+
+
+## Keyboard conversation switcher - September 10, 2026
+
+Baseline f8baa2df1f705b771b5a2cd99a10bb13b4d8a4c3 is draft presence PR #21. Its recorded
+text/voice executable hashes were verified before separate package baselines were copied.
+This comparison excludes main's independent image-aspect-ratio PR #20. Same Windows 11 Home
+10.0.26200 / Ryzen 7 7800X3D / 16 logical CPUs / about 31 GiB RAM / Rust 1.98.1 release/wgpu
+host. Both unsigned Windows packaging commands passed; text uses no-default-features and
+voice adds voice. ZIP uses Python DEFLATE level 9, excluding the voice sibling from text.
+
+| Metric / method | Baseline f8baa2d | Switcher | Delta |
+| --- | ---: | ---: | ---: |
+| text executable bytes | 49,624,576 | 49,658,368 | +33,792 (+0.068%) |
+| text installed bytes | 50,055,923 | 50,098,393 | +42,470 (+0.085%) |
+| text zip bytes | 31,088,897 | 31,104,011 | +15,114 (+0.049%) |
+| voice executable bytes | 52,957,184 | 52,990,464 | +33,280 (+0.063%) |
+| voice installed bytes | 53,612,089 | 53,654,047 | +41,958 (+0.078%) |
+| voice zip bytes | 32,455,653 | 32,466,873 | +11,220 (+0.035%) |
+
+Installed file counts remain 42 text / 88 voice. Neither package includes PR screenshots.
+Totals describe actual packaged documentation before this measurement addendum, not a
+subsequently reconstructed archive. No package was launched, signed or published. No runtime
+crate, core reducer, protocol, worker, storage schema or codec was added.
+
+The picker limits its query to 128 characters / 512 bytes and results to 20 bounded labels.
+It normalizes one eligible channel's bounded metadata at a time and retains no background
+index. Matching and candidate allocations occur only while open. Headless checks assert query
+length/capacity after an oversized Unicode paste and verify bounded results. These are component
+bounds, not measured picker latency or RSS. The existing message-reducer replay does not exercise
+this UI feature, so it was not rerun as a substitute for picker measurements.
+
+Native screenshots, input/display/GPU parameters, process RSS/idle CPU and interactive latency
+remain unmeasured because desktop automation is paused after owner Escape stops. Focus cleanup
+requests repaint only while this modal's closing layer remains; no continuously active timer
+or search worker was added. No improvement in native latency or memory is claimed.
+
+Measured executable SHA256:
+- text: F127A6ACB7F1857A39C174BBF348603DAF623A3BE4D3BEB74FC4424103D6EF39
+- voice: 8BDE5C39E0E383BA323BEB7E9021D51D640684861D2F4104F8A84B567732B8E3

@@ -254,3 +254,13 @@ are discarded. Bursts coalesce within a fixed 100-ms window; stale request/sessi
 updates cannot modify the pane. Self-session DND notification suppression keeps its separate
 existing path. Synthetic localhost Gateway, reducer and headless UI tests supply local evidence;
 normal-account delivery and native screenshots remain owner-controlled validation gates.
+
+
+### Keyboard conversation navigation (September 10, 2026)
+
+Find conversation / Ctrl+K (Command+K) is a local picker over existing loaded navigation and
+current VIEW decisions. It adds no Discord route, subscription or relationship lookup. Selection
+reuses the same history/roster path as the sidebar, including cancellation and service-authoritative
+permission failures. A voice result only opens the roster and does not join. The query is session
+UI state and never enters message content, REST requests or SQLite. Headless keyboard/IME checks
+are synthetic; real platform input, screen readers and live navigation remain unverified.

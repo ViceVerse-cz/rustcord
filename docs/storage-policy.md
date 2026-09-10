@@ -118,3 +118,11 @@ Presence growth is checked against the member budget before mutation. Full snaps
 subscription/session invalidation clear pending status batches. No presence, activity or client
 device history is saved to SQLite, logs or diagnostics; status-only changes do not persist chat
 history or invalidate timeline layout. These are component bounds, not process RSS measurements.
+
+
+The conversation switcher retains only its open-state flags, focused control ID and a query of
+at most 128 characters / 512 UTF-8 bytes. Each open frame builds at most 20 labels from bounded
+channel/guild names; each field is limited to 128 characters. Matching normalizes one eligible
+channel's bounded names and at most 64 known DM recipient names at a time, then drops them.
+It reuses the existing navigation limits and permission cache, with no persistent query history,
+search index, directory fetch or new worker/queue. Closing clears the query; logout resets the UI.

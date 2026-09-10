@@ -846,3 +846,48 @@ Both Windows package commands passed. Text/voice executables grew by 13,824 / 13
 installed and ZIP totals are in performance.md. Five-run reducer median was 37.4956 ms versus
 37.5618 ms at baseline, retaining the same 500 records / 220,992-221,477 estimated bytes; the
 small difference is noise. Original seven dirty-source hashes were rechecked unchanged.
+
+
+## Keyboard conversation navigation - September 10, 2026
+
+This SPEC 9.1/9.5 slice starts at f8baa2df1f705b771b5a2cd99a10bb13b4d8a4c3 (draft PR #21),
+with separate text/voice package baselines verified against their recorded executable hashes.
+The new isolated branch adds Find conversation in the sidebar and Ctrl/Cmd+K. Search covers
+already loaded, VIEW-accessible text channels, DMs, group DMs, threads and voice channels;
+unsupported kinds and categories are excluded. Server/channel names and known DM recipients
+match case-insensitive query words. Results identify their server or DM scope and show voice
+as a roster destination. Selection uses State::select; it never joins a call or sends text.
+
+The picker keeps at most 128 query characters / 512 UTF-8 bytes and 20 bounded result labels.
+It recomputes from current navigation/permissions while open and adds no service request,
+relationship directory, background index or saved query. Up/Down, Enter, Escape, Tab and mouse
+interaction use native egui controls. IME preedit/commit cannot activate or close the picker,
+and the composer does not process picker keyboard input, including its closing frame. Cancel
+restores prior focus; selecting a text conversation focuses its composer after the modal closes.
+Existing drafts and unfinished inline edits remain intact; ordinary navigation cancellation
+continues to govern uploads and history. Selecting the current conversation does not reload it.
+
+Native desktop automation remains paused following owner Escape stops. Headless input/shape
+checks are synthetic evidence, not native screenshots, screen-reader verification or real IME
+validation. No Discord account, OS notification, browser or microphone action was taken. This
+branch is stacked on #21; main's independent image-aspect-ratio PR #20 is outside the baseline.
+The full SPEC objective, live/platform gates and inherited security findings remain open.
+
+
+cargo xtask check passed 190 offline Rust tests plus doctests, formatting, strict all-feature
+Clippy, text-only compilation and policy checks. Focused input regressions verify query arrows,
+Tab to results/Close, Enter targeting, Unicode paste limits, IME keyboard/pointer dismissal,
+restored focus, preserved drafts/inline edits and no accidental send or voice action. An extended
+post-selection test confirms subsequent typing reaches the newly selected conversation's draft.
+Independent review found no remaining actionable issue after the input/focus fixes. Native
+screenshots, physical IME/accessibility and process RSS/idle CPU remain unmeasured; no native
+or live behavior is inferred from these tests. Base #21 native Linux/macOS CI passed in its PR
+run while Windows remained pending; its inherited security job failed. This delivery stays draft.
+
+
+Both unsigned Windows packages passed. Text/voice executables grew by 33,792 / 33,280 bytes
+(under 0.07%); full installed/ZIP comparisons are in performance.md. Native picker latency
+and memory remain unmeasured. Original seven dirty-source hashes were rechecked unchanged.
+
+Next concrete hardening step: repair the inherited dependency/security audit failures without
+waiving checks, then continue the remaining text/platform/live gates from the full specification.
