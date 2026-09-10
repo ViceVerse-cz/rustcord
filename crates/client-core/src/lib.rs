@@ -20,6 +20,7 @@ pub const COMMAND_SLOTS: usize = 16; // each admitted command <= 16 KiB
 pub enum Command {
     Pins {
         channel: Id,
+        before: Option<i128>,
         request: u64,
     },
     Search {
@@ -428,7 +429,9 @@ impl State {
         if let Command::Search {
             channel, request, ..
         }
-        | Command::Pins { channel, request } = command
+        | Command::Pins {
+            channel, request, ..
+        } = command
         {
             self.apply_search(channel, request, Err(auth::Failure::Capacity));
             return;
