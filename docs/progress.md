@@ -166,3 +166,34 @@ Replaced the basic profile window with a banner/avatar card and on-demand real p
 Workspace checks pass, including 70 offline tests, strict all-feature Clippy, formatting and policy checks. Native macOS arm64 offline preview verifies clickable mention → profile, @Ro → Robin suggestion, Enter insertion of `<@2>` without sending, large image layout/Close, and profile detail scrolling/Close. A regression test verifies profile scope follows the open DM/server conversation while another server is browsed in the sidebar. No authenticated Discord request or message was performed. Real profile/media delivery, mention notification behavior, native Save As dialog interaction, Windows/Linux presentation and full-resolution/animated viewing remain unverified or outside this slice. Offline evidence does not satisfy the live Discord interoperability gate.
 
 Both final macOS arm64 variants packaged with updated documentation and native-dialog license texts. Strict local ad-hoc signature and archive CRC/content checks pass. The rerun dependency audit retains the existing six advisories/five warnings; no new finding names rfd or pollster. See [performance sizes](performance.md) and [audit details](dependency-audit.md).
+
+## September 10 continuation — idea-to-PR agent workflow
+
+Adapted the working method and Git/PR conventions from the owner's AICaller instructions for
+Serein's Rust/native boundaries. `AGENTS.md` now directs feature requests through implementation,
+focused verification, synthetic native before/after screenshots, relevant release performance
+comparisons, task-only commits, push and PR creation. Native demo verification is authorized by
+default; live Discord actions retain the explicit owner gate. Dirty work stays preserved, blocked
+checks/evidence produce a draft, and merging/release publication is not automatic. Added the
+repository delivery skill, PR template and contributor link; no runtime code/dependencies changed.
+
+Installed optional `gh-fix-ci` and `gh-address-comments` locally from
+[OpenAI's curated skills](https://github.com/openai/skills/tree/49f948faa9258a0c61caceaf225e179651397431/skills/.curated),
+pinned to that source revision. These user-local installations are not vendored in the repository;
+the committed delivery skill and AGENTS instructions work without them. Existing Ponytail and
+visual-design-polish skills are reused when available. Skill guidance must respect the owner's
+standing task authorization and runtime tool permissions. No extra approval loop, global Git
+configuration, background agent, paid service or fixed delivery-time guarantee was introduced.
+
+Validation: `cargo xtask check` passed (70 offline tests, strict Clippy, formatting and policy).
+The skill creator's `quick_validate.py` passed for all three skills using an isolated `uv --with
+pyyaml` tool environment; the system Python lacked PyYAML. `git diff --check` passed. Independent
+read-only scenario review found no blocker for dirty UI work, docs-only work with existing CI
+failures, or unavailable screenshot export. Native screenshots and runtime benchmarks are not
+applicable to this instructions/template-only change; no feature-level/live claims were added.
+
+Baseline `778b71a` is current `origin/main`. Its
+[native-client workflow](https://github.com/ViceVerse-cz/rustcord/actions/runs/34423149411)
+passed macOS, Windows and Linux native jobs but failed `cargo audit --deny warnings` in the security
+job before this task. This setup is delivered as a draft PR with that inherited blocker, without
+suppressing audit checks or expanding into dependency repairs.
