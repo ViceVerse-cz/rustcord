@@ -26,12 +26,22 @@ pub enum Failure {
     Ambiguous,
     #[error("Service response rejected or incompatible")]
     Protocol,
+    // Only compile-time labels are allowed here, never remote text, IDs or decode errors.
+    #[error("{0}")]
+    ProtocolAt(&'static str),
     #[error("Safe session capacity exceeded; connection stopped")]
     Capacity,
     #[error("Only an owner-supplied normal-user session is supported")]
     InvalidCredential,
 }
 impl Failure {
+    pub fn protocol_at(self, stage: &'static str) -> Self {
+        if self == Self::Protocol {
+            Self::ProtocolAt(stage)
+        } else {
+            self
+        }
+    }
     pub fn label(self) -> &'static str {
         match self {
             Self::Expired => "Session expired · reconnect explicitly; drafts remain in RAM",
@@ -41,6 +51,7 @@ impl Failure {
             Self::Network => "Connection failed",
             Self::Ambiguous => "Outcome unknown · check the official client before retrying",
             Self::Protocol => "Unsupported service response",
+            Self::ProtocolAt(stage) => stage,
             Self::Capacity => "Safe capacity exceeded · connection stopped",
             Self::InvalidCredential => "Invalid session input or bot account rejected",
         }
@@ -84,6 +95,19 @@ mod tests {
     use super::*;
     #[test]
     fn secret_is_redacted_and_header_injection_rejected() {
+        let contextual = Failure::Protocol.protocol_at("Synthetic stage");
+        assert_eq!(contextual.label(), "Synthetic stage");
+        for failure in [
+            Failure::Expired,
+            Failure::Challenged,
+            Failure::Forbidden,
+            Failure::RateLimited,
+            Failure::Network,
+            Failure::Capacity,
+            contextual,
+        ] {
+            assert_eq!(failure.protocol_at("Other stage"), failure);
+        }
         let secret = SessionSecret::from_owner_input("SYNTHETIC_SECRET_MARKER".into()).unwrap();
         assert!(!format!("{secret:?}").contains("SYNTHETIC"));
         for value in [

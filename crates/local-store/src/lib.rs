@@ -303,6 +303,7 @@ impl LocalStore {
             }
             let parse = |value: String| value.parse::<Id>().map_err(|_| StoreError::Incompatible);
             let message = Message {
+                reactions: None,
                 id: parse(row.get(0)?)?,
                 channel,
                 author: User {
@@ -415,6 +416,7 @@ mod tests {
         store.0.execute("INSERT INTO messages(account,channel,id,author,name,content,edited,unsupported) VALUES('1','2','3','4','Synthetic','<@5>',0,0)",[]).unwrap();
         let mut store = LocalStore::initialize(store.0).unwrap();
         let mut messages = store.load_channel(Id(1), Id(2)).unwrap();
+        assert!(messages[0].reactions.is_none()); // Session-only counts must be revalidated.
         assert!(messages[0].mentions.is_empty());
         assert_eq!(store.load_drafts(Id(1)).unwrap()[&Id(2)], "kept draft");
         messages[0].mentions = vec![User {
@@ -608,6 +610,7 @@ mod tests {
         );
         for channel in 1..=30 {
             let message = Message {
+                reactions: Some(vec![]),
                 id: Id(100),
                 channel: Id(channel),
                 author: User {

@@ -2,9 +2,13 @@
 mod attachments;
 mod embeds;
 pub mod profile;
+mod reactions;
+pub mod read_state;
+pub mod search;
 use attachments::AttachmentList;
 use embeds::EmbedList;
 use model::{Channel, Guild, Id, Message, MessagePatch, Patch, User};
+pub use reactions::ReactionTarget;
 use serde::Deserialize;
 use serde_json::value::RawValue;
 
@@ -64,6 +68,8 @@ impl UserDto {
 }
 #[derive(Deserialize)]
 pub struct ChannelDto {
+    #[serde(default)]
+    pub last_message_id: Option<Id>,
     pub id: Id,
     #[serde(default)]
     pub guild_id: Option<Id>,
@@ -89,6 +95,7 @@ impl ChannelDto {
             .map(UserDto::into_model)
             .collect();
         Channel {
+            last_message: self.last_message_id,
             id: self.id,
             guild: self.guild_id,
             parent_id: self.parent_id,
@@ -108,6 +115,8 @@ impl ChannelDto {
 }
 #[derive(Deserialize)]
 pub struct ChannelPatchDto {
+    #[serde(default)]
+    pub last_message_id: Patch<Id>,
     pub id: Id,
     #[serde(default)]
     pub name: Patch<String>,
@@ -125,6 +134,7 @@ pub struct ChannelPatchDto {
 impl ChannelPatchDto {
     pub fn into_model(self) -> model::ChannelPatch {
         model::ChannelPatch {
+            last_message: self.last_message_id,
             id: self.id,
             name: self.name,
             parent_id: self.parent_id,
@@ -206,6 +216,8 @@ impl GuildPatchDto {
 }
 #[derive(Deserialize)]
 pub struct Ready {
+    #[serde(default)]
+    pub read_state: Option<read_state::Snapshot>,
     pub user: UserDto,
     pub session_id: String,
     pub resume_gateway_url: String,
@@ -267,6 +279,8 @@ impl Ready {
 pub struct MentionList(#[serde(deserialize_with = "model::deserialize_mentions")] pub Vec<UserDto>);
 #[derive(Deserialize)]
 pub struct MessageDto {
+    #[serde(default)]
+    pub reactions: reactions::ReactionList,
     pub id: Id,
     pub channel_id: Id,
     pub author: UserDto,
@@ -302,6 +316,7 @@ pub struct Reference {
 impl MessageDto {
     pub fn into_model(self) -> Message {
         Message {
+            reactions: Some(self.reactions.0),
             id: self.id,
             channel: self.channel_id,
             author: self.author.into_model(),
@@ -329,6 +344,8 @@ impl MessageDto {
 }
 #[derive(Deserialize)]
 pub struct PatchDto {
+    #[serde(default)]
+    pub reactions: Patch<reactions::ReactionList>,
     pub id: Id,
     pub channel_id: Id,
     #[serde(default)]
@@ -347,6 +364,11 @@ pub struct PatchDto {
 impl PatchDto {
     pub fn into_model(self) -> MessagePatch {
         MessagePatch {
+            reactions: match self.reactions {
+                Patch::Absent => Patch::Absent,
+                Patch::Null => Patch::Null,
+                Patch::Value(list) => Patch::Value(list.0),
+            },
             id: self.id,
             channel: self.channel_id,
             content: self.content,

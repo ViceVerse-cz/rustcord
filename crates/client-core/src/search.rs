@@ -1,0 +1,120 @@
+use crate::{
+    Command, State,
+    auth::{AuthState, Failure},
+};
+use model::{Freshness, Id, SearchPage};
+
+pub struct SearchView {
+    pub channel: Id,
+    pub query: String,
+    pub before: Option<Id>,
+    pub request: u64,
+    pub loading: bool,
+    pub error: Option<&'static str>,
+    pub page: Option<SearchPage>,
+}
+pub enum Outcome {
+    Page(SearchPage),
+    Indexing,
+}
+impl State {
+    pub fn can_search(&self) -> bool {
+        self.auth == AuthState::Authenticated
+            && self.gateway_connected
+            && self.freshness != Freshness::Unavailable
+            && self
+                .channels
+                .iter()
+                .any(|c| Some(c.id) == self.selected && c.supports_text())
+    }
+    pub fn request_search(&mut self, query: String, before: Option<Id>) -> Option<Command> {
+        if !self.can_search() || !model::valid_search_query(&query) {
+            return None;
+        }
+        let channel = self.channels.iter().find(|c| Some(c.id) == self.selected)?;
+        let (channel, guild) = (channel.id, channel.guild);
+        if before.is_some()
+            && !self.search.as_ref().is_some_and(|s| {
+                s.channel == channel
+                    && s.query == query
+                    && !s.loading
+                    && s.page.as_ref().and_then(|p| p.hits.last()).map(|h| h.id) == before
+            })
+        {
+            return None;
+        }
+        self.search_request = self.search_request.wrapping_add(1);
+        self.search = Some(SearchView {
+            channel,
+            query: query.clone(),
+            before,
+            request: self.search_request,
+            loading: true,
+            error: None,
+            page: None,
+        });
+        Some(Command::Search {
+            channel,
+            guild,
+            query,
+            before,
+            request: self.search_request,
+        })
+    }
+    pub fn clear_search(&mut self) -> Command {
+        self.search_request = self.search_request.wrapping_add(1);
+        self.search = None;
+        Command::CancelSearch
+    }
+    pub fn apply_search(&mut self, channel: Id, request: u64, result: Result<Outcome, Failure>) {
+        if let Err(f) = &result
+            && f.ends_session()
+            && *f != Failure::Capacity
+        {
+            self.fail(*f);
+            return;
+        }
+        if !self.can_search() {
+            return;
+        }
+        let Some(view) = self.search.as_mut().filter(|s| {
+            s.channel == channel
+                && s.request == request
+                && s.loading
+                && Some(channel) == self.selected
+        }) else {
+            return;
+        };
+        view.loading = false;
+        match result {
+            Ok(Outcome::Page(page)) if page.valid(channel, view.before) => {
+                view.page = Some(page);
+                view.error = None;
+            }
+            Ok(Outcome::Indexing) => {
+                view.error = Some("Discord is indexing this conversation. Try Search again later.")
+            }
+            Ok(_) => view.error = Some("Search response was invalid or too large"),
+            Err(f) => view.error = Some(f.label()),
+        }
+    }
+    pub fn open_search_hit(&mut self, message: Id) -> Option<Command> {
+        if !self.can_search()
+            || !self
+                .search
+                .as_ref()?
+                .page
+                .as_ref()?
+                .hits
+                .iter()
+                .any(|h| h.id == message && Some(h.channel) == self.selected)
+        {
+            return None;
+        }
+        let before = Id(message.0.checked_add(1)?);
+        self.timeline.clear();
+        self.revision += 1;
+        self.search_target = Some(message);
+        Some(self.history(Some(before)))
+    }
+}

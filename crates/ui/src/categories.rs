@@ -142,16 +142,14 @@ impl MessagingUi {
                         }
                         Row::Channel(channel) => {
                             let active = state.selected == Some(channel.id);
+                            let unread = state.unread(channel.id) == Some(true);
                             let symbol = match channel.kind {
                                 1 | 3 => "@",
                                 2 | 13 => "♫",
                                 15 | 16 => "▤",
                                 _ => "#",
                             };
-                            let unread = state.has_unread(channel.id);
-                            let name = if channel.supports_text() && unread {
-                                format!("●  {symbol}   {}", channel.name)
-                            } else if channel.supports_text() {
+                            let name = if channel.supports_text() {
                                 format!("{symbol}   {}", channel.name)
                             } else {
                                 format!("{symbol}   {} · unavailable", channel.name)
@@ -178,7 +176,7 @@ impl MessagingUi {
                                                     colors.text
                                                 }),
                                             )
-                                            .right_text(())
+                                            .right_text(if unread { "Unread" } else { "" })
                                             .min_size(egui::vec2(ui.available_width(), 36.0))
                                             .corner_radius(7)
                                             .truncate(),
@@ -188,15 +186,21 @@ impl MessagingUi {
                                 })
                                 .inner
                                 .on_hover_text(format!(
-                                    "{} · {}{}",
+                                    "{} · {}",
                                     channel.name,
-                                    kind_label(channel.kind),
-                                    if unread {
-                                        " · Unread messages this session"
-                                    } else {
-                                        ""
-                                    }
+                                    kind_label(channel.kind)
                                 ));
+                            response.widget_info(|| {
+                                egui::WidgetInfo::labeled(
+                                    egui::WidgetType::Button,
+                                    channel.supports_text(),
+                                    format!(
+                                        "{}{}",
+                                        channel.name,
+                                        if unread { ", unread" } else { "" }
+                                    ),
+                                )
+                            });
                             if active {
                                 ui.painter().rect_filled(
                                     egui::Rect::from_min_size(
@@ -223,6 +227,7 @@ mod tests {
     use super::*;
     fn channel(id: u64, kind: u8, position: i32, parent_id: Option<Id>) -> Channel {
         Channel {
+            last_message: None,
             id: Id(id),
             guild: Some(Id(100)),
             parent_id,

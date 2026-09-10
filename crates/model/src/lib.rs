@@ -7,6 +7,10 @@ mod embeds;
 pub use embeds::*;
 mod mentions;
 pub use mentions::*;
+mod reactions;
+pub use reactions::*;
+mod search;
+pub use search::*;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{fmt, str::FromStr};
 
@@ -108,6 +112,7 @@ pub struct GuildPatch {
 }
 #[derive(Clone, PartialEq, Eq)]
 pub struct Channel {
+    pub last_message: Option<Id>,
     pub id: Id,
     pub guild: Option<Id>,
     pub parent_id: Option<Id>,
@@ -132,6 +137,7 @@ impl Channel {
 }
 #[derive(Clone)]
 pub struct ChannelPatch {
+    pub last_message: Patch<Id>,
     pub id: Id,
     pub name: Patch<String>,
     pub parent_id: Patch<Id>,
@@ -140,6 +146,8 @@ pub struct ChannelPatch {
 }
 #[derive(Clone, PartialEq, Eq)]
 pub struct Message {
+    /// Session-only counts; None means a service refresh is needed.
+    pub reactions: Option<Vec<Reaction>>,
     pub id: Id,
     pub channel: Id,
     pub author: User,
@@ -158,6 +166,9 @@ pub struct Message {
 impl Message {
     pub fn bytes(&self) -> usize {
         size_of::<Self>()
+            + self.reactions.as_ref().map_or(0, |r| {
+                reaction_bytes(r) + r.capacity().saturating_sub(r.len()) * size_of::<Reaction>()
+            })
             + self.content.capacity()
             + self.author.heap_bytes()
             + mention_bytes(&self.mentions)
@@ -187,6 +198,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Patch<T> {
 }
 #[derive(Clone)]
 pub struct MessagePatch {
+    pub reactions: Patch<Vec<Reaction>>,
     pub id: Id,
     pub channel: Id,
     pub content: Patch<String>,

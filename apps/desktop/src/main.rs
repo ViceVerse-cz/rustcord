@@ -132,7 +132,7 @@ impl Desktop {
             .worker_threads(2)
             .enable_all()
             .build()?;
-        let store = (!demo).then(|| credentials::Store::start(cc.egui_ctx.clone()));
+        let mut store = (!demo).then(|| credentials::Store::start(cc.egui_ctx.clone()));
         let cache = (!demo).then(|| cache::Cache::start(cc.egui_ctx.clone()));
         let state = if demo {
             if std::env::args().any(|arg| arg == "--demo-chat") {
@@ -143,11 +143,9 @@ impl Desktop {
         } else {
             State::default()
         };
-        if let Some(store) = &store {
-            let _ = store
-                .send
-                .try_send((state.generation, credentials::Operation::Load));
-        }
+        let loading_saved = store
+            .as_mut()
+            .is_some_and(|store| store.load(state.generation, std::time::Instant::now()));
         let cache_pending = usize::from(cache.as_ref().is_some_and(|cache| {
             // Appearance has its own singleton table; this account ID is unused.
             cache
@@ -192,8 +190,10 @@ impl Desktop {
             pending_save: None,
             credential_status: if demo {
                 "Fixture mode never opens the credential store or network"
-            } else {
+            } else if loading_saved {
                 "Checking saved login…"
+            } else {
+                "Saved login unavailable; could not start credential lookup"
             },
             forgetting: false,
             confirming_close: false,
@@ -207,6 +207,14 @@ impl Desktop {
         })
     }
     fn connect(&mut self, secret: SessionSecret, save: bool, ctx: &egui::Context) {
+        if let Some(store) = &mut self.store {
+            store.cancel_load();
+        }
+        self.credential_status = if save {
+            "Login will be saved after Discord connects"
+        } else {
+            "Connecting with the supplied session; saved login unchanged"
+        };
         #[cfg(feature = "voice")]
         self.voice.stop();
         self.state.disconnect_voice();
@@ -232,6 +240,9 @@ impl Desktop {
         ));
     }
     fn logout(&mut self, ctx: &egui::Context) {
+        if let Some(store) = &mut self.store {
+            store.cancel_load();
+        }
         self.downloads.cancel();
         #[cfg(feature = "voice")]
         self.voice.stop();
@@ -351,7 +362,113 @@ impl Desktop {
         }
         if self.state.demo {
             let event = match command {
-                Command::Voice(_) | Command::CancelProfile => return,
+                Command::MarkRead {
+                    channel,
+                    message,
+                    request,
+                } => Event::ReadState(client_core::read_state::Event::Result {
+                    channel,
+                    message,
+                    request,
+                    result: Ok(()),
+                }),
+                Command::Reactions(command) => {
+                    use client_core::reactions::{Command as R, Event as E};
+                    Event::Reactions(match command {
+                        R::Read {
+                            channel,
+                            message,
+                            request,
+                        } => E::Read {
+                            channel,
+                            message,
+                            request,
+                            result: Ok(vec![]),
+                        },
+                        R::Set {
+                            channel,
+                            message,
+                            emoji,
+                            add,
+                            request,
+                        } => {
+                            let mut reactions = self
+                                .state
+                                .timeline
+                                .get(message)
+                                .and_then(|m| m.reactions.clone())
+                                .unwrap_or_default();
+                            if let Some(r) = reactions.iter_mut().find(|r| r.emoji.same(&emoji)) {
+                                if r.me != add {
+                                    r.count = if add {
+                                        r.count + 1
+                                    } else {
+                                        r.count.saturating_sub(1)
+                                    };
+                                    r.me = add;
+                                }
+                            } else if add {
+                                reactions.push(model::Reaction {
+                                    emoji,
+                                    count: 1,
+                                    me: true,
+                                    me_burst: false,
+                                });
+                            }
+                            reactions.retain(|r| r.count > 0);
+                            self.state.reactions.writing = None;
+                            let _ = self.state.timeline.set_reactions(message, Some(reactions));
+                            // The fixture has no service readback; it updates synthetic RAM only.
+                            E::Written {
+                                channel,
+                                message,
+                                request,
+                                result: Ok(()),
+                            }
+                        }
+                    })
+                }
+                Command::Voice(_) | Command::CancelProfile | Command::CancelSearch => return,
+                Command::Search {
+                    channel,
+                    query,
+                    before,
+                    request,
+                    ..
+                } => {
+                    let mut hits = Vec::new();
+                    let mut total = 0;
+                    for id in (1..=500)
+                        .rev()
+                        .filter(|id| before.is_none_or(|b| *id < b.0))
+                    {
+                        let message = test_support::message(id, channel);
+                        if message
+                            .content
+                            .to_lowercase()
+                            .contains(&query.to_lowercase())
+                        {
+                            total += 1;
+                            if hits.len() < model::SEARCH_PAGE_SIZE {
+                                hits.push(model::SearchHit {
+                                    id: message.id,
+                                    channel,
+                                    author: message.author.name,
+                                    excerpt: message.content.chars().take(256).collect(),
+                                });
+                            }
+                        }
+                    }
+                    Event::Search {
+                        channel,
+                        request,
+                        result: Ok(client_core::search::Outcome::Page(model::SearchPage {
+                            hits,
+                            total,
+                            partial: false,
+                        })),
+                    }
+                }
                 Command::Profile {
                     user,
                     guild,
@@ -417,6 +534,7 @@ impl Desktop {
                     message,
                     content,
                 } => Event::Patch(model::MessagePatch {
+                    reactions: model::Patch::Absent,
                     embeds: model::Patch::Absent,
                     attachments: model::Patch::Absent,
                     mentions: model::Patch::Absent,
@@ -505,6 +623,8 @@ impl Desktop {
                     ui.add_space(8.0);
                     let can_sign_in = !self.fixture_only && self.authorized && !self.forgetting && self.state.auth != AuthState::Authenticating;
                     if ui.add_enabled_ui(can_sign_in, |ui| ui::design::primary_button(ui, "Sign in with Discord  →")).inner.clicked() {
+                        if let Some(store)=&mut self.store {store.cancel_load();}
+                        self.credential_status="Sign in through Discord; saved-login lookup stopped";
                         let wake = ctx.clone();
                         match platform::LoginView::open(self.window.clone(), move || wake.request_repaint()) {
                             Ok(login) => { self.login = Some(login); self.state.auth = AuthState::Authenticating; self.state.status = "Waiting for Discord login"; }
@@ -515,10 +635,10 @@ impl Desktop {
                     ui.add_space(8.0);
                     ui.label(egui::RichText::new("Opens Discord’s login page. Your device’s credential store remembers your login.").size(12.0).color(p.muted));
                     ui.add_space(12.0);
-                    if self.state.auth != AuthState::Unauthenticated || self.state.status != "Disconnected" || self.forgetting || self.credential_status.contains("unavailable") || self.credential_status.contains("Could not") {
+                    if self.state.auth != AuthState::Unauthenticated || self.state.status != "Disconnected" || self.forgetting {
                         ui.label(self.state.status);
-                        ui.label(egui::RichText::new(self.credential_status).size(12.0));
                     }
+                    ui.label(egui::RichText::new(self.credential_status).size(12.0));
                     if self.cache_error || self.cache_pending > 0 { ui.small(self.cache_status); }
                     ui.label(egui::RichText::new("Unofficial clients may put your Discord account at risk.").size(12.0).color(p.muted));
                 }
@@ -526,6 +646,7 @@ impl Desktop {
                 ui.separator();
                 ui.add_space(10.0);
                 if ui.add(egui::Button::new("Preview the interface  →").frame(false)).clicked() {
+                    if let Some(store)=&mut self.store {store.cancel_load();}
                     self.connection = None; self.pending_save = None;
                     let generation = self.state.generation + 1;
                     self.state = test_support::demo_state(); self.state.generation = generation; self.messaging.clear();
@@ -533,7 +654,7 @@ impl Desktop {
                 ui.label(egui::RichText::new("Sample conversations. No Discord connection.").size(12.0).color(p.muted));
                 ui.add_space(12.0);
                 ui.collapsing("About this preview", |ui| {
-                    ui.small("Login and messaging compatibility are still being tested. Voice, attachments, reactions, search and read markers are not available yet.");
+                    ui.small("Messaging, reactions, search and read markers have offline tests. Real Discord interoperability is still unverified; attachment uploads and advanced search remain incomplete.");
                     ui.small("Messages and drafts are cached locally. Login tokens use the operating system credential store.");
                     ui.small(self.credential_status);
                     if !self.fixture_only && ui.button("Forget saved login").clicked() { self.logout(&ctx); }
@@ -735,12 +856,15 @@ impl Desktop {
             }
         }
         let mut results = Vec::new();
-        if let Some(store) = &self.store {
+        if let Some(store) = &mut self.store {
             for _ in 0..4 {
-                match store.receive.try_recv() {
-                    Ok(result) => results.push(result),
-                    Err(_) => break,
+                match store.poll(std::time::Instant::now()) {
+                    Some(result) => results.push(result),
+                    None => break,
                 }
+            }
+            if let Some(remaining) = store.remaining(std::time::Instant::now()) {
+                ctx.request_repaint_after(remaining);
             }
         }
         for (generation, outcome) in results {
@@ -748,13 +872,12 @@ impl Desktop {
                 continue;
             }
             match outcome {
-                credentials::Outcome::Loaded(Ok(Some(secret))) => self.connect(secret, false, ctx),
-                credentials::Outcome::Loaded(Ok(None)) => {
-                    self.credential_status =
-                        "Sign in once; the session token will be saved in your OS credential store"
-                }
-                credentials::Outcome::Loaded(Err(_)) => {
-                    self.credential_status = "Saved login unavailable; no plaintext fallback"
+                credentials::Outcome::Loaded(result) => {
+                    let status = credentials::loaded_status(&result);
+                    if let Ok(Some(secret)) = result {
+                        self.connect(secret, false, ctx);
+                    }
+                    self.credential_status = status;
                 }
                 credentials::Outcome::Saved(Ok(())) => {
                     self.credential_status = "Login saved in the OS credential store"
@@ -800,6 +923,7 @@ impl Desktop {
                 event.event,
                 Event::Resync | Event::PermissionsChanged | Event::Unavailable(_)
             ) || matches!(&event.event, Event::RecipientRemoved { user, .. } if self.state.user.as_ref().is_some_and(|owner| owner.id == *user))
+                || matches!(&event.event, Event::Reactions(client_core::reactions::Event::Read {channel,result:Err(Failure::Forbidden),..}) if self.state.selected==Some(*channel))
                 || matches!(&event.event, Event::HistoryFailed { channel, request, failure: Failure::Forbidden }
                 if self.state.selected == Some(*channel) && self.state.request == *request && self.state.history_pending);
             let history_changed = changes_active_history(&self.state, &event.event);
@@ -891,6 +1015,11 @@ impl Desktop {
             }
         }
         // Network and store workers request repaint only when their outcomes change.
+        if !self.state.demo
+            && let Some(command) = self.state.next_reaction_read()
+        {
+            self.command(command);
+        }
 
         #[cfg(target_os = "linux")]
         if self.login.is_some() {
@@ -1002,6 +1131,9 @@ impl eframe::App for Desktop {
                 }
             }
             if self.messaging.reconnect_requested {
+                if let Some(store) = &mut self.store {
+                    store.cancel_load();
+                }
                 self.messaging.reconnect_requested = false;
                 let wake = ctx.clone();
                 match platform::LoginView::open(self.window.clone(), move || wake.request_repaint())

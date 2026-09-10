@@ -16,6 +16,7 @@ const ACCOUNT: &str = "discord-session";
 pub enum CredentialError {
     Unavailable,
     Invalid,
+    TimedOut,
 }
 pub fn load_session() -> Result<Option<SessionSecret>, CredentialError> {
     let entry = keyring::Entry::new(SERVICE, ACCOUNT).map_err(|_| CredentialError::Unavailable)?;

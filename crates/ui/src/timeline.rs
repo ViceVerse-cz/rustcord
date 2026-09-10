@@ -9,6 +9,8 @@ use std::{
 
 #[derive(Default)]
 pub struct TimelineView {
+    pub(super) mark_read: Option<Id>,
+    pub(super) reaction: Option<(Id, Option<model::ReactionEmoji>)>,
     heights: BTreeMap<Id, (u64, f32)>,
     width: f32,
     rows: Vec<(Id, f32)>,
@@ -28,7 +30,6 @@ pub struct TimelineView {
     pub(super) load_older: bool,
     pub(super) latest: bool,
     jump: bool,
-    unread_source: Option<Id>,
     unread_boundary: Option<Id>,
 }
 pub fn visible_range(rows: &[(Id, f32)], min: f32, max: f32) -> (usize, usize, f32) {
@@ -65,6 +66,7 @@ fn layout_key(message: &Message) -> u64 {
     // A layout fingerprint only; spoiler visibility uses exact text instead.
     let mut key = DefaultHasher::new();
     message.content.hash(&mut key);
+    message.reactions.hash(&mut key);
     for user in &message.mentions {
         user.id.hash(&mut key);
         user.name.hash(&mut key);
@@ -141,6 +143,7 @@ fn message_actions(
     ui: &mut egui::Ui,
     message: &Message,
     own: bool,
+    mark_read: Option<&mut Option<Id>>,
     reply: &mut Option<Id>,
     editing: &mut Option<(Id, Id, String)>,
     deleting: &mut Option<(Id, Id)>,
@@ -159,6 +162,18 @@ fn message_actions(
         }
         if ui.button("Reply").clicked() {
             *reply = Some(message.id);
+            ui.close();
+        }
+        if ui
+            .add_enabled(
+                mark_read.is_some(),
+                egui::Button::new("Mark read through here"),
+            )
+            .clicked()
+        {
+            if let Some(mark_read) = mark_read {
+                *mark_read = Some(message.id);
+            }
             ui.close();
         }
         if own {
@@ -207,20 +222,16 @@ impl TimelineView {
                 ..Self::default()
             };
         }
-        if let Some(boundary) = state
+        let boundary = state
             .selected
-            .and_then(|channel| state.first_unread(channel))
-            && (channel_changed || !self.following || !ui.input(|i| i.focused))
-        {
-            self.unread_source = Some(boundary);
-        }
-        let boundary = self.unread_source.and_then(|boundary| {
-            state
-                .timeline
-                .iter()
-                .find(|m| m.id >= boundary)
-                .map(|m| m.id)
-        });
+            .and_then(|channel| state.read_marker(channel))
+            .and_then(|read| {
+                state
+                    .timeline
+                    .iter()
+                    .find(|m| read.is_none_or(|id| m.id > id))
+                    .map(|m| m.id)
+            });
         if self.unread_boundary != boundary {
             self.unread_boundary = boundary;
             self.revision = u64::MAX;
@@ -292,6 +303,18 @@ impl TimelineView {
                 model::Freshness::Fresh => "No messages yet. Start the conversation below.",
             });
         }
+        if !state.history_pending
+            && let Some(target) = state.search_target.take()
+        {
+            if state.timeline.get(target).is_some() {
+                self.following = false;
+                self.jump = false;
+                self.anchor = Some((target, 0.0));
+                offset = Some(anchor_offset(&self.rows, target, 0.0));
+            } else {
+                state.status = "Search message was not returned; it may have been removed";
+            }
+        }
         let mut scroll = egui::ScrollArea::vertical()
             .max_height((ui.available_height() - 36.0).max(0.0))
             .id_salt(("timeline", state.selected))
@@ -305,7 +328,6 @@ impl TimelineView {
             scroll = scroll.vertical_scroll_offset(offset);
         }
         let mut measurements = Vec::new();
-        let mut latest_visible = false;
         let output = scroll.show_viewport(ui, |ui, viewport| {
             ui.spacing_mut().item_spacing.y = 0.0;
             let (first, end, top) = visible_range(
@@ -321,6 +343,7 @@ impl TimelineView {
             ui.add_space(top);
             for index in first..end {
                 let (id, _) = &self.rows[index];
+                let can_mark_read = state.can_mark_read(*id);
                 let Some(message) = state.timeline.get(*id) else {
                     continue;
                 };
@@ -333,7 +356,7 @@ impl TimelineView {
                         divider(ui, format!("{} {}, {} · UTC", date.month(), date.day(), date.year()), false);
                     }
                     if self.unread_boundary == Some(*id) {
-                        divider(ui, "New messages · this session".into(), true);
+                        divider(ui, "New messages".into(), true);
                     }
                     let colors = crate::design::palette(ui);
                     egui::Frame::NONE
@@ -354,7 +377,7 @@ impl TimelineView {
                                         egui::vec2(ui.available_width(), 20.0),
                                         egui::Layout::right_to_left(egui::Align::Center),
                                         |ui| {
-                                            message_actions(ui, message, state.user.as_ref().is_some_and(|u| u.id == message.author.id), &mut state.reply, editing, deleting);
+                                            message_actions(ui, message, state.user.as_ref().is_some_and(|u| u.id == message.author.id), can_mark_read.then_some(&mut self.mark_read), &mut state.reply, editing, deleting);
                                             if message.edited {
                                                 ui.label(RichText::new("edited").small().color(colors.muted));
                                             }
@@ -407,15 +430,19 @@ impl TimelineView {
                                     if message.unsupported {
                                         ui.label(RichText::new("System content · Preview unavailable").small().color(colors.muted));
                                     }
+                                    if let Some(action)=crate::reactions::show(ui,message.reactions.as_deref(),
+                                        state.gateway_connected && state.freshness==model::Freshness::Fresh,
+                                        state.reactions.writing.is_some(), state.reactions.invalidated(message.id)) {
+                                        self.reaction=Some((*id,action));
+                                    }
                                 });
                                 if compact {
-                                            message_actions(ui, message, state.user.as_ref().is_some_and(|u| u.id == message.author.id), &mut state.reply, editing, deleting);
+                                            message_actions(ui, message, state.user.as_ref().is_some_and(|u| u.id == message.author.id), can_mark_read.then_some(&mut self.mark_read), &mut state.reply, editing, deleting);
                                 }
 
                             });
                         });
                 });
-                latest_visible |= index + 1 == self.rows.len() && response.response.rect.intersects(ui.clip_rect());
                 measurements.push((*id, row_key(message, previous, self.unread_boundary), response.response.rect.height()));
             }
             let used: f32 = self.rows[..end].iter().map(|(_, height)| *height).sum();
@@ -448,20 +475,12 @@ impl TimelineView {
                         .is_some_and(|pos| output.inner_rect.contains(pos))
             })
             && state.can_load_older();
-        if self.following
-            && latest_visible
-            && state.history_before.is_none()
-            && ui.input(|i| i.focused)
-            && let Some(channel) = state.selected
-        {
-            state.mark_read(channel);
-        }
         if (!self.following || state.history_before.is_some())
             && ui
                 .button(
                     if state
                         .selected
-                        .is_some_and(|channel| state.has_unread(channel))
+                        .is_some_and(|channel| state.unread(channel) == Some(true))
                     {
                         "↓ New messages · Jump to latest"
                     } else {
@@ -550,6 +569,7 @@ mod tests {
             embeds: vec![],
             attachments: vec![],
             mentions: vec![],
+            reactions: Some(vec![]),
             embeds_suppressed: false,
         }
     }
@@ -667,6 +687,7 @@ mod tests {
     #[test]
     fn same_id_revision_reset_does_not_reuse_reveal_or_height() {
         let mut message = Message {
+            reactions: Some(vec![]),
             id: Id(1),
             channel: Id(2),
             author: model::User {
@@ -751,6 +772,7 @@ mod tests {
             }
         }
         let mut message = Message {
+            reactions: Some(vec![]),
             id: Id(1),
             channel: Id(2),
             author: model::User {
