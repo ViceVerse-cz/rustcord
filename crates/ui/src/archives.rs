@@ -143,6 +143,12 @@ mod tests {
                 egui::Visuals::light()
             });
             let mut state = State {
+                user: Some(model::User {
+                    id: Id(2),
+                    name: "Synthetic member".into(),
+                    avatar: None,
+                    discriminator: 0,
+                }),
                 auth: client_core::auth::AuthState::Authenticated,
                 gateway_connected: true,
                 guilds: vec![model::Guild {
@@ -154,6 +160,10 @@ mod tests {
                 channels: vec![channel(7, 15, None)],
                 ..State::default()
             };
+            state
+                .permissions
+                .replace(test_support::permission_snapshot(&state))
+                .unwrap();
             let mut ui = crate::MessagingUi {
                 guild: Some(Id(100)),
                 ..Default::default()

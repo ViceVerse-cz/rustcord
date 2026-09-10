@@ -17,4 +17,14 @@ Budgets: 64 KiB voice WebSocket frames/messages; 4 KiB UDP receive limit; 1,275-
 
 These tests do not establish Discord compatibility or microphone/speaker quality. Actual two-way audio with an official Discord client remains an owner-operated live gate. No hardware audio access is performed by default tests. Receive streams mix into one 20 ms playback frame with hard clipping to the valid sample range; this is not an automatic gain controller. This implementation has fixed jitter buffering, no acoustic echo cancellation, no automatic device fallback, and no globally captured push-to-talk. Use headphones for live validation. Windows/Linux audio and macOS microphone permission remain unverified until explicitly exercised on those systems.
 
-The HPKE dependency has a small [source security backport](../../vendor/hpke-rs/SEREIN-PATCH.md) replacing its affected SHAKE dependency with RustCrypto sha3. All modified MPL-2.0 component source ships in voice packages. The full lockfile audit still fails on unselected optional packages and maintenance warnings; see [the audit](../../docs/dependency-audit.md).
+The HPKE dependency has a small [source security backport](../../vendor/hpke-rs/SEREIN-PATCH.md) replacing its affected SHAKE dependency with RustCrypto sha3. All modified MPL-2.0 component source ships in voice packages. Current dependency findings and remediation are recorded in [the audit](../../docs/dependency-audit.md).
+
+`Audio::set_gain(input_percent, output_percent)` adjusts session-only software levels without
+opening/restarting devices. Values are clamped to 0..=200%, with 100% defaults. Two integer
+atomics survive device replacement; each callback reads its relevant gain once. Capture gain
+is applied before resampling/enqueue, playback gain after resampling and mixing. Finite samples
+are clipped to [-1, 1]; invalid PCM becomes silence. No callback allocations, locks, queues or
+codec/protocol changes are added. Already-captured resampler endpoints and queued frames keep
+their existing latency; gain is not a privacy substitute for mute/deafen. Existing gates reset
+the callback buffers. Synthetic helper tests exercise the same processing used by CPAL, without
+constructing a host/device/stream. Physical audio quality and real-time timing remain unverified.

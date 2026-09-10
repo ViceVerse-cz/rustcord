@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 pub enum Event {
     Snapshot {
-        entries: Option<Vec<(Id, Option<Id>)>>,
+        entries: Option<Vec<(Id, Option<Id>, u32)>>,
         version: Option<u64>,
         partial: bool,
     },
@@ -15,6 +15,7 @@ pub enum Event {
         channel: Id,
         message: Option<Id>,
         manual: bool,
+        mention_count: Option<u32>,
         version: Option<u64>,
     },
     Latest(Vec<(Id, Patch<Id>)>),
@@ -27,6 +28,7 @@ pub enum Event {
 }
 #[derive(Default)]
 pub struct ReadState {
+    pub(crate) activity: crate::notifications::Activity,
     entries: BTreeMap<Id, (Option<Id>, u64)>,
     known: bool,
     version: Option<u64>,
@@ -42,11 +44,13 @@ impl ReadState {
         };
     }
     pub fn cancel(&mut self) {
+        self.activity.clear_notifications();
         self.pending = None;
         self.status = None;
     }
     pub fn forget(&mut self, channel: Id) {
         self.entries.remove(&channel);
+        self.activity.forget(channel);
         if self.pending.is_some_and(|(id, ..)| id == channel) {
             self.cancel();
         }
@@ -55,6 +59,7 @@ impl ReadState {
 impl State {
     pub fn read_marker(&self, channel: Id) -> Option<Option<Id>> {
         if !self.gateway_connected
+            || !self.can_view(channel)
             || !self
                 .channels
                 .iter()
@@ -70,12 +75,23 @@ impl State {
         })
     }
     pub fn unread(&self, channel: Id) -> Option<bool> {
-        let read = self.read_marker(channel)?;
-        let latest = self
-            .channels
-            .iter()
-            .find(|c| c.id == channel)?
-            .last_message?;
+        self.channel_unread(self.channels.iter().find(|c| c.id == channel)?)
+    }
+    /// Shared unread visibility for sidebar rows and notification badges.
+    pub fn channel_unread(&self, channel: &model::Channel) -> Option<bool> {
+        if !self.gateway_connected
+            || !self.can_view(channel.id)
+            || !channel.supports_text()
+            || !(self.read_state.known || self.read_state.entries.contains_key(&channel.id))
+        {
+            return None;
+        }
+        let read = self
+            .read_state
+            .entries
+            .get(&channel.id)
+            .and_then(|(id, _)| *id);
+        let latest = channel.last_message?;
         Some(read.is_none_or(|read| latest > read))
     }
     pub fn can_mark_read(&self, message: Id) -> bool {
@@ -88,9 +104,11 @@ impl State {
                 .get(message)
                 .is_some_and(|m| Some(m.channel) == self.selected)
             && self.selected.is_some_and(|channel| {
-                self.read_marker(channel)
-                    .flatten()
-                    .is_none_or(|read| message > read)
+                self.can_view(channel)
+                    && self
+                        .read_marker(channel)
+                        .flatten()
+                        .is_none_or(|read| message > read)
             })
     }
     pub fn prepare_mark_read(&mut self, message: Id) -> Option<crate::Command> {
@@ -114,10 +132,11 @@ impl State {
         })
     }
     pub fn observe_last_message(&mut self, channel: Id, message: Id) {
-        if let Some(channel) = self.channels.iter_mut().find(|c| c.id == channel)
-            && channel.last_message.is_none_or(|id| message > id)
-        {
-            channel.last_message = Some(message);
+        if let Some(channel) = self.channels.iter_mut().find(|c| c.id == channel) {
+            self.read_state.activity.observe_latest(channel.id, message);
+            if channel.last_message.is_none_or(|id| message > id) {
+                channel.last_message = Some(message);
+            }
         }
     }
     pub fn apply_read_state(&mut self, event: Event) -> Result<(), &'static str> {
@@ -139,16 +158,25 @@ impl State {
                     version,
                     ..ReadState::default()
                 };
-                for (channel, message) in entries.unwrap_or_default() {
-                    if self
+                for channel in &self.channels {
+                    if let Some(message) = channel.last_message {
+                        self.read_state.activity.observe_latest(channel.id, message);
+                    }
+                }
+                for (channel, message, count) in entries.unwrap_or_default() {
+                    if !self
                         .channels
                         .iter()
                         .any(|c| c.id == channel && c.supports_text())
-                        && self
-                            .read_state
-                            .entries
-                            .insert(channel, (message, self.read_state.revision))
-                            .is_some()
+                    {
+                        continue;
+                    }
+                    self.read_state.activity.set_count(channel, count);
+                    if self
+                        .read_state
+                        .entries
+                        .insert(channel, (message, self.read_state.revision))
+                        .is_some()
                     {
                         self.read_state.reset();
                         return Err("Duplicate channel read state");
@@ -159,6 +187,7 @@ impl State {
                 channel,
                 message,
                 manual,
+                mention_count,
                 version,
             } => {
                 if !self
@@ -181,6 +210,9 @@ impl State {
                 } else {
                     message.max(current)
                 };
+                self.read_state
+                    .activity
+                    .ack(channel, message, mention_count);
                 self.read_state
                     .entries
                     .insert(channel, (message, self.read_state.revision));
@@ -216,6 +248,10 @@ impl State {
                     return Ok(());
                 }
                 self.read_state.pending = None;
+                if !self.can_view(channel) {
+                    self.read_state.status = None;
+                    return Ok(());
+                }
                 match result {
                     Ok(()) => {
                         // A newer service ACK (including manual mark-unread) wins over this HTTP completion.
@@ -233,6 +269,9 @@ impl State {
                                 .entries
                                 .get(&channel)
                                 .and_then(|(id, _)| *id);
+                            self.read_state
+                                .activity
+                                .ack(channel, Some(message).max(current), None);
                             self.read_state.entries.insert(
                                 channel,
                                 (Some(message).max(current), self.read_state.revision),

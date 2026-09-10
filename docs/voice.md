@@ -12,6 +12,19 @@ Default builds remain text-only. Voice source builds additionally require CMake 
 
 ## Implemented behavior and limits
 
+The Audio menu provides session-only Microphone gain and Speaker volume controls from 0% to
+200%, initially 100%. Reset levels restores both to 100%. Changes apply to the active call
+without reopening devices and carry across calls/device changes in the same session; logout
+or preview reset clears them. Zero silences that signal; values above 100% boost and may clip.
+These are software levels, not system mixer settings or automatic gain control. Existing mute,
+deafen, push-to-talk, permission and encrypted-readiness gates continue taking precedence.
+Opening settings or changing a level never starts a call or opens a microphone.
+
+Device-free tests cover gain, clipping, invalid PCM, independent live changes and gates. Actual
+gain perception, microphone/speaker hardware, native slider interaction and callback latency
+remain unverified. Owner-controlled live checks should include 0/100/200% on each control,
+Reset levels, mute/deafen/PTT precedence and changing devices while custom levels are selected.
+
 Start calls the selected existing DM; incoming calls require Answer or Decline. One active call is retained while navigating text conversations. Start rings once after Discord voice transport allocation is confirmed; Answer never rings. Required DAVE group readiness and native device readiness precede the connected-audio state. An allocation with no endpoint waits within the deadline; incompatible states fail visibly. Hangup closes local audio immediately and sends departure; another call waits for the service's departure acknowledgment. No uncertain ring write or failed main Gateway session automatically starts another call.
 
 Mute/deafen, session-local input/output selection and focused V push-to-talk are implemented. Push-to-talk releases when focus is lost and is disabled while text entry has focus. It is not a global hotkey. Devices are initialized only following an explicit call and encrypted readiness; no microphone test runs at startup. Headphones are recommended because acoustic echo cancellation is absent. Device loss requires selecting a usable device and calling again; there is no automatic device fallback.
@@ -52,3 +65,10 @@ An authenticated empty room displays “Connected · waiting for others”; audi
 `cargo run --locked --features voice -- --demo --demo-voice` shows a separately labeled synthetic roster/call scene, including long names and mute/deafen states. It cannot connect, ring, or access devices. The ordinary `--demo` fixture remains the before/after comparison scenario.
 
 For live verification, the owner must explicitly enable `voice,developer-session` and control a private guild voice channel and the participating official clients. In addition to the DM gate above: join empty then add two official-client participants; verify actual intelligible audio in every direction and simultaneous speech; exercise encrypted joins/leaves and the last peer leaving/rejoining; check self mute/deafen, server mute/deafen, denied Connect/Speak, full room, deliberate switching, a server move/disconnect and voice region migration; verify devices/keys/tasks are released on Leave/logout/exit. Never record participants or publish private account/channel data. None of these live outcomes is established by the synthetic roster screenshot.
+
+Permission-aware continuation: known VIEW_CHANNEL and CONNECT are required for guild joining;
+SPEAK is required before initial or sustained microphone capture, and missing/denied USE_VAD
+requires enabled, focused, held push-to-talk. A listen-only join stays muted. Lost CONNECT
+ends the active call; merely regaining access never rejoins. The failed-call state remains
+visible after Gateway disconnect. These gates are covered by offline permission and
+device-free capture tests; owner-operated live permission changes/audio remain unverified.

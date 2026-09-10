@@ -1,9 +1,16 @@
 //! Single UI-thread state owner. Adapters deliver generation-tagged typed events.
 pub mod archives;
 pub mod auth;
+pub mod permissions;
+#[cfg(test)]
+mod permissions_tests;
+
+pub mod notifications;
+mod presence;
 pub mod profile;
 pub mod reactions;
 pub mod read_state;
+pub mod resident;
 pub mod search;
 mod threads;
 pub mod voice;
@@ -91,12 +98,13 @@ pub enum Event {
         result: Result<search::Outcome, auth::Failure>,
     },
     ReadState(read_state::Event),
+    NotificationPreferences(notifications::Event),
     Reactions(reactions::Event),
     Profile {
         user: Id,
         guild: Option<Id>,
         request: u64,
-        result: Result<UserProfile, auth::Failure>,
+        result: Result<Box<UserProfile>, auth::Failure>,
     },
     Voice(voice::Event),
     ChannelCreated(Channel),
@@ -122,6 +130,12 @@ pub enum Event {
         emojis: Vec<CustomEmoji>,
     },
     Members(MemberList),
+    MemberPresence {
+        guild: Id,
+        channel: Id,
+        request: u64,
+        updates: Vec<(Id, Option<String>)>,
+    },
     RecipientAdded {
         channel: Id,
         user: User,
@@ -131,6 +145,7 @@ pub enum Event {
         user: Id,
     },
     Ready {
+        permissions: model::permissions::Snapshot,
         user: User,
         guilds: Vec<Guild>,
         channels: Vec<Channel>,
@@ -166,6 +181,7 @@ pub enum Event {
     Resync,
     Unavailable(Id),
     PermissionsChanged,
+    Permissions(permissions::Event),
 }
 pub struct Envelope {
     pub generation: u64,
@@ -180,15 +196,18 @@ pub struct Pending {
     pub confirmed: Option<Id>,
 }
 pub struct State {
+    pub permissions: permissions::Permissions,
     pub archives: Option<archives::View>,
     pub archived_thread: Option<Id>,
     pub search: Option<search::SearchView>,
     pub search_request: u64,
     pub search_target: Option<Id>,
     pub read_state: read_state::ReadState,
+    pub notification_preferences: notifications::Preferences,
     pub reactions: reactions::Reactions,
     pub profile: Option<profile::ProfileView>,
     pub profile_request: u64,
+    pub profile_cache: profile::ProfileCache,
     pub voice: voice::State,
     pub generation: u64,
     pub auth: auth::AuthState,
@@ -199,6 +218,7 @@ pub struct State {
     pub channels: Vec<Channel>,
     pub selected: Option<Id>,
     pub timeline: Timeline,
+    pub resident: resident::Windows,
     pub freshness: Freshness,
     pub status: &'static str,
     pub drafts: BTreeMap<Id, String>,
@@ -216,15 +236,18 @@ pub struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
+            permissions: permissions::Permissions::default(),
             archives: None,
             archived_thread: None,
             search: None,
             search_request: 0,
             search_target: None,
             read_state: read_state::ReadState::default(),
+            notification_preferences: notifications::Preferences::default(),
             reactions: reactions::Reactions::default(),
             profile: None,
             profile_request: 0,
+            profile_cache: Default::default(),
             voice: voice::State::default(),
             generation: 1,
             auth: auth::AuthState::Unauthenticated,
@@ -235,6 +258,7 @@ impl Default for State {
             channels: vec![],
             selected: None,
             timeline: Timeline::default(),
+            resident: resident::Windows::default(),
             freshness: Freshness::Stale,
             status: "Disconnected",
             drafts: BTreeMap::new(),
@@ -288,13 +312,17 @@ impl State {
             self.status = "This channel kind is unsupported";
             return None;
         }
+        if !self.can_view(channel) {
+            self.status = "Channel permissions are unavailable or access was revoked";
+            return None;
+        }
         self.retire_archived_thread(Some(channel));
+        self.select_resident(channel);
         self.members = None;
         self.selected = Some(channel);
         self.clear_search();
         self.search_target = None;
         self.reactions.reset();
-        self.timeline.clear();
         self.older_exhausted = false;
         self.reply = None;
         self.revision += 1;
@@ -303,11 +331,18 @@ impl State {
             self.freshness = Freshness::Fresh;
             return None;
         }
-        Some(self.history(None))
+        let command = self.history(None);
+        if self.freshness == Freshness::Loading && self.timeline.row_count() != 0 {
+            self.status = "Showing recent conversation · revalidating history";
+        }
+        Some(command)
     }
     pub fn request_members(&mut self) -> Option<Command> {
         let channel = self.channels.iter().find(|c| Some(c.id) == self.selected)?;
         self.member_request = self.member_request.wrapping_add(1);
+        if !self.can_view(channel.id) {
+            return None;
+        }
         let rows = if channel.guild.is_none() && self.freshness != Freshness::Unavailable {
             let mut users = channel.recipients.clone();
             if let Some(user) = &self.user
@@ -322,6 +357,7 @@ impl State {
                         user,
                         nick: None,
                         status: None,
+                        custom_status: None,
                     })
                 })
                 .collect()
@@ -380,6 +416,18 @@ impl State {
             self.status = "Conversation no longer available in navigation";
             return self.clear_search();
         };
+        if !self.can_read_history(channel) {
+            self.cancel_history();
+            self.timeline.clear();
+            self.reply = None;
+            self.freshness = if self.can_view(channel) && self.gateway_connected {
+                Freshness::Fresh
+            } else {
+                Freshness::Unavailable
+            };
+            self.status = "Message history is unavailable with the current permissions";
+            return self.clear_search();
+        }
         if self.search.as_ref().is_some_and(|s| s.loading)
             || self.archives.as_ref().is_some_and(|s| s.loading)
         {
@@ -401,17 +449,19 @@ impl State {
         }
     }
     pub fn can_load_older(&self) -> bool {
-        self.gateway_connected
+        self.selected
+            .is_some_and(|channel| self.can_read_history(channel))
+            && self.gateway_connected
             && self.freshness == Freshness::Fresh
             && !self.history_pending
             && !self.older_exhausted
-            && !self.timeline.is_empty()
+            && self.timeline.row_count() != 0
     }
     pub fn older_history(&mut self) -> Option<Command> {
         if !self.can_load_older() {
             return None;
         }
-        let before = self.timeline.iter().next()?.id;
+        let before = self.timeline.row_ids().next()?;
         Some(self.history(Some(before)))
     }
     pub fn prepare_send(&mut self) -> Option<Command> {
@@ -419,8 +469,8 @@ impl State {
     }
     pub fn prepare_send_with_attachment(&mut self, filename: Option<&str>) -> Option<Command> {
         let channel = self.selected?;
-        if self.auth != auth::AuthState::Authenticated || self.freshness != Freshness::Fresh {
-            self.status = "Wait for a current connected channel";
+        if !self.can_send(channel) || (filename.is_some() && !self.can_attach(channel)) {
+            self.status = "Sending is unavailable with the current connection or permissions";
             return None;
         }
         if filename.is_some_and(|name| {
@@ -590,6 +640,20 @@ impl State {
         if envelope.generation != self.generation {
             return;
         }
+        if let Event::MemberPresence {
+            guild,
+            channel,
+            request,
+            updates,
+        } = &envelope.event
+        {
+            if envelope.event.bytes() <= 8 * 1024 {
+                self.apply_member_presence(*guild, *channel, *request, updates);
+            }
+            return;
+        }
+        let access_changed = envelope.event.changes_access();
+        let previous_access = access_changed.then(|| self.permission_access()).flatten();
         if let Event::ChannelRestored(channel) = &envelope.event
             && (channel.id.0 == 0
                 || !matches!(channel.kind, 0 | 2 | 4 | 5 | 13..=16)
@@ -633,6 +697,7 @@ impl State {
         {
             return;
         }
+        self.invalidate_resident_event(&envelope.event);
         self.revision += 1;
         if matches!(
             &envelope.event,
@@ -652,6 +717,55 @@ impl State {
             self.clear_search();
         }
         let result = match envelope.event {
+            Event::Permissions(mut event) => {
+                let known = |id: Id| self.guilds.iter().any(|guild| guild.id == id);
+                match &mut event {
+                    permissions::Event::Snapshot(snapshot)
+                        if snapshot.guilds.iter().any(|guild| !known(guild.id)) =>
+                    {
+                        return;
+                    }
+                    permissions::Event::Guild(guild) if !known(guild.id) => return,
+                    permissions::Event::Members(members) => {
+                        members.retain(|(guild, _, _)| known(*guild))
+                    }
+                    permissions::Event::Role { guild, .. }
+                    | permissions::Event::RoleRemoved { guild, .. }
+                    | permissions::Event::Member { guild, .. }
+                    | permissions::Event::Owner { guild, .. }
+                    | permissions::Event::UnavailableGuild(guild)
+                        if !known(*guild) =>
+                    {
+                        return;
+                    }
+                    permissions::Event::Channel {
+                        guild: Some(guild), ..
+                    } if !known(*guild) => return,
+                    _ => {}
+                }
+                if let permissions::Event::Channel { channel, guild, .. } = &mut event {
+                    let actual = self
+                        .channels
+                        .iter()
+                        .find(|c| c.id == *channel)
+                        .and_then(|c| c.guild);
+                    if guild.is_some() && actual.is_some() && *guild != actual {
+                        return;
+                    }
+                    if guild.is_none() {
+                        *guild = actual;
+                    }
+                }
+                // Typed updates replace the old PermissionsChanged fallback too.
+                // Retire both snapshots and in-flight profiles before applying them.
+                self.clear_profile();
+                self.profile_cache.clear();
+                let result = self.permissions.update(event);
+                if result.is_err() {
+                    self.permissions = permissions::Permissions::default();
+                }
+                result
+            }
             Event::Archives {
                 parent,
                 request,
@@ -669,6 +783,7 @@ impl State {
                 Ok(())
             }
             Event::ReadState(event) => self.apply_read_state(event),
+            Event::NotificationPreferences(event) => self.apply_notification_preferences(event),
             Event::ThreadsSync {
                 guild,
                 parents,
@@ -871,9 +986,13 @@ impl State {
                 }
                 Ok(())
             }
+            Event::MemberPresence { .. } => {
+                unreachable!("presence handled before timeline revision")
+            }
             Event::Members(list) => {
                 if !self.gateway_connected
                     || self.freshness == Freshness::Unavailable
+                    || !self.can_view(list.channel)
                     || self.selected != Some(list.channel)
                     || self
                         .members
@@ -892,6 +1011,7 @@ impl State {
                 Ok(())
             }
             Event::Ready {
+                permissions,
                 user,
                 guilds,
                 channels,
@@ -912,10 +1032,17 @@ impl State {
                         .any(|g| g.emojis.as_ref().is_some_and(|e| !valid_custom_emojis(e)))
                     || guilds.iter().map(Guild::bytes).sum::<usize>()
                         + channels.iter().map(Channel::bytes).sum::<usize>()
+                        + permissions.bytes()
                         > MAX_EVENT_BYTES
                 {
                     self.auth = auth::AuthState::Failed;
                     self.status = "Account navigation exceeds safe capacity";
+                    return;
+                }
+                let mut permission_state = permissions::Permissions::default();
+                if permission_state.replace(permissions).is_err() {
+                    self.auth = auth::AuthState::Failed;
+                    self.status = "Permission metadata exceeds safe capacity";
                     return;
                 }
                 let current: BTreeMap<_, _> = channels
@@ -952,10 +1079,13 @@ impl State {
                 self.voice.roster.clear();
                 self.members = None;
                 self.clear_profile();
+                self.profile_cache.clear();
                 self.read_state.reset();
+                self.notification_preferences = notifications::Preferences::default();
                 self.user = Some(user);
                 self.guilds = guilds;
                 self.channels = channels;
+                self.permissions = permission_state;
                 self.archived_thread = None;
                 self.auth = auth::AuthState::Authenticated;
                 self.gateway_connected = true;
@@ -975,6 +1105,7 @@ impl State {
                 if self.selected != Some(channel)
                     || request != self.request
                     || !self.history_pending
+                    || !self.can_read_history(channel)
                     || !self
                         .channels
                         .iter()
@@ -1036,6 +1167,7 @@ impl State {
                 Ok(())
             }
             Event::Message(mut m) => {
+                self.observe_notification(&m);
                 self.observe_last_message(m.channel, m.id);
                 if self.selected == Some(m.channel)
                     && self.reactions.invalidated(m.id)
@@ -1047,7 +1179,10 @@ impl State {
                     m.reactions = None;
                 }
                 self.confirm(&m);
-                if self.selected == Some(m.channel) && self.freshness != Freshness::Unavailable {
+                if self.selected == Some(m.channel)
+                    && self.can_view(m.channel)
+                    && self.freshness != Freshness::Unavailable
+                {
                     self.timeline.insert(m, true, false)
                 } else {
                     Ok(())
@@ -1063,13 +1198,17 @@ impl State {
                 if self.reactions.invalidated(p.id) {
                     p.reactions = Patch::Absent;
                 }
-                if self.selected == Some(p.channel) && self.freshness != Freshness::Unavailable {
+                if self.selected == Some(p.channel)
+                    && self.can_view(p.channel)
+                    && self.freshness != Freshness::Unavailable
+                {
                     self.timeline.patch(p)
                 } else {
                     Ok(())
                 }
             }
             Event::Delete { channel, id } => {
+                self.read_state.activity.delete(channel, id);
                 if let Some(channel) = self
                     .channels
                     .iter_mut()
@@ -1078,12 +1217,20 @@ impl State {
                     channel.last_message = None;
                 }
                 if self.selected == Some(channel) {
+                    if self.reply == Some(id) {
+                        self.reply = None;
+                    }
                     self.timeline.delete(id)
                 } else {
                     Ok(())
                 }
             }
             Event::DeleteBulk { channel, ids } => {
+                if ids.len() <= 100 {
+                    for id in &ids {
+                        self.read_state.activity.delete(channel, *id);
+                    }
+                }
                 if let Some(channel) = self
                     .channels
                     .iter_mut()
@@ -1094,6 +1241,9 @@ impl State {
                 if ids.len() > 100 {
                     Err("Bulk deletion exceeds safe capacity")
                 } else if self.selected == Some(channel) {
+                    if self.reply.is_some_and(|id| ids.contains(&id)) {
+                        self.reply = None;
+                    }
                     ids.into_iter().try_for_each(|id| self.timeline.delete(id))
                 } else {
                     Ok(())
@@ -1107,6 +1257,7 @@ impl State {
                             p.confirmed = Some(m.id);
                         }
                         if self.selected == Some(m.channel)
+                            && self.can_view(m.channel)
                             && self.freshness != Freshness::Unavailable
                             && self.timeline.get(m.id).is_none()
                             && self.timeline.insert(m, false, false).is_err()
@@ -1163,8 +1314,10 @@ impl State {
                 Ok(())
             }
             Event::Resync | Event::PermissionsChanged => {
+                self.permissions = permissions::Permissions::default();
                 self.read_state.cancel();
                 self.clear_profile();
+                self.profile_cache.clear();
                 self.disconnect_voice();
                 self.invalidate_members();
                 self.timeline.clear();
@@ -1187,12 +1340,18 @@ impl State {
             }
         };
         if let Err(status) = result {
+            self.clear_cached_history();
             self.status = status;
             self.freshness = Freshness::Stale;
             self.timeline.clear();
             self.cancel_history();
         }
-        if !self.can_search() && self.search.is_some() {
+        if access_changed {
+            self.reconcile_permissions(previous_access);
+            self.reconcile_notifications();
+            self.prune_resident();
+        }
+        if self.search.is_some() && !self.can_search() {
             self.clear_search();
         }
         if self
@@ -1202,6 +1361,7 @@ impl State {
         {
             self.clear_archives();
         }
+        self.enforce_resident_budget();
     }
     fn invalidate_members(&mut self) {
         self.member_request = self.member_request.wrapping_add(1);
@@ -1212,6 +1372,9 @@ impl State {
         }
     }
     fn remove_channels(&mut self, removed: &BTreeSet<Id>) {
+        for id in removed {
+            self.resident.remove(*id);
+        }
         if self
             .archives
             .as_ref()
@@ -1223,12 +1386,17 @@ impl State {
             self.archived_thread = None;
         }
         self.channels.retain(|c| !removed.contains(&c.id));
+        if !removed.is_empty() {
+            self.permissions.clear_cache();
+        }
         for id in removed {
+            self.permissions.channels.remove(id);
             self.end_voice_channel(*id);
             self.read_state.forget(*id);
         }
         if !removed.is_empty() {
             self.clear_profile();
+            self.profile_cache.clear();
         }
         if self.selected.is_some_and(|id| removed.contains(&id)) {
             self.clear_search();
@@ -1258,10 +1426,12 @@ impl State {
             _ => {}
         }
         if failure.ends_session() {
+            self.clear_cached_history();
             self.clear_search();
             self.search_target = None;
             self.read_state.cancel();
             self.clear_profile();
+            self.profile_cache.clear();
             self.disconnect_voice();
             self.gateway_connected = false;
             self.invalidate_members();
@@ -1278,6 +1448,26 @@ impl State {
 }
 
 impl Event {
+    /// Events that can change channel scope or permission inputs.
+    pub fn changes_access(&self) -> bool {
+        matches!(
+            self,
+            Event::Ready { .. }
+                | Event::Permissions(_)
+                | Event::Resync
+                | Event::PermissionsChanged
+                | Event::Unavailable(_)
+                | Event::ChannelCreated(_)
+                | Event::ChannelRestored(_)
+                | Event::ChannelChanged(_)
+                | Event::ThreadChanged { .. }
+                | Event::ThreadRemoved { .. }
+                | Event::ThreadsSync { .. }
+                | Event::RecipientAdded { .. }
+                | Event::RecipientRemoved { .. }
+        )
+    }
+
     /// Admission estimate for heap-owned fields; rejects oversized items before entering the UI queue.
     pub fn bytes(&self) -> usize {
         size_of::<Self>()
@@ -1291,15 +1481,17 @@ impl Event {
                 } => page.bytes(),
                 Self::ReadState(read_state::Event::Snapshot { entries, .. }) => entries
                     .as_ref()
-                    .map_or(0, |e| e.capacity() * size_of::<(Id, Option<Id>)>()),
+                    .map_or(0, |e| e.capacity() * size_of::<(Id, Option<Id>, u32)>()),
+                Self::NotificationPreferences(event) => event.bytes(),
                 Self::ReadState(read_state::Event::Latest(entries)) => {
                     entries.capacity() * size_of::<(Id, Patch<Id>)>()
                 }
                 Self::Reactions(reactions::Event::Read { result, .. }) => {
                     result.as_ref().map_or(0, |r| model::reaction_bytes(r))
                 }
-                Self::Profile { result, .. } => result.as_ref().map_or(0, UserProfile::bytes),
+                Self::Profile { result, .. } => result.as_ref().map_or(0, |p| p.bytes()),
                 Self::Voice(event) => event.bytes(),
+                Self::Permissions(event) => event.bytes(),
                 Self::GuildEmojis { emojis, .. } => custom_emoji_bytes(emojis),
                 Self::GuildChanged(patch) => [&patch.name, &patch.icon]
                     .into_iter()
@@ -1332,10 +1524,19 @@ impl Event {
                     user,
                     guilds,
                     channels,
+                    permissions,
                 } => {
-                    user.heap_bytes()
+                    permissions.bytes()
+                        + user.heap_bytes()
                         + guilds.iter().map(Guild::bytes).sum::<usize>()
                         + channels.iter().map(Channel::bytes).sum::<usize>()
+                }
+                Self::MemberPresence { updates, .. } => {
+                    updates.capacity() * size_of::<(Id, Option<String>)>()
+                        + updates
+                            .iter()
+                            .map(|(_, status)| status.as_ref().map_or(0, String::capacity))
+                            .sum::<usize>()
                 }
                 Self::Members(list) => {
                     list.rows.capacity() * size_of::<Option<Member>>()
@@ -1378,9 +1579,51 @@ impl Event {
 
 #[cfg(test)]
 mod tests {
+    pub(crate) fn grant_permissions(state: &mut State) {
+        let Some(user) = &state.user else {
+            return;
+        };
+        state
+            .permissions
+            .replace(model::permissions::Snapshot {
+                guilds: state
+                    .guilds
+                    .iter()
+                    .map(|guild| model::permissions::Guild {
+                        id: guild.id,
+                        owner: Some(user.id),
+                        roles: Some(vec![]),
+                        member: None,
+                    })
+                    .collect(),
+                channels: state
+                    .channels
+                    .iter()
+                    .filter_map(|channel| {
+                        channel.guild.map(|guild| model::permissions::Channel {
+                            id: channel.id,
+                            guild,
+                            overwrites: Some(vec![]),
+                        })
+                    })
+                    .collect(),
+            })
+            .unwrap();
+    }
     #[test]
     fn rejected_sends_do_not_invalidate_a_healthy_conversation() {
         let mut state = State {
+            channels: vec![Channel {
+                id: Id(1),
+                guild: None,
+                parent_id: None,
+                kind: 1,
+                name: "Synthetic DM".into(),
+                position: 0,
+                recipients: vec![],
+                last_message: None,
+                member_list_id: None,
+            }],
             selected: Some(Id(1)),
             auth: auth::AuthState::Authenticated,
             freshness: Freshness::Fresh,
@@ -1421,9 +1664,21 @@ mod tests {
     #[test]
     fn attachment_only_sends_are_bounded_and_keep_existing_confirmation() {
         let mut state = State {
+            channels: vec![Channel {
+                id: Id(1),
+                guild: None,
+                parent_id: None,
+                kind: 1,
+                name: "Synthetic DM".into(),
+                position: 0,
+                recipients: vec![],
+                last_message: None,
+                member_list_id: None,
+            }],
             selected: Some(Id(1)),
             auth: auth::AuthState::Authenticated,
             freshness: Freshness::Fresh,
+            gateway_connected: true,
             ..State::default()
         };
         assert!(state.prepare_send().is_none());
@@ -1822,6 +2077,7 @@ mod tests {
         apply(
             &mut state,
             Event::Ready {
+                permissions: model::permissions::Snapshot::default(),
                 user: User {
                     id: Id(1),
                     name: "Synthetic".into(),
@@ -1909,7 +2165,16 @@ mod tests {
 
     #[test]
     fn channel_mutations_preserve_partial_metadata_and_remove_deleted_categories() {
-        let mut state = State::default();
+        let mut state = State {
+            user: Some(message(1).author),
+            guilds: vec![Guild {
+                id: Id(1),
+                name: "Synthetic".into(),
+                icon: None,
+                emojis: None,
+            }],
+            ..State::default()
+        };
         let channel = Channel {
             last_message: None,
             id: Id(2),
@@ -1939,6 +2204,7 @@ mod tests {
         assert_eq!(state.channels[0].position, 0);
         assert_eq!(state.channels[0].name, "Synthetic channel");
         assert_eq!(state.channels[0].kind, 0);
+        grant_permissions(&mut state);
         assert!(state.select(Id(2)).is_some());
         apply(
             &mut state,
@@ -1972,7 +2238,7 @@ mod tests {
                 }),
             );
         }
-        assert_eq!(state.channels.len(), MAX_NAV);
+        assert_eq!(state.channels.len() + state.guilds.len(), MAX_NAV);
         assert_eq!(state.status, auth::Failure::Capacity.label());
     }
 
@@ -1999,12 +2265,147 @@ mod tests {
             revision: 0,
             nonce: None,
             reply_to: None,
+            kind: 0,
             unsupported: false,
+            extra_content: Default::default(),
             embeds: vec![],
             attachments: vec![],
             mentions: Vec::new(),
             embeds_suppressed: false,
         }
+    }
+    #[test]
+    fn deleted_reading_rows_keep_pagination_and_release_reply_targets() {
+        let mut state = State {
+            user: Some(message(1).author),
+            gateway_connected: true,
+            auth: auth::AuthState::Authenticated,
+            selected: Some(Id(1)),
+            channels: vec![Channel {
+                id: Id(1),
+                guild: None,
+                parent_id: None,
+                kind: 1,
+                position: 0,
+                name: "Synthetic DM".into(),
+                recipients: vec![],
+                last_message: None,
+                member_list_id: None,
+            }],
+            ..State::default()
+        };
+        state.drafts.insert(Id(1), "unsent draft".into());
+        state.history(None);
+        let request = state.request;
+        apply(
+            &mut state,
+            Event::History {
+                channel: Id(1),
+                request,
+                older: false,
+                messages: (100..150).map(message).collect(),
+            },
+        );
+        let positions = state.timeline.row_ids().collect::<Vec<_>>();
+        state.reply = Some(Id(100));
+        apply(
+            &mut state,
+            Event::Delete {
+                channel: Id(2),
+                id: Id(100),
+            },
+        );
+        assert_eq!(state.reply, Some(Id(100)));
+        assert!(state.timeline.get(Id(100)).is_some());
+        apply(
+            &mut state,
+            Event::Delete {
+                channel: Id(1),
+                id: Id(100),
+            },
+        );
+        assert_eq!(state.reply, None);
+        state.reply = Some(Id(101));
+        let mut ids: Vec<_> = (101..150).map(Id).collect();
+        ids.extend([Id(101), Id(999)]); // Duplicate and unknown IDs create no extra rows.
+        apply(
+            &mut state,
+            Event::DeleteBulk {
+                channel: Id(1),
+                ids,
+            },
+        );
+        assert_eq!(state.reply, None);
+        assert_eq!(state.timeline.row_ids().collect::<Vec<_>>(), positions);
+        assert!(state.timeline.is_empty());
+        assert_eq!(state.timeline.bytes(), 0);
+        assert!(state.can_load_older());
+        assert!(!state.can_edit(Id(1), Id(100)));
+        assert!(matches!(
+            state.older_history(),
+            Some(Command::History {
+                before: Some(Id(100)),
+                ..
+            })
+        ));
+        let request = state.request;
+        apply(
+            &mut state,
+            Event::SendResult {
+                nonce: "synthetic-late".into(),
+                result: Ok(message(100)),
+            },
+        );
+        assert!(state.timeline.get(Id(100)).is_none());
+        apply(
+            &mut state,
+            Event::History {
+                channel: Id(1),
+                request,
+                older: true,
+                messages: vec![message(99)],
+            },
+        );
+        assert_eq!(state.timeline.len(), 1);
+        assert_eq!(state.timeline.row_count(), 51);
+        assert_eq!(state.timeline.row_ids().next(), Some(Id(99)));
+        state.history(None);
+        let request = state.request;
+        apply(
+            &mut state,
+            Event::Delete {
+                channel: Id(1),
+                id: Id(99),
+            },
+        );
+        apply(
+            &mut state,
+            Event::History {
+                channel: Id(1),
+                request,
+                older: false,
+                messages: vec![message(99), message(150)],
+            },
+        );
+        assert_eq!(
+            state.timeline.row_ids().collect::<Vec<_>>(),
+            [Id(99), Id(150)]
+        );
+        assert!(state.timeline.get(Id(99)).is_none());
+        state.history(None);
+        let request = state.request;
+        apply(&mut state, Event::Resync);
+        apply(
+            &mut state,
+            Event::History {
+                channel: Id(1),
+                request,
+                older: false,
+                messages: vec![message(99)],
+            },
+        );
+        assert_eq!(state.timeline.row_count(), 0);
+        assert_eq!(state.drafts[&Id(1)], "unsent draft");
     }
     #[test]
     fn members_reject_late_requests_and_permission_invalidations() {
@@ -2080,6 +2481,7 @@ mod tests {
             member_list_id: Some("known-list".into()),
         };
         let mut state = State {
+            user: Some(message(1).author),
             channels: vec![channel.clone()],
             guilds: vec![Guild {
                 id: Id(10),
@@ -2093,6 +2495,7 @@ mod tests {
             freshness: Freshness::Fresh,
             ..State::default()
         };
+        grant_permissions(&mut state);
         let candidate = Channel {
             name: "Restored".into(),
             position: 0,
@@ -2226,10 +2629,16 @@ mod tests {
             gateway_connected: true,
             ..State::default()
         };
+        grant_permissions(&mut state);
         assert!(state.start_call(Id(1), false).is_some());
+        let permissions = model::permissions::Snapshot {
+            guilds: state.permissions.guilds.values().cloned().collect(),
+            channels: state.permissions.channels.values().cloned().collect(),
+        };
         apply(
             &mut state,
             Event::Ready {
+                permissions,
                 user,
                 guilds: vec![guild],
                 channels: vec![channel.clone()],
@@ -2310,6 +2719,7 @@ mod tests {
             apply(
                 &mut state,
                 Event::Ready {
+                    permissions: model::permissions::Snapshot::default(),
                     user: user(),
                     guilds: vec![],
                     channels: replacement.into_iter().collect(),
@@ -2356,6 +2766,7 @@ mod tests {
         apply(
             &mut state,
             Event::Ready {
+                permissions: model::permissions::Snapshot::default(),
                 user: user(),
                 guilds: vec![],
                 channels: vec![channel(1)],
@@ -2412,6 +2823,7 @@ mod tests {
         apply(
             &mut state,
             Event::Ready {
+                permissions: model::permissions::Snapshot::default(),
                 user: User {
                     id: Id(2),
                     name: "Synthetic".into(),

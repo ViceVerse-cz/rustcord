@@ -1,5 +1,28 @@
 # Discord compatibility — checked 2026-09-10
 
+Unsupported ordinary-message content (September 10): the [Discord message resource](https://docs.discord.com/developers/resources/message)
+documents poll, sticker_items, deprecated stickers, components and IS_COMPONENTS_V2 (1 << 15).
+The decoder now preserves only independent presence markers for these sources through full
+messages, absent/null partial updates and bounded local cache reloads. It keeps no poll answer,
+sticker or component payload. Native static Poll/Sticker/Components placeholders accompany any
+supported text/media and share one confirmed Open in Discord action. This implements recognition
+and a fallback, not poll voting, sticker rendering or interactive components. Old cache rows
+cannot recover metadata previously discarded and gain markers during ordinary history refresh.
+The local decoder caps arrays at 100 objects, each direct object at 64 fields, within the existing
+4 MiB wire limit; these are application bounds, not Discord quotas. Native/live behavior remains
+unverified; the source documentation does not establish normal-account API acceptance.
+
+External fallback (September 10): unsupported channel rows and message placeholders offer
+Open in Discord through an explicit browser confirmation. URLs use the fixed Discord HTTPS
+origin and typed guild/channel/message IDs; DMs use @me with the conversation ID. No content,
+names, credentials or signed media URLs enter the route. Zero IDs, missing DM/guild identity
+and unavailable view permission disable the action. Discord's [message-link help](https://support.discord.com/hc/en-us/articles/206346498-Where-can-I-find-my-User-Server-Message-ID)
+documents linking to an accessible message/conversation; its [Trust and Safety example](https://support.discord.com/hc/en-us/community/posts/1500000159602-How-to-Properly-Report-People-On-Discord)
+shows the guild and @me path structure on the older discordapp.com domain. The current
+discord.com route is an integration assumption, not a new API guarantee. Headless tests cover
+construction and explicit confirmation; native launch, browser account selection and destination
+resolution remain owner-unverified. The browser uses its own session and Discord authorization.
+
 Loaded threads (September 10): READY guild thread arrays follow the original [discord.py-self guild parser](https://github.com/dolfies/discord.py-self/blob/master/discord/guild.py); active create/update/delete, scoped sync, archive eviction and owner-removal handling are informed by its [dispatch implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/state.py). Discord's [Gateway thread events](https://docs.discord.com/developers/events/gateway-events#thread-list-sync) document the guild/parent scope and membership fields. These primary sources establish wire evidence, not normal-account acceptance; no implementation blocks were copied. Active discovery is limited to service-supplied snapshots/events; explicit archive reads are described below, with existing subscriptions unchanged. Unknown updates do not hydrate a missing thread. See [native navigation scope](categories.md).
 
 Serein is unofficial and not endorsed by Discord. No normal-user live session has been tested. Technical compatibility does not imply approval. Discord forbids normal-account automation outside its OAuth2/bot API and warns of account termination ([policy](https://support.discord.com/hc/en-us/articles/115002192352-Automated-User-Accounts-Self-Bots)); its [terms](https://discord.com/terms) also apply.
@@ -18,7 +41,7 @@ Serein is unofficial and not endorsed by Discord. No normal-user live session ha
 | People / member pane | Normal session; [discord.py-self Gateway](https://github.com/dolfies/discord.py-self/blob/master/discord/gateway.py), [member-list identity](https://github.com/dolfies/discord.py-self/blob/master/discord/abc.py), [wire types](https://github.com/dolfies/discord.py-self/blob/master/discord/types/gateway.py) | Unofficial and unstable | On-demand opcode 37 with the required guild typing subscription, first 100 list positions, typed incremental operations, identity/request filtering and 15-second timeout; DM recipients from READY. Missing metadata or unsupported replies show unavailable; live-unverified |
 | Profile pictures | [Discord image formatting](https://docs.discord.com/developers/reference#image-formatting), [User resource](https://docs.discord.com/developers/resources/user#user-object) | Documented CDN paths and user metadata; normal-session acquisition unofficial | Static PNGs, credential-free requests, account-isolated disk cache, bounded decode/textures, fallback initials; offline transport/cache tests only |
 | User mentions | [Message formatting](https://docs.discord.com/developers/reference#message-formatting) | Documented syntax; normal-user notification behavior unverified | Local @ autocomplete, clickable names/profile cards, exact user allowlists, bounded SQLite metadata; [tests and limits](mentions.md) |
-| User profile cards | Normal session `/users/{id}/profile`; [public implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/http.py) | Unofficial route and payload; live-unverified | On-demand banner/avatar/bio/pronouns/badges/connections/mutual servers, cancellable requests and visible failures; [evidence](profiles.md) |
+| User profile cards | Normal session `/users/{id}/profile`; [public implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/http.py) | Unofficial route and payload; live-unverified | Anchored popout with banner/avatar/bio/pronouns/badge artwork/server tag/theme colors/connections/mutual servers and retained presence/custom status, cancellable requests and visible failures; badge and server-tag CDN paths are observed, not documented; [evidence](profiles.md) |
 | History, send, edit, delete, replies | Normal session; [message resource](https://docs.discord.com/developers/resources/message) and Abaddon | Documented bot-facing resource; user compatibility unofficial | Experimental text adapter; owner permissions remain server-authoritative |
 | Realtime, resume | Normal session; [Gateway](https://docs.discord.com/developers/events/gateway), Abaddon Identify/READY | Documented lifecycle; normal-user Identify and dispatch differences unofficial | Bounded JSON transport; no compression requested; incompatible snapshots fail |
 | Rate limits | Credential-specific response headers/body; [rate limits](https://docs.discord.com/developers/topics/rate-limits) | Documented; do not assume bot quotas | Conservative shared cooldown, no blind write retry |
@@ -131,7 +154,7 @@ Only catalog entries explicitly available, unmanaged and unrestricted by roles a
 unknown eligibility remains disabled. Cross-server/DM catalog selection and full role/Nitro
 entitlement inference are not implemented; the service remains authoritative for actual sends.
 Animated emoji are inserted with their original animated markup and shown as still previews.
-The editable composer itself continues to display raw Unicode/markup while editing.
+The composer now displays known user mentions as `@name`, Unicode as bundled Twemoji, and custom emoji as static server artwork, while retaining original wire text for editing/copy/send. Unresolved user IDs remain literal; unavailable server artwork shows its name.
 
 
 ## Server voice — September 10, 2026
@@ -186,3 +209,87 @@ clears the active view and ends affected voice state; restoration requires delib
 join. Voice allowances and guild roster snapshots exclude obfuscated channels.
 This closes explicit visibility and stale-response paths, not the full role/overwrite permission
 mirror. Service permission failures remain authoritative; normal-user live behavior is unverified.
+
+## Permission-aware actions (September 10, 2026)
+
+The session now mirrors the current account's guild owner, roles, self-member role IDs and
+timeout, and channel role/self overwrites. Unknown metadata is distinct from a known zero-bit
+result and cannot enable guild actions. Owner/administrator bypass, everyone then combined
+role then self overwrites, and timeout restrictions follow the documented
+[permission calculation](https://docs.discord.com/developers/topics/permissions).
+Threads use their loaded text/announcement/forum/media parent's overwrites and
+SEND_MESSAGES_IN_THREADS; category overwrites are not recursively applied to children.
+Existing DM/group-DM text access remains service-authoritative without guild metadata.
+
+READY and known-guild GUILD_CREATE install bounded snapshots. Role create/update/delete,
+self GUILD_MEMBER_UPDATE, owner and channel overwrite updates replace the relevant metadata;
+READY_SUPPLEMENTAL and PASSIVE_UPDATE_V2 can update already supplied self-member data.
+No full member request or new subscription is added. Normal-user evidence is pinned to
+[READY merged members](https://github.com/dolfies/discord.py-self/blob/2ba64a9a997e151a9c259984e0a179b1fdf4aff4/discord/state.py#L1731),
+[guild owner properties](https://github.com/dolfies/discord.py-self/blob/2ba64a9a997e151a9c259984e0a179b1fdf4aff4/discord/guild.py#L691),
+and [member updates](https://github.com/dolfies/discord.py-self/blob/2ba64a9a997e151a9c259984e0a179b1fdf4aff4/discord/member.py#L375),
+plus the [documented member event](https://docs.discord.com/developers/events/gateway-events#guild-member-update).
+These are wire references, not live account acceptance or a guarantee of event delivery.
+Absent incremental fields preserve known state; explicit null makes roles/overwrites/owner
+unknown or clears a timeout. A full self-member snapshot without a timeout means no timeout.
+
+Shared command/UI checks cover sending, attachment selection/drop/upload, own-message editing
+and deletion, reactions, history/search/pins/archive reads, and voice admission/capture.
+VIEW without READ_MESSAGE_HISTORY permits fresh live messages and separately authorized sends,
+but cannot fetch, seed or persist history. Permission loss clears the affected loaded view,
+pending reads, result pages and reply target; late content cannot restore it. Recovery drafts
+remain. Read restoration requires deliberate reload/reselection. New reactions require
+ADD_REACTIONS; an existing emoji can be added without that bit, with history and timeout checks.
+Removing one's existing reaction remains separate. Private archive enumeration additionally
+requires MANAGE_THREADS. Voice CONNECT permits listen-only joining; SPEAK gates capture;
+without USE_VAD, focused push-to-talk must be enabled and held. Restoration never rejoins.
+
+Discord remains authoritative for action rejection, private-thread membership, account emoji
+entitlements and delivery of permission updates. Role names/colors, role administration,
+moderating other users' messages, new guild joining, and full member-directory synchronization
+are outside this slice. Synthetic parser, localhost transport and reducer/UI guard tests do
+not establish live compatibility. Native automation remains paused after owner Escape stops;
+no live account action, microphone capture or new native screenshot was performed.
+
+## Composer and notifications — September 10, 2026
+
+See [notifications](notifications.md) for service badge/read-state reconciliation, focused
+view ACKs, session-only native opt-in and fail-closed mute/DND handling. READY read-state
+counts, settings and session presence use isolated unofficial normal-user wire shapes.
+Synthetic protocol/UI tests are not live Discord validation. Role/everyone mention events,
+blocked relationships and complete protobuf notification preferences remain unsupported.
+
+
+### Loaded People presence (September 10, 2026)
+
+The open guild People pane consumes standalone PRESENCE_UPDATE for users in its current
+100-row subscription mirror. [Discord's presence event](https://docs.discord.com/developers/events/gateway-events#presence-update)
+documents partial user objects and online/idle/dnd/offline status. The pinned normal-user
+[dispatcher](https://github.com/dolfies/discord.py-self/blob/2ba64a9a997e151a9c259984e0a179b1fdf4aff4/discord/state.py#L2040)
+allows an optional guild scope. Serein ignores guildless updates and does not request a
+friends/global directory or additional subscription flags. These are primary wire references,
+not proof that a normal-user account receives these updates through this client's subscription.
+
+Absent status preserves the known value; explicit null or unknown strings clear it to
+Presence unavailable. Online, Away, Do not disturb and Offline are service-reported labels;
+Offline does not distinguish an invisible user. Partial profiles, activities and device status
+are discarded. Bursts coalesce within a fixed 100-ms window; stale request/session/access
+updates cannot modify the pane. Self-session DND notification suppression keeps its separate
+existing path. Synthetic localhost Gateway, reducer and headless UI tests supply local evidence;
+normal-account delivery and native screenshots remain owner-controlled validation gates.
+
+
+### Keyboard conversation navigation (September 10, 2026)
+
+Find conversation / Ctrl+K (Command+K) is a local picker over existing loaded navigation and
+current VIEW decisions. It adds no Discord route, subscription or relationship lookup. Selection
+reuses the same history/roster path as the sidebar, including cancellation and service-authoritative
+permission failures. A voice result only opens the roster and does not join. The query is session
+UI state and never enters message content, REST requests or SQLite. Headless keyboard/IME checks
+are synthetic; real platform input, screen readers and live navigation remain unverified.
+
+## September 10: native system-message descriptions
+
+Discord's [documented message type IDs](https://docs.discord.com/developers/resources/message#message-types) were checked on 2026-09-10. The decoder now retains the type through REST/Gateway messages and the local history cache. The timeline describes joins/welcomes, recipient changes, calls, channel name/icon changes, pins, boosts/tiers, channel follows, discovery notices, threads, invite reminders, AutoMod, subscriptions/offers, Stage events, incident alerts, purchases and poll results. Original content/embeds/attachments still render separately. Copy and loaded reply previews include the description. Unknown types keep an explicit placeholder; legacy cached unsupported rows remain unknown until history revalidation.
+
+These are native textual descriptions, not full interactive cards or proof of normal-user protocol compatibility. Call outcome/duration, subscription details, missing thread content and poll votes are not inferred. Search/pins snapshot excerpts remain their existing content-only previews; opening a hit loads the described timeline message. No live account, call or microphone validation was performed. Open PR #27 adds the external fallback and #28 adds unsupported payload markers; neither implemented these descriptions. Integration must retain their controls/markers without restoring a generic system placeholder for recognized types.

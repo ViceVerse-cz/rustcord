@@ -130,6 +130,13 @@ fn package(voice: bool) -> Result<(), String> {
     } else {
         root.join(exe)
     };
+    if cfg!(windows) {
+        std::fs::copy(
+            "packaging/windows/install-notifications.ps1",
+            root.join("install-notifications.ps1"),
+        )
+        .map_err(|e| e.to_string())?;
+    }
     let source = std::env::var_os("CARGO_TARGET_DIR")
         .map_or_else(|| PathBuf::from("target"), PathBuf::from)
         .join("release")
@@ -183,6 +190,14 @@ fn package(voice: bool) -> Result<(), String> {
     copy_directory(
         std::path::Path::new("assets/licenses/files"),
         &resources.join("licenses/files"),
+    )?;
+    copy_directory(
+        std::path::Path::new("assets/licenses/notifications"),
+        &resources.join("licenses/notifications"),
+    )?;
+    copy_directory(
+        std::path::Path::new("assets/licenses/login"),
+        &resources.join("licenses/login"),
     )?;
     if voice {
         copy_directory(

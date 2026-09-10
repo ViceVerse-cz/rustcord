@@ -10,6 +10,15 @@ Message mention metadata is bounded to 100 user summaries, included in RAM/event
 
 Sources checked September 10, 2026: Discord's [message formatting](https://docs.discord.com/developers/reference#message-formatting) and [message/allowed-mention structures](https://docs.discord.com/developers/resources/message#allowed-mentions-object). These are public developer wire references; this client's normal-user protocol use remains unofficial. Offline tests cover precision/bounds, code/escape safety, keyboard profile activation, Unicode cursor insertion, Enter not sending during selection, partial-update/history ordering, and SQLite migration/round-trip/rejection. Live notification delivery and native accessibility remain unverified.
 
+
+Composer update (September 10, 2026): known mention tokens display as `@name`, Unicode
+emoji use the bundled Twemoji atlas, and custom emoji show static server artwork (or
+`:name:` while unavailable). The native editor keeps the original wire characters for
+copy, sending, draft storage and undo. Arrow navigation and deletion treat each rendered
+mention/emoji as one token; unknown mentions remain editable literal markup. Message
+editing uses this same composer, including mention suggestions and both emoji pickers.
+The ordinary unsent draft remains separate while editing; Save edit and Cancel edit
+return to it. Network failure keeps the edit available for review/retry.
 ## Channel references - September 10 continuation
 
 Type `#` at a word boundary to suggest already-loaded text, announcement and thread channels from the current server. DMs, group DMs, voice channels, categories and forum containers are excluded. The existing menu shows at most eight suggestions with 120-character labels and a 64-character query. Arrow keys select, Tab/Enter inserts the exact `<#id>` token without sending, and Escape dismisses; Unicode cursor and IME handling are shared with user mentions. No channel directory request is made.

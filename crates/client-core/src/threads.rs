@@ -121,6 +121,12 @@ mod tests {
             member_list_id: None,
         };
         let mut state = State {
+            user: Some(User {
+                id: Id(9),
+                name: "Synthetic member".into(),
+                avatar: None,
+                discriminator: 0,
+            }),
             guilds: vec![
                 Guild {
                     emojis: None,
@@ -149,6 +155,39 @@ mod tests {
             freshness: Freshness::Fresh,
             ..State::default()
         };
+        state
+            .permissions
+            .replace(model::permissions::Snapshot {
+                guilds: state
+                    .guilds
+                    .iter()
+                    .map(|guild| model::permissions::Guild {
+                        id: guild.id,
+                        owner: Some(Id(999)),
+                        roles: Some(vec![model::permissions::Role {
+                            id: guild.id,
+                            bits: model::permissions::VIEW_CHANNEL
+                                | model::permissions::READ_MESSAGE_HISTORY
+                                | model::permissions::SEND_MESSAGES_IN_THREADS,
+                        }]),
+                        member: Some(model::permissions::Member {
+                            roles: vec![],
+                            timeout_until: None,
+                        }),
+                    })
+                    .collect(),
+                channels: state
+                    .channels
+                    .iter()
+                    .filter(|channel| !matches!(channel.kind, 10..=12))
+                    .map(|channel| model::permissions::Channel {
+                        id: channel.id,
+                        guild: channel.guild.unwrap(),
+                        overwrites: Some(vec![]),
+                    })
+                    .collect(),
+            })
+            .unwrap();
         state.drafts.insert(Id(100), "unsent thread draft".into());
         state.drafts.insert(Id(10), "unsent parent draft".into());
         let original = state.channels.clone();
@@ -203,7 +242,9 @@ mod tests {
             revision: 0,
             nonce: None,
             reply_to: None,
+            kind: 0,
             unsupported: false,
+            extra_content: Default::default(),
             embeds: vec![],
             embeds_suppressed: false,
             attachments: vec![],

@@ -2,7 +2,7 @@
 use super::voice::Calls;
 use client_core::{Event, auth::Failure};
 use discord_protocol::{ChannelDto, ChannelPatchDto, Ready, decode};
-use model::{Channel, Id, Patch};
+use model::{Channel, Id};
 use std::collections::BTreeSet;
 
 pub(super) fn ready_calls(ready: &Ready, calls: &mut Calls) -> Result<BTreeSet<Id>, Failure> {
@@ -68,6 +68,18 @@ pub(super) fn create(bytes: &[u8]) -> Result<Event, Failure> {
     Ok(created(channel))
 }
 
+pub(super) fn permission_metadata(bytes: &[u8], user: Id) -> Result<Option<Event>, Failure> {
+    Ok(discord_protocol::permissions::channel(bytes, user)
+        .map_err(|_| Failure::Protocol)?
+        .map(|update| {
+            Event::Permissions(client_core::permissions::Event::Channel {
+                channel: update.id,
+                guild: update.guild,
+                overwrites: update.overwrites,
+            })
+        }))
+}
+
 pub(super) fn created(channel: ChannelDto) -> Event {
     if channel.is_obfuscated() {
         Event::Unavailable(channel.id)
@@ -79,7 +91,6 @@ pub(super) fn created(channel: ChannelDto) -> Event {
 pub(super) struct Update {
     pub restored: Option<Channel>,
     pub event: Event,
-    pub permissions: bool,
 }
 
 pub(super) fn update(bytes: &[u8]) -> Result<Update, Failure> {
@@ -88,11 +99,8 @@ pub(super) fn update(bytes: &[u8]) -> Result<Update, Failure> {
         return Ok(Update {
             restored: None,
             event: Event::Unavailable(patch.id),
-            permissions: false,
         });
     }
-    let permissions = !matches!(patch.permission_overwrites, Patch::Absent)
-        || !matches!(patch.flags, Patch::Absent);
     // Optional fields may be omitted even on visibility restoration. Core admits this
     // candidate only when absent; the patch below updates existing channels losslessly.
     let restored = decode::<ChannelDto>(bytes)
@@ -111,14 +119,13 @@ pub(super) fn update(bytes: &[u8]) -> Result<Update, Failure> {
     Ok(Update {
         restored,
         event: Event::ChannelChanged(patch.into_model()),
-        permissions,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use model::Id;
+    use model::{Id, Patch};
 
     #[test]
     fn voice_admission_and_snapshots_exclude_hidden_and_unknown_guild_channels() {
@@ -163,7 +170,7 @@ mod tests {
         assert!(matches!(create(hidden).unwrap(), Event::Unavailable(Id(3))));
         let update = super::update(hidden).unwrap();
         assert!(matches!(update.event, Event::Unavailable(Id(3))));
-        assert!(update.restored.is_none() && !update.permissions);
+        assert!(update.restored.is_none());
         assert!(matches!(
             create(br#"{"id":"3","guild_id":"1","type":0,"name":"___hidden___"}"#).unwrap(),
             Event::ChannelCreated(_)

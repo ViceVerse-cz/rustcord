@@ -1,6 +1,8 @@
 //! The only credential-persistence boundary; the only webview is a temporary login surface.
+pub mod notifications;
 pub mod save;
 use client_core::auth::{Failure, SessionSecret};
+#[cfg(not(target_os = "linux"))]
 use std::{
     sync::{
         Arc,
@@ -8,7 +10,12 @@ use std::{
     },
     time::{Duration, Instant},
 };
+#[cfg(not(target_os = "linux"))]
 use wry::{WebView, WebViewBuilder};
+#[cfg(target_os = "linux")]
+mod login_linux;
+#[cfg(target_os = "linux")]
+pub use login_linux::LoginView;
 
 const SERVICE: &str = "org.serein.desktop";
 const ACCOUNT: &str = "discord-session";
@@ -50,13 +57,13 @@ fn discord_origin(value: &str) -> bool {
 }
 /// Receives only the account token used by THIS ephemeral, owner-operated login page.
 /// No browser-profile reads, password interception, console instructions, or QR exchange implementation.
+#[cfg(not(target_os = "linux"))]
 pub struct LoginView {
     view: WebView,
     tokens: Receiver<SessionSecret>,
     opened: Instant,
-    #[cfg(target_os = "linux")]
-    window: gtk::Window,
 }
+#[cfg(not(target_os = "linux"))]
 impl LoginView {
     pub fn open(
         parent: Arc<winit::window::Window>,
@@ -93,30 +100,14 @@ impl LoginView {
                     wake();
                 }
             });
-        #[cfg(not(target_os = "linux"))]
         let view = builder
             .with_bounds(bounds(&parent))
             .build_as_child(parent.as_ref())
             .map_err(|_| Failure::Protocol)?;
-        #[cfg(target_os = "linux")]
-        let (view, window) = {
-            use gtk::prelude::*;
-            use wry::WebViewBuilderExtUnix;
-            gtk::init().map_err(|_| Failure::Protocol)?;
-            let window = gtk::Window::new(gtk::WindowType::Toplevel);
-            window.set_title("Discord sign-in · Serein");
-            window.set_default_size(900, 700);
-            let view = builder.build_gtk(&window).map_err(|_| Failure::Protocol)?;
-            window.show_all();
-            let _ = parent;
-            (view, window)
-        };
         Ok(Self {
             view,
             tokens,
             opened: Instant::now(),
-            #[cfg(target_os = "linux")]
-            window,
         })
     }
     pub fn token(&self) -> Option<SessionSecret> {
@@ -126,29 +117,9 @@ impl LoginView {
         self.opened.elapsed() > Duration::from_secs(600)
     }
     pub fn resize(&self, parent: &winit::window::Window) {
-        #[cfg(not(target_os = "linux"))]
         let _ = self.view.set_bounds(bounds(parent));
-        #[cfg(target_os = "linux")]
-        {
-            let _ = (parent, &self.view);
-        }
     }
-    pub fn pump(&self) {
-        #[cfg(target_os = "linux")]
-        for _ in 0..16 {
-            if !gtk::events_pending() {
-                break;
-            }
-            gtk::main_iteration_do(false);
-        }
-    }
-}
-#[cfg(target_os = "linux")]
-impl Drop for LoginView {
-    fn drop(&mut self) {
-        use gtk::prelude::*;
-        self.window.close();
-    }
+    pub fn pump(&self) {}
 }
 #[cfg(not(target_os = "linux"))]
 fn bounds(parent: &winit::window::Window) -> wry::Rect {

@@ -10,6 +10,7 @@ use discord_protocol::*;
 use futures_util::{SinkExt, StreamExt};
 use model::{Freshness, Id, Member, MemberList};
 use std::{
+    collections::BTreeMap,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -118,6 +119,8 @@ struct ActiveMembers {
     rows: Vec<Option<Member>>,
     synced: bool,
     total: u64,
+    pending_presence: BTreeMap<Id, Option<String>>,
+    presence_deadline: Option<Instant>,
 }
 impl ActiveMembers {
     fn new(subscription: MemberSubscription) -> Self {
@@ -126,6 +129,8 @@ impl ActiveMembers {
             rows: vec![None; 100],
             synced: false,
             total: 0,
+            pending_presence: BTreeMap::new(),
+            presence_deadline: None,
         }
     }
     fn snapshot(&self, freshness: Freshness) -> MemberList {
@@ -142,6 +147,9 @@ impl ActiveMembers {
         if update.guild_id != self.subscription.guild || update.id != self.subscription.list_id {
             return Ok(false);
         }
+        // The emitted full snapshot includes the mirror's latest statuses, so a
+        // separate queued delta must not race it or reference a removed row.
+        self.clear_presence();
         if update.ops.len() > 200 {
             return Err(Failure::Capacity);
         }
@@ -206,6 +214,84 @@ impl ActiveMembers {
             return Err(Failure::Capacity);
         }
         Ok(true)
+    }
+    fn clear_presence(&mut self) {
+        self.pending_presence.clear();
+        self.presence_deadline = None;
+    }
+    fn presence(&mut self, update: discord_protocol::presence::PresenceUpdate, now: Instant) {
+        if !self.synced || update.guild != Some(self.subscription.guild) {
+            return;
+        }
+        let Some(previous) = self
+            .rows
+            .iter()
+            .flatten()
+            .find(|row| row.user.id == update.user)
+        else {
+            return;
+        };
+        let status = match update.status {
+            model::Patch::Absent => previous.status.clone(),
+            model::Patch::Null => None,
+            model::Patch::Value(status) => match status.as_str() {
+                "online" | "idle" | "dnd" | "offline" => Some(status.as_str().to_owned()),
+                _ => None,
+            },
+        };
+        if self.pending_presence.len() == 100 && !self.pending_presence.contains_key(&update.user) {
+            return;
+        }
+        let projected = self
+            .rows
+            .iter()
+            .flatten()
+            .map(|row| {
+                if row.user.id == update.user {
+                    row.bytes()
+                        - row.status.as_ref().map_or(0, String::capacity)
+                        - row.custom_status.as_ref().map_or(0, String::capacity)
+                        + status.as_ref().map_or(0, String::len)
+                } else {
+                    row.bytes()
+                }
+            })
+            .sum::<usize>();
+        if projected > 128 * 1024 {
+            return;
+        }
+        let mut changed = false;
+        for row in self
+            .rows
+            .iter_mut()
+            .flatten()
+            .filter(|row| row.user.id == update.user)
+        {
+            if row.status != status || row.custom_status.is_some() {
+                row.status = status.clone();
+                // Activities are intentionally discarded by the compact presence DTO;
+                // stop showing a snapshot's custom text when newer presence arrives.
+                row.custom_status = None;
+                changed = true;
+            }
+        }
+        if changed {
+            // <=100 entries, each with an ID and at most seven status bytes. The
+            // deadline belongs to the first change, never to the latest packet.
+            self.pending_presence.insert(update.user, status);
+            self.presence_deadline
+                .get_or_insert(now + Duration::from_millis(100));
+        }
+    }
+    fn take_presence(&mut self) -> Option<Event> {
+        self.presence_deadline = None;
+        let pending = std::mem::take(&mut self.pending_presence);
+        (self.synced && !pending.is_empty()).then(|| Event::MemberPresence {
+            guild: self.subscription.guild,
+            channel: self.subscription.channel,
+            request: self.subscription.request,
+            updates: pending.into_iter().collect(),
+        })
     }
 }
 pub async fn run(
@@ -358,6 +444,9 @@ async fn run_inner(
                 }
                 sent_members = true;
             }
+            let presence_deadline = active_members
+                .as_ref()
+                .and_then(|active| active.presence_deadline);
             tokio::select! {
                 command=voice_controls.recv(), if voice_open && ready_at.is_some() => {
                     let Some(command)=command else {voice_open=false;continue;};
@@ -377,13 +466,19 @@ async fn run_inner(
                     if let Some(event)=calls.departure_expired() {emit(event)?;}
                 }
                 changed=subscriptions.changed(), if subscriptions_open && ready_at.is_some() => {
-                    if changed.is_err() { subscriptions_open=false;continue; }
+                    subscriptions_open=changed.is_ok();
                     if let Some(old)=active_members.take() && !matches!(timeout(Duration::from_secs(5),socket.send(subscription_packet(old.subscription.guild,None))).await,Ok(Ok(()))) {break;}
-                    members_deadline=None;sent_members=false;
+                    members_deadline=None;sent_members = !subscriptions_open;
                 }
                 _=tokio::time::sleep_until(members_deadline.unwrap_or(ready_deadline)), if members_deadline.is_some() => {
-                    if let Some(active)=&mut active_members {active.rows.clear();active.rows.resize(100,None);active.synced=false;emit(Event::Members(active.snapshot(Freshness::Unavailable)))?;}
+                    if let Some(active)=&mut active_members {active.clear_presence();active.rows.clear();active.rows.resize(100,None);active.synced=false;emit(Event::Members(active.snapshot(Freshness::Unavailable)))?;}
                     members_deadline=None;
+                }
+                _=tokio::time::sleep_until(presence_deadline.unwrap_or(ready_deadline)), if presence_deadline.is_some() => {
+                    if let Some(active)=&mut active_members {
+                        if subscriptions.has_changed().unwrap_or(true) {active.clear_presence();}
+                        else if let Some(event)=active.take_presence() {emit(event)?;}
+                    }
                 }
                 _ = tokio::time::sleep_until(ready_deadline), if ready_at.is_none() => break,
                 _ = timer.tick() => {
@@ -413,9 +508,11 @@ async fn run_inner(
                                 }
                                 0 => match packet.t.as_deref().unwrap_or("") {
                                     "READY" => {
+                                        active_members=None;members_deadline=None;sent_members = !subscriptions_open;
                                         let mut ready: Ready = decode(packet.d.get().as_bytes()).map_err(|_| Failure::ProtocolAt("Gateway login: unsupported READY payload"))?;
                                         owner_id=Some(ready.user.id);
                                         if ready.user.bot { return Err(Failure::InvalidCredential); }
+                                        let permissions=permissions::ready(packet.d.get().as_bytes(),ready.user.id).map_err(|_|Failure::ProtocolAt("Gateway login: invalid permission metadata"))?;
                                         if ready.session_id.len() > 2048 { return Err(Failure::Capacity); }
                                         state.url = Some(validated_url(&ready.resume_gateway_url).map_err(|f|f.protocol_at("Gateway login: resume address rejected"))?);
                                         state.session = Some(Zeroizing::new(std::mem::take(&mut ready.session_id)));
@@ -432,16 +529,25 @@ async fn run_inner(
                                             }
                                         }
                                         let (guilds, channels) = ready.navigation().map_err(|_| Failure::ProtocolAt("Gateway login: invalid or oversized channel/thread navigation"))?;
-                                        let (read_entries,read_version,partial)=ready.read_state.take().map_or((None,None,false),|snapshot|(Some(snapshot.entries.into_iter().filter(|e|e.kind==0).map(|e|(e.id,e.last_message_id)).collect()),snapshot.version,snapshot.partial));
+                                        let (read_entries,read_version,partial)=ready.read_state.take().map_or((None,None,false),|snapshot|(Some(snapshot.entries.into_iter().filter(|e|e.kind==0).map(|e|(e.id,e.last_message_id,e.mention_count)).collect()),snapshot.version,snapshot.partial));
                                         if guilds.len() + channels.len() > MAX_NAV { return Err(Failure::Capacity); }
                                         calls.allowed=channels.iter().filter(|c|(c.guild.is_none() && c.kind==1 && c.recipients.len()==1) || (c.guild.is_some() && c.kind==2)).map(|c|(c.id,c.guild)).collect();
                                         if was_ready { emit(Event::Resync)?; }
-                                        emit(Event::Ready { user: ready.user.into_model(), guilds, channels })?; was_ready = true;
+                                        emit(Event::Ready { user: ready.user.into_model(), guilds, channels, permissions })?; was_ready = true;
                                         emit(Event::ReadState(client_core::read_state::Event::Snapshot{entries:read_entries,version:read_version,partial}))?;
+                                        if let Some(snapshot) = ready.user_guild_settings.take() {
+                                            let (entries,replace)=snapshot.entries();
+                                            emit(notification_settings(entries,replace))?;
+                                        }
+                                        if let Some(sessions) = ready.sessions.as_ref() { emit(Event::NotificationPreferences(client_core::notifications::Event::Presence(sessions.dnd())))?; }
                                         if !participants.is_empty() { emit(Event::Voice(client_core::voice::Event::Snapshot { partial: false, guild: None, participants }))?; }
                                         ready_at = Some(Instant::now());
                                     }
                                     "READY_SUPPLEMENTAL" => {
+                                        if let Some(owner)=owner_id {
+                                            let updates=permissions::supplemental(packet.d.get().as_bytes(),owner).map_err(|_|Failure::Protocol)?;
+                                            if !updates.is_empty() {emit(Event::Permissions(client_core::permissions::Event::Members(updates)))?;}
+                                        }
                                         let mut extra: ReadySupplemental = decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
                                         if extra.guilds.len() > MAX_NAV || extra.merged_members.len() > MAX_NAV { return Err(Failure::Capacity); }
                                         let mut participants = Vec::new();
@@ -464,18 +570,36 @@ async fn run_inner(
                                             match decode::<MemberUpdate>(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol).and_then(|update|active.update(update)) {
                                                 Ok(true)=>{let freshness=if active.synced {Freshness::Fresh}else{Freshness::Stale};emit(Event::Members(active.snapshot(freshness)))?;if active.synced {members_deadline=None;}else{members_deadline=Some(Instant::now()+Duration::from_secs(15));}},
                                                 Ok(false)=>{},
-                                                Err(_)=>{active.rows.fill(None);active.synced=false;emit(Event::Members(active.snapshot(Freshness::Unavailable)))?;members_deadline=None;}
+                                                Err(_)=>{active.clear_presence();active.rows.fill(None);active.synced=false;emit(Event::Members(active.snapshot(Freshness::Unavailable)))?;members_deadline=None;}
                                             }
+                                        }
+                                    }
+                                    "PRESENCE_UPDATE" => {
+                                        if let Some(active)=&mut active_members && active.synced {
+                                            let update=discord_protocol::presence::decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
+                                            active.presence(update,Instant::now());
                                         }
                                     }
                                     "CHANNEL_RECIPIENT_ADD" => {let d:RecipientAdded=decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;emit(Event::RecipientAdded {channel:d.channel_id,user:d.user.into_model()})?;}
                                     "CHANNEL_RECIPIENT_REMOVE" => {let d:RecipientRemoved=decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;emit(Event::RecipientRemoved {channel:d.channel_id,user:d.user.id})?;}
+                                    "USER_GUILD_SETTINGS_UPDATE" => {
+                                        let setting=decode::<discord_protocol::notifications::Setting>(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
+                                        emit(notification_settings(vec![setting],false))?;
+                                    }
+                                    "SESSIONS_REPLACE" => {
+                                        let sessions=decode::<discord_protocol::notifications::Sessions>(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
+                                        emit(Event::NotificationPreferences(client_core::notifications::Event::Presence(sessions.dnd())))?;
+                                    }
+                                    "USER_SETTINGS_PROTO_UPDATE" => emit(Event::NotificationPreferences(client_core::notifications::Event::Invalidate))?,
                                     "MESSAGE_CREATE" => emit(Event::Message(decode::<MessageDto>(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?.into_model()))?,
                                     "MESSAGE_ACK" => {
                                         let ack=decode::<read_state::Ack>(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
-                                        emit(Event::ReadState(client_core::read_state::Event::Ack{channel:ack.channel_id,message:ack.message_id,manual:ack.manual,version:ack.version}))?;
+                                        emit(Event::ReadState(client_core::read_state::Event::Ack{channel:ack.channel_id,message:ack.message_id,manual:ack.manual,mention_count:ack.mention_count,version:ack.version}))?;
                                     }
                                     "PASSIVE_UPDATE_V2" => {
+                                        if let Some(owner)=owner_id && let Some((guild,roles,timeout_until))=permissions::passive(packet.d.get().as_bytes(),owner).map_err(|_|Failure::Protocol)? {
+                                            emit(Event::Permissions(client_core::permissions::Event::Member {guild,roles,timeout_until}))?;
+                                        }
                                         calls.passive(decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?,owner_id,&emit)?;
                                         let update=decode::<read_state::PassiveUpdate>(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
                                         emit(Event::ReadState(client_core::read_state::Event::Latest(update.updated_channels.into_iter().map(|c|(c.id,c.last_message_id)).collect())))?;
@@ -490,6 +614,7 @@ async fn run_inner(
                                     "AUTH_SESSION_CHANGE" => return Err(Failure::Expired),
                                     "CHANNEL_DELETE" => { let c: ChannelDto = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?; calls.allowed.remove(&c.id); emit(Event::Unavailable(c.id))?; }
                                     "CHANNEL_CREATE" => {
+                                        let permissions=owner_id.map(|owner|channel_events::permission_metadata(packet.d.get().as_bytes(),owner)).transpose()?.flatten();
                                         let event=channel_events::create(packet.d.get().as_bytes())?;
                                         match &event {
                                             Event::ChannelCreated(c) => channel_events::admit_call(c,&known_guilds,&mut calls),
@@ -497,14 +622,16 @@ async fn run_inner(
                                             _=>{}
                                         }
                                         emit(event)?;
+                                        if let Some(permissions)=permissions {emit(permissions)?;}
                                     }
                                     "CHANNEL_UPDATE" => {
+                                        let permissions=owner_id.map(|owner|channel_events::permission_metadata(packet.d.get().as_bytes(),owner)).transpose()?.flatten();
                                         let update=channel_events::update(packet.d.get().as_bytes())?;
                                         if let Some(channel)=update.restored {channel_events::admit_call(&channel,&known_guilds,&mut calls);emit(Event::ChannelRestored(channel))?;}
                                         if let Event::Unavailable(id)=&update.event {calls.allowed.remove(id);}
                                         if let Event::ChannelChanged(patch)=&update.event && let model::Patch::Value(kind)=patch.kind && kind != 2 && kind != 1 {calls.allowed.remove(&patch.id);}
                                         emit(update.event)?;
-                                        if update.permissions {emit(Event::PermissionsChanged)?;}
+                                        if let Some(permissions)=permissions {emit(permissions)?;}
                                     }
                                     "THREAD_CREATE" | "THREAD_UPDATE" | "THREAD_DELETE" | "THREAD_LIST_SYNC" | "THREAD_MEMBERS_UPDATE" => {
                                         if let Some(event) = thread_events::decode_event(packet.t.as_deref().unwrap_or(""), packet.d.get().as_bytes(), owner_id)? { emit(event)?; }
@@ -514,8 +641,10 @@ async fn run_inner(
                                         emit(Event::GuildEmojis { guild: update.guild_id, emojis: update.emojis.0 })?;
                                     }
                                     "GUILD_CREATE" => {
+                                        let permissions=owner_id.map(|owner|permissions::guild(packet.d.get().as_bytes(),owner)).transpose().map_err(|_|Failure::Protocol)?;
                                         let mut guild: GuildDto = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?;
                                         if guild.channels.len() + calls.allowed.len() > MAX_NAV { return Err(Failure::Capacity); }
+                                        if let Some(permissions)=permissions {emit(Event::Permissions(client_core::permissions::Event::Snapshot(permissions)))?;}
                                         let hidden:std::collections::BTreeSet<_>=guild.channels.iter().filter(|c|c.is_obfuscated()).map(|c|c.id).collect();
                                         for mut channel in std::mem::take(&mut guild.channels) {
                                             channel.guild_id = Some(guild.id);
@@ -530,19 +659,31 @@ async fn run_inner(
                                         emit(calls.snapshot(&mut guild, false)?)?;
                                         if let Some(emojis) = guild.emojis { emit(Event::GuildEmojis { guild: guild.id, emojis: emojis.0 })?; }
                                     }
-                                    "GUILD_UPDATE" => emit(Event::GuildChanged(decode::<GuildPatchDto>(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?.into_model()))?,
+                                    "GUILD_UPDATE" => {
+                                        let owner=permissions::owner(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
+                                        emit(Event::GuildChanged(decode::<GuildPatchDto>(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?.into_model()))?;
+                                        if let Some((guild,owner))=owner {emit(Event::Permissions(client_core::permissions::Event::Owner {guild,owner}))?;}
+                                    }
                                     "GUILD_MEMBER_UPDATE" => {
-                                        let update:MemberIdentity=decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
-                                        if Some(update.user.id)==owner_id {emit(Event::PermissionsChanged)?;}
+                                        if let Some(owner)=owner_id && let Some((guild,roles,timeout_until))=permissions::member(packet.d.get().as_bytes(),owner).map_err(|_|Failure::Protocol)? {
+                                            emit(Event::Permissions(client_core::permissions::Event::Member {guild,roles,timeout_until}))?;
+                                        }
                                     }
                                     "GUILD_DELETE" => {
                                         let guild: GuildDto = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?;
                                         let removed: Vec<_> = calls.allowed.iter().filter_map(|(channel, id)| (*id == Some(guild.id)).then_some(*channel)).collect();
                                         for channel in removed { calls.allowed.remove(&channel); emit(Event::Unavailable(channel))?; }
                                         emit(Event::GuildEmojis { guild: guild.id, emojis: Vec::new() })?;
-                                        emit(Event::PermissionsChanged)?;
+                                        emit(Event::Permissions(client_core::permissions::Event::UnavailableGuild(guild.id)))?;
                                     }
-                                    "GUILD_ROLE_UPDATE" | "GUILD_ROLE_DELETE" => emit(Event::PermissionsChanged)?,
+                                    "GUILD_ROLE_CREATE" | "GUILD_ROLE_UPDATE" => {
+                                        let (guild,role)=permissions::role(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
+                                        emit(Event::Permissions(client_core::permissions::Event::Role {guild,role}))?;
+                                    }
+                                    "GUILD_ROLE_DELETE" => {
+                                        let (guild,id)=permissions::role_removed(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
+                                        emit(Event::Permissions(client_core::permissions::Event::RoleRemoved {guild,id}))?;
+                                    }
                                     _ => {} // No raw-event archive; unsupported events grant no capabilities.
                                 },
                                 _ => return Err(Failure::Protocol),
@@ -565,6 +706,29 @@ async fn run_inner(
     }
     Err(Failure::Network)
 }
+fn notification_settings(
+    entries: Vec<discord_protocol::notifications::Setting>,
+    replace: bool,
+) -> Event {
+    Event::NotificationPreferences(client_core::notifications::Event::Settings {
+        entries: entries
+            .into_iter()
+            .map(|s| client_core::notifications::Setting {
+                guild: s.guild_id,
+                muted: s.channel_overrides.as_ref().and(s.muted),
+                level: s.message_notifications,
+                channels: s
+                    .channel_overrides
+                    .map_or_else(Vec::new, |c| c.0)
+                    .into_iter()
+                    .map(|c| (c.channel_id, c.muted, c.message_notifications))
+                    .collect(),
+            })
+            .collect(),
+        replace,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -625,7 +789,8 @@ mod tests {
                 assert_eq!(packet(&mut socket).await["op"],2);
                 let mut initial=ready(1,"synthetic-session");
                 initial["d"]["read_state"]=json!([]);
-                initial["d"]["guilds"]=json!([{"id":"2","name":"Synthetic guild","threads":[{"id":"5","parent_id":"4","type":11,"name":"Initial thread"}]}]);
+                initial["d"]["guilds"]=json!([{"id":"2","name":"Synthetic guild","properties":{"owner_id":"9"},"roles":[{"id":"2","permissions":"68608"}],"threads":[{"id":"5","parent_id":"4","type":11,"name":"Initial thread"}]}]);
+                initial["d"]["merged_members"]=json!([[{"user_id":"1","roles":[]}]]);
                 send(&mut socket,initial).await;
                 for (sequence,name,data) in [
                     (2,"CHANNEL_CREATE",json!({"id":"3","guild_id":"2","type":4,"name":"Synthetic category","position":0})),
@@ -650,9 +815,18 @@ mod tests {
                     (21,"THREAD_DELETE",json!({"id":"8","guild_id":"2","parent_id":"4","type":10})),
                     (22,"GUILD_CREATE",json!({"id":"2","emojis":[{"id":"20","name":"wave","roles":[],"available":true}]})),
                     (23,"GUILD_EMOJIS_UPDATE",json!({"guild_id":"2","emojis":[{"id":"21","name":"party","animated":true,"roles":[],"available":true}]})),
-                    (24,"GUILD_DELETE",json!({"id":"2"})),
+                    (24,"GUILD_ROLE_CREATE",json!({"guild_id":"2","role":{"id":"30","permissions":"32768"}})),
+                    (25,"GUILD_ROLE_UPDATE",json!({"guild_id":"2","role":{"id":"30","permissions":"0"}})),
+                    (26,"GUILD_MEMBER_UPDATE",json!({"guild_id":"2","user":{"id":"1"},"roles":["30"],"communication_disabled_until":null})),
+                    (27,"GUILD_MEMBER_UPDATE",json!({"guild_id":"2","user":{"id":"8"},"roles":["30"]})),
+                    (28,"GUILD_ROLE_DELETE",json!({"guild_id":"2","role_id":"30"})),
+                    (29,"GUILD_UPDATE",json!({"id":"2","owner_id":"7"})),
+                    (30,"PASSIVE_UPDATE_V2",json!({"guild_id":"2","updated_members":[{"user":{"id":"1","username":"Synthetic"},"roles":[],"communication_disabled_until":null}]})),
+                    (31,"READY_SUPPLEMENTAL",json!({"guilds":[{"id":"2"}],"merged_members":[[{"user_id":"1","roles":[]}]]})),
+                    (32,"GUILD_DELETE",json!({"id":"2"})),
+                    (33,"GUILD_CREATE",json!({"id":"2","owner_id":"7","roles":[{"id":"2","permissions":"68608"}],"members":[{"user":{"id":"1","username":"Synthetic"},"roles":[]}],"channels":[{"id":"4","type":0,"name":"Synthetic channel","position":0,"parent_id":null,"last_message_id":"9","permission_overwrites":[]}]})),
                 ] {send(&mut socket,json!({"op":0,"t":name,"s":sequence,"d":data})).await;}
-                acknowledge(&mut socket,24).await;
+                acknowledge(&mut socket,33).await;
                 // Force a heartbeat reply to race the following terminal close.
                 send(&mut socket,json!({"op":1,"d":null})).await;
                 socket.send(Frame::Close(Some(CloseFrame {code:CloseCode::from(4004),reason:"synthetic expiration".into()}))).await.unwrap();
@@ -669,15 +843,21 @@ mod tests {
                 Arc::new(SessionSecret::from_owner_input("synthetic-owner-session".into()).unwrap()),
                 "wss://gateway.discord.gg/".into(),watch::channel(None).1,mpsc::channel(1).1,
                 |event| {
-                    if let Event::Ready { channels, .. } = &event {
+                    if let Event::Ready { channels, permissions, .. } = &event {
                         assert!(channels.iter().any(|c| c.id == Id(5) && c.guild == Some(Id(2))));
+                        assert_eq!(permissions.guilds[0].owner,Some(Id(9)));
+                        assert_eq!(permissions.guilds[0].member.as_ref().unwrap().roles,Vec::<Id>::new());
                     }
                     if let Event::ReadState(client_core::read_state::Event::Snapshot {entries,version,partial})=&event {
                         assert!(entries.as_ref().is_some_and(Vec::is_empty));
                         assert_eq!(*version,None);
                         assert!(!partial);
                     }
-                    if matches!(event,Event::PermissionsChanged) {permission_changes.fetch_add(1,std::sync::atomic::Ordering::Relaxed);}
+                    if matches!(event,Event::Permissions(_)) {permission_changes.fetch_add(1,std::sync::atomic::Ordering::Relaxed);}
+                    if let Event::Permissions(client_core::permissions::Event::Channel {channel,guild,overwrites})=&event {
+                        assert_eq!((*channel,*guild),(Id(4),None));
+                        assert_eq!(*overwrites,model::Patch::Value(Vec::new()));
+                    }
                     if let Event::Reactions(client_core::reactions::Event::Changed{channel,message})=&event {
                         assert_eq!((*channel,*message),(Id(4),Id(9)));
                         reaction_changes.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
@@ -696,8 +876,13 @@ mod tests {
                     let thread_change=matches!(&event, Event::ThreadChanged{..}|Event::ThreadsSync{..}|Event::ThreadRemoved{..})
                         || matches!(&event,Event::ChannelCreated(c) if matches!(c.kind,10..=12));
                     let sync=matches!(&event,Event::ThreadsSync{..});
+                    let unavailable=matches!(&event,Event::Permissions(client_core::permissions::Event::UnavailableGuild(Id(2))));
                     let generation=state.generation;
                     state.apply(client_core::Envelope {generation,event});
+                    if unavailable {
+                        assert!(!state.can_view(Id(4)));
+                        assert_eq!(state.read_marker(Id(4)),None);
+                    }
                     if thread_change {thread_events.fetch_add(1,std::sync::atomic::Ordering::Relaxed);}
                     if sync {
                         assert!(!state.channels.iter().any(|c|c.id==Id(5)));
@@ -721,7 +906,7 @@ mod tests {
             assert_eq!(state.channels[0].name,"Synthetic channel");
             assert_eq!(state.read_marker(Id(4)),Some(Some(Id(8))));
             assert_eq!(state.unread(Id(4)),Some(true));
-            assert_eq!(permission_changes.load(std::sync::atomic::Ordering::Relaxed),2);
+            assert_eq!(permission_changes.load(std::sync::atomic::Ordering::Relaxed),11);
             assert_eq!(emoji_changes.load(std::sync::atomic::Ordering::Relaxed),3);
             assert!(state.guilds[0].emojis.as_ref().unwrap().is_empty());
             assert_eq!(reaction_changes.load(std::sync::atomic::Ordering::Relaxed),4);
@@ -734,6 +919,10 @@ mod tests {
         timeout(Duration::from_secs(45), async {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let endpoint = format!("ws://{}/", listener.local_addr().unwrap());
+            let (client_finished, mut terminal_observed) = tokio::sync::oneshot::channel();
+            let (invalid_session_consumed, mut invalid_session_observed) =
+                tokio::sync::oneshot::channel();
+            let invalid_session_consumed = std::sync::Mutex::new(Some(invalid_session_consumed));
             let server = async {
                 for connection in 0..3 {
                     let (stream, _) = listener.accept().await.unwrap();
@@ -751,7 +940,12 @@ mod tests {
                         assert_eq!(handshake["d"]["session_id"], "synthetic-first-session");
                         send(&mut socket, json!({"op":0,"t":"RESUMED","s":42,"d":{}})).await;
                         acknowledge(&mut socket, 42).await;
+                        // Leave a heartbeat reply unread to exercise the TCP-reset race.
+                        send(&mut socket, json!({"op":1,"d":null})).await;
                         send(&mut socket, json!({"op":9,"d":false})).await;
+                        // Keep TCP alive until the client processes invalid-session;
+                        // dropping it now can discard that frame with the unread reply.
+                        (&mut invalid_session_observed).await.unwrap();
                     } else {
                         assert_eq!(handshake["op"], 2);
                         assert!(handshake["d"].get("session_id").is_none());
@@ -769,6 +963,10 @@ mod tests {
                                 })))
                                 .await
                                 .unwrap();
+                            // An unread timer heartbeat can make dropping TCP reset the
+                            // socket and discard this close. Wait until the client has
+                            // consumed the terminal result, without adding a grace sleep.
+                            (&mut terminal_observed).await.unwrap();
                         }
                     }
                 }
@@ -805,11 +1003,24 @@ mod tests {
                     };
                     let mut events = events.lock().unwrap();
                     assert!(events.len() < 16);
+                    // Emission is synchronous: the first connection's Disconnected
+                    // precedes Resumed, so it cannot release the second socket.
+                    if label == "disconnected"
+                        && events.contains(&"resumed")
+                        && let Some(consumed) = invalid_session_consumed.lock().unwrap().take()
+                    {
+                        consumed.send(()).unwrap();
+                    }
                     events.push(label);
                     Ok(())
                 },
                 Some(&endpoint),
             );
+            let client = async {
+                let result = client.await;
+                let _ = client_finished.send(());
+                result
+            };
             let (result, ()) = tokio::join!(client, server);
             assert_eq!(result, Err(Failure::Expired));
             let events = events.into_inner().unwrap();
@@ -913,6 +1124,220 @@ mod member_tests {
     use super::*;
     use serde_json::json;
     #[test]
+    fn newer_presence_clears_snapshot_custom_status_without_retaining_activities() {
+        for (patch, expected) in [
+            (json!({"activities":[]}), Some("online")),
+            (json!({"status":"online"}), Some("online")),
+            (json!({"status":"offline"}), Some("offline")),
+        ] {
+            let mut list = ActiveMembers::new(MemberSubscription {
+                guild: Id(1),
+                channel: Id(2),
+                request: 7,
+                list_id: "everyone".into(),
+            });
+            list.update(decode(br#"{"guild_id":"1","id":"everyone","member_count":1,"ops":[{"op":"SYNC","range":[0,99],"items":[{"member":{"user":{"id":"3","username":"Synthetic"},"presence":{"status":"online","activities":[{"type":4,"state":"Old custom status"}]}}}]}]}"#).unwrap()).unwrap();
+            assert!(list.rows[0].as_ref().unwrap().custom_status.is_some());
+            let mut wire = patch;
+            wire["guild_id"] = json!("1");
+            wire["user"] = json!({"id":"3"});
+            list.presence(
+                discord_protocol::presence::decode(&serde_json::to_vec(&wire).unwrap()).unwrap(),
+                Instant::now(),
+            );
+            let row = list.rows[0].as_ref().unwrap();
+            assert_eq!(row.status.as_deref(), expected);
+            assert!(row.custom_status.is_none());
+            let Event::MemberPresence { updates, .. } = list.take_presence().unwrap() else {
+                panic!(
+                    "custom-status invalidation must reach the core even when status is unchanged"
+                );
+            };
+            assert_eq!(updates, vec![(Id(3), expected.map(str::to_owned))]);
+        }
+    }
+    #[test]
+    fn presence_coalesces_loaded_rows_at_a_fixed_deadline_and_snapshots_supersede_it() {
+        let mut list = ActiveMembers::new(MemberSubscription {
+            guild: Id(1),
+            channel: Id(2),
+            request: 7,
+            list_id: "everyone".into(),
+        });
+        let now = Instant::now();
+        let presence = |guild, user, status| discord_protocol::presence::PresenceUpdate {
+            guild,
+            user,
+            status,
+        };
+        list.presence(
+            presence(Some(Id(1)), Id(3), model::Patch::Value("online".into())),
+            now,
+        );
+        assert!(
+            list.presence_deadline.is_none(),
+            "Unsynced lists never accept presence"
+        );
+        list.update(decode(br#"{"guild_id":"1","id":"everyone","member_count":2,"ops":[{"op":"SYNC","range":[0,99],"items":[{"member":{"user":{"id":"3","username":"First"},"presence":{"status":"online"}}},{"member":{"user":{"id":"4","username":"Second"},"presence":{"status":"offline"}}}]}]}"#).unwrap()).unwrap();
+        for (guild, user, status) in [
+            (None, Id(3), model::Patch::Value("idle".into())),
+            (Some(Id(9)), Id(3), model::Patch::Value("idle".into())),
+            (Some(Id(1)), Id(99), model::Patch::Value("idle".into())),
+            (Some(Id(1)), Id(3), model::Patch::Absent),
+            (Some(Id(1)), Id(3), model::Patch::Value("online".into())),
+        ] {
+            list.presence(presence(guild, user, status), now);
+        }
+        assert!(list.pending_presence.is_empty() && list.presence_deadline.is_none());
+        list.presence(
+            presence(Some(Id(1)), Id(3), model::Patch::Value("idle".into())),
+            now,
+        );
+        list.presence(
+            presence(Some(Id(1)), Id(3), model::Patch::Value("dnd".into())),
+            now + Duration::from_millis(90),
+        );
+        list.presence(
+            presence(Some(Id(1)), Id(4), model::Patch::Null),
+            now + Duration::from_millis(95),
+        );
+        assert_eq!(
+            list.presence_deadline,
+            Some(now + Duration::from_millis(100))
+        );
+        assert_eq!(list.pending_presence.len(), 2);
+        assert_eq!(
+            list.rows[0].as_ref().unwrap().status.as_deref(),
+            Some("dnd")
+        );
+        let Event::MemberPresence {
+            guild,
+            channel,
+            request,
+            updates,
+        } = list.take_presence().unwrap()
+        else {
+            panic!("compact presence event");
+        };
+        assert_eq!((guild, channel, request), (Id(1), Id(2), 7));
+        assert_eq!(updates, vec![(Id(3), Some("dnd".into())), (Id(4), None)]);
+        assert!(list.take_presence().is_none() && list.presence_deadline.is_none());
+        list.presence(
+            presence(Some(Id(1)), Id(3), model::Patch::Value("idle".into())),
+            now,
+        );
+        assert!(
+            !list
+                .update(
+                    decode(br#"{"guild_id":"9","id":"everyone","member_count":0,"ops":[]}"#)
+                        .unwrap()
+                )
+                .unwrap()
+        );
+        assert!(
+            list.presence_deadline.is_some(),
+            "Another guild cannot supersede this batch"
+        );
+        list.update(decode(br#"{"guild_id":"1","id":"everyone","member_count":2,"ops":[{"op":"UPDATE","index":0,"item":{"member":{"user":{"id":"3","username":"First"},"presence":{"status":"offline"}}}}]}"#).unwrap()).unwrap();
+        assert!(list.take_presence().is_none());
+        assert_eq!(
+            list.snapshot(Freshness::Fresh).rows[0]
+                .as_ref()
+                .unwrap()
+                .status
+                .as_deref(),
+            Some("offline")
+        );
+        list.presence(
+            presence(Some(Id(1)), Id(3), model::Patch::Value("idle".into())),
+            now,
+        );
+        list.update(decode(br#"{"guild_id":"1","id":"everyone","member_count":2,"ops":[{"op":"INVALIDATE","range":[0,99]}]}"#).unwrap()).unwrap();
+        assert!(!list.synced && list.take_presence().is_none() && list.presence_deadline.is_none());
+    }
+    #[test]
+    fn presence_flood_retains_only_the_hundred_loaded_users() {
+        let mut list = ActiveMembers::new(MemberSubscription {
+            guild: Id(1),
+            channel: Id(2),
+            request: 7,
+            list_id: "everyone".into(),
+        });
+        let items: Vec<_> = (10..110)
+            .map(|id| json!({"member":{"user":{"id":id.to_string(),"username":"Synthetic"}}}))
+            .collect();
+        list.update(decode(&serde_json::to_vec(&json!({"guild_id":"1","id":"everyone","member_count":100,"ops":[{"op":"SYNC","range":[0,99],"items":items}]})).unwrap()).unwrap()).unwrap();
+        let now = Instant::now();
+        for id in 10..1010 {
+            list.presence(
+                discord_protocol::presence::PresenceUpdate {
+                    guild: Some(Id(1)),
+                    user: Id(id),
+                    status: model::Patch::Value("online".into()),
+                },
+                now,
+            );
+        }
+        assert_eq!(list.pending_presence.len(), 100);
+        assert_eq!(list.rows.len(), 100);
+        let event = list.take_presence().unwrap();
+        assert!(event.bytes() <= 8 * 1024);
+        let Event::MemberPresence { updates, .. } = event else {
+            panic!("presence");
+        };
+        assert_eq!(updates.len(), 100);
+        assert!(
+            updates.iter().all(
+                |(id, status)| (10..110).contains(&id.0) && status.as_deref() == Some("online")
+            )
+        );
+        assert!(list.presence_deadline.is_none());
+    }
+    #[test]
+    fn presence_preserves_the_existing_loaded_row_byte_limit() {
+        let mut list = ActiveMembers::new(MemberSubscription {
+            guild: Id(1),
+            channel: Id(2),
+            request: 7,
+            list_id: "everyone".into(),
+        });
+        list.update(decode(br#"{"guild_id":"1","id":"everyone","member_count":1,"ops":[{"op":"SYNC","range":[0,99],"items":[{"member":{"user":{"id":"3","username":"Synthetic"}}}]}]}"#).unwrap()).unwrap();
+        // Fill the synthetic mirror to three bytes below its admitted budget.
+        let row = list.rows[0].as_mut().unwrap();
+        row.nick = Some("n".repeat(128 * 1024 - row.bytes() - 3));
+        assert_eq!(row.bytes(), 128 * 1024 - 3);
+        let now = Instant::now();
+        let update = |status: &str| discord_protocol::presence::PresenceUpdate {
+            guild: Some(Id(1)),
+            user: Id(3),
+            status: model::Patch::Value(status.into()),
+        };
+        list.presence(update("idle"), now);
+        assert!(list.rows[0].as_ref().unwrap().status.is_none());
+        assert!(list.pending_presence.is_empty() && list.presence_deadline.is_none());
+        list.presence(update("dnd"), now);
+        assert_eq!(list.rows[0].as_ref().unwrap().bytes(), 128 * 1024);
+        list.presence(update("offline"), now + Duration::from_millis(50));
+        assert_eq!(
+            list.rows[0].as_ref().unwrap().status.as_deref(),
+            Some("dnd")
+        );
+        assert_eq!(list.pending_presence.get(&Id(3)), Some(&Some("dnd".into())));
+        assert_eq!(
+            list.presence_deadline,
+            Some(now + Duration::from_millis(100))
+        );
+        list.presence(
+            discord_protocol::presence::PresenceUpdate {
+                guild: Some(Id(1)),
+                user: Id(3),
+                status: model::Patch::Null,
+            },
+            now,
+        );
+        assert_eq!(list.rows[0].as_ref().unwrap().bytes(), 128 * 1024 - 3);
+    }
+    #[test]
     fn member_operations_preserve_indices_scope_and_bounds() {
         let mut list = ActiveMembers::new(MemberSubscription {
             guild: Id(1),
@@ -965,12 +1390,23 @@ mod member_tests {
                     if !subscribed {
                         assert_eq!(subscription["typing"],true);assert_eq!(subscription["channels"],json!({"2":[[0,99]]}));subscribed=true;
                         socket.send(Frame::Text(json!({"op":0,"t":"GUILD_MEMBER_LIST_UPDATE","s":2,"d":{"guild_id":"1","id":"everyone","member_count":1,"ops":[{"op":"SYNC","range":[0,99],"items":[{"member":{"user":{"id":"3","username":"Visible","avatar":"0123456789abcdef0123456789abcdef"}}}]}]}}).to_string().into())).await.unwrap();
+                        for (sequence,data) in [
+                            (3,json!({"guild_id":"9","user":{"id":"3"},"status":"dnd"})),
+                            (4,json!({"guild_id":"1","user":{"id":"4"},"status":"online"})),
+                            (5,json!({"guild_id":"1","user":{"id":"3"},"status":"idle","activities":[{"name":"Ignored synthetic activity"}]})),
+                            (6,json!({"guild_id":"1","user":{"id":"3"}})),
+                        ] {socket.send(Frame::Text(json!({"op":0,"t":"PRESENCE_UPDATE","s":sequence,"d":data}).to_string().into())).await.unwrap();}
                     } else {assert_eq!(subscription["typing"],false);assert_eq!(subscription["channels"],json!({}));break;}
                 }
                 socket.close(Some(CloseFrame{code:CloseCode::Library(4004),reason:"synthetic stop".into()})).await.unwrap();
             };
             let client=run_inner(Arc::new(SessionSecret::from_owner_input("synthetic-owner-session".into()).unwrap()),"wss://gateway.discord.gg/".into(),receive,mpsc::channel(1).1,|event| {
-                if let Event::Members(list)=event { assert_eq!(list.request,7);assert_eq!(list.channel,Id(2));assert_eq!(list.rows[0].as_ref().unwrap().user.id,Id(3));selection.send(None).unwrap(); }
+                if let Event::Members(list)=&event { assert_eq!(list.request,7);assert_eq!(list.channel,Id(2));assert_eq!(list.rows[0].as_ref().unwrap().user.id,Id(3)); }
+                if let Event::MemberPresence {guild,channel,request,updates}=event {
+                    assert_eq!((guild,channel,request),(Id(1),Id(2),7));
+                    assert_eq!(updates,vec![(Id(3),Some("idle".into()))]);
+                    selection.send(None).unwrap();
+                }
                 Ok(())
             },Some(&endpoint));
             let ((),result)=tokio::join!(server,client);assert_eq!(result,Err(Failure::Expired));

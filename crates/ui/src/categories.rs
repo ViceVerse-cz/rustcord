@@ -204,7 +204,14 @@ impl MessagingUi {
                                 }
                                 continue;
                             }
-                            let unread = state.unread(channel.id) == Some(true);
+                            let visible = state.can_view(channel.id);
+                            let unread = visible && (state.channel_unread(channel) == Some(true)
+                                || state.unread_count(channel.id) > 0);
+                            let count = if !visible { 0 } else if channel.guild.is_some() {
+                                state.mention_count(channel.id)
+                            } else {
+                                state.unread_count(channel.id)
+                            };
                             let symbol = match channel.kind {
                                 1 | 3 => "@",
                                 2 | 13 => "♫",
@@ -239,18 +246,25 @@ impl MessagingUi {
                                             self.profile = Some(user.clone());
                                         }
                                         let archives = channel.guild.is_some() && matches!(channel.kind, 0 | 5 | 15 | 16);
-                                        let width = (ui.available_width() - if archives { 68.0 } else { 0.0 }).max(0.0);
+                                        let external = !channel.supports_text();
+                                        let width = (ui.available_width() - if archives { 68.0 } else { 0.0 } - if external { 36.0 } else { 0.0 }).max(0.0);
                                         let response = ui.allocate_ui(egui::vec2(width, 36.0), |ui| ui.add_enabled(
-                                            channel.supports_text(),
+                                            channel.supports_text() && state.can_view(channel.id),
                                             egui::Button::selectable(
                                                 active,
                                                 RichText::new(name).color(if active {
                                                     colors.accent
                                                 } else {
-                                                    colors.text
+                                                    if unread { colors.text } else { colors.muted }
                                                 }),
                                             )
-                                            .right_text(if unread { "Unread" } else { "" })
+                                            .right_text(if count > 0 {
+                                                "        "
+                                            } else if unread {
+                                                "●"
+                                            } else {
+                                                ""
+                                            })
                                             .min_size(egui::vec2(width, 36.0))
                                             .corner_radius(7)
                                             .truncate(),
@@ -265,29 +279,50 @@ impl MessagingUi {
                                                 allowed && ui.is_enabled(), format!("Archive for {}", channel.name)));
                                             if archive.clicked() { self.archive_parent = Some(channel.id); }
                                         }
+                                        if external {
+                                            let allowed = visible && crate::markdown::discord_url(channel, None).is_some();
+                                            let open = ui.add_enabled(allowed, egui::Button::new("↗").min_size(egui::vec2(28.0, 32.0)))
+                                                .on_hover_text("Open in Discord");
+                                            open.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button,
+                                                allowed && ui.is_enabled(), format!("Open {} in Discord", channel.name)));
+                                            if open.clicked() { self.timeline.opening = crate::markdown::discord_url(channel, None); }
+                                        }
                                         response
                                     })
                                     .inner
                                 })
                                 .inner
                                 .on_hover_text(format!(
-                                    "{} · {}",
+                                    "{} · {}{}",
                                     channel.name,
-                                    kind_label(channel.kind)
+                                    kind_label(channel.kind),
+                                    if unread && state.channel_unread(channel).is_none() {
+                                        " · Session activity; read sync unavailable"
+                                    } else if count > 0 {
+                                        " · Notification count may be a lower bound"
+                                    } else {
+                                        ""
+                                    }
                                 ))
-                                .on_disabled_hover_text(format!(
-                                    "{} · {}",
-                                    channel.name,
-                                    kind_label(channel.kind)
-                                ));
+                                .on_disabled_hover_text(if state.can_view(channel.id) {
+                                    format!("{} · {}", channel.name, kind_label(channel.kind))
+                                } else { "This conversation is unavailable with current permission information".into() });
+                            if count > 0 {
+                                crate::notifications::badge(
+                                    ui,
+                                    response.rect.right_center() - egui::vec2(19.0, 0.0),
+                                    count,
+                                );
+                            }
                             response.widget_info(|| {
                                 egui::WidgetInfo::labeled(
                                     egui::WidgetType::Button,
-                                    channel.supports_text(),
+                                    response.enabled(),
                                     format!(
-                                        "{}{}",
+                                        "{}{}; {} notifications",
                                         channel.name,
-                                        if unread { ", unread" } else { "" }
+                                        if unread { ", unread" } else { "" },
+                                        count
                                     ),
                                 )
                             });
@@ -328,6 +363,74 @@ mod tests {
             member_list_id: None,
         }
     }
+    #[test]
+    fn unsupported_channel_opens_confirmation_by_keyboard_without_selecting() {
+        let mut state = State {
+            user: Some(model::User {
+                id: Id(2),
+                name: "Synthetic".into(),
+                avatar: None,
+                discriminator: 0,
+            }),
+            guilds: vec![model::Guild {
+                id: Id(100),
+                name: "Synthetic".into(),
+                icon: None,
+                emojis: None,
+            }],
+            channels: vec![channel(9, 13, 0, None)],
+            demo: true,
+            ..State::default()
+        };
+        state
+            .permissions
+            .replace(test_support::permission_snapshot(&state))
+            .unwrap();
+        let mut view = MessagingUi {
+            guild: Some(Id(100)),
+            ..Default::default()
+        };
+        for permitted in [true, false] {
+            if !permitted {
+                state.permissions = Default::default();
+            }
+            view.timeline.opening = None;
+            let ctx = egui::Context::default();
+            for key in [egui::Key::Tab, egui::Key::Enter] {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(240.0, 180.0),
+                        )),
+                        events: vec![egui::Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: egui::Modifiers::NONE,
+                        }],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        assert!(view.channel_list(ui, &state).is_none());
+                        assert!(ui.min_rect().right() <= ui.max_rect().right() + 1.0);
+                    },
+                );
+                assert!(output.platform_output.commands.is_empty());
+                output.drop_without_applying_deltas();
+            }
+            assert_eq!(
+                view.timeline.opening.as_deref(),
+                permitted.then_some("https://discord.com/channels/100/9")
+            );
+            assert!(state.selected.is_none());
+        }
+        view.timeline.opening = Some("https://discord.com/channels/100/9".into());
+        view.clear();
+        assert!(view.timeline.opening.is_none());
+    }
+
     #[test]
     fn service_order_orphans_collapsed_selection_and_category_buttons() {
         let channels = vec![
@@ -400,10 +503,26 @@ mod tests {
         assert!(!channels[1].supports_text());
         assert_eq!(kind_label(15), "Forum · loaded posts");
         let mut state = State {
+            user: Some(model::User {
+                id: Id(2),
+                name: "Synthetic member".into(),
+                avatar: None,
+                discriminator: 0,
+            }),
+            guilds: vec![model::Guild {
+                id: Id(100),
+                name: "Synthetic guild".into(),
+                icon: None,
+                emojis: None,
+            }],
             channels,
             demo: true,
             ..State::default()
         };
+        state
+            .permissions
+            .replace(test_support::permission_snapshot(&state))
+            .unwrap();
         assert!(state.select(Id(4)).is_none());
         let ctx = egui::Context::default();
         let mut view = MessagingUi {
@@ -440,10 +559,14 @@ mod tests {
         assert!(state.selected.is_none());
         // Forum containers never request history; their loaded posts remain keyboard-selectable.
         state.channels = vec![channel(7, 15, 0, None), channel(8, 11, 0, Some(Id(7)))];
+        state
+            .permissions
+            .replace(test_support::permission_snapshot(&state))
+            .unwrap();
         assert!(state.select(Id(7)).is_none());
         let ctx = egui::Context::default();
         let mut picked = None;
-        for key in [egui::Key::Tab, egui::Key::Enter] {
+        for key in [egui::Key::Tab, egui::Key::Tab, egui::Key::Enter] {
             ctx.run_ui(
                 egui::RawInput {
                     events: vec![egui::Event::Key {
