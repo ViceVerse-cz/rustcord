@@ -190,6 +190,7 @@ pub struct State {
     pub reactions: reactions::Reactions,
     pub profile: Option<profile::ProfileView>,
     pub profile_request: u64,
+    pub profile_cache: profile::ProfileCache,
     pub voice: voice::State,
     pub generation: u64,
     pub auth: auth::AuthState,
@@ -227,6 +228,7 @@ impl Default for State {
             reactions: reactions::Reactions::default(),
             profile: None,
             profile_request: 0,
+            profile_cache: Default::default(),
             voice: voice::State::default(),
             generation: 1,
             auth: auth::AuthState::Unauthenticated,
@@ -899,6 +901,7 @@ impl State {
                 self.voice.roster.clear();
                 self.members = None;
                 self.clear_profile();
+                self.profile_cache.clear();
                 self.read_state.reset();
                 self.notification_preferences = notifications::Preferences::default();
                 self.user = Some(user);
@@ -1112,6 +1115,7 @@ impl State {
             Event::Resync | Event::PermissionsChanged => {
                 self.read_state.cancel();
                 self.clear_profile();
+                self.profile_cache.clear();
                 self.disconnect_voice();
                 self.invalidate_members();
                 self.timeline.clear();
@@ -1176,6 +1180,7 @@ impl State {
         }
         if !removed.is_empty() {
             self.clear_profile();
+            self.profile_cache.clear();
         }
         if self.selected.is_some_and(|id| removed.contains(&id)) {
             self.clear_search();
@@ -1208,6 +1213,7 @@ impl State {
             self.search_target = None;
             self.read_state.cancel();
             self.clear_profile();
+            self.profile_cache.clear();
             self.disconnect_voice();
             self.gateway_connected = false;
             self.invalidate_members();
