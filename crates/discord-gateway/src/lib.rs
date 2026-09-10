@@ -778,6 +778,8 @@ fn notification_settings(
                 guild: s.guild_id,
                 muted: s.channel_overrides.as_ref().and(s.muted),
                 level: s.message_notifications,
+                suppress_everyone: s.suppress_everyone,
+                suppress_roles: s.suppress_roles,
                 channels: s
                     .channel_overrides
                     .map_or_else(Vec::new, |c| c.0)
@@ -793,6 +795,24 @@ fn notification_settings(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn notification_settings_forward_explicit_mention_suppression() {
+        let setting = decode::<discord_protocol::notifications::Setting>(br#"{"guild_id":"1","muted":false,"message_notifications":1,"channel_overrides":[],"suppress_everyone":false,"suppress_roles":true}"#).unwrap();
+        let Event::NotificationPreferences(client_core::notifications::Event::Settings {
+            entries,
+            replace,
+        }) = notification_settings(vec![setting], false)
+        else {
+            panic!()
+        };
+        assert!(!replace);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            (entries[0].suppress_everyone, entries[0].suppress_roles),
+            (Some(false), Some(true))
+        );
+        assert_eq!(entries[0].guild, Some(model::Id(1)));
+    }
     use serde_json::{Value, json};
     use tokio::net::{TcpListener, TcpStream};
     use tokio_tungstenite::{

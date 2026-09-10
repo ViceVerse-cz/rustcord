@@ -158,6 +158,7 @@ impl Timeline {
                         .is_some_and(|target| target.0 != 0 && target < message.id)))
             && message.content.len() <= 64 * 1024
             && model::valid_mentions(&message.mentions)
+            && model::valid_mention_roles(&message.mention_roles)
             && model::valid_embeds(&message.embeds)
             && model::valid_attachments(&message.attachments)
             && message
@@ -844,6 +845,9 @@ mod tests {
             extra_content: Default::default(),
             attachments: Vec::new(),
             embeds: Vec::new(),
+            mention_roles: vec![],
+            mention_everyone: false,
+            suppress_notifications: false,
             mentions: Vec::new(),
             embeds_suppressed: false,
         }

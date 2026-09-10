@@ -247,3 +247,12 @@ cursor fields and a full-page flag are session-only. Forward-target pages are no
 from the SQLite latest-page cache or parked in the resident recent-window cache. Accepted
 message metadata remains subject to ordinary account history persistence; no new cache,
 queue, directory fetch or background pagination is introduced.
+
+
+Role/everyone/silent notification fields are session-only message-arrival metadata. Up to 100
+unique positive role IDs and 800 retained role-vector bytes are admitted per message, charged
+by allocated capacity in Message/Event/timeline budgets. SQLite restoration supplies empty/false
+notification fields; reading history never generates an alert. No schema change is needed.
+Queued notifications retain role IDs and direct/everyone provenance to recheck delivery, within
+the existing 32-item/16-KiB ceiling including unused deque slots. Observed badge records remain
+4096 fixed entries/128 KiB, without retaining role arrays. No additional cache or queue exists.
