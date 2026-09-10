@@ -1,5 +1,50 @@
 # Initial performance evidence
 
+## Color emoji and composer completion — September 10, 2026
+
+Baseline `899fca77347553516186e8686133f29c6ef6a66f`, clean task checkout; separate
+verified baseline text/voice packages, not historical dist files. macOS 27.0 (26A428),
+Apple M1 Pro, 16 GiB RAM, Rust 1.98.1, release thin LTO / one codegen unit, wgpu/Metal,
+1120×760 logical viewport, 2× Retina scale. Both feature variants built and ad-hoc signed.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| text executable, bytes | 47,515,152 | 47,581,392 | +66,240 (+0.139%) |
+| text installed, bytes | 48,184,044 | 48,259,436 | +75,392 (+0.156%) |
+| text zip, bytes | 30,690,485 | 30,723,202 | +32,717 (+0.107%) |
+| voice executable, bytes | 50,335,296 | 50,417,744 | +82,448 (+0.164%) |
+| voice installed, bytes | 51,133,881 | 51,225,481 | +91,600 (+0.179%) |
+| voice zip, bytes | 31,990,504 | 32,028,786 | +38,282 (+0.120%) |
+| settled RSS, MiB / 10 × 1 s `ps` samples | 105.69 | 116.30 | +10.61 (+10.04%) |
+| settled CPU, median `ps %cpu` | 0.0% | 0.0% | 0.0 pp |
+
+Sizes measured once from each staged package; installed sums every file (text excludes
+nested voice), ZIP uses Python zipfile DEFLATE level 9. Docs were staged before this final
+measurement addendum, so rebuilding later may slightly change documentation/ZIP bytes.
+No new package versions or bundled emoji/font assets. Three existing macOS bindings are
+now direct UI dependencies; strict pinned license checking passes.
+
+Native text-only samples use the synthetic demo after at least 30 s warmup. Baseline had
+`:hea` in the draft; after uses the explicit offline `--demo-emoji-completion` preset with
+`<#20> :hea`, then Enter acceptance. Delayed native input means the first after sample
+straddles suggestion acceptance: observed RSS range 116.33–130.23 MiB,
+CPU 0–0.5%. The separate settled 10 s sample above follows acceptance.
+These are related, not identical, UI states; background build/archive activity and OS/GPU
+paging add noise. The observed +10.61 MiB settled difference is a cost/regression, not
+an optimization claim. Both settled runs exceed the initial 80 MiB target. The observed
+active sample remains below 150 MiB, without establishing a worst-case guarantee.
+No app child processes were involved; GPU memory, shared OS font-service memory, startup
+p95 and frame-time p95 are unmeasured. The ordinary reducer benchmark would not measure
+this UI change and was not substituted for these samples.
+
+Native color fallback permits 128 cached 64×64 RGBA textures (2 MiB pixel payload), 128-byte
+keys and 16 queued jobs (2 KiB queued text), one worker-local bitmap at a time. Entries used
+in the current frame stay pinned; failed glyph batches schedule only a necessary overflow
+retry. A repeated over-capacity viewport test proves requests settle. Catalog completion
+has fewer than 4,096 fixed entries / 300 KiB strings and at most eight visible candidates.
+The default demo's moon/status and suggestions use Twemoji; OS-only missing-glyph font
+loading was exercised by native raster tests, not this process-memory workload.
+
 ## Inline message spoilers - September 10, 2026
 
 Baseline main b92a082a4b06c480fe6509252712f6513cd7dc62 / PR #35. Its verified text/voice

@@ -1,5 +1,48 @@
 # Implementation progress — 2026-09-10
 
+## Native emoji fallback and composer completion — September 10, 2026
+
+Task baseline: clean `899fca77347553516186e8686133f29c6ef6a66f`, task branch
+`t3code/native-emoji-autocomplete`, fetched `origin/main`; Rust 1.98.1, macOS 27.0
+26A428 / Apple M1 Pro / 16 GiB RAM. Baseline text and voice packages were built from
+that revision and retained separately. A baseline worktree shared target artifacts;
+xtask embeds its source root, so it was explicitly rebuilt in the task checkout before
+final validation. Results below refer to that final task checkout, not the baseline run.
+
+Implemented: color emoji in channel/category/header and member/profile status labels;
+bounded macOS AppKit color fallback for Unicode atlas misses; eight-result emoji completion
+using bundled names, common aliases and usable current-server customs; full `:heart:`
+conversion; channel names in completion and editable mention labels while preserving wire
+IDs. Unknown channels display `#unknown-channel`. NBSP advance slots fix wrapped inline
+cursor geometry; keyboard insertion, delete/copy/undo and IME composition retain original
+text. Current-frame native cache pinning prevents a crowded viewport evicting its own
+textures and repeatedly repainting. No protocol or authentication behavior changed.
+
+Reproduce with `cargo run --locked -p serein -- --demo --demo-emoji-completion`.
+This new, explicitly offline preset preloads `<#20> :hea` and focuses the editor for native
+visual review. Normal usage: type `:hea`, choose with arrows then Tab/Enter; type `:heart:`
+for immediate conversion; type `#get` and accept to display `#getting-started`.
+
+Native keyboard automation delayed focus/text events during this session. Native Enter
+acceptance was observed with the draft retained and no send; detailed input/IME behavior
+is verified by runnable egui event tests. A fixed offline preset supports visual inspection. During focus troubleshooting, one baseline relaunch accidentally omitted
+`--demo` and restored the saved session. It was stopped immediately without selecting any
+conversation or sending a message. No private screenshot or account content is committed.
+This incident is not live compatibility validation. All retained evidence is synthetic.
+
+Validation: final `cargo xtask check` passed (341 workspace tests, including 95 UI tests,
+strict all-feature Clippy, text-only check and policy checks). `cargo xtask package` and
+`cargo xtask package-voice` passed with local ad-hoc signatures. License checking passed via
+`target/debug/xtask licenses`, after installing pinned cargo-deny 0.20.2 and fetching the
+locked cross-platform dependencies needed for its offline metadata scan. Existing vendored
+Wry warnings remain; no checks were weakened. Native dark/light screenshot inspection found and corrected over-tall suggestion rows;
+long suggestion labels truncate instead of growing the panel. Native narrow-window input
+remains unverified; headless narrow inline-layout tests pass. Input tests cover Enter-without-send, closing-colon
+conversion, undo, IME, whole-token deletion/copy, narrow wrapping and cache saturation.
+See the task PR and `docs/performance.md` for measured package/native sample results. Windows/Linux native fallback is not implemented (bundled Twemoji
+remains available); those platforms and live Discord behavior were not tested here.
+
+
 ## Current scope and gates
 
 Current slice: automated dependency license policy after notification PR #45,

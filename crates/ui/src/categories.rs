@@ -179,22 +179,16 @@ impl MessagingUi {
                                 ),
                                 color,
                             );
-                            let label = ui.painter().layout(
-                                category.name.to_uppercase(),
-                                egui::FontId::new(12.0, crate::design::semibold_family(ui.ctx())),
-                                color,
-                                (rect.width() - 24.0).max(10.0),
-                            );
                             let label_rect = egui::Rect::from_min_size(
-                                egui::pos2(
-                                    rect.left() + 16.0,
-                                    rect.bottom() - 6.0 - label.size().y,
-                                ),
-                                egui::vec2(rect.width() - 24.0, label.size().y),
+                                egui::pos2(rect.left() + 16.0, rect.bottom() - 22.0),
+                                egui::vec2((rect.width() - 24.0).max(10.0), 18.0),
                             );
-                            ui.painter().with_clip_rect(label_rect).galley(
-                                label_rect.min,
-                                label,
+                            let mut label_ui =
+                                ui.new_child(egui::UiBuilder::new().max_rect(label_rect));
+                            crate::emoji::label(
+                                &mut label_ui,
+                                &category.name.to_uppercase(),
+                                egui::FontId::new(12.0, crate::design::semibold_family(ui.ctx())),
                                 color,
                             );
                             let response = response.on_hover_text(format!(
@@ -344,15 +338,12 @@ impl MessagingUi {
                             }
                             let subtitle = (dm_list && channel.kind == 3)
                                 .then(|| format!("{} Members", channel.recipients.len().max(1)));
-                            let name =
-                                egui::Label::new(design::medium(ui, label, 15.0).color(name_color))
-                                    .truncate()
-                                    .selectable(false);
+                            let font = egui::FontId::new(15.0, design::medium_family(ui.ctx()));
                             if let Some(subtitle) = subtitle {
                                 inner.vertical(|ui| {
                                     ui.spacing_mut().item_spacing.y = 0.0;
                                     ui.add_space(((row.height() - 34.0) * 0.5).max(0.0));
-                                    ui.add(name);
+                                    crate::emoji::label(ui, &label, font, name_color);
                                     ui.add(
                                         egui::Label::new(
                                             RichText::new(subtitle).size(12.0).color(colors.muted),
@@ -362,7 +353,7 @@ impl MessagingUi {
                                     );
                                 });
                             } else {
-                                inner.add(name);
+                                crate::emoji::label(&mut inner, &label, font, name_color);
                             }
                             if let Some(url) = &external {
                                 let mut open = ui.new_child(

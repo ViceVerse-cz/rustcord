@@ -107,6 +107,10 @@ pub struct MessagingUi {
 }
 
 impl MessagingUi {
+    /// Focus the composer for the desktop's explicitly selected offline fixture.
+    pub fn preview_composer(&mut self) {
+        self.focus_switched_composer = true;
+    }
     /// Fixture-only entry point: opens People and the profile card for `user` as if clicked.
     pub fn preview_profile(&mut self, user: model::User) {
         self.members_narrow_open = true;
@@ -453,29 +457,23 @@ impl MessagingUi {
                                 };
                                 ui.vertical(|ui| {
                                     ui.spacing_mut().item_spacing.y = 1.0;
-                                    ui.add(
-                                        egui::Label::new(
-                                            design::medium(ui, name, 15.0).color(text_color),
-                                        )
-                                        .truncate()
-                                        .selectable(false),
+                                    emoji::label(
+                                        ui,
+                                        name,
+                                        egui::FontId::new(15.0, design::medium_family(ui.ctx())),
+                                        text_color,
                                     );
-                                    ui.add(
-                                        egui::Label::new(
-                                            RichText::new(subtitle.unwrap_or({
-                                                match member.status.as_deref() {
-                                                    Some("online") => "Online",
-                                                    Some("idle") => "Away",
-                                                    Some("dnd") => "Do not disturb",
-                                                    Some("offline" | "invisible") => "Offline",
-                                                    _ => "Presence unavailable",
-                                                }
-                                            }))
-                                            .size(12.0)
-                                            .color(colors.muted),
-                                        )
-                                        .truncate()
-                                        .selectable(false),
+                                    emoji::label(
+                                        ui,
+                                        subtitle.unwrap_or(match member.status.as_deref() {
+                                            Some("online") => "Online",
+                                            Some("idle") => "Away",
+                                            Some("dnd") => "Do not disturb",
+                                            Some("offline" | "invisible") => "Offline",
+                                            _ => "Presence unavailable",
+                                        }),
+                                        egui::FontId::proportional(12.0),
+                                        colors.muted,
                                     );
                                 });
                             });
@@ -950,18 +948,13 @@ impl MessagingUi {
                             self.call_button(ui, state, channel, commands);
                         }
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            ui.add(
-                                egui::Label::new(
-                                    design::semibold(
-                                        ui,
-                                        channel
-                                            .as_ref()
-                                            .map_or("Direct Messages", |c| c.name.as_str()),
-                                        16.0,
-                                    )
-                                    .color(colors.text_strong),
-                                )
-                                .truncate(),
+                            emoji::label(
+                                ui,
+                                channel
+                                    .as_ref()
+                                    .map_or("Direct Messages", |c| c.name.as_str()),
+                                egui::FontId::new(16.0, design::semibold_family(ui.ctx())),
+                                colors.text_strong,
                             );
                         });
                     });
@@ -1240,8 +1233,11 @@ impl MessagingUi {
             channel,
             composer_content,
             cursor.filter(|_| mention_enabled),
-            &mention_users,
-            &state.channels,
+            (
+                &mention_users,
+                &state.channels,
+                mentions::known_emojis(state, channel),
+            ),
         );
         let mention_pick = if mention_enabled {
             self.mention_menu.keys(ctx)
@@ -1333,6 +1329,10 @@ impl MessagingUi {
                             && ctx.memory(|m| m.has_focus(composer_id) || m.had_focus_last_frame(composer_id))
                             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
                         let remaining = if editing_here { MAX_CONTENT * 4 } else { MAX_DRAFT_BYTES.saturating_sub(state.draft_bytes()) };
+                        let server_emojis = state.channels.iter().find(|c| c.id == channel)
+                            .and_then(|c| c.guild)
+                            .and_then(|id| state.guilds.iter().find(|guild| guild.id == id))
+                            .and_then(|guild| guild.emojis.as_deref()).unwrap_or(&[]);
                         let mut new_draft = String::new();
                         let draft = if let Some((_, _, content)) = &mut editing {
                             content
@@ -1358,7 +1358,7 @@ impl MessagingUi {
                             }
                         }
                         if let Some(pick) = mention_pick
-                            && let Some(cursor) = mentions::insert(draft, pick)
+                            && let Some(cursor) = mentions::insert(draft, pick, remaining)
                         {
                             let mut edit_state =
                                 egui::text_edit::TextEditState::load(ctx, composer_id).unwrap_or_default();
@@ -1381,7 +1381,7 @@ impl MessagingUi {
                                 ui,
                                 draft,
                                 ui.available_width(),
-                                &mention_users,
+                                (&mention_users, &state.channels),
                                 &mut self.avatars,
                                 demo,
                             );
@@ -1392,7 +1392,7 @@ impl MessagingUi {
                                 ui,
                                 buffer.as_str(),
                                 width,
-                                &mention_users,
+                                (&mention_users, &state.channels),
                                 &mut self.avatars,
                                 demo,
                             )
@@ -1418,15 +1418,28 @@ impl MessagingUi {
                         if mention_changed {
                             output.response.request_focus();
                         }
+                        if output.response.changed() && !self.ime_active && !ime_this_frame
+                            && let Some(range) = output.cursor_range.filter(|range| range.is_empty())
+                            && let Some(cursor) = mentions::complete_shortcode(
+                                draft, range.primary.index.0, server_emojis, remaining,
+                            )
+                        {
+                            let range = egui::text::CCursorRange::one(egui::text::CCursor::new(cursor));
+                            output.cursor_range = Some(range);
+                            output.state.cursor.set_char_range(Some(range));
+                            output.state.clone().store(ctx, composer_id);
+                            mention_changed = true;
+                            ctx.request_repaint();
+                        }
                         let mention_cursor = output
                             .cursor_range
                             .filter(|r| r.is_empty())
                             .map(|r| r.primary.index.0)
                             .filter(|_| mention_enabled);
                         self.mention_menu
-                            .refresh(channel, draft, mention_cursor, &mention_users, &state.channels);
+                            .refresh(channel, draft, mention_cursor, (&mention_users, &state.channels, server_emojis));
                         if let Some(pick) = self.mention_menu.show(ui)
-                            && let Some(cursor) = mentions::insert(draft, pick)
+                            && let Some(cursor) = mentions::insert(draft, pick, remaining)
                         {
                             output
                                 .state

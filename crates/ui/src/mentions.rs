@@ -1,6 +1,6 @@
-//! Suggestions use only bounded people and guild text channels already loaded in this session.
+//! Bounded suggestions from loaded people/channels and the local emoji catalog.
 use client_core::State;
-use model::{Channel, Id, User};
+use model::{Channel, CustomEmoji, Id, User};
 use std::ops::Range;
 
 #[derive(Default)]
@@ -21,13 +21,25 @@ pub struct Pick {
 enum Kind {
     User,
     Channel,
+    Emoji,
 }
 #[derive(Clone)]
 struct Candidate {
-    id: Id,
+    token: String,
     name: String,
     kind: Kind,
 }
+pub fn known_emojis(state: &State, channel: Id) -> &[CustomEmoji] {
+    state
+        .channels
+        .iter()
+        .find(|c| c.id == channel)
+        .and_then(|c| c.guild)
+        .and_then(|id| state.guilds.iter().find(|g| g.id == id))
+        .and_then(|g| g.emojis.as_deref())
+        .unwrap_or_default()
+}
+
 pub fn known_users(state: &State, channel: Id) -> Vec<User> {
     let mut users = Vec::new();
     let mut add = |user: &User| {
@@ -64,59 +76,124 @@ fn query(draft: &str, cursor: usize) -> Option<(Range<usize>, &str, Kind)> {
         .nth(cursor)
         .map_or(draft.len(), |(i, _)| i);
     let prefix = &draft[..end];
-    let (start, _) = prefix.rmatch_indices(['@', '#']).find(|(start, _)| {
+    let (start, _) = prefix.rmatch_indices(['@', '#', ':']).find(|(start, _)| {
         prefix[..*start]
             .chars()
             .next_back()
             .is_none_or(|c| c.is_whitespace() || matches!(c, '(' | '[' | '{'))
     })?;
-    let kind = if prefix.as_bytes()[start] == b'#' {
-        Kind::Channel
-    } else {
-        Kind::User
+    let kind = match prefix.as_bytes()[start] {
+        b'#' => Kind::Channel,
+        b':' => Kind::Emoji,
+        _ => Kind::User,
     };
+    if in_code(&prefix[..start]) {
+        return None;
+    }
     let query = &prefix[start + 1..];
-    if query.chars().count() > 64
+    if query.chars().count() > if kind == Kind::Emoji { 96 } else { 64 }
         || query.chars().any(|c| {
             c.is_whitespace()
                 || matches!(c, '<' | '>' | '@' | '`')
                 || (kind == Kind::Channel && c == '#')
+                || (kind == Kind::Emoji
+                    && !c.is_ascii_alphanumeric()
+                    && !matches!(c, '_' | '+' | '-'))
         })
     {
         return None;
     }
     Some((start..end, query, kind))
 }
-pub fn insert(draft: &mut String, pick: Pick) -> Option<usize> {
-    if pick.range.end > draft.len()
-        || !draft.is_char_boundary(pick.range.start)
-        || !draft.is_char_boundary(pick.range.end)
-    {
-        return None;
+// Keep incomplete code literal while typing, including unmatched backtick runs.
+fn in_code(prefix: &str) -> bool {
+    let mut delimiter = None;
+    let mut chars = prefix.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' && delimiter.is_none() {
+            chars.next();
+        } else if c == '`' || c == '~' {
+            let mut count = 1;
+            while chars.peek() == Some(&c) {
+                chars.next();
+                count += 1;
+            }
+            if delimiter == Some((c, count)) {
+                delimiter = None;
+            } else if delimiter.is_none() && (c == '`' || count >= 3) {
+                delimiter = Some((c, count));
+            }
+        }
     }
-    let marker = if pick.candidate.kind == Kind::Channel {
-        '#'
-    } else {
-        '@'
-    };
-    let token = format!("<{marker}{}> ", pick.candidate.id);
-    if draft.chars().count() - draft[pick.range.clone()].chars().count() + token.chars().count()
-        > client_core::MAX_CONTENT
-    {
-        return None;
-    }
-    let cursor = draft[..pick.range.start].chars().count() + token.chars().count();
-    draft.replace_range(pick.range, &token);
-    Some(cursor)
+    delimiter.is_some()
 }
+
+fn replace(
+    draft: &mut String,
+    range: Range<usize>,
+    token: &str,
+    remaining: usize,
+) -> Option<usize> {
+    if range.start > range.end
+        || range.end > draft.len()
+        || !draft.is_char_boundary(range.start)
+        || !draft.is_char_boundary(range.end)
+    {
+        return None;
+    }
+    let selection = egui::text::CCursorRange::two(
+        egui::text::CCursor::new(draft[..range.start].chars().count()),
+        egui::text::CCursor::new(draft[..range.end].chars().count()),
+    );
+    crate::emoji_picker::insert(draft, token, Some(selection), remaining)
+}
+
+pub fn insert(draft: &mut String, pick: Pick, remaining: usize) -> Option<usize> {
+    replace(
+        draft,
+        pick.range,
+        &format!("{} ", pick.candidate.token),
+        remaining,
+    )
+}
+
+/// Convert the complete shortcode immediately before the scalar-index caret.
+/// The caller excludes active IME composition and nonempty selections.
+pub fn complete_shortcode(
+    draft: &mut String,
+    cursor: usize,
+    emojis: &[CustomEmoji],
+    remaining: usize,
+) -> Option<usize> {
+    let end = draft
+        .char_indices()
+        .nth(cursor)
+        .map_or(draft.len(), |(i, _)| i);
+    let prefix = draft[..end].strip_suffix(':')?;
+    let (range, name, kind) = query(prefix, cursor.checked_sub(1)?)?;
+    if kind != Kind::Emoji || name.is_empty() {
+        return None;
+    }
+    let token = crate::emoji_picker::shortcodes()
+        .iter()
+        .find(|(_, alias)| alias.eq_ignore_ascii_case(name))
+        .map(|(text, _)| (*text).to_owned())
+        .or_else(|| {
+            emojis
+                .iter()
+                .find(|emoji| emoji.usable() && emoji.name.eq_ignore_ascii_case(name))
+                .map(CustomEmoji::markup)
+        })?;
+    replace(draft, range.start..end, &token, remaining)
+}
+
 impl Menu {
     pub fn refresh(
         &mut self,
         channel: Id,
         draft: &str,
         cursor: Option<usize>,
-        users: &[User],
-        channels: &[Channel],
+        (users, channels, emojis): (&[User], &[Channel], &[CustomEmoji]),
     ) {
         let Some((range, query, kind)) = cursor.and_then(|cursor| query(draft, cursor)) else {
             *self = Self::default();
@@ -146,8 +223,8 @@ impl Menu {
                 .filter(|user| matches(user.id, &user.name))
                 .take(8)
                 .map(|user| Candidate {
-                    id: user.id,
-                    name: user.name.clone(),
+                    token: format!("<@{}>", user.id),
+                    name: user.name.chars().take(120).collect(),
                     kind,
                 })
                 .collect(),
@@ -167,11 +244,54 @@ impl Menu {
                     })
                     .take(8)
                     .map(|c| Candidate {
-                        id: c.id,
+                        token: format!("<#{}>", c.id),
                         name: c.name.chars().take(120).collect(),
                         kind,
                     })
                     .collect()
+            }
+            Kind::Emoji => {
+                let mut candidates: Vec<Candidate> = Vec::new();
+                if !query.is_empty() {
+                    for prefix_only in [true, false] {
+                        for (text, name) in crate::emoji_picker::shortcodes() {
+                            if candidates.len() == 8 {
+                                break;
+                            }
+                            if (if prefix_only {
+                                name.starts_with(&query)
+                            } else {
+                                name.contains(&query)
+                            }) && !candidates.iter().any(|c| c.token == *text)
+                            {
+                                candidates.push(Candidate {
+                                    token: (*text).into(),
+                                    name: name.clone(),
+                                    kind,
+                                });
+                            }
+                        }
+                        for emoji in emojis.iter().filter(|e| e.usable()) {
+                            if candidates.len() == 8 {
+                                break;
+                            }
+                            let name = emoji.name.to_lowercase();
+                            if (if prefix_only {
+                                name.starts_with(&query)
+                            } else {
+                                name.contains(&query)
+                            }) && !candidates.iter().any(|c| c.token == emoji.markup())
+                            {
+                                candidates.push(Candidate {
+                                    token: emoji.markup(),
+                                    name: emoji.name.chars().take(64).collect(),
+                                    kind,
+                                });
+                            }
+                        }
+                    }
+                }
+                candidates
             }
         };
         self.selected = self.selected.min(self.candidates.len().saturating_sub(1));
@@ -209,23 +329,34 @@ impl Menu {
         if self.dismissed || self.candidates.is_empty() {
             return None;
         }
-        ui.small(if self.kind == Some(Kind::Channel) {
-            "Link a channel · ↑↓ choose · Tab/Enter insert · Esc dismiss"
-        } else {
-            "Mention a person · ↑↓ choose · Tab/Enter insert · Esc dismiss"
+        ui.small(match self.kind {
+            Some(Kind::Channel) => "Link a channel · ↑↓ choose · Tab/Enter insert · Esc dismiss",
+            Some(Kind::Emoji) => "Insert emoji · ↑↓ choose · Tab/Enter insert · Esc dismiss",
+            _ => "Mention a person · ↑↓ choose · Tab/Enter insert · Esc dismiss",
         });
         let mut picked = None;
         for (index, candidate) in self.candidates.iter().enumerate() {
-            let marker = if candidate.kind == Kind::Channel {
-                '#'
+            let label = match candidate.kind {
+                Kind::Channel => format!("#{}", candidate.name),
+                Kind::User => format!(
+                    "@{} · {}",
+                    candidate.name,
+                    candidate
+                        .token
+                        .trim_start_matches("<@")
+                        .trim_end_matches('>')
+                ),
+                Kind::Emoji => format!(":{}:", candidate.name),
+            };
+            let button = if candidate.kind == Kind::Emoji
+                && let Some(image) = crate::emoji::image(ui.ctx(), &candidate.token, 20.0)
+            {
+                egui::Button::image_and_text(image, label).image_tint_follows_text_color(false)
             } else {
-                '@'
+                egui::Button::new(label)
             };
             if ui
-                .selectable_label(
-                    self.selected == index,
-                    format!("{marker}{} · {}", candidate.name, candidate.id),
-                )
+                .add(button.small().truncate().selected(self.selected == index))
                 .clicked()
             {
                 picked = Some(index);
@@ -243,6 +374,7 @@ mod tests {
         for (draft, expected, guild, kind) in [
             ("@Zo", "<@42> ", None, 1),
             ("#Zo", "<#42> ", Some(Id(9)), 0),
+            (":hea", "❤️ ", None, 1),
         ] {
             let ctx = egui::Context::default();
             let mut state = State {
@@ -280,7 +412,7 @@ mod tests {
             edit_state
                 .cursor
                 .set_char_range(Some(egui::text::CCursorRange::one(
-                    egui::text::CCursor::new(3),
+                    egui::text::CCursor::new(draft.chars().count()),
                 )));
             edit_state.store(&ctx, editor);
             let mut output = ctx.run_ui(
@@ -302,6 +434,155 @@ mod tests {
             assert!(view.draft_changes.contains(&Id(1)));
         }
     }
+    #[test]
+    fn composer_closing_colon_converts_with_undo_and_ime_stays_literal() {
+        for ime in [false, true] {
+            let ctx = egui::Context::default();
+            let mut state = State {
+                selected: Some(Id(1)),
+                demo: true,
+                ..State::default()
+            };
+            state.channels.push(channel(1, None, 1, "Synthetic DM"));
+            state.drafts.insert(Id(1), ":heart".into());
+            let mut view = crate::MessagingUi::default();
+            let mut editor = egui::Id::NULL;
+            let mut frame = |time, events| {
+                let mut commands = Vec::new();
+                ctx.run_ui(
+                    egui::RawInput {
+                        time: Some(time),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        editor = ui.make_persistent_id("message-input");
+                        view.composer(ui, &mut state, Id(1), &ctx, &mut commands);
+                    },
+                )
+                .drop_without_applying_deltas();
+                assert!(commands.is_empty());
+                if time == 0.0 {
+                    ctx.memory_mut(|m| m.request_focus(editor));
+                    let mut edit_state =
+                        egui::text_edit::TextEditState::load(&ctx, editor).unwrap();
+                    edit_state
+                        .cursor
+                        .set_char_range(Some(egui::text::CCursorRange::one(
+                            egui::text::CCursor::new(state.drafts[&Id(1)].chars().count()),
+                        )));
+                    edit_state.store(&ctx, editor);
+                }
+                state.drafts[&Id(1)].clone()
+            };
+            frame(0.0, vec![]);
+            if ime {
+                assert_eq!(
+                    frame(
+                        1.0,
+                        vec![egui::Event::Ime(egui::ImeEvent::Preedit {
+                            text: ":".into(),
+                            active_range_chars: None
+                        })]
+                    ),
+                    ":heart:"
+                );
+                assert_eq!(
+                    frame(
+                        2.0,
+                        vec![egui::Event::Ime(egui::ImeEvent::Commit(":".into()))]
+                    ),
+                    ":heart:"
+                );
+                assert_eq!(frame(3.0, vec![]), ":heart:");
+            } else {
+                assert_eq!(frame(1.0, vec![egui::Event::Text(":".into())]), "❤️");
+                let undone = frame(
+                    2.0,
+                    vec![egui::Event::Key {
+                        key: egui::Key::Z,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::COMMAND,
+                    }],
+                );
+                assert!(
+                    undone.starts_with(":heart"),
+                    "Undo must restore shortcode source: {undone}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn emoji_shortcodes_preserve_literal_text_unicode_and_budgets() {
+        for (source, expected) in [
+            (":heart:", "❤️"),
+            ("čau :+1:", "čau 👍"),
+            (":woman_technologist:", "👩‍💻"),
+            (":HEART:", "❤️"),
+        ] {
+            let mut draft = source.to_owned();
+            let end = draft.chars().count();
+            assert_eq!(
+                complete_shortcode(&mut draft, end, &[], 100),
+                Some(expected.chars().count())
+            );
+            assert_eq!(draft, expected);
+        }
+        for source in [
+            r"\:heart:",
+            "`:heart:",
+            "``code ` :heart:",
+            "```rust\n:heart:",
+            "~~~\n:heart:",
+            ":unknown:",
+            "https://host:heart:",
+        ] {
+            let mut draft = source.to_owned();
+            let end = draft.chars().count();
+            assert_eq!(
+                complete_shortcode(&mut draft, end, &[], 100),
+                None,
+                "{source}"
+            );
+            assert_eq!(draft, source);
+        }
+        let mut draft = "`literal` :heart: suffix".to_owned();
+        assert_eq!(complete_shortcode(&mut draft, 17, &[], 0), Some(12));
+        assert_eq!(draft, "`literal` ❤️ suffix");
+        let mut menu = Menu::default();
+        menu.refresh(Id(1), ":hea", Some(4), (&[], &[], &[]));
+        assert_eq!(menu.candidates[0].token, "❤️");
+        assert!(menu.candidates.len() <= 8);
+        menu.refresh(
+            Id(1),
+            &format!(":{}", "a".repeat(97)),
+            Some(98),
+            (&[], &[], &[]),
+        );
+        assert!(menu.candidates.is_empty());
+        let custom = CustomEmoji {
+            id: Id(99),
+            name: "party_blob".into(),
+            animated: true,
+            available: true,
+            managed: false,
+            roles: Some(vec![]),
+        };
+        let mut emojis = vec![custom];
+        menu.refresh(Id(1), ":party_bl", Some(9), (&[], &[], &emojis));
+        assert_eq!(menu.candidates[0].token, "<a:party_blob:99>");
+        let mut draft = ":party_blob:".to_owned();
+        assert_eq!(complete_shortcode(&mut draft, 12, &emojis, 0), None);
+        assert_eq!(complete_shortcode(&mut draft, 12, &emojis, 100), Some(17));
+        assert_eq!(draft, "<a:party_blob:99>");
+        emojis[0].available = false;
+        menu.refresh(Id(1), ":party_bl", Some(9), (&[], &[], &emojis));
+        assert!(menu.candidates.is_empty());
+    }
+
     fn user(id: u64, name: &str) -> User {
         User {
             id: Id(id),
@@ -321,7 +602,7 @@ mod tests {
         assert_eq!(query("čau @Zo", 7), Some((5..8, "Zo", Kind::User)));
         let mut menu = Menu::default();
         let users = vec![user(1, "Zoe"), user(2, "Zoë")];
-        menu.refresh(Id(1), "čau @Zo", Some(7), &users, &[]);
+        menu.refresh(Id(1), "čau @Zo", Some(7), (&users, &[], &[]));
         let ctx = egui::Context::default();
         let mut chosen = None;
         let mut output = ctx.run_ui(
@@ -351,12 +632,12 @@ mod tests {
         );
         output.textures_delta.clear();
         let mut draft = "čau @Zo".into();
-        assert_eq!(insert(&mut draft, chosen.unwrap()), Some(9));
+        assert_eq!(insert(&mut draft, chosen.unwrap(), 100), Some(9));
         assert_eq!(draft, "čau <@2> ");
         let users = (1..=1000).map(|id| user(id, "User")).collect::<Vec<_>>();
-        menu.refresh(Id(1), "@", Some(1), &users, &[]);
+        menu.refresh(Id(1), "@", Some(1), (&users, &[], &[]));
         assert_eq!(menu.candidates.len(), 8);
-        menu.refresh(Id(1), "no query", Some(8), &users, &[]);
+        menu.refresh(Id(1), "no query", Some(8), (&users, &[], &[]));
         assert!(menu.candidates.is_empty());
     }
 
@@ -390,10 +671,13 @@ mod tests {
         for text in ["https://host/#name", "abc#name", "<#6>"] {
             assert!(query(text, text.chars().count()).is_none());
         }
-        menu.refresh(Id(1), "čau #Žl", Some(7), &[], &channels);
+        menu.refresh(Id(1), "čau #Žl", Some(7), (&[], &channels, &[]));
         assert_eq!(
-            menu.candidates.iter().map(|c| c.id).collect::<Vec<_>>(),
-            [Id(6), Id(7)]
+            menu.candidates
+                .iter()
+                .map(|c| c.token.as_str())
+                .collect::<Vec<_>>(),
+            ["<#6>", "<#7>"]
         );
         let ctx = egui::Context::default();
         let mut pick = None;
@@ -415,16 +699,21 @@ mod tests {
         )
         .drop_without_applying_deltas();
         let mut draft = "čau #Žl".into();
-        assert_eq!(insert(&mut draft, pick.unwrap()), Some(9));
+        assert_eq!(insert(&mut draft, pick.unwrap(), 100), Some(9));
         assert_eq!(draft, "čau <#6> ");
-        menu.refresh(Id(3), "#", Some(1), &[], &channels);
+        menu.refresh(Id(3), "#", Some(1), (&[], &channels, &[]));
         assert!(menu.candidates.is_empty());
         channels.extend((20..40).map(|id| channel(id, Some(Id(9)), 0, &"é".repeat(300))));
-        menu.refresh(Id(1), "#é", Some(2), &[], &channels);
+        menu.refresh(Id(1), "#é", Some(2), (&[], &channels, &[]));
         assert_eq!(menu.candidates.len(), 8);
         assert!(menu.candidates.iter().all(|c| c.name.len() <= 480));
         let mut full = format!("{} #", "x".repeat(client_core::MAX_CONTENT - 2));
-        menu.refresh(Id(1), &full, Some(client_core::MAX_CONTENT), &[], &channels);
-        assert!(insert(&mut full, menu.pick(0).unwrap()).is_none());
+        menu.refresh(
+            Id(1),
+            &full,
+            Some(client_core::MAX_CONTENT),
+            (&[], &channels, &[]),
+        );
+        assert!(insert(&mut full, menu.pick(0).unwrap(), 100).is_none());
     }
 }

@@ -326,6 +326,12 @@ impl Desktop {
             .last()
             .map_or(10_000, |m| m.id.0.max(10_000));
         let mut messaging = ui::MessagingUi::default();
+        if demo && std::env::args().any(|arg| arg == "--demo-emoji-completion") {
+            if let Some(channel) = state.selected {
+                state.drafts.insert(channel, "<#20> :hea".into());
+            }
+            messaging.preview_composer();
+        }
         messaging.notification_test_available =
             demo && std::env::args().any(|arg| arg == "--demo-system-notifications");
         if messaging.notification_test_available {

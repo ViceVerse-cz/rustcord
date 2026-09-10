@@ -45,3 +45,8 @@ as `licenses/Unicode-LICENSE.txt`. Custom server emoji are service content fetch
 not redistributed in this repository; demo custom images are original synthetic shapes.
 
 Native system notifications use **notify-rust 4.18.0** (MIT OR Apache-2.0), with the opt-in modern macOS UserNotifications backend **mac-usernotifications 0.3.1** (MIT OR Apache-2.0). Its manifest also links **mac-notification-sys 0.6.15** (MIT/Apache-2.0), although the legacy notification backend is not selected. Additional host dependencies include **futures-timer 3.0.4** (MIT/Apache-2.0) and **objc2-core-location / objc2-user-notifications 0.3.2** (Zlib OR Apache-2.0 OR MIT). The notification adapters’ unmodified MIT texts, objc2’s upstream licensing notice and pinned source provenance are in [assets/licenses/notifications](assets/licenses/notifications). Linux uses the existing zbus dependency family; Windows uses **tauri-winrt-notification 0.7.3** and **windows 0.61.3** (MIT OR Apache-2.0). OS notification services/frameworks retain their platform terms. Notifications carry only generic Serein text; server content is not bundled in these assets.
+
+Native emoji fallback on macOS uses the installed Apple Color Emoji font through AppKit;
+no Apple font data or artwork is redistributed. It uses the already-resolved **objc2 0.6.4**,
+**objc2-foundation 0.3.2**, and **objc2-app-kit 0.3.2** bindings, with existing upstream license
+notices under `assets/licenses/notifications`. AppKit and OS fonts retain Apple's terms.

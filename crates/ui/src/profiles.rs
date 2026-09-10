@@ -252,7 +252,12 @@ pub fn show(
                         .inner_margin(egui::Margin::symmetric(10, 6))
                         .show(ui, |ui| {
                             ui.set_max_width(bubble.width() - 20.0);
-                            ui.add(egui::Label::new(RichText::new(custom).size(13.0)).wrap());
+                            crate::emoji::label_wrapped(
+                                ui,
+                                custom,
+                                egui::FontId::proportional(13.0),
+                                theme.text,
+                            );
                         });
                 });
                 header_bottom = header_bottom.max(response.response.rect.bottom());

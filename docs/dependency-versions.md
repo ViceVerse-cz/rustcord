@@ -1,5 +1,13 @@
 # Resolved dependencies
 
+September 10 emoji fallback: the UI declares existing macOS-only objc2 0.6.4,
+objc2-foundation 0.3.2 and objc2-app-kit 0.3.2 directly for bounded background bitmap rendering.
+No resolved package or version was added. Only `emoji/native_macos.rs` permits audited unsafe
+AppKit calls; other UI code denies unsafe code, and the workspace-wide forbid remains intact.
+The bitmap context and autorelease pool are worker-local, following Apple's
+[thread-safety guidance](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/Multithreading/ThreadSafetySummary/ThreadSafetySummary.html)
+(rechecked September 10, 2026).
+
 September 10 Linux migration: current Cargo.lock has 726 packages. GTK4 0.11.4, WebKit6 0.6.1,
 JavaScriptCore6 0.6.0, GLib 0.22.9 and Soup3 0.9.0 replace the earlier GTK3/WebKit2GTK family.
 Wry 0.57.0 is a Windows/macOS-only local patch. Earlier inventory/addenda below are historical.

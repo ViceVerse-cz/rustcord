@@ -144,11 +144,11 @@ counts and the reaction menu use bundled [Twemoji 17.0.3](https://github.com/jde
 artwork from Twitter and contributors, under CC BY 4.0. This is a local rendering feature,
 not a new protocol endpoint or proof of matching Discord's current artwork revision.
 Grapheme matching supports flags, modifiers, keycaps and ZWJ sequences, including optional
-emoji presentation selectors. Code, explicit text-presentation and unknown sequences remain
-literal. Original message/reaction strings and outgoing requests are unchanged. Whole-message
+emoji presentation selectors. Code and explicit text-presentation remain literal. On macOS, atlas misses use
+the installed color emoji font when it supports the complete grapheme; other misses remain text. Original message/reaction strings and outgoing requests are unchanged. Whole-message
 Copy preserves the original text; drag-selection of rendered text excludes inline image widgets.
-The editable composer continues to use native font text. Custom server emoji and animation
-are not supplied by Twemoji and retain their existing text fallback. Validation is synthetic;
+The editable composer uses the same Unicode artwork path. Custom server emoji use the
+separate bounded static-image path described below; Twemoji does not provide them. Validation is synthetic;
 no live Discord session was used.
 
 ### Custom server emoji, chat picker and copying (September 10, 2026)
@@ -176,7 +176,16 @@ Only catalog entries explicitly available, unmanaged and unrestricted by roles a
 unknown eligibility remains disabled. Cross-server/DM catalog selection and full role/Nitro
 entitlement inference are not implemented; the service remains authoritative for actual sends.
 Animated emoji are inserted with their original animated markup and shown as still previews.
-The composer now displays known user mentions as `@name`, Unicode as bundled Twemoji, and custom emoji as static server artwork, while retaining original wire text for editing/copy/send. Unresolved user IDs remain literal; unavailable server artwork shows its name.
+The composer displays known user mentions as `@name`, channel references as `#channel-name`,
+Unicode as color artwork, and custom emoji as static server artwork, retaining wire text for
+editing/copy/send. Missing channel metadata displays `#unknown-channel`; unresolved users remain
+literal. Unavailable custom artwork shows its name. Channel suggestions show names without IDs.
+Typing `:hea` offers up to eight matching Unicode/common chat aliases or usable current-server
+emoji; arrows choose, Tab/Enter inserts, Escape dismisses. Typing a full `:heart:` converts it
+at the caret. Code, escaped text, unknown names and active IME composition stay literal.
+This is local completion, not a claim of exact Discord shortcode parity or cross-server emoji
+entitlements. Channel/category labels, member names/status and profile statuses also use color
+artwork. Native OS fallback currently exists only on macOS; Windows/Linux use bundled Twemoji.
 
 
 ## Server voice — September 10, 2026

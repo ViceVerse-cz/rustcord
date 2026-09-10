@@ -18,5 +18,11 @@ image = { version = "=0.25.10", default-features = false, features = ["png"] }
 test-support.workspace = true
 skrifa = { version = "=0.44.0", default-features = false, features = ["std"] }
 
-[lints]
-workspace = true
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "=0.6.4"
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSString", "NSDictionary", "NSObject"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSBitmapImageRep", "NSImageRep", "NSGraphicsContext", "NSGraphics", "NSFont", "NSAttributedString", "NSStringDrawing", "objc2-core-foundation"] }
+
+[lints.rust]
+# Only emoji/native_macos.rs allows the audited AppKit bitmap bridge.
+unsafe_code = "deny"

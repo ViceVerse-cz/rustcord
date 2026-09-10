@@ -1,7 +1,7 @@
 //! Inline artwork with the original wire text retained in egui's editing/undo model.
 use crate::{avatars::Avatars, emoji};
 use egui::{Color32, Image, text::CCursor, text::LayoutJob, text::TextFormat};
-use model::User;
+use model::{Channel, User};
 use std::{ops::Range, sync::Arc};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -24,10 +24,11 @@ impl Layout {
         ui: &egui::Ui,
         text: &str,
         width: f32,
-        users: &[User],
+        references: (&[User], &[Channel]),
         avatars: &mut Avatars,
         demo: bool,
     ) -> Arc<egui::Galley> {
+        let (users, channels) = references;
         self.inlines.clear();
         let font = egui::TextStyle::Body.resolve(ui.style());
         let colors = crate::design::palette(ui);
@@ -46,6 +47,13 @@ impl Layout {
                 && let Some(user) = users.iter().find(|u| u.id == id)
             {
                 label = Some((format!("@{}", user.name), colors.accent));
+                len
+            } else if let Some((id, len)) = model::channel_mention_prefix(tail) {
+                let name = channels
+                    .iter()
+                    .find(|channel| channel.id == id)
+                    .map_or("unknown-channel", |channel| channel.name.as_str());
+                label = Some((format!("#{name}"), colors.accent));
                 len
             } else if let Some((id, len)) = emoji::custom_prefix(tail) {
                 image = avatars.custom_image(ui.ctx(), id, size, demo);
@@ -75,12 +83,16 @@ impl Layout {
             let count = raw.chars().count();
             if label.is_some() || image.is_some() {
                 let slot = label.as_ref().map_or(size, |g| g.size().x + 6.0);
-                // One zero-width glyph plus leading space forms an unbroken inline object.
-                // Expand its character slots below, so native selection/copy/undo use wire text.
+                // A blank glyph reserves real advance width, including at wrapped row starts.
+                // Leading indentation is discarded by egui when it wraps a row.
+                let mut slot_font = font.clone();
+                let advance = ui.fonts_mut(|fonts| fonts.glyph_width(&font, '\u{a0}'));
+                slot_font.size *= slot / advance;
                 job.append(
-                    "\u{200b}",
-                    slot,
+                    "\u{a0}",
+                    0.0,
                     TextFormat {
+                        font_id: slot_font,
                         color: Color32::TRANSPARENT,
                         line_height: Some(size),
                         ..format.clone()
@@ -118,8 +130,7 @@ impl Layout {
                     for (index, chr) in chars[inline.source.clone()].iter().enumerate() {
                         let mut slot = *glyph;
                         slot.chr = *chr;
-                        slot.pos.x =
-                            glyph.pos.x - inline.width + inline.width * index as f32 / count as f32;
+                        slot.pos.x = glyph.pos.x + inline.width * index as f32 / count as f32;
                         slot.advance_width = inline.width / count as f32;
                         glyphs.push(slot);
                     }
@@ -277,7 +288,7 @@ mod tests {
             let mut output = ctx.run_ui(Default::default(), |ui| {
                 emoji::selectable(ui, &text, |_| Some(image.clone()), 24.0, false);
                 let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, width| {
-                    layout.galley(ui, buffer.as_str(), width, &[], &mut avatars, true)
+                    layout.galley(ui, buffer.as_str(), width, (&[], &[]), &mut avatars, true)
                 };
                 let edit = egui::TextEdit::multiline(&mut text)
                     .layouter(&mut layouter)
@@ -311,11 +322,12 @@ mod tests {
     fn artwork_keeps_wire_characters_and_cursor_geometry_across_wrapped_lines() {
         let ctx = egui::Context::default();
         emoji::install(&ctx).unwrap();
-        let text = "Hi <@42> 👩🏽‍💻 <:serein_leaf:9001>\nagain <@!42> ❤️";
+        let text = "Hi <@42> 👩🏽‍💻 <:serein_leaf:9001>\nagain <@!42> ❤️ <#20> <#999>";
+        let channels = test_support::demo_state().channels;
         let mut avatars = Avatars::default();
         let mut layout = Layout::default();
         let output = ctx.run_ui(Default::default(), |ui| {
-            let galley = layout.galley(ui, text, 130.0, &users(), &mut avatars, true);
+            let galley = layout.galley(ui, text, 130.0, (&users(), &channels), &mut avatars, true);
             assert_eq!(galley.job.text, text);
             let mut reconstructed = String::new();
             for row in &galley.rows {
@@ -323,11 +335,23 @@ mod tests {
                 if row.ends_with_newline {
                     reconstructed.push('\n');
                 }
-                assert!(row.glyphs.iter().all(|g| g.pos.x >= -0.1));
+                assert!(
+                    row.glyphs.iter().all(|g| g.pos.x >= -0.1),
+                    "{:?}",
+                    row.glyphs
+                );
                 assert!(row.glyphs.windows(2).all(|g| g[0].pos.x <= g[1].pos.x));
             }
             assert_eq!(reconstructed, text);
-            assert_eq!(layout.inlines.len(), 5);
+            assert_eq!(layout.inlines.len(), 7);
+            assert_eq!(
+                layout.inlines[5].label.as_ref().unwrap().job.text,
+                "#getting-started"
+            );
+            assert_eq!(
+                layout.inlines[6].label.as_ref().unwrap().job.text,
+                "#unknown-channel"
+            );
             assert_eq!(
                 layout.inlines.iter().filter(|i| i.image.is_some()).count(),
                 3
@@ -381,10 +405,17 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    layout.galley(ui, &text, 300.0, &users(), &mut avatars, true);
+                    layout.galley(ui, &text, 300.0, (&users(), &[]), &mut avatars, true);
                     layout.select_deleted_inline(&ctx, id);
                     let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, width| {
-                        layout.galley(ui, buffer.as_str(), width, &users(), &mut avatars, true)
+                        layout.galley(
+                            ui,
+                            buffer.as_str(),
+                            width,
+                            (&users(), &[]),
+                            &mut avatars,
+                            true,
+                        )
                     };
                     let mut edit = egui::TextEdit::multiline(&mut text)
                         .id(id)

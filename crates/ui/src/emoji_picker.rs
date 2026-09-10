@@ -62,6 +62,51 @@ fn standard() -> &'static [(&'static str, &'static str)] {
     })
 }
 
+/// Shortcodes share the bundled palette; common chat aliases precede Unicode names.
+pub(crate) fn shortcodes() -> &'static [(&'static str, String)] {
+    static ENTRIES: OnceLock<Vec<(&'static str, String)>> = OnceLock::new();
+    ENTRIES.get_or_init(|| {
+        let aliases = [
+            ("❤️", "heart"),
+            ("👍", "+1"),
+            ("👍", "thumbsup"),
+            ("👎", "-1"),
+            ("👎", "thumbsdown"),
+            ("😂", "joy"),
+            ("😄", "smile"),
+            ("😃", "smiley"),
+            ("😊", "blush"),
+            ("😍", "heart_eyes"),
+            ("🥰", "smiling_face_with_three_hearts"),
+            ("😘", "kissing_heart"),
+            ("😭", "sob"),
+            ("😢", "cry"),
+            ("😆", "laughing"),
+            ("😎", "sunglasses"),
+            ("🤔", "thinking"),
+            ("🎉", "tada"),
+            ("💯", "100"),
+            ("✅", "white_check_mark"),
+            ("❌", "x"),
+            ("🙏", "pray"),
+            ("👋", "wave"),
+            ("💩", "poop"),
+        ];
+        aliases
+            .into_iter()
+            .map(|(text, name)| (text, name.to_owned()))
+            .chain(standard().iter().map(|&(text, name)| {
+                let name = name
+                    .split(|c: char| !c.is_ascii_alphanumeric())
+                    .filter(|part| !part.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("_");
+                (text, name)
+            }))
+            .collect()
+    })
+}
+
 pub(crate) struct Picker {
     open: bool,
     focus: bool,
@@ -74,7 +119,8 @@ pub(crate) struct Picker {
 
 impl Default for Picker {
     fn default() -> Self {
-        // Initialize the static catalog during application creation, outside rendering.
+        // Initialize the static catalogs during application creation, outside rendering.
+        shortcodes();
         Self {
             open: false,
             focus: false,
@@ -301,6 +347,15 @@ mod tests {
             .lines()
             .map(|l| l.split_once('\t').unwrap().0)
             .collect();
+        assert!(shortcodes().len() < 4096);
+        assert!(shortcodes().iter().all(|(_, name)| name.len() <= 96));
+        assert!(
+            shortcodes()
+                .iter()
+                .map(|(text, name)| text.len() + name.capacity())
+                .sum::<usize>()
+                < 300_000
+        );
         assert_eq!(standard().len(), 3953);
         assert!(NAMES.len() < 300_000);
         for (text, name) in standard() {

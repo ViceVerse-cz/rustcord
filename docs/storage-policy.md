@@ -135,8 +135,16 @@ and a fixed 4,009-entry Unicode index are embedded in the executable. Startup de
 one 2,048×2,016 RGBA atlas (15.75 MiB) before the first render callback; the GPU texture
 has the same pixel payload, with driver overhead additional. Decode/conversion/upload
 can temporarily hold multiple copies. The context retains the single atlas until exit,
-including across logout; there are no emoji downloads, disk writes, or growing texture
-queues. Unknown sequences and explicit text-presentation selectors remain font text.
+including across logout; no Twemoji downloads or disk writes occur.
+On macOS, atlas misses can use the installed Apple Color Emoji font through a background
+AppKit worker. Its FIFO cache holds at most 128 keys (128 UTF-8 bytes each) and 128 64×64 RGBA
+textures (2 MiB pixel payload plus driver/upload overhead), including failed lookups. The
+16-slot request queue holds at most 2 KiB of text; one 16 KiB bitmap is rasterized at a time.
+This public Unicode-only cache lasts until context teardown, with no account IDs or disk
+persistence. The app does not copy or bundle the system font. Explicit text presentation,
+unsupported OS sequences and non-macOS atlas misses remain text.
+The fixed shortcode catalog has fewer than 4,096 entries and 300 KiB of string payload;
+completion retains at most eight choices and uses the existing draft character/capacity limits.
 
 Custom server emoji catalogs live only in session navigation memory: at most 1,000 entries
 and 256 KiB allocated data per server, including names and role lists, within the shared
