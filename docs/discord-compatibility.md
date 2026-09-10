@@ -279,8 +279,10 @@ no live account action, microphone capture or new native screenshot was performe
 See [notifications](notifications.md) for service badge/read-state reconciliation, focused
 view ACKs, session-only native opt-in and fail-closed mute/DND handling. READY read-state
 counts, settings and session presence use isolated unofficial normal-user wire shapes.
-Synthetic protocol/UI tests are not live Discord validation. Role/everyone mention events,
-blocked relationships and complete protobuf notification preferences remain unsupported.
+Synthetic protocol/UI tests are not live Discord validation. Role/everyone mention events and silent flags are handled through bounded supplied metadata
+and current self roles/settings; see notifications.md for conservative classification and
+live limits. Blocked relationships and complete protobuf notification preferences remain
+unsupported.
 
 
 ### Loaded People presence (September 10, 2026)

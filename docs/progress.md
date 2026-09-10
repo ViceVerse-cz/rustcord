@@ -2,9 +2,9 @@
 
 ## Current scope and gates
 
-Current slice: unread navigation and bounded forward history after custom-status PR #40, from
-main c4ae54d. Full SPEC completion remains active; native automation and live-account validation
-remain owner-controlled. See the final dated entry for this slice and its verification.
+Current slice: role/everyone and silent-message notifications after unread navigation PR #41,
+from main 9ce22a9. Full SPEC completion remains active; native automation and live-account
+validation remain owner-controlled. See the final dated entry for verification.
 
 ## Inline message spoilers (merged PR #36)
 
@@ -1388,3 +1388,26 @@ native screenshots were accessed; the owner performs the live retry.
 - Both unsigned Windows packages passed. Text/voice executables grow 8,704/10,752 bytes.
   Package/ZIP deltas and one-warmup/five-run replay results are in docs/performance.md;
   retained 500-message data remains 228,992..229,477 estimated bytes. No speedup claim.
+
+
+## Group mentions and silent notifications (September 10, 2026)
+
+- Baseline clean main `9ce22a9585d3db0cbff4772fb571dfb4113c05d8`; isolated branch
+  `feat/notification-mentions`. SPEC9.2/9.4 mention/notification handling now includes supplied
+  role IDs, everyone/here and silent-message flags without scanning message text or requesting
+  directory data. Self roles and explicit suppression preferences determine group pings.
+- Silent messages retain badges but never enqueue alerts. Direct/DM mentions remain independent
+  of group suppression; existing mute/DND and incomplete-settings gates remain conservative.
+  Queued role alerts recheck current membership, with 32 items/16 KiB including slot capacity
+  and role allocations. Edits/history do not alert; fields are not persisted to SQLite.
+- Decoder/model tests enforce 100 positive unique role IDs/800 retained bytes, null/shape/duplicate
+  rejection and allocation accounting. Core tests cover suppression/unknowns, dedup, silent
+  badges, role removal before delivery and queue byte pressure. Storage roundtrip proves
+  notification metadata is not restored. Independent review found no remaining blocker.
+- `cargo xtask check` passed 320 offline Rust tests, doctests, formatting, strict all-feature
+  Clippy, text-only compilation and policy checks. Both unsigned Windows release packages passed.
+  Text/voice executables grow 13,312/10,752 bytes; replay median 36.6610 to 39.9284 ms (+8.91%)
+  on the shared host, with retained timeline estimates +8,000 bytes for 500 messages. Full
+  samples/package deltas are in docs/performance.md. Native screenshots,
+  resource measurements, OS notification delivery and live account behavior remain unverified
+  because native/live validation is owner-controlled. No account or audio actions occurred.

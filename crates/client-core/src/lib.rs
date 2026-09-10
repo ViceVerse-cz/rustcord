@@ -2397,6 +2397,9 @@ mod tests {
             extra_content: Default::default(),
             embeds: vec![],
             attachments: vec![],
+            mention_roles: vec![],
+            mention_everyone: false,
+            suppress_notifications: false,
             mentions: Vec::new(),
             embeds_suppressed: false,
         }

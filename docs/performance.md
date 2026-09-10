@@ -1427,3 +1427,36 @@ desktop automation is owner-paused. No live account or audio-device interaction 
 Forward history adds fixed-size cursor/flag state and reuses the 50-message response limit,
 500-row/4-MiB active window, global resident ceiling and existing cancellable request worker.
 Pages replace the active window. No added dependency, migration, cache or queue.
+
+
+## Group mentions and silent notifications - September 10, 2026
+
+| Metric / method | Main 9ce22a9 | Notification mentions | Delta |
+| --- | ---: | ---: | ---: |
+| text executable, bytes | 50,814,464 | 50,827,776 | +13,312 (+0.026%) |
+| text installed, bytes | 51,413,035 | 51,433,272 | +20,237 (+0.039%) |
+| text zip, bytes | 31,758,083 | 31,768,372 | +10,289 (+0.032%) |
+| voice executable, bytes | 54,170,624 | 54,181,376 | +10,752 (+0.020%) |
+| voice installed, bytes | 54,991,968 | 55,009,645 | +17,677 (+0.032%) |
+| voice zip, bytes | 33,134,023 | 33,140,030 | +6,007 (+0.018%) |
+| 100,000-event replay median, ms | 36.6610 | 39.9284 | +3.2674 (+8.91%) |
+| Retained 500-message timeline, estimated bytes | 228,992..229,477 | 236,992..237,477 | +8,000 |
+
+Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical CPUs), approximately 31 GiB RAM,
+Rust 1.98.1, release thin LTO/one codegen unit. Both unsigned Windows packages passed.
+Baseline PR #41 executables were SHA256-verified against their original recorded artifacts.
+Text has no default features; voice explicitly enables voice. Installed sums and DEFLATE 9 ZIPs
+exclude PR screenshots; text excludes nested voice. Bundled documentation is its build-time
+snapshot before final measurement addenda; installed deltas include documentation updates.
+
+One warmup and five direct replay runs per revision. Baseline samples:
+36.0087,36.8362,36.0801,37.7125,36.661ms. New samples:
+39.9284,40.3984,40.9795,39.8744,39.1995ms. The measured median increased 8.91%; this shared-host sample
+cannot separate timing noise from regression and is not a native latency measurement.
+Retained timeline estimates grow by 8,000 bytes for 500 records because of the new message
+metadata. No process RSS, native CPU/frame/startup or OS alert measurements were made;
+desktop automation remains owner-paused. No live account or audio actions occurred.
+
+Mention roles are capped at 100 positive unique IDs and 800 retained allocation bytes per message.
+Notification delivery retains at most 32 items/16 KiB including reserved queue slots and role
+allocations; observed badge records remain 4,096/128 KiB. No dependency or migration was added.

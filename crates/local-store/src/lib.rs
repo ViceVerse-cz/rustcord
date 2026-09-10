@@ -438,6 +438,9 @@ impl LocalStore {
                 nonce: None,
                 revision: 0,
                 embeds,
+                mention_roles: vec![],
+                mention_everyone: false,
+                suppress_notifications: false,
                 mentions,
                 embeds_suppressed: row.get(10)?,
                 attachments,
@@ -1303,7 +1306,7 @@ mod tests {
             "synthetic draft"
         );
         for channel in 1..=30 {
-            let message = Message {
+            let mut message = Message {
                 reactions: Some(vec![]),
                 id: Id(100),
                 channel: Id(channel),
@@ -1325,12 +1328,19 @@ mod tests {
                     title: Some("Cached synthetic embed".into()),
                     ..Default::default()
                 }],
+                mention_roles: vec![],
+                mention_everyone: false,
+                suppress_notifications: false,
                 mentions: Vec::new(),
                 embeds_suppressed: true,
                 attachments: Vec::new(),
                 nonce: None,
                 revision: 0,
             };
+            // Notification targeting is session-only; disk hydration never replays it.
+            message.mention_roles = vec![Id(77)];
+            message.mention_everyone = true;
+            message.suppress_notifications = true;
             store.save_channel(Id(1), Id(channel), &[message]).unwrap();
         }
         let count: i64 = store
@@ -1347,6 +1357,9 @@ mod tests {
             Some("Cached synthetic embed")
         );
         assert!(cached[0].embeds_suppressed);
+        assert!(cached[0].mention_roles.is_empty());
+        assert!(!cached[0].mention_everyone);
+        assert!(!cached[0].suppress_notifications);
         let cached_author = &cached[0].author;
         assert_eq!(
             cached_author.avatar.as_deref(),
