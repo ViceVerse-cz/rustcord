@@ -321,7 +321,7 @@ both release packages are recorded in this task's performance/PR evidence. Windo
 live compatibility, screen-reader output and frame/startup p95 remain unverified.
 
 Verification: `cargo test -p ui emoji` passed 2 focused tests; final `cargo xtask check`
-passed all 98 workspace tests, both strict Clippy configurations, format and policy checks.
+passed all 88 workspace tests, both strict Clippy configurations, format and policy checks.
 `cargo xtask package` and `cargo xtask package-voice` passed including strict ad-hoc
 codesign verification. The generator reproduced the atlas/index from a hash-verified
 upstream archive. Staged diff review passed except preserved upstream license whitespace.
@@ -331,3 +331,46 @@ Text executable +6,170,256 bytes; compressed .app +6,075,785 bytes; median sampl
 Delivery: [PR #6](https://github.com/ViceVerse-cz/rustcord/pull/6) is a draft while
 GitHub's macOS/Windows/Linux native jobs and security job are pending. Local checks
 and both host packages passed; pending CI is not reported as success.
+
+### September 10, 2026 — custom server emoji and composer picker
+
+Follow-up to Twemoji: receive bounded guild emoji catalogs over READY/GUILD_CREATE and
+GUILD_EMOJIS_UPDATE; render standard/static custom emoji in formatted text and reactions
+through the existing credential-free media worker; show a searchable 3,953-entry standard
+palette and current-server picker in the composer. Emoji selection inserts/replaces at the
+saved cursor without sending and respects message/draft capacity limits. Unknown/restricted
+catalog eligibility is visibly disabled. Two explicitly synthetic server emoji demonstrate
+the same insertion/rendering path offline; animated markup uses a still preview.
+
+Fixed inline selection/copy for both Unicode and custom image widgets. Original text stays
+in egui's selection model, with atomic emoji hit targets; dragging across images and beginning
+inside an image cannot copy a partial sequence/markup. Right-click Copy emoji is also available.
+Code/unknown sequences and the editable composer remain literal. No new runtime dependency,
+account action, schema migration, cross-server entitlement claim or live Discord test.
+
+Baseline `a270437cb6c1e69030420cda4e0fb6efa957bcb0` on clean `feat/twemoji`, fetched from origin;
+new task branch `feat/server-emoji-picker` is stacked on PR #6. Baseline packages reuse the
+previously verified exact runtime binaries (compared byte-for-byte); their packaged docs
+predate the previous final measurement report. A detached baseline source worktree supplies
+the reducer replay. Synthetic screenshots are in `docs/pr-evidence/server-emoji-picker`.
+Inherited CI blocker: PR #6's native jobs passed on macOS/Windows/Linux; its security job
+fails `cargo audit --deny warnings` with six vulnerabilities and five denied warnings
+(run 34466516925). This change does not modify Cargo.lock or those dependencies.
+
+Verification: final `cargo xtask check` passed 98 workspace unit tests, formatting,
+policy checks and default/all-feature strict Clippy. Both `cargo xtask package` and
+`cargo xtask package-voice` passed with signature verification. Pointer-event tests
+copy exact Unicode/ZWJ/custom markup across image labels and forbid partial emoji
+endpoints; picker tests cover filtering, replacement budgets, reset and viewport media
+requests. Native before/after screenshots show the same synthetic message; custom
+images and Emoji trigger are visible in the changed build. Native automation returned
+unchanged UI state on repeated AX/coordinate picker activation (and intermittent
+user-changed-state errors), including after resetting the session with only the final
+preview running. Full native picker/clipboard/light/narrow checks remain incomplete;
+unit selection output is not claimed as native clipboard verification.
+
+Measured text executable +224,240 bytes (+0.50%); compressed package +65,520 bytes
+(+0.22%); median RSS +21,600 KiB (+18.82%), with unequal extra picker activation attempts.
+Reducer median 27.093 → 26.771 ms is a noisy difference. See `docs/performance.md` for
+methods, full package comparisons and limits. Draft delivery is required for the native
+evidence gap and inherited dependency audit failure; no live Discord test was performed.

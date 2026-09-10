@@ -139,3 +139,52 @@ were started. Synthetic results do not establish logged-in performance targets.
 Raw measurements and the sampling/package-size script are in ignored
 `target/twemoji-*-samples.json`, `target/twemoji-sizes.json`, and
 `target/measure-twemoji.py`.
+
+
+### September 10, 2026 — server emoji, picker and text selection
+
+Baseline `a270437cb6c1e69030420cda4e0fb6efa957bcb0` (`feat/twemoji`); follow-up
+`feat/server-emoji-picker`. Same Apple M1 Pro, 16 GiB RAM, macOS 27.0 build 26A428,
+arm64 Rust 1.98.1 locked release builds. Both packages passed strict local ad-hoc
+signature verification. Baseline runtime binaries were compared byte-for-byte with
+the previously verified packages; their docs precede the previous final report.
+Current package snapshots likewise precede this final measurement report.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text exe bytes | 44,792,944 | 45,017,184 | +224,240 (+0.50%) |
+| Text installed bytes | 45,053,460 | 45,283,476 | +230,016 (+0.51%) |
+| Text compressed bytes | 29,326,284 | 29,391,804 | +65,520 (+0.22%) |
+| Voice exe bytes | 47,634,496 | 47,875,680 | +241,184 (+0.51%) |
+| Voice installed bytes | 48,125,973 | 48,378,556 | +252,583 (+0.52%) |
+| Voice compressed bytes | 30,641,220 | 30,708,940 | +67,720 (+0.22%) |
+| Text median/peak sampled RSS, KiB | 114,768 | 136,368 | +21,600 (+18.82%) |
+| Text interval idle CPU | 0.0% | 0.0% | 0.0 percentage points |
+| Reducer median, ms | 27.093 | 26.771 | -0.323 (-1.19%) |
+
+Installed is the sum of complete .app file bytes; compressed is Python tarfile gzip
+level 9 of the complete package, including notices/docs. No new Cargo dependency.
+Unicode names add 158,704 source bytes; catalogs have per-guild 1,000-entry/256-KiB
+limits within shared 4-MiB navigation storage. Custom images reuse the existing
+64-entry/16-MiB decoded-texture cache and bounded credential-free media worker.
+
+Replay: isolated baseline build and current release executable, one discarded warmup
+plus five direct runs each. Both retain 500 messages / 220,992–221,477 estimated bytes.
+The small elapsed difference is noise, not a throughput improvement claim; this
+workload does not exercise picker layout or catalog parsing.
+
+Process: native text `--demo`, same mixed fixture plus the same message containing
+Unicode and custom markup, dark theme, 1088×768 captured viewport, default requested
+1120×760 logical size. Current fixture additionally supplies two original synthetic
+custom images. After interaction, ten-second warmup then eleven RSS/cumulative CPU
+samples at one-second intervals; CPU is cumulative-time delta over about 10.16 seconds.
+Both medians equal sampled peaks; peaks exclude startup. After had additional picker
+activation attempts, so interaction histories are not identical. RSS increased 21.1 MiB;
+this is a material observed increase, with allocator/font/media contributions not
+isolated. It is not a claim about logged-in workloads or the exact cost of the catalog.
+wgpu configured; actual backend/display scale not instrumented. No helper processes
+were launched. GPU memory, frame/startup p95, open-picker scroll performance and long
+soak remain unmeasured. Native automation intermittently failed to activate controls,
+preventing reliable completion of picker/light/narrow interaction evidence.
+Raw local samples: `target/custom-{before,after,replay,sizes}.json`;
+script: `target/measure-custom-emoji.py`.

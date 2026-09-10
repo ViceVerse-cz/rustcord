@@ -461,12 +461,25 @@ async fn run_inner(
                                         emit(Event::ChannelChanged(patch.into_model()))?;
                                         if permissions {emit(Event::PermissionsChanged)?;}
                                     }
+                                    "GUILD_EMOJIS_UPDATE" => {
+                                        let update: GuildEmojisUpdate = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?;
+                                        emit(Event::GuildEmojis { guild: update.guild_id, emojis: update.emojis.0 })?;
+                                    }
+                                    "GUILD_CREATE" => {
+                                        let guild: GuildDto = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?;
+                                        if let Some(emojis) = guild.emojis { emit(Event::GuildEmojis { guild: guild.id, emojis: emojis.0 })?; }
+                                    }
                                     "GUILD_UPDATE" => emit(Event::GuildChanged(decode::<GuildPatchDto>(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?.into_model()))?,
                                     "GUILD_MEMBER_UPDATE" => {
                                         let update:MemberIdentity=decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
                                         if Some(update.user.id)==owner_id {emit(Event::PermissionsChanged)?;}
                                     }
-                                    "GUILD_ROLE_UPDATE" | "GUILD_ROLE_DELETE" | "GUILD_DELETE" => emit(Event::PermissionsChanged)?,
+                                    "GUILD_DELETE" => {
+                                        let guild: GuildDto = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?;
+                                        emit(Event::GuildEmojis { guild: guild.id, emojis: Vec::new() })?;
+                                        emit(Event::PermissionsChanged)?;
+                                    }
+                                    "GUILD_ROLE_UPDATE" | "GUILD_ROLE_DELETE" => emit(Event::PermissionsChanged)?,
                                     _ => {} // No raw-event archive; unsupported events grant no capabilities.
                                 },
                                 _ => return Err(Failure::Protocol),
@@ -549,6 +562,7 @@ mod tests {
                 assert_eq!(packet(&mut socket).await["op"],2);
                 let mut initial=ready(1,"synthetic-session");
                 initial["d"]["read_state"]=json!([]);
+                initial["d"]["guilds"]=json!([{"id":"2","name":"Synthetic"}]);
                 send(&mut socket,initial).await;
                 for (sequence,name,data) in [
                     (2,"CHANNEL_CREATE",json!({"id":"3","guild_id":"2","type":4,"name":"Synthetic category","position":0})),
@@ -562,8 +576,11 @@ mod tests {
                     (10,"MESSAGE_REACTION_REMOVE_EMOJI",json!({"channel_id":"4","message_id":"9","emoji":{"id":null,"name":"x"}})),
                     (11,"MESSAGE_ACK",json!({"channel_id":"4","message_id":"8","version":2})),
                     (12,"PASSIVE_UPDATE_V2",json!({"updated_channels":[{"id":"4","last_message_id":"9"}]})),
+                    (13,"GUILD_CREATE",json!({"id":"2","emojis":[{"id":"20","name":"wave","roles":[],"available":true}]})),
+                    (14,"GUILD_EMOJIS_UPDATE",json!({"guild_id":"2","emojis":[{"id":"21","name":"party","animated":true,"roles":[],"available":true}]})),
+                    (15,"GUILD_DELETE",json!({"id":"2"})),
                 ] {send(&mut socket,json!({"op":0,"t":name,"s":sequence,"d":data})).await;}
-                acknowledge(&mut socket,12).await;
+                acknowledge(&mut socket,15).await;
                 // Force a heartbeat reply to race the following terminal close.
                 send(&mut socket,json!({"op":1,"d":null})).await;
                 socket.send(Frame::Close(Some(CloseFrame {code:CloseCode::from(4004),reason:"synthetic expiration".into()}))).await.unwrap();
@@ -574,6 +591,7 @@ mod tests {
             let state=std::sync::Mutex::new(client_core::State::default());
             let permission_changes=std::sync::atomic::AtomicUsize::new(0);
             let reaction_changes=std::sync::atomic::AtomicUsize::new(0);
+            let emoji_changes=std::sync::atomic::AtomicUsize::new(0);
             let client=run_inner(
                 Arc::new(SessionSecret::from_owner_input("synthetic-owner-session".into()).unwrap()),
                 "wss://gateway.discord.gg/".into(),watch::channel(None).1,mpsc::channel(1).1,
@@ -587,6 +605,16 @@ mod tests {
                     if let Event::Reactions(client_core::reactions::Event::Changed{channel,message})=&event {
                         assert_eq!((*channel,*message),(Id(4),Id(9)));
                         reaction_changes.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
+                    }
+                    if let Event::GuildEmojis {guild,emojis}=&event {
+                        assert_eq!(*guild,Id(2));
+                        let change=emoji_changes.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
+                        match change {
+                            0 => assert_eq!(emojis[0].markup(),"<:wave:20>"),
+                            1 => assert_eq!(emojis[0].markup(),"<a:party:21>"),
+                            2 => assert!(emojis.is_empty()),
+                            _ => panic!("unexpected emoji update"),
+                        }
                     }
                     let mut state=state.lock().unwrap();
                     let generation=state.generation;
@@ -609,7 +637,9 @@ mod tests {
             assert_eq!(state.channels[0].name,"Synthetic channel");
             assert_eq!(state.read_marker(Id(4)),Some(Some(Id(8))));
             assert_eq!(state.unread(Id(4)),Some(true));
-            assert_eq!(permission_changes.load(std::sync::atomic::Ordering::Relaxed),1);
+            assert_eq!(permission_changes.load(std::sync::atomic::Ordering::Relaxed),2);
+            assert_eq!(emoji_changes.load(std::sync::atomic::Ordering::Relaxed),3);
+            assert!(state.guilds[0].emojis.as_ref().unwrap().is_empty());
             assert_eq!(reaction_changes.load(std::sync::atomic::Ordering::Relaxed),4);
         }).await.unwrap();
     }

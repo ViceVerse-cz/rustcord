@@ -75,9 +75,105 @@ pub(crate) fn button(ctx: &Context, emoji: &str, text: String) -> egui::Button<'
     }
 }
 
+/// Keep original text in egui's selection model while drawing artwork in its place.
+pub(crate) fn selectable(
+    ui: &mut egui::Ui,
+    text: &str,
+    image: impl FnOnce(&mut egui::Ui) -> Option<Image<'static>>,
+    size: f32,
+    link: bool,
+) -> egui::Response {
+    let mut galley = ui.fonts_mut(|fonts| {
+        fonts.layout_no_wrap(
+            text.to_owned(),
+            egui::FontId::proportional(size),
+            egui::Color32::TRANSPARENT,
+        )
+    });
+    let glyphs = std::sync::Arc::make_mut(&mut galley);
+    glyphs.rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::Vec2::splat(size));
+    glyphs.mesh_bounds = glyphs.rect;
+    glyphs.num_vertices = 0;
+    glyphs.num_indices = 0;
+    for placed in &mut glyphs.rows {
+        let row = std::sync::Arc::make_mut(&mut placed.row);
+        // One hit target: selection endpoints must never split a Unicode sequence or markup.
+        for glyph in &mut row.glyphs {
+            glyph.pos.x = 0.0;
+            glyph.advance_width = size;
+            glyph.first_vertex = 0;
+        }
+        row.size = egui::Vec2::splat(size);
+        row.visuals = Default::default();
+    }
+    let mut label = egui::Label::new(galley).selectable(true);
+    if link {
+        label = label.sense(egui::Sense::click());
+    }
+    let response = ui.add(label);
+    if let Some(image) = ui
+        .is_rect_visible(response.rect)
+        .then(|| image(ui))
+        .flatten()
+    {
+        image.paint_at(ui, response.rect);
+    } else {
+        ui.painter().text(
+            response.rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "?",
+            egui::FontId::proportional(size),
+            ui.visuals().weak_text_color(),
+        );
+    }
+    let response = response.on_hover_text(text);
+    response.context_menu(|ui| {
+        if ui.button("Copy emoji").clicked() {
+            ui.ctx().copy_text(text.to_owned());
+            ui.close();
+        }
+    });
+    response
+}
+
+pub(crate) fn custom_prefix(text: &str) -> Option<(model::Id, usize)> {
+    let body = text
+        .strip_prefix("<:")
+        .or_else(|| text.strip_prefix("<a:"))?;
+    let end = body.as_bytes().iter().take(54).position(|b| *b == b'>')?;
+    let (name, id) = body[..end].split_once(':')?;
+    if !(2..=32).contains(&name.len())
+        || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    {
+        return None;
+    }
+    Some((id.parse().ok()?, text.len() - body.len() + end + 1))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn custom_markup_is_bounded_and_never_an_arbitrary_url() {
+        for token in ["<:serein_wave:9001>", "<a:serein_party:9001>"] {
+            assert_eq!(
+                custom_prefix(&format!("{token} trailing")),
+                Some((model::Id(9001), token.len()))
+            );
+        }
+        for token in [
+            "<:x:1>",
+            "<:hello:0>",
+            "<:hello:-1>",
+            "<:hello:18446744073709551616>",
+            "<:../x:1>",
+            "<:hello:1/2>",
+            "<a:hello:1",
+            "<:hello:https://example.com>",
+        ] {
+            assert!(custom_prefix(token).is_none(), "{token}");
+        }
+    }
     #[test]
     fn atlas_is_bounded_and_matches_complete_sequences() {
         let image = image::load_from_memory(ATLAS).unwrap();

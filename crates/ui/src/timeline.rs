@@ -421,7 +421,7 @@ impl TimelineView {
                                             self.revealed.insert(*id, (message.content.clone(), message.embeds.clone(), message.attachments.clone()));
                                         }
                                     } else {
-                                        formatted.show_mentions(ui, &mut self.opening, &message.mentions, profile);
+                                        formatted.show_with_images(ui, &mut self.opening, &message.mentions, profile, avatars, state.demo);
                                         if formatted.limited {
                                             ui.label(RichText::new("Display limited · Copy message for the full text").small().color(colors.muted));
                                         }
@@ -436,7 +436,7 @@ impl TimelineView {
                                     }
                                     if let Some(action)=crate::reactions::show(ui,message.reactions.as_deref(),
                                         state.gateway_connected && state.freshness==model::Freshness::Fresh,
-                                        state.reactions.writing.is_some(), state.reactions.invalidated(message.id)) {
+                                        state.reactions.writing.is_some(), state.reactions.invalidated(message.id), (avatars, state.demo)) {
                                         self.reaction=Some((*id,action));
                                     }
                                 });

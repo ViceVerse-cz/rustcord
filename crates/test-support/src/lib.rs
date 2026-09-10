@@ -115,6 +115,24 @@ pub fn demo_state() -> State {
                 name: "You (synthetic)".into(),
             },
             guilds: vec![Guild {
+                emojis: Some(vec![
+                    model::CustomEmoji {
+                        id: Id(9001),
+                        name: "serein_wave".into(),
+                        animated: false,
+                        available: true,
+                        managed: false,
+                        roles: Some(vec![]),
+                    },
+                    model::CustomEmoji {
+                        id: Id(9002),
+                        name: "serein_party".into(),
+                        animated: true,
+                        available: true,
+                        managed: false,
+                        roles: Some(vec![]),
+                    },
+                ]),
                 icon: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
                 id: Id(10),
                 name: "Synthetic workspace".into(),

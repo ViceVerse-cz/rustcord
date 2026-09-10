@@ -6,6 +6,7 @@ mod categories;
 pub mod design;
 mod embeds;
 pub mod emoji;
+mod emoji_picker;
 pub mod fonts;
 mod markdown;
 mod mentions;
@@ -51,6 +52,7 @@ pub struct MessagingUi {
     deleting: Option<(Id, Id)>,
     ime_active: bool,
     mention_menu: mentions::Menu,
+    emoji_picker: emoji_picker::Picker,
 }
 
 impl MessagingUi {
@@ -299,9 +301,33 @@ impl MessagingUi {
             .corner_radius(12)
             .inner_margin(14)
             .show(ui, |ui| {
+                let pick = ui
+                    .add_enabled_ui(!self.ime_active && !ime_this_frame, |ui| {
+                        self.emoji_picker
+                            .show(ui, state, channel, &mut self.avatars)
+                    })
+                    .inner;
+                let remaining = MAX_DRAFT_BYTES.saturating_sub(state.draft_bytes());
                 let mut new_draft = String::new();
                 let draft = state.drafts.get_mut(&channel).unwrap_or(&mut new_draft);
                 let mut mention_changed = false;
+                if let Some(pick) = pick {
+                    let mut edit_state =
+                        egui::text_edit::TextEditState::load(ctx, composer_id).unwrap_or_default();
+                    let range = edit_state.cursor.char_range();
+                    if let Some(cursor) = emoji_picker::insert(draft, &pick, range, remaining) {
+                        edit_state
+                            .cursor
+                            .set_char_range(Some(egui::text::CCursorRange::one(
+                                egui::text::CCursor::new(cursor),
+                            )));
+                        edit_state.store(ctx, composer_id);
+                        mention_changed = true;
+                    } else {
+                        state.status =
+                            "Emoji will not fit. Shorten this message or free draft space.";
+                    }
+                }
                 if let Some(pick) = mention_pick
                     && let Some(cursor) = mentions::insert(draft, pick)
                 {
@@ -323,6 +349,9 @@ impl MessagingUi {
                     .frame(egui::Frame::NONE)
                     .hint_text("Write a message… @ to mention")
                     .show(ui);
+                if mention_changed {
+                    output.response.request_focus();
+                }
                 let mention_cursor = output
                     .cursor_range
                     .filter(|r| r.is_empty())

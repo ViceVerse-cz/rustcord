@@ -83,6 +83,10 @@ pub enum Event {
     ChannelCreated(Channel),
     ChannelChanged(ChannelPatch),
     GuildChanged(GuildPatch),
+    GuildEmojis {
+        guild: Id,
+        emojis: Vec<CustomEmoji>,
+    },
     Members(MemberList),
     RecipientAdded {
         channel: Id,
@@ -521,6 +525,26 @@ impl State {
                 Ok(())
             }
 
+            Event::GuildEmojis { guild, emojis } => {
+                if let Some(index) = self.guilds.iter().position(|g| g.id == guild) {
+                    let previous = self.guilds[index]
+                        .emojis
+                        .as_ref()
+                        .map_or(0, custom_emoji_bytes);
+                    let navigation_bytes = self.guilds.iter().map(Guild::bytes).sum::<usize>()
+                        + self.channels.iter().map(Channel::bytes).sum::<usize>();
+                    if !valid_custom_emojis(&emojis)
+                        || navigation_bytes - previous + custom_emoji_bytes(&emojis)
+                            > MAX_EVENT_BYTES
+                    {
+                        self.guilds[index].emojis = None;
+                        self.fail(auth::Failure::Capacity);
+                        return;
+                    }
+                    self.guilds[index].emojis = Some(emojis);
+                }
+                Ok(())
+            }
             Event::GuildChanged(patch) => {
                 if let Some(guild) = self.guilds.iter_mut().find(|guild| guild.id == patch.id) {
                     match patch.name {
@@ -547,6 +571,7 @@ impl State {
                         .map(Channel::bytes)
                         .sum::<usize>()
                         + channel.bytes()
+                        + self.guilds.iter().map(Guild::bytes).sum::<usize>()
                         > MAX_EVENT_BYTES
                 {
                     self.fail(auth::Failure::Capacity);
@@ -677,6 +702,12 @@ impl State {
                 }
                 if channels.len() + guilds.len() > MAX_NAV
                     || channels.iter().any(|c| c.recipients.len() > 64)
+                    || guilds
+                        .iter()
+                        .any(|g| g.emojis.as_ref().is_some_and(|e| !valid_custom_emojis(e)))
+                    || guilds.iter().map(Guild::bytes).sum::<usize>()
+                        + channels.iter().map(Channel::bytes).sum::<usize>()
+                        > MAX_EVENT_BYTES
                 {
                     self.auth = auth::AuthState::Failed;
                     self.status = "Account navigation exceeds safe capacity";
@@ -986,6 +1017,7 @@ impl Event {
                 }
                 Self::Profile { result, .. } => result.as_ref().map_or(0, UserProfile::bytes),
                 Self::Voice(event) => event.bytes(),
+                Self::GuildEmojis { emojis, .. } => custom_emoji_bytes(emojis),
                 Self::GuildChanged(patch) => [&patch.name, &patch.icon]
                     .into_iter()
                     .map(|value| match value {
@@ -1004,14 +1036,7 @@ impl Event {
                     channels,
                 } => {
                     user.heap_bytes()
-                        + guilds
-                            .iter()
-                            .map(|g| {
-                                size_of::<Guild>()
-                                    + g.name.capacity()
-                                    + g.icon.as_ref().map_or(0, String::capacity)
-                            })
-                            .sum::<usize>()
+                        + guilds.iter().map(Guild::bytes).sum::<usize>()
                         + channels.iter().map(Channel::bytes).sum::<usize>()
                 }
                 Self::Members(list) => {
@@ -1245,9 +1270,123 @@ mod tests {
     }
 
     #[test]
+    fn guild_emoji_updates_replace_catalog_and_reject_stale_or_oversized_data() {
+        let emoji = CustomEmoji {
+            id: Id(4),
+            name: "wave".into(),
+            animated: false,
+            available: true,
+            managed: false,
+            roles: Some(vec![]),
+        };
+        let mut state = State {
+            guilds: vec![Guild {
+                id: Id(2),
+                name: "Synthetic".into(),
+                icon: None,
+                emojis: None,
+            }],
+            ..State::default()
+        };
+        let event = Event::GuildEmojis {
+            guild: Id(2),
+            emojis: vec![emoji.clone()],
+        };
+        assert!(event.bytes() >= size_of::<Event>() + custom_emoji_bytes(&vec![emoji.clone()]));
+        apply(&mut state, event);
+        assert_eq!(
+            state.guilds[0].emojis.as_ref().unwrap()[0].markup(),
+            "<:wave:4>"
+        );
+        state.apply(Envelope {
+            generation: state.generation + 1,
+            event: Event::GuildEmojis {
+                guild: Id(2),
+                emojis: vec![],
+            },
+        });
+        assert_eq!(state.guilds[0].emojis.as_ref().unwrap().len(), 1);
+        apply(
+            &mut state,
+            Event::GuildEmojis {
+                guild: Id(2),
+                emojis: vec![],
+            },
+        );
+        assert!(state.guilds[0].emojis.as_ref().unwrap().is_empty());
+        let mut huge = emoji.clone();
+        huge.name = String::with_capacity(MAX_GUILD_EMOJI_BYTES);
+        huge.name.push_str("wave");
+        apply(
+            &mut state,
+            Event::GuildEmojis {
+                guild: Id(2),
+                emojis: vec![huge],
+            },
+        );
+        assert!(state.guilds[0].emojis.is_none());
+        apply(
+            &mut state,
+            Event::GuildEmojis {
+                guild: Id(2),
+                emojis: vec![emoji; MAX_GUILD_EMOJIS + 1],
+            },
+        );
+        assert!(state.guilds[0].emojis.is_none());
+        state.logout();
+        assert!(state.guilds.is_empty());
+    }
+
+    #[test]
+    fn ready_rejects_emoji_catalogs_exceeding_total_navigation_budget() {
+        let emoji = CustomEmoji {
+            id: Id(4),
+            name: "wave".into(),
+            animated: false,
+            available: true,
+            managed: false,
+            roles: Some(vec![]),
+        };
+        let mut state = State::default();
+        let mut guilds: Vec<_> = (1..=32)
+            .map(|id| Guild {
+                id: Id(id),
+                name: "Synthetic".into(),
+                icon: None,
+                emojis: Some(vec![emoji.clone()]),
+            })
+            .collect();
+        for guild in &mut guilds {
+            let name = &mut guild.emojis.as_mut().unwrap()[0].name;
+            name.reserve(192 * 1024);
+        }
+        assert!(
+            guilds
+                .iter()
+                .all(|g| valid_custom_emojis(g.emojis.as_ref().unwrap()))
+        );
+        apply(
+            &mut state,
+            Event::Ready {
+                user: User {
+                    id: Id(1),
+                    name: "Synthetic".into(),
+                    avatar: None,
+                    discriminator: 0,
+                },
+                guilds,
+                channels: vec![],
+            },
+        );
+        assert!(state.guilds.is_empty());
+        assert!(matches!(state.auth, auth::AuthState::Failed));
+    }
+
+    #[test]
     fn guild_identity_patches_preserve_omitted_fields_and_change_icon_keys() {
         let mut state = State {
             guilds: vec![Guild {
+                emojis: None,
                 id: Id(2),
                 name: "Synthetic server".into(),
                 icon: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
