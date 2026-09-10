@@ -403,3 +403,8 @@ narrow and long-text layout is covered by the 360-point offline egui test.
 Release text and optional-voice packages are built locally; measurements are recorded in
 `docs/performance.md`. Screenshot evidence proves only offline presentation, not live
 Discord compatibility. Windows/Linux and screen-reader verification remain unperformed.
+
+Delivery: [PR #11](https://github.com/ViceVerse-cz/rustcord/pull/11), draft while macOS,
+Windows, Linux and security CI checks are pending. Implementation/evidence commit
+`7cb25ba`; commit-pinned screenshot paths verified on origin. Local checks and both
+release packages passed; remote CI is not yet a success claim.
