@@ -287,6 +287,7 @@ mod tests {
             .timeline
             .insert(
                 Message {
+                    kind: 0,
                     id: Id(50),
                     channel: Id(10),
                     author: user,
@@ -299,6 +300,7 @@ mod tests {
                     nonce: None,
                     reply_to: None,
                     unsupported: false,
+                    extra_content: Default::default(),
                     embeds: vec![],
                     embeds_suppressed: false,
                     attachments: vec![],

@@ -47,7 +47,9 @@ pub fn message(id: u64, channel: Id) -> Message {
         revision: 0,
         nonce: None,
         reply_to: None,
+        kind: 0,
         unsupported: false,
+        extra_content: Default::default(),
         embeds: demo_embeds(id),
         attachments: if id == 500 {
             vec![
@@ -348,6 +350,7 @@ pub fn voice_demo_state() -> State {
             },
             nick: None,
             status: None,
+            custom_status: None,
         }),
     })
     .collect();
@@ -477,6 +480,43 @@ pub fn permission_snapshot(state: &State) -> model::permissions::Snapshot {
             })
             .collect(),
     }
+}
+
+/// Synthetic system events; never live Discord history.
+pub fn system_demo_state() -> State {
+    let mut state = chat_demo_state();
+    state.timeline.clear();
+    for (i, (kind, content)) in [
+        (7, ""),
+        (1, ""),
+        (6, ""),
+        (9, ""),
+        (4, "welcome-and-updates"),
+        (18, "Introductions"),
+        (3, ""),
+        (222, ""),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut m = message(i as u64 + 1, Id(20));
+        m.id = Id(((1_788_998_100_000u64 + i as u64 * 60_000 - 1_420_070_400_000) << 22) | 1);
+        m.kind = kind;
+        m.unsupported = true;
+        m.content = content.into();
+        m.embeds.clear();
+        m.attachments.clear();
+        m.reactions = Some(vec![]);
+        m.mentions = vec![User {
+            id: Id(42),
+            name: "Casey (synthetic)".into(),
+            avatar: None,
+            discriminator: 0,
+        }];
+        state.timeline.insert(m, false, false).unwrap();
+    }
+    state.revision += 1;
+    state
 }
 
 #[cfg(test)]
