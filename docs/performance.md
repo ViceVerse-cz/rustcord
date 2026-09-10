@@ -54,3 +54,44 @@ One profile retains at most 64 KiB metadata after a 256 KiB response cap. Banner
 Native macOS offline checks exercised mention insertion/profile activation, banner card layout and scrolling, and enlarged image controls. Native Save As interaction and live CDN requests were not exercised; localhost tests establish transfer/cancellation/file replacement behavior only. No whole-process RSS, idle CPU or frame-time benchmark was performed for these additions.
 
 Final staged executable sizes: text **38,374,272 bytes** (36.60 MiB), +344,208 bytes over the preceding attachment build; voice **41,248,800 bytes** (39.34 MiB), +346,720 bytes. Both variants passed strict local ad-hoc signature verification; these are development packages, not notarized releases.
+
+
+## September 10 — chat timeline comparison
+
+Baseline is origin/main **74c0d79**, rebuilt in a detached worktree with a separate target
+and package directory. After is the final chat-timeline source including the edited-label
+correction. The earlier e9fb3e4 binaries and measurements were superseded after integration.
+macOS 27.0 (26A428), Apple M1 Pro, 16 GiB RAM, Rust 1.98.1, arm64 release/thin LTO.
+Both text and optional voice variants were built with the lockfile, packaged and verified
+with strict local ad-hoc codesign. Archives contain the complete .app, including notices/docs;
+logical file-byte sums exclude filesystem allocation overhead. Package snapshots precede
+this final measurement report; the voice snapshot includes the new scope/progress docs.
+
+| Metric | Main 74c0d79 | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable bytes | 38,604,512 | 38,622,688 | +18,176 (+0.047%) |
+| Text full .app bytes | 38,832,679 | 38,850,855 | +18,176 (+0.047%) |
+| Text tar.gz bytes | 23,271,482 | 23,277,295 | +5,813 (+0.025%) |
+| Voice executable bytes | 41,445,968 | 41,464,160 | +18,192 (+0.044%) |
+| Voice full .app bytes | 41,905,096 | 41,929,046 | +23,950 (+0.057%) |
+| Voice tar.gz bytes | 24,587,808 | 24,600,845 | +13,037 (+0.053%) |
+| Text settled RSS | 113,568 KiB | 113,712 KiB | +144 KiB (+0.127%) |
+| Text peak sampled RSS | 113,760 KiB | 113,808 KiB | +48 KiB (+0.042%) |
+| Reducer median, 100,000 events | 27.005 ms | 27.224 ms | +0.219 ms (+0.81%) |
+| Text median idle CPU | 0.0% | 0.0% | 0.0 percentage points |
+
+Reducer: one discarded warmup plus five direct executable runs per revision, after builds
+finished. Both retained **500 records / 220,992–221,477 estimated timeline bytes**. The 0.81%
+elapsed difference is a small noisy change, not evidence of a throughput improvement or
+meaningful regression. This workload does not exercise GUI layout.
+
+Process: each text .app launched explicitly with `--demo`, same unchanged mixed-content
+fixture and default launch options; 10-second warmup, ten `ps -p PID -o rss=,%cpu=` samples
+at one-second intervals, then terminated. RSS is process resident memory; peak is only the
+sampled interval, not startup peak. Both samples exceed the 80 MiB aspirational logged-in-idle
+target, but these are offline mixed-media previews, not logged-in idle. No interaction was
+scripted: native automation failed with `Sky Computer Use native pipe startup failed`.
+wgpu is configured; actual backend, display scale, viewport, GPU/OS-helper memory, interactive
+scroll peaks and p95 frame/startup times could not be verified. No native visual or performance
+acceptance is claimed from the launch-only memory samples. Raw local measurements and the
+measurement script are in ignored `target/chat-measurements.json` and `target/measure-chat.py`.

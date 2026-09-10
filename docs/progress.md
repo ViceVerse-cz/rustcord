@@ -258,3 +258,41 @@ Validation: the legacy READY regression failed before the parser correction and 
 Known owner-reported issue before main synchronization: reacting can make the chat view lose its messages. Investigation has not yet established the cause, and the offline reaction tests do not cover the owner's failure. The next implementation task is to reproduce and fix that path before adding further features.
 
 Main synchronization: incorporated the incoming repository workflow commits through e9fb3e4, preserving both progress histories. The integrated tree passed `cargo xtask check` again (83 offline Rust tests and all configured checks) and `node tests/login-handoff.cjs`. No reaction-crash fix or new live-validation claim is included in this synchronization.
+
+## September 10 continuation — chat timeline delivery
+
+Resumed the uncommitted `feat/chat-timeline` slice from e9fb3e4, preserving its work before
+integrating origin/main 74c0d79. The new main already implemented service read markers, reactions,
+search and login fixes; the final change reuses them and removes the redundant session-local
+read-state implementation. No automatic read ACK is sent by scrolling.
+
+Added grouped author rows, UTC timestamps/day separators, service unread dividers, bounded loaded
+reply previews, scroll-triggered history paging and explicit jump-to-latest behavior. Older-page
+retention now begins at request admission, protecting the reading window against live arrivals
+even when history fails. The existing history/reaction/search/authentication paths remain.
+Independent review found a hidden edited-label regression in grouped rows; edited messages now
+start a full row, with a regression check. See [scope and reproduction](chat-timeline.md).
+
+`cargo xtask check` passed: formatting, strict all-target/all-feature Clippy, **86 offline Rust
+tests**, doctests, the text-only build and policy checks. `node tests/login-handoff.cjs` passed.
+Focused UI/core/cache/fixture tests also passed. No dependency or schema changes were needed.
+
+Native screenshot/interaction evidence is blocked by `Sky Computer Use native pipe startup
+failed`, repeated after resetting the tool session. The obsolete before-only screenshot is
+preserved in ignored local artifacts rather than offered as a current comparison. Headless
+layout checks are not native visual or accessibility acceptance. This delivery remains a draft.
+Main's [CI run](https://github.com/ViceVerse-cz/rustcord/actions/runs/34462932351) passed all three
+native jobs but failed security audit with six vulnerabilities and five denied warnings before
+this task; no check was suppressed. The earlier owner-reported reaction disappearance and live
+text/voice gates remain unresolved. Performance/package results are recorded below and in
+[performance](performance.md).
+
+Both final macOS arm64 package variants passed strict local ad-hoc signature verification,
+and their compressed archives passed CRC checks. Text executable: **38,622,688 bytes**
+(+18,176); voice: **41,464,160 bytes** (+18,192), against the rebuilt 74c0d79 baseline.
+Five-run median reducer time: **27.005 → 27.224 ms** (+0.81%, noise-sized); retained timeline
+range is unchanged. Ten launch-only offline idle samples gave settled text RSS
+**113,568 → 113,712 KiB**, with median CPU 0.0% in both. Native interaction, display scale,
+GPU/helper memory and frame latency remain unmeasured; details and full package sizes are
+in the performance report. No release publication, real account messaging or microphone
+operation was performed.

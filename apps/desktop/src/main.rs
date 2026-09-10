@@ -135,7 +135,11 @@ impl Desktop {
         let mut store = (!demo).then(|| credentials::Store::start(cc.egui_ctx.clone()));
         let cache = (!demo).then(|| cache::Cache::start(cc.egui_ctx.clone()));
         let state = if demo {
-            test_support::demo_state()
+            if std::env::args().any(|arg| arg == "--demo-chat") {
+                test_support::chat_demo_state()
+            } else {
+                test_support::demo_state()
+            }
         } else {
             State::default()
         };
@@ -153,6 +157,11 @@ impl Desktop {
                 ))
                 .is_ok()
         }));
+        let synthetic_id = state
+            .timeline
+            .iter()
+            .last()
+            .map_or(10_000, |m| m.id.0.max(10_000));
         Ok(Self {
             login: None,
             connection: None,
@@ -192,7 +201,7 @@ impl Desktop {
             close_approved: false,
             fixture_only: demo,
             authorized: false,
-            synthetic_id: 10000,
+            synthetic_id,
             #[cfg(feature = "developer-session")]
             token_input: Zeroizing::new(String::new()),
         })

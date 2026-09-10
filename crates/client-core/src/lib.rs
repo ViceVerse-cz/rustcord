@@ -322,7 +322,7 @@ impl State {
         self.history_before = before;
         self.history_pending = true;
         self.freshness = Freshness::Loading;
-        self.timeline.begin_page();
+        self.timeline.begin_page(before.is_some());
         Command::History {
             channel: self.selected.expect("selected channel"),
             before,

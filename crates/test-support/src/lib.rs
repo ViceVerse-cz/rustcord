@@ -216,6 +216,50 @@ pub fn load_page(state: &mut State, before: Option<Id>) {
         },
     });
 }
+/// Additional native chat scenario: fixed dates, grouped authors and unread events.
+pub fn chat_demo_state() -> State {
+    let mut state = demo_state();
+    state.timeline.clear();
+    state.older_exhausted = true;
+    let texts = [
+        "Can we keep the conversation simple?",
+        "Names and times, with room for the messages.",
+        "And keep my place when earlier history arrives.",
+        "Yes. History loads in small pages as you scroll up.",
+        "Only nearby messages are rendered. The cache has a fixed memory budget.",
+        "A new day, same conversation.",
+        "This looks much easier to read.",
+        "Two new messages arrived while you were away.",
+        "Welcome back. All of this is synthetic, offline data.",
+    ];
+    for (i, text) in texts.iter().enumerate() {
+        let mut m = message(i as u64 + 1, Id(20));
+        // September 9, 2026, 23:55 UTC, one minute between records.
+        m.id = Id(((1_788_998_100_000u64 + i as u64 * 60_000 - 1_420_070_400_000) << 22) | 1);
+        m.author = message(if !(3..7).contains(&i) { 1 } else { 2 }, Id(20)).author;
+        m.content = (*text).into();
+        if i < 7 {
+            state.timeline.insert(m, false, false).unwrap();
+        } else {
+            state.apply(Envelope {
+                generation: state.generation,
+                event: Event::Message(m),
+            });
+        }
+    }
+    let read = state.timeline.iter().nth(6).unwrap().id;
+    state.apply(Envelope {
+        generation: state.generation,
+        event: Event::ReadState(client_core::read_state::Event::Ack {
+            channel: Id(20),
+            message: Some(read),
+            manual: true,
+            version: Some(2),
+        }),
+    });
+    state.revision += 1;
+    state
+}
 #[cfg(test)]
 mod tests {
     use super::*;
