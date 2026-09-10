@@ -2,9 +2,9 @@
 
 ## Current scope and gates
 
-Current slice: automated dependency license policy after notification PR #45,
-from main 192b40c. Full SPEC completion remains active; native automation and live-account
-validation remain owner-controlled. See the final dated entry for verification.
+Current slice: bounded Gateway compatibility diagnostics from main 31bf546. Full SPEC
+completion remains active; native automation and live-account validation remain owner-controlled.
+See the Gateway diagnostics entry for verification.
 
 ## Inline message spoilers (merged PR #36)
 
@@ -1624,3 +1624,400 @@ tests, `cargo xtask check`, and `cargo build --locked -p serein` passed against 
 - Screenshots: not applicable — no visible UI change. Performance: not applicable — no runtime
   or build dependency change. No model-cost or speed savings claimed. See
   `docs/agent-orchestration.md` for fresh-session usage, source links and limitations.
+
+
+## Authorized single-message deletion (September 10, 2026)
+
+- Baseline clean main `899fca77347553516186e8686133f29c6ef6a66f`; isolated branch
+  `fix/authorized-message-deletion`. SPEC9.2 now separates deletion permission from editing:
+  loaded guild messages from other authors admit the existing delete confirmation with effective
+  MANAGE_MESSAGES. Own messages remain deletable without SEND_MESSAGES; edits stay author-only.
+- The shared admission gate validates user, channel, message, connection and current VIEW access,
+  with an explicit guild boundary for deleting others. Existing role/overwrite/thread-parent,
+  timeout and administrator calculations apply. Known non-deletable/unknown kinds are denied;
+  automoderation notices always require MANAGE_MESSAGES. Confirmation rechecks the shared gate.
+- Reuses the single-message DELETE endpoint and reconciliation; no bulk action, new queue,
+  optimistic deletion, dependency, persistence or role-directory request. Synthetic HTTP checks
+  distinguish confirmed success, forbidden access and uncertain server failure without retries.
+- Focused checks passed 12 core deletion/reconciliation tests, one headless menu test and one
+  local HTTP test. `cargo xtask check` passed 340 offline Rust tests, doctests, formatting,
+  strict all-feature Clippy, text-only compilation and policy checks. Independent review found
+  no blocker. Both unsigned Windows release packages passed; each executable is 512 bytes
+  smaller. Paired replay medians 39.6040 to 39.5085 ms; retained estimates unchanged. Initial
+  host-load differences motivated the paired rerun; full samples/deltas are in docs/performance.md.
+  Native screenshots,
+  UI resource measurements and screen-reader checks remain unavailable while desktop automation
+  is owner-paused. No live account, deletion, microphone, speaker or call action was performed.
+  Official bot-facing message documentation supplies protocol evidence, not normal-user proof.
+
+
+## Bounded protocol and state-transition fuzzing (September 10, 2026)
+
+- Baseline main `dc49d640302c5244c84953dfc8345396e82ce971`; isolated branch
+  `test/bounded-protocol-fuzzing`. SPEC14.1 now has two real coverage-guided libFuzzer targets
+  with AddressSanitizer: decoder/conversion boundaries and state-transition invariants.
+- The separate fuzz workspace has a committed lockfile, cargo-fuzz 0.13.2, libfuzzer-sys 0.4.13
+  and nightly-2026-09-09 (Rust 1.100.0-nightly). Shared dependency identities/checksums match
+  the application lock; no application dependencies or production APIs changed. Both graphs
+  are covered by offline license checks; the development-only NCSA exception is exact-version.
+- `cargo xtask fuzz` uses fresh copies of 26 small synthetic seeds, one worker per target,
+  30-second/one-million-run budgets, five-second input timeouts and a 512 MiB RSS ceiling.
+  Decoder inputs reach the 4 MiB wire boundary; state inputs are capped at 16 KiB/256 operations
+  and 24 MiB cumulative generated payload. Invocation corpora are cleaned; latest failure
+  artifacts are bounded by input size. CI has a separate Linux smoke job and seven-day artifact
+  retention. Normal native CI stays on Rust 1.98.1; no live/account/audio operation is involved.
+- Windows MSVC/ASAN runs passed: decoder 158,424 executions, coverage counters 2,469 to 5,486,
+  reported RSS 297 MiB; state 8,842 executions, coverage 2,436 to 3,339, reported RSS 382 MiB.
+  Each reported 31 seconds for its 30-second budget. Seeds were replayed during initialization,
+  corpora were removed and lockfiles stayed unchanged. These are tool-process observations,
+  not client memory measurements, coverage percentages or proof of absent bugs.
+- `cargo xtask check` passed 340 offline Rust tests, doctests, formatting, strict all-feature
+  Clippy, text-only compilation and policy checks on the original task baseline. The separate
+  fuzz formatter, both license graphs and all six license fixtures passed. Independent review
+  found no blockers. Native application builds were not repeated for this tooling-only change.
+  Linux/macOS fuzz execution and remote CI remain unverified until their checks finish.
+- Integration with main `4325dd1` preserved the presence and voice UI changes. The combined
+  `cargo xtask check` passed 351 offline Rust tests plus all format, Clippy, compile and policy
+  checks; both license graphs and the separate fuzz formatter passed again. A second ASAN
+  smoke passed on the integrated code: decoder 112,015 executions/281 MiB reported RSS,
+  state 2,892/350 MiB, 31 seconds each. No crash, lock changes or retained generated corpus.
+- Remaining spec implementation candidates include Linux distribution packaging and bounded
+  unknown-event diagnostics. Native accessibility/resource/storage tracing and owner-controlled
+  live text/voice interoperability remain separate, incomplete gates.
+
+## Rich presence in members, DMs and profiles (September 10, 2026)
+
+Implemented from clean main `5f11cb92644d06e2302678211ac21d9445fad692` on
+`feat/rich-presence`. The original checkout was clean and safely fast-forwarded after fetching
+origin; default branch remains main. Member rows and DM sidebar/header display a received
+activity summary. Profiles keep custom status and show activity names, details and states even
+if profile metadata is loading/unavailable. All activity content is synthetic in default tests
+and `--demo --demo-profile`. No dependency, live account action or persistence was added.
+
+The shared parser bounds rich activity count and field sizes. Guild snapshot/delta propagation
+uses the existing member subscription and 128 KiB pane. Known DM recipients receive a bounded
+RAM cache and coalesced global updates plus unofficial READY/SUPPLEMENTAL friend snapshots.
+Offline/null/empty changes clear correctly; omitted fields remain unchanged. Disconnect hides
+DM data; successful resume applies replayed updates while preserving unchanged activity. Fresh
+READY/resync/logout discard it. Unknown/removed recipients and stale account generations do not
+populate the cache. Profile changes do not refetch metadata or churn timeline revisions.
+
+Verification: `cargo xtask check` passed (formatting, strict all-feature Clippy, all-feature
+workspace tests: 327 passed, text-only compilation, policy checks). The first full attempt exhausted C:
+space; this task's temporary cache was moved to E: and the check passed using
+`CARGO_TARGET_DIR=E:/codex-builds/rustcord-rich-target`. A policy block prevented deleting that
+temporary cache; the safe move preserved it instead. Existing unrelated files/caches were kept.
+Focused UI tests include render-and-clear on member/profile and all four DM surfaces, separate
+server/global presence, and no external platform commands. Core/Gateway regressions include
+bounded batching, omission/clearing, rejected unknown users, stable no-op allocation, cache
+budgets, recipient removal and presence replay before RESUMED.
+
+Baseline native dark screenshots were captured and inspected using the unchanged release
+`--demo --demo-profile` process. Computer Use then reported owner physical Escape and was
+stopped. After screenshots, native light/narrow/long-content/keyboard/scroll inspection, and
+comparable after native memory/CPU measurement are blocked by that owner stop. No further
+Computer Use or after executable launch was attempted. Keep the PR draft until this evidence is
+completed. See `docs/pr-evidence/rich-presence/README.md` and the dated performance entry.
+
+Text-only scope: artwork, elapsed/progress timers, party counters and activity actions are not
+implemented. No Windows after-render, macOS/Linux native or live Discord interoperability claim.
+
+Both release package variants and `cargo replay` passed. Text executable +86,016 bytes; voice
++84,992 bytes. Paired replay medians37.6737 ->37.5833ms with unchanged retained range; no speedup
+claim. Exact installed/ZIP sizes, raw samples and method are recorded in performance.md.
+
+
+### Owner-authorized merge of rich presence
+
+The owner explicitly requested merging PR #48 after the draft handoff. Reconciled with main
+`dc49d640302c5244c84953dfc8345396e82ce971`, preserving new role metadata/grouping, computed member-list
+subscription IDs, notification changes and guild deletion authorization. Rich activity and role
+fields coexist with both admission limits. Boxed member payloads in the wire member variant and
+voice state event keep the combined enums compact without suppressing Clippy.
+
+The integrated tree passed `cargo xtask check` (351 tests), `node tests/license-policy.cjs`
+(six offline fixtures), and `cargo xtask licenses` with pinned cargo-deny 0.20.2. Missing platform
+crate sources were fetched with `cargo fetch --locked` before the offline license rerun passed.
+Both release packages passed: text 50,987,520 bytes and voice 54,337,024 bytes. `cargo replay`
+passed: 100,000 events in 39.4606 ms, 500 rows, 236,992..237,477 estimated bytes. This is a single
+integration smoke run, not a performance comparison with the original PR baseline; main changed
+message metadata in the meantime. Native after evidence remains unavailable following owner
+Escape. The owner approved merging with this known limitation and pending remote CI; no branch
+protection bypass or renewed Computer Use was requested.
+
+### Already-running game presence at startup
+
+Follow-up to the missing Genshin Impact report, baseline clean main `ebad184` on branch
+`fix/ready-game-presence`, Rust 1.98.1. Identify requests no capabilities, but the previous
+bootstrap only consumed merged presence records. Accept legacy `READY.presences` / `user.id`
+alongside merged friend records through the same bounded decoder and existing DM recipient filter.
+No subscription or rendering change. Guild-scoped presence remains scoped to its guild.
+
+The synthetic regression failed before the fix and passed afterward. A loopback Gateway test
+sends only legacy READY with an already-running Genshin Impact activity and verifies that the
+core exposes `Playing Genshin Impact` for the known DM recipient without any PRESENCE_UPDATE.
+The pre-existing coalescing, recipient filtering and bounded multi-batch tests also pass.
+Workspace check passed 352 tests; the subsequently added loopback test passed separately.
+No owner account session was used, so this establishes a startup parsing defect rather than
+confirming the exact cause of every missing live activity. Native capture remains paused by
+the owner's earlier Escape stop; the initial follow-up PR was delivered as draft without it.
+Both release packages and replay passed; each executable grows 512 bytes. Five-pair replay
+medians were 40.5364 -> 39.6790 ms (noise), with unchanged retained bounds. Final formatting
+and strict all-feature Gateway Clippy passed after adding the loopback regression. Package and
+replay measurements are in performance.md. Unrelated `target-relocation-remainder/` was preserved.
+
+The owner subsequently authorized merging PR #50. Integrated main `4325dd1`, retaining the
+voice UI/icon atlas changes and both sets of progress/performance notes. Only the appended
+documentation sections conflicted. The combined tree passed `cargo xtask check` (353 tests,
+strict Clippy and policy); owner-paused native evidence and unverified live behavior remain
+explicit limitations of the authorized merge.
+Both integrated release packages passed: text 51,126,272 bytes and voice 54,479,360 bytes.
+These include main's new voice UI and atlas; earlier paired presence measurements remain
+historical evidence of the isolated fix, not the combined UI change. Remote CI is pending.
+Main's subsequently landed fuzz tooling (`68526e8`) merged cleanly without application runtime
+changes; the final combined `cargo xtask check` passed again (353 tests, Clippy and policy).
+
+## Discord-style voice UI and Phosphor icon atlas (September 10, 2026)
+
+- Baseline: main `c4ae54d`, clean tree; branch `t3code/improve-voice-chat-ui`.
+- Owner rejected the primitive-painted glyphs. `crates/ui/src/icons.rs` now draws Phosphor
+  Icons 2.1.1 (MIT) from one bundled 512×320 atlas (`assets/icons/`), tinted at draw time and
+  uploaded once at startup; the `Icon` API is unchanged and gains slashed mic/headphones, camera,
+  screen share, activities, soundboard, hang-up, in-call, add-people and profile glyphs.
+  `tools/generate-icons.py` pins every upstream SVG hash and rasterizes with `resvg` 0.45.1.
+  License staged as `licenses/Phosphor-Icons-MIT.txt`; notices, asset README and design doc updated.
+- Voice views follow Discord: DM calls show a black stage above the conversation with 80px
+  participant avatars and mute/deafen badges; guild voice channels show 16:9 participant tiles
+  with name badges in a virtualized grid and a green Join Voice button when not connected. The
+  bottom control bar is Discord's pill layout (mute + settings chevron, camera, screen share,
+  activities, soundboard, more, red hang-up). Unsupported controls are disabled with hints.
+  Header shows a green "In a call" badge; the account card gains mute/deafen toggles; a
+  "Voice Connected" panel with disconnect sits above it while a call is active; incoming calls
+  use a compact banner with round answer/decline actions.
+- New offline fixture `--demo --demo-call` (synthetic DM call, one muted peer) for screenshots.
+- `cargo xtask check` passed: 304 offline tests, formatting, strict all-feature Clippy, text-only
+  compile and policy. Both macOS packages built; sizes and single-run demo memory/CPU samples are
+  in docs/performance.md. Native `--demo-call`/`--demo-voice` captures (dark and light) inspected;
+  evidence in docs/pr-evidence/voice-call-ui. No live call, microphone or account action occurred;
+  Windows/Linux rendering and real call behaviour with the new controls remain unverified.
+
+### Activity artwork in profile cards
+
+The owner confirmed rich-presence text works after launching main3307396, then requested the
+missing image. Baseline3307396 was preserved in a separate E: worktree/package directory;
+implementation branch feat/activity-artwork does not replace the running main executable.
+
+Profile activity cards now display a 64px static image to the left of name/details/state, for
+both guild and DM profiles. Prefer supplied large artwork, small artwork when large is absent,
+or a public application-icon lookup for application-only activities. Asset IDs and bounded
+Discord media-proxy paths pass through the same presence snapshot/update flow and memory
+budgets. Reuse the existing credential-free worker, cache, placeholders and texture lifetime;
+no dependency, separate cache or background activity-directory loading is added.
+
+Focused model/protocol/core, local HTTP/cache, and headless egui checks pass. The egui check
+verifies actual tessellated artwork appears and disappears with activities in guild/DM profiles;
+an initial assertion checked untessellated shapes and was corrected to inspect rendered meshes.
+Full cargo xtask check passes358 tests, formatting, strict Clippy and policy. The synthetic demo
+uses an original generated emblem, never live game artwork. Native before/after capture and
+process sampling remain unavailable following the owner's earlier Escape stop; a subsequent
+request authorized launching the live build for the owner, not renewed screenshot automation.
+No live account artwork test was performed. Required native evidence therefore remains a draft
+PR blocker under the delivery skill; no completion claim about live artwork or visual QA.
+Both release packages and cargo replay passed. Each executable grows17,408 bytes. Five paired
+replay medians40.3052 ->40.4948 ms are noise with unchanged timeline bounds; see performance.md.
+Independent cross-layer review found no additional blocking defect. Package measurement does not
+substitute for native screenshot/process or live-account artwork evidence.
+
+
+## Debian/Ubuntu distribution packaging (September 10, 2026)
+
+- Baseline main `68526e822461ff8134c3b14e786b17f4bf5920ce`; isolated branch
+  `feat/linux-distribution-package`. The original checkout's ongoing work remains untouched.
+- SPEC14.5 packaging now stages an unsigned native `.deb` for each text/voice variant through
+  the existing package commands. Runtime shared-library dependencies come from dpkg-shlibdeps;
+  desktop libraries loaded dynamically and session services are declared separately. The
+  desktop entry installs with the binary, documentation, asset notices and relevant voice source.
+- Packaging uses an explicit input list and a fresh private temporary directory. Root ownership,
+  executable/data modes, metadata, extracted file contents, desktop syntax and linked-library
+  availability are checked before the archive is copied to dist. No maintainer scripts, autostart,
+  account-data changes, root installation or application launch occur in this smoke test.
+- Windows `cargo xtask check` passed 351 Rust tests, doctests, formatting, strict all-feature
+  Clippy, text-only compilation and policy checks. The Linux synthetic package regression passed
+  both variant payloads, stale nested-file exclusion and invalid ELF/payload rejection. Independent
+  review found no remaining blockers after the source-manifest fix.
+- Integrated main `3307396` (startup game-presence fix); Windows full checks passed again with
+  353 Rust tests. Both real Linux release variants and `.deb` package smoke passed on Ubuntu 26.04
+  x86_64 under WSL2, Rust 1.98.1. Text: 52 payload files/28,056,260 compressed bytes; voice:
+  98 files/29,256,868 bytes. Full installed/binary sizes and measurement limits are in performance.md.
+  The locally provisioned compiler and build cache are isolated under the E: build directory.
+  X11/Wayland rendering, Secret Service, portal dialogs, IME, accessibility and actual login/audio
+  remain unverified; WSL compilation and archive inspection do not prove those desktop paths.
+- Previous PR #51's Linux fuzz, license and security jobs passed on GitHub; native jobs remained
+  queued or running at this inspection. This is separate from the new packaging validation.
+
+- Packaging host emitted a dpkg-shlibdeps warning for the libc6 `/lib64` loader diversion.
+  Readlink and dpkg ownership checks resolve both paths to the installed libc6 loader;
+  generated Depends includes libc6 >=2.43 and both host library-closure checks passed. No
+  missing-library/dependency-metadata checks were suppressed. These builds target this host
+  distribution, not older Debian/Ubuntu versions. The `.deb` files remain unsigned.
+- No application source/dependency changes were made by this slice. Native install/launch,
+  Wayland/X11, desktop services, IME, accessibility and physical/live audio remain unverified.
+  Remaining implementation work includes bounded unknown-event compatibility diagnostics;
+  source-license assembly and the documented runtime/live evidence gates remain incomplete.
+
+### Owner-authorized merge of activity artwork
+
+The owner explicitly requested merging PR #54. Integrated main31bf546, preserving Debian
+packaging and both sets of progress/performance notes; conflicts were limited to appended docs.
+The combined cargo xtask check passed358 tests, strict Clippy and policy. Application source,
+assets and lockfile match the previously verified artwork release builds exactly, so those
+Windows text/voice package results remain applicable. Linux packaging is covered by its own
+main/CI checks, not claimed as locally executed on Windows. Before integration, macOS, Ubuntu,
+security, licenses and fuzz CI passed; Windows CI was still pending. Native screenshots remain
+owner-paused and live artwork remains unverified; this explicit merge request accepts those
+reported limitations without changing repository protection or enabling account automation.
+
+
+## Bounded Gateway compatibility diagnostics (September 10, 2026)
+
+- Baseline main `31bf546a0754f157e131007003b6df70db57f353`; isolated branch
+  `feat/bounded-gateway-diagnostics`. SPEC7.2 unsupported dispatches now have opt-in fixed-label
+  diagnostics, including missing names and unsupported opcodes. Received event names, payloads,
+  credentials and account/message metadata are never logged. Existing ignore/protocol-error
+  behavior is preserved; no new capabilities are inferred from unknown inputs.
+- Reuses member diagnostics with independent 64-record/8-KiB attempted-output budgets per
+  enabled scope, across reconnects. No raw archive, retained strings, queue or new dependency.
+  Broken stderr and partial writes are charged but cannot panic these diagnostic paths.
+  The desktop's existing terminal diagnostic also uses fallible output, for either enabled scope.
+- Focused synthetic tests pass disabled output, exact UTF-8/line bounds, oversized labels,
+  failed writes, redaction and continued message/heartbeat flow after unsupported events.
+  A separate opt-in loopback run emitted exactly the three expected fixed labels and no
+  synthetic private markers. No owner account, desktop, microphone or speaker was accessed.
+- Validation exposed cached xtask selecting its compilation checkout instead of the caller's
+  workspace. `cargo locate-project --workspace` now resolves it at runtime. The new Node
+  regression failed on the old binary and passed after the fix, from a nested synthetic workspace.
+  CI runs that regression. Shared Cargo output also reused an old test binary; those initial
+  full-suite results are discarded. The private-target full suite passed 353 tests, including the new test names, plus Clippy,
+  formatting, policy and the workspace regression. CONTRIBUTING documents separate worktree
+  target directories. Main `34c4a8f` (activity artwork) is integrated with both sets of
+  documentation preserved. The combined private-target check passed 358 Rust tests, doctests,
+  formatting, strict all-feature Clippy, text-only compilation and policy; the cached-workspace
+  regression passed again. Both Windows release packages and replay passed from the private
+  target. Text executable size is unchanged; voice adds 1,536 bytes. Paired reducer medians
+  were 41.1287 ms before and 40.1348 ms after, with identical retained byte/row bounds; this
+  small variation is noise, not a speed claim. See performance.md for package measurements.
+- No visible UI change, so screenshots are not applicable. On the initial PR head, macOS, Linux,
+  security, licenses and fuzz CI passed; Windows was pending. Final integrated-head checks are
+  reported separately. Native desktop, storage tracing and owner-controlled live text/voice
+  evidence gates remain incomplete.
+
+## September 10, 2026 — egui main and native emoji experiment
+
+Starting from clean `main` at `3307396005f72f2e2b26946204b27991881d4ad1`
+(same as fetched origin/main), branch `chore/egui-main-test` pins egui and eframe
+and their ecosystem to upstream main `65e7db3c06d779c60ac56647bdd3011ed8ba1cbd`.
+The exact revision came from upstream `git ls-remote`, not a cached version page.
+`Id::new` calls were migrated to `Id::unique`; panel state reset now uses the
+parent-scoped ID required upstream. The existing sidebar test caught the latter
+regression and now passes. The font coverage test uses `FontData::bytes()`.
+
+The owner's follow-up reported striped placeholders for Unicode emoji. Enabling
+eframe `system_fonts` also enables epaint color font decoding and OS font fallback
+for normal labels/editors, including channel names. Bundled text fonts and existing
+Twemoji rendering remain. No system emoji font is copied into the distribution.
+
+Validation: `cargo xtask check` passed with native fallback enabled: strict Clippy,
+353 tests passed, one existing opt-in voice test ignored, text-only check and policy
+checks passed. `cargo deny --locked --all-features check licenses advisories` passed
+with cargo-deny 0.20.2. Existing vendored Wry deprecation/unsafe warnings remain;
+no egui ID deprecation is suppressed. macOS 27.0, Apple M1 Pro, 16 GiB, Rust 1.98.1.
+Windows/Linux native rendering and live Discord interoperability remain unverified.
+
+Both final release package commands passed. Text executable: 47,910,256 bytes
+(+205,968); voice executable: 50,730,160 bytes (+189,584). Complete installed/ZIP
+comparisons and measurement limits are in docs/performance.md. Native screenshots
+in `docs/pr-evidence/egui-main` use the unchanged synthetic `--demo --demo-profile`
+fixture at 1120×760 points / 2× scale: before is the intermediate main-pin build
+without system fonts, after is the final text build with system fonts. The same
+profile status visibly changes from the striped missing-glyph marker to a yellow
+moon. This validates native label rendering on this Mac, not every emoji sequence
+or live Discord behavior. Temporary preview copies used distinct bundle IDs to
+keep automation separate from the owner's running app.
+
+## September 11, 2026 - message-history scroll stability
+
+Baseline `fd20dc90c5bf25bce1cfc313944661f973f3c9e1`, branch `fix/scroll-jitter`,
+isolated Windows worktree. The original main checkout and its untracked
+`target-relocation-remainder/` were preserved. Rust 1.98.1; unchanged pinned egui,
+text-only default and optional voice features. Baseline release packages were built
+from a separate detached worktree before application edits.
+
+The timeline saved its anchor before egui consumed wheel input, then restored that
+outdated position after measuring new rows. Leading row measurements also shifted
+already visible messages, while estimated trailing heights could leave gaps.
+The fix saves the post-input anchor, measures leading rows in a clipped child whose
+bounds do not move the visible content, and fills the viewport using actual row heights.
+Row widget IDs remain stable across those two layouts. Existing 500-row/content-byte
+bounds and caches are unchanged; no additional rendering passes or dependencies.
+
+Synthetic egui input regression: 500 messages with compact and long wrapped rows,
+900x600 and 360x600 point viewports, explicit 60 Hz timestamps, 120 upward wheel
+frames, 240 downward frames and four idle frames. Maximum visible-message displacement
+error was 80/76 points on the baseline and 0/0 after the fix. These are CPU layout
+coordinates, not native GPU frame-time or live Discord evidence. Existing focused
+timeline checks cover zoom, deletion, spoilers, keyboard actions and jumping to present.
+
+Native Computer Use remains owner-paused from the earlier Escape interruption.
+Before/after native screenshots and native process CPU/RSS sampling are therefore
+unavailable; no desktop automation, live conversation or running owner build was touched.
+The delivery skill requires a draft PR while this evidence is unavailable. Release
+package measurements and their limits are recorded in `docs/performance.md`.
+
+Validation: `cargo test --locked -p ui timeline::tests -- --nocapture` passed;
+`cargo xtask check` passed all 360 tests (one existing opt-in voice test ignored),
+formatting, strict workspace Clippy, text-only check and policy. The tall-leading-row
+regression also verifies first-frame visibility and absence of phantom scroll extent.
+`cargo xtask package` and `cargo xtask package-voice` passed; each executable grew by
+1,024 bytes. Native capture/process metrics and live scrolling remain unverified.
+The shared target initially reused an xtask binary containing the baseline worktree
+path; rebuilding only the xtask cache corrected that before the successful checks
+and final packages. Baseline packages and the owner's running build were preserved.
+
+Owner-requested main integration: preserved the newer DM-ordering fix `990d1c3`;
+the only conflict joined both appended progress sections. The combined
+`cargo xtask check` passed 361 tests, strict Clippy, formatting, text-only check
+and policy (one existing opt-in voice test ignored). Release/size evidence above
+describes `d6909bd` before this integration. The owner explicitly requested pushing
+to main with the previously reported pending CI and paused native evidence.
+
+## Combined DM/group activity ordering - September 11, 2026
+
+DMs and group DMs now share newest-message-first sidebar ordering. Incoming messages
+and confirmed sends update placement; composing or pending sends do not. Existing
+bounded activity cursors retain ordering across deleted latest messages and stale/null
+metadata replacements. Empty conversations fall back to their channel IDs; equal
+activity uses channel ID as a deterministic tie-breaker. Guild/category ordering and
+selection by channel ID remain unchanged. No new storage, dependencies or network calls.
+
+Baseline: clean task worktree from origin/main `fd20dc9`; original local main was
+`2d17054` with unrelated `target-relocation-remainder/`, preserved. Rust 1.98.1.
+The new regression failed against baseline ordering, then passed. Final
+`cargo xtask check` passed all 359 tests, formatting, strict Clippy and policy checks;
+`cargo xtask package` and `cargo xtask package-voice` passed on Windows. Independent
+read-only review found no remaining blockers. Release package/replay comparisons are
+recorded in `docs/performance.md` (text and voice executables each +48,640 bytes).
+
+The existing native `--demo` baseline was inspected; Computer Use was stopped with
+physical Escape before the matched before/after pair, so no visual-pair claim is made.
+The temporary screenshot-only fixture was removed from the delivered change.
+No live Discord session, microphone, macOS or Linux validation was performed.
+The owner explicitly requested rebase and direct push to main instead of a PR.
+
+Protocol basis checked September 11: Discord's [channel fields](https://docs.discord.com/developers/resources/channel)
+provide last_message_id and [snowflake IDs](https://docs.discord.com/developers/reference#snowflakes)
+encode creation time. Ordering is a local interpretation of available metadata;
+synthetic tests do not prove exact official-client ordering or live interoperability.
+
+September 11 owner-requested merge: integrated main 487069f (including scrolling/DM order); retained diagnostics and runtime xtask workspace resolution through formatting conflicts. Full `cargo xtask check` passed 361 tests, strict Clippy, text-only compilation and policy; `node tests/xtask-workspace.cjs` passed. Existing-head cross-platform CI was green. No native/live interaction performed.
+
+September 11 owner-requested PR47 integration: preserved current main fast-local policy and all runtime changes. Four TOML files, settings JSON, three Claude frontmatters and both skills validated; no hooks or permission bypasses added. Runtime unchanged by this PR; no new native run needed.

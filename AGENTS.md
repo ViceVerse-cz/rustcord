@@ -33,6 +33,19 @@ route work to a strong lead and bounded workers; see [usage](docs/agent-orchestr
 This is a workflow for an active coding session, not a background daemon or a fixed delivery-time
 promise. Build times, platform access, credentials and CI can delay completion.
 
+## Fast local mode
+
+When a request begins with `!fast`, it authorizes a local, uncommitted implementation pass. Write
+the requested code and run only the smallest debug command that exercises it. Skip baselines,
+`cargo xtask check`, focused tests, packages, screenshots, performance/size measurements,
+`docs/progress.md` updates, commits, pushes, and PR work. Do not start external or live-account
+actions. If the debug run cannot be performed, state the concrete blocker.
+
+Finish with `Done — please check it. Say confirm to commit and push it to main.` On an explicit
+confirmation, review and commit only the fast-task paths, then push `main`; do not create a PR
+unless separately requested. This mode never waives security, input validation, secret handling,
+or the product boundaries above.
+
 1. Inspect the relevant implementation, callers and tests. Establish the baseline before edits.
 2. Make reasonable reversible choices and implement a complete useful slice. Ask only when missing
    information changes scope materially or an action exceeds the authorization above; continue

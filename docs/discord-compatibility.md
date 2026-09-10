@@ -392,3 +392,68 @@ rendered. Equal positions favor the lower role ID, consistent with
 Names retain hue when readable; the theme adjusts insufficient contrast, including hover.
 Member list subscriptions remain unofficial. Synthetic role evidence does not establish
 live role behavior for every account.
+
+
+### Authorized message deletion - September 10, 2026
+
+A loaded guild message can be deleted after explicit confirmation when its author is the current
+user or the current effective channel permissions include MANAGE_MESSAGES. Others' DM/group-DM
+messages are excluded; edit remains author-only. Permission overwrites and thread-parent
+inheritance use the existing permission resolver. The confirmation rechecks access; the server
+remains authoritative and HTTP rejection/uncertainty does not synthesize successful deletion.
+
+The [official message resource](https://docs.discord.com/developers/resources/message#delete-message)
+documents deleting others' guild messages with MANAGE_MESSAGES and lists deletable message types.
+Known non-deletable and unknown types are denied locally; automoderation notices require
+MANAGE_MESSAGES even when their supplied author matches the user. This is dated protocol evidence,
+not proof of normal-user service acceptance. Offline permission/menu/local HTTP tests are synthetic;
+no message was deleted on Discord, and native confirmation/screen-reader evidence remains unverified.
+
+
+## Received rich presence (September 10, 2026)
+
+Activity types and text fields follow the [documented Gateway activity object](https://docs.discord.com/developers/events/gateway-events#activity-object).
+The existing member-list snapshot and PRESENCE_UPDATE path now retains bounded rich text alongside
+custom status. DM presence is admitted only for already-known accessible DM recipients; initial
+friend presence from READY/READY_SUPPLEMENTAL and guild-less updates use unofficial normal-user
+shapes observed in [discord.py-self's state implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/state.py).
+These sources were checked September 10; developer documentation is not proof of normal-user
+support. The initial text implementation added no subscription or endpoint; artwork lookup is
+described below. No agent-operated account action or live session validation was performed.
+The existing guild subscription's `activities` flag stays unchanged: the public implementation's
+[subscription reference](https://github.com/dolfies/discord.py-self/blob/master/discord/guild.py)
+labels its meaning unknown. Only received activity metadata is displayed; missing events remain
+unavailable. Offline status clears activity. Disconnect hides cached DM presence; a successful resume restores it and applies replayed changes. Fresh READY, resync and session reset discard the cache.
+Activity actions and elapsed/progress timers remain unsupported.
+
+Startup correction: Identify does not enable `DEDUPE_USER_OBJECTS`, so initial friend presence
+arrives in `READY.presences` with `user.id`. The bootstrap now accepts that format as well as
+`merged_presences.friends` with `user_id`; both use the same recipient filter and byte/item limits.
+The [unofficial READY capability description](https://docs.discord.food/gateway/gateway-events#ready)
+documents this format distinction. A synthetic already-running Genshin Impact activity exercises
+the missing startup path. This does not verify the owner's reported live payload, change activity
+subscriptions, or promote guild-scoped presence into globally authoritative DM presence.
+
+Activity artwork: profile cards show a static image to the left of the text. The decoder prefers
+`assets.large_image`, then `small_image` when large is absent, then the application icon. Numeric
+assets and `mp:` references follow the [documented activity asset formats](https://docs.discord.com/developers/events/gateway-events#activity-object-activity-asset-image)
+and [CDN paths](https://docs.discord.com/developers/reference#image-formatting). Media-proxy
+references must also pass the existing safe image-loader path restrictions; direct external
+URLs and unsupported asset schemes are never fetched. A missing/failed image keeps the text.
+Application-only activities use the unauthenticated
+[`GET /applications/{id}/rpc` endpoint](https://docs.discord.food/resources/application#get-rpc-application-unauthenticated)
+to obtain an icon hash, then the fixed Discord CDN app-icons path. This metadata route is
+unofficial; a public sample application returned HTTP 200 without credentials on September 10.
+Synthetic decoder, local HTTP, cache and egui tests cover the implementation, not normal-user
+artwork interoperability. The owner confirmed presence text after launching the prior build;
+new artwork has not been tested against the owner's live session.
+
+
+### Unknown Gateway variants (September 10, 2026)
+
+Unknown dispatches remain ignored without granting capabilities; unsupported opcodes retain the
+existing protocol-error behavior. Opt-in `SEREIN_GATEWAY_DIAGNOSTICS=1` now records bounded fixed
+categories for these cases and missing dispatch names. Received names and payloads never enter
+diagnostics. This changes observability, not the supported service contract. Offline local-socket
+checks cover continued message delivery and heartbeat cursor advancement; normal-user service
+behavior remains unverified. See storage-policy.md for exact per-run limits and stderr handling.

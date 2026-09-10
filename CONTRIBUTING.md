@@ -8,13 +8,27 @@ Keep UI, model, protocol, storage and transport boundaries clear. Bound item cou
 
 For dependency changes, install `cargo-deny` with
 `cargo install cargo-deny --version 0.20.2 --locked`, fetch sources with `cargo fetch --locked`,
+also run `cargo fetch --locked --manifest-path fuzz/Cargo.toml`,
 then run `cargo xtask licenses` and `node tests/license-policy.cjs`. CI runs these separately
 from native builds. The offline check covers all features and platforms in the locked graph,
 including development and vendored dependencies. Unapproved licenses fail; version-specific
 exceptions in `deny.toml` require source/notice review when upgraded. This checks declared license
 policy, not complete per-artifact license-text assembly or external system-library obligations.
 
+Run `cargo xtask fuzz` for bounded, offline, coverage-guided decoder/state smoke tests after
+installing the pinned development tools described in [fuzz/README.md](fuzz/README.md).
+Fuzzing uses its own lockfile and nightly toolchain; normal application builds remain stable.
+
 Agent implementation requests follow the [idea-to-PR contract](AGENTS.md) and the
 [delivery skill](.agents/skills/serein-delivery/SKILL.md). Native UI changes include synthetic
 before/after screenshots; runtime changes include comparable release performance evidence.
 Use the PR template and leave blocked checks/evidence visible in a draft. Do not merge automatically.
+
+
+Use a separate Cargo target directory for each worktree (the default `target/` already does
+this). If `CARGO_TARGET_DIR` moves builds to another drive, give each worktree its own path;
+sharing one directory can reuse stale application/test artifacts across simultaneous edits.
+`xtask` resolves the invocation's Cargo workspace at runtime, including nested working
+directories, instead of embedding the checkout where its cached executable was compiled.
+After `cargo xtask check`, `node tests/xtask-workspace.cjs` checks that behavior without
+building or accessing an owner session.

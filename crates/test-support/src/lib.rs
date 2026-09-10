@@ -2,58 +2,58 @@
 use client_core::{Envelope, Event, State};
 use model::*;
 pub fn message(id: u64, channel: Id) -> Message {
-    let mut content = match id % 6 {
-        0 => "A short synthetic message.".into(),
-        1 => "A longer synthetic message which wraps at smaller window sizes. ".repeat(8),
-        2 => "Unicode: 日本語 · čeština · العربية · e\u{301} · 👩🏽‍💻".into(),
-        3 => "```rust\nfn main() {\n    println!(\"synthetic fixture\");\n}\n```".into(),
-        4 => "> A quoted thought\nA second line, and a third.\nThis stays only in session memory."
-            .into(),
-        _ => "**Synthetic history** — this is an offline fixture, never a Discord reply.".into(),
-    };
-    if id == 500 {
-        content = format!("Hey <@2> — see <#21>. {content}");
-    }
-    Message {
-        reactions: Some(if id == 500 {
-            vec![Reaction {
-                emoji: ReactionEmoji {
-                    id: None,
-                    name: Some("👍".into()),
-                },
-                count: 3,
-                me: false,
-                me_burst: false,
-            }]
-        } else {
-            vec![]
-        }),
-        id: Id(id),
-        channel,
-        author: User {
-            avatar: None,
-            discriminator: 0,
-            id: Id(if id.is_multiple_of(2) { 1 } else { 2 }),
-            name: if id.is_multiple_of(2) {
-                "You (synthetic)"
-            } else {
-                "Robin (synthetic)"
-            }
-            .into(),
-        },
-        content,
-        edited: false,
-        edited_at: None,
-        revision: 0,
-        nonce: None,
-        reply_to: None,
-        kind: 0,
-        reply_deleted: false,
-        unsupported: false,
-        extra_content: Default::default(),
-        embeds: demo_embeds(id),
-        attachments: if id == 500 {
-            vec![
+	let mut content = match id % 6 {
+		0 => "A short synthetic message.".into(),
+		1 => "A longer synthetic message which wraps at smaller window sizes. ".repeat(8),
+		2 => "Unicode: 日本語 · čeština · العربية · e\u{301} · 👩🏽‍💻".into(),
+		3 => "```rust\nfn main() {\n    println!(\"synthetic fixture\");\n}\n```".into(),
+		4 => "> A quoted thought\nA second line, and a third.\nThis stays only in session memory."
+			.into(),
+		_ => "**Synthetic history** — this is an offline fixture, never a Discord reply.".into(),
+	};
+	if id == 500 {
+		content = format!("Hey <@2> — see <#21>. {content}");
+	}
+	Message {
+		reactions: Some(if id == 500 {
+			vec![Reaction {
+				emoji: ReactionEmoji {
+					id: None,
+					name: Some("👍".into()),
+				},
+				count: 3,
+				me: false,
+				me_burst: false,
+			}]
+		} else {
+			vec![]
+		}),
+		id: Id(id),
+		channel,
+		author: User {
+			avatar: None,
+			discriminator: 0,
+			id: Id(if id.is_multiple_of(2) { 1 } else { 2 }),
+			name: if id.is_multiple_of(2) {
+				"You (synthetic)"
+			} else {
+				"Robin (synthetic)"
+			}
+			.into(),
+		},
+		content,
+		edited: false,
+		edited_at: None,
+		revision: 0,
+		nonce: None,
+		reply_to: None,
+		kind: 0,
+		reply_deleted: false,
+		unsupported: false,
+		extra_content: Default::default(),
+		embeds: demo_embeds(id),
+		attachments: if id == 500 {
+			vec![
                 Attachment {
                     id: Id(700),
                     filename: "synthetic-landscape.png".into(),
@@ -101,30 +101,30 @@ pub fn message(id: u64, channel: Id) -> Message {
                     },
                 },
             ]
-        } else {
-            vec![]
-        },
-        mention_roles: vec![],
-        mention_everyone: false,
-        suppress_notifications: false,
-        mentions: if id == 500 {
-            vec![User {
-                id: Id(2),
-                name: "Robin (synthetic)".into(),
-                avatar: None,
-                discriminator: 0,
-            }]
-        } else {
-            Vec::new()
-        },
-        embeds_suppressed: false,
-    }
+		} else {
+			vec![]
+		},
+		mention_roles: vec![],
+		mention_everyone: false,
+		suppress_notifications: false,
+		mentions: if id == 500 {
+			vec![User {
+				id: Id(2),
+				name: "Robin (synthetic)".into(),
+				avatar: None,
+				discriminator: 0,
+			}]
+		} else {
+			Vec::new()
+		},
+		embeds_suppressed: false,
+	}
 }
 fn demo_embeds(id: u64) -> Vec<Embed> {
-    if id != 500 {
-        return vec![];
-    }
-    vec![Embed {
+	if id != 500 {
+		return vec![];
+	}
+	vec![Embed {
         kind: "rich".into(),
         title: Some("A quieter place for your conversations".into()),
         description: Some("**Native embed preview**\nFormatted descriptions, *useful details*, and a static image.\n[Markdown link](https://example.com/synthetic) · https://example.org".into()),
@@ -138,1234 +138,1265 @@ fn demo_embeds(id: u64) -> Vec<Embed> {
     }]
 }
 pub fn demo_state() -> State {
-    let mut state = State {
-        demo: true,
-        ..State::default()
-    };
-    state.apply(Envelope {
-        generation: state.generation,
-        event: Event::Ready {
-            permissions: model::permissions::Snapshot::default(),
-            user: User {
-                avatar: None,
-                discriminator: 0,
-                id: Id(1),
-                name: "You (synthetic)".into(),
-            },
-            guilds: vec![Guild {
-                emojis: Some(vec![
-                    model::CustomEmoji {
-                        id: Id(9001),
-                        name: "serein_wave".into(),
-                        animated: false,
-                        available: true,
-                        managed: false,
-                        roles: Some(vec![]),
-                    },
-                    model::CustomEmoji {
-                        id: Id(9002),
-                        name: "serein_party".into(),
-                        animated: true,
-                        available: true,
-                        managed: false,
-                        roles: Some(vec![]),
-                    },
-                ]),
-                icon: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
-                id: Id(10),
-                name: "Synthetic workspace".into(),
-            }],
-            channels: vec![
-                Channel {
-                    last_message: None,
-                    id: Id(20),
-                    guild: Some(Id(10)),
-                    parent_id: Some(Id(23)),
-                    position: 0,
-                    name: "getting-started".into(),
-                    kind: 0,
-                    recipients: vec![],
-                    member_list_id: Some("everyone".into()),
-                },
-                Channel {
-                    last_message: None,
-                    id: Id(21),
-                    guild: Some(Id(10)),
-                    parent_id: Some(Id(24)),
-                    position: 0,
-                    name: "long-form".into(),
-                    kind: 0,
-                    recipients: vec![],
-                    member_list_id: Some("everyone".into()),
-                },
-                Channel {
-                    last_message: None,
-                    id: Id(22),
-                    guild: None,
-                    parent_id: None,
-                    position: 0,
-                    name: "Robin (synthetic)".into(),
-                    kind: 1,
-                    recipients: vec![message(1, Id(22)).author],
-                    member_list_id: None,
-                },
-                Channel {
-                    last_message: None,
-                    id: Id(23),
-                    guild: Some(Id(10)),
-                    parent_id: None,
-                    position: 0,
-                    name: "WELCOME".into(),
-                    kind: 4,
-                    recipients: vec![],
-                    member_list_id: None,
-                },
-                Channel {
-                    last_message: None,
-                    id: Id(24),
-                    guild: Some(Id(10)),
-                    parent_id: None,
-                    position: 1,
-                    name: "CONVERSATIONS".into(),
-                    kind: 4,
-                    recipients: vec![],
-                    member_list_id: None,
-                },
-                Channel {
-                    last_message: None,
-                    id: Id(25),
-                    guild: Some(Id(10)),
-                    parent_id: Some(Id(24)),
-                    position: 1,
-                    name: "hangout".into(),
-                    kind: 2,
-                    recipients: vec![],
-                    member_list_id: None,
-                },
-                Channel {
-                    id: Id(26),
-                    guild: Some(Id(10)),
-                    parent_id: Some(Id(24)),
-                    position: 2,
-                    name: "ideas".into(),
-                    kind: 15,
-                    recipients: vec![],
-                    last_message: None,
-                    member_list_id: None,
-                },
-                Channel {
-                    id: Id(27),
-                    guild: Some(Id(10)),
-                    parent_id: Some(Id(26)),
-                    position: 0,
-                    name: "A synthetic forum post".into(),
-                    kind: 11,
-                    recipients: vec![],
-                    last_message: None,
-                    member_list_id: None,
-                },
-                Channel {
-                    id: Id(28),
-                    guild: Some(Id(10)),
-                    parent_id: Some(Id(20)),
-                    position: 0,
-                    name: "Introductions thread".into(),
-                    kind: 11,
-                    recipients: vec![],
-                    last_message: None,
-                    member_list_id: None,
-                },
-            ],
-        },
-    });
-    state
-        .permissions
-        .replace(permission_snapshot(&state))
-        .unwrap();
-    state.select(Id(20));
-    load_page(&mut state, None);
-    state.apply(Envelope {
-        generation: state.generation,
-        event: Event::ReadState(client_core::read_state::Event::Snapshot {
-            partial: false,
-            entries: Some(vec![(Id(20), Some(Id(495)), 0)]),
-            version: Some(1),
-        }),
-    });
-    state.status = "Offline fixture · no network access";
-    state
+	let mut state = State {
+		demo: true,
+		..State::default()
+	};
+	state.apply(Envelope {
+		generation: state.generation,
+		event: Event::Ready {
+			permissions: model::permissions::Snapshot::default(),
+			user: User {
+				avatar: None,
+				discriminator: 0,
+				id: Id(1),
+				name: "You (synthetic)".into(),
+			},
+			guilds: vec![Guild {
+				emojis: Some(vec![
+					model::CustomEmoji {
+						id: Id(9001),
+						name: "serein_wave".into(),
+						animated: false,
+						available: true,
+						managed: false,
+						roles: Some(vec![]),
+					},
+					model::CustomEmoji {
+						id: Id(9002),
+						name: "serein_party".into(),
+						animated: true,
+						available: true,
+						managed: false,
+						roles: Some(vec![]),
+					},
+				]),
+				icon: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
+				id: Id(10),
+				name: "Synthetic workspace".into(),
+			}],
+			channels: vec![
+				Channel {
+					last_message: None,
+					id: Id(20),
+					guild: Some(Id(10)),
+					parent_id: Some(Id(23)),
+					position: 0,
+					name: "getting-started".into(),
+					kind: 0,
+					recipients: vec![],
+					member_list_id: Some("everyone".into()),
+				},
+				Channel {
+					last_message: None,
+					id: Id(21),
+					guild: Some(Id(10)),
+					parent_id: Some(Id(24)),
+					position: 0,
+					name: "long-form".into(),
+					kind: 0,
+					recipients: vec![],
+					member_list_id: Some("everyone".into()),
+				},
+				Channel {
+					last_message: None,
+					id: Id(22),
+					guild: None,
+					parent_id: None,
+					position: 0,
+					name: "Robin (synthetic)".into(),
+					kind: 1,
+					recipients: vec![message(1, Id(22)).author],
+					member_list_id: None,
+				},
+				Channel {
+					last_message: None,
+					id: Id(23),
+					guild: Some(Id(10)),
+					parent_id: None,
+					position: 0,
+					name: "WELCOME".into(),
+					kind: 4,
+					recipients: vec![],
+					member_list_id: None,
+				},
+				Channel {
+					last_message: None,
+					id: Id(24),
+					guild: Some(Id(10)),
+					parent_id: None,
+					position: 1,
+					name: "CONVERSATIONS".into(),
+					kind: 4,
+					recipients: vec![],
+					member_list_id: None,
+				},
+				Channel {
+					last_message: None,
+					id: Id(25),
+					guild: Some(Id(10)),
+					parent_id: Some(Id(24)),
+					position: 1,
+					name: "hangout".into(),
+					kind: 2,
+					recipients: vec![],
+					member_list_id: None,
+				},
+				Channel {
+					id: Id(26),
+					guild: Some(Id(10)),
+					parent_id: Some(Id(24)),
+					position: 2,
+					name: "ideas".into(),
+					kind: 15,
+					recipients: vec![],
+					last_message: None,
+					member_list_id: None,
+				},
+				Channel {
+					id: Id(27),
+					guild: Some(Id(10)),
+					parent_id: Some(Id(26)),
+					position: 0,
+					name: "A synthetic forum post".into(),
+					kind: 11,
+					recipients: vec![],
+					last_message: None,
+					member_list_id: None,
+				},
+				Channel {
+					id: Id(28),
+					guild: Some(Id(10)),
+					parent_id: Some(Id(20)),
+					position: 0,
+					name: "Introductions thread".into(),
+					kind: 11,
+					recipients: vec![],
+					last_message: None,
+					member_list_id: None,
+				},
+			],
+		},
+	});
+	state
+		.permissions
+		.replace(permission_snapshot(&state))
+		.unwrap();
+	state.select(Id(20));
+	load_page(&mut state, None);
+	state.apply(Envelope {
+		generation: state.generation,
+		event: Event::ReadState(client_core::read_state::Event::Snapshot {
+			partial: false,
+			entries: Some(vec![(Id(20), Some(Id(495)), 0)]),
+			version: Some(1),
+		}),
+	});
+	state.status = "Offline fixture · no network access";
+	state
 }
 /// Notification rail evidence: synthetic incoming DMs and a guild mention, no OS delivery.
 pub fn notification_demo_state() -> State {
-    let mut state = demo_state();
-    let dm = state
-        .channels
-        .iter()
-        .find(|c| c.guild.is_none() && c.supports_text())
-        .unwrap()
-        .id;
-    let guild = state
-        .channels
-        .iter()
-        .find(|c| c.guild.is_some() && c.supports_text() && Some(c.id) != state.selected)
-        .unwrap()
-        .id;
-    for (id, channel) in [(1001, dm), (1003, dm), (1005, guild)] {
-        let mut message = message(id, channel);
-        message.mentions = vec![state.user.clone().unwrap()];
-        state.apply(Envelope {
-            generation: state.generation,
-            event: Event::Message(message),
-        });
-    }
-    state.status = "Offline notification fixture · no network or OS alerts";
-    state
+	let mut state = demo_state();
+	let dm = state
+		.channels
+		.iter()
+		.find(|c| c.guild.is_none() && c.supports_text())
+		.unwrap()
+		.id;
+	let guild = state
+		.channels
+		.iter()
+		.find(|c| c.guild.is_some() && c.supports_text() && Some(c.id) != state.selected)
+		.unwrap()
+		.id;
+	for (id, channel) in [(1001, dm), (1003, dm), (1005, guild)] {
+		let mut message = message(id, channel);
+		message.mentions = vec![state.user.clone().unwrap()];
+		state.apply(Envelope {
+			generation: state.generation,
+			event: Event::Message(message),
+		});
+	}
+	state.status = "Offline notification fixture · no network or OS alerts";
+	state
 }
 /// Voice-only visual evidence: synthetic membership, no media or gateway commands.
 pub fn voice_demo_state() -> State {
-    use client_core::voice::{Call, Participant, Phase, RosterEntry};
-    use std::time::{Duration, Instant};
-    let mut state = demo_state();
-    state
-        .channels
-        .iter_mut()
-        .find(|c| c.id == Id(25))
-        .unwrap()
-        .name = "Room 3,5".into();
-    state.channels.push(Channel {
-        id: Id(26),
-        guild: Some(Id(10)),
-        parent_id: Some(Id(24)),
-        position: 2,
-        name: "Quiet room".into(),
-        kind: 2,
-        recipients: vec![],
-        member_list_id: None,
-        last_message: None,
-    });
-    state.voice.roster = [
-        (1, "You (synthetic)", false, false),
-        (2, "Robin with a rather long display name", true, true),
-        (3, "Fern and the midnight orchestra", true, false),
-    ]
-    .into_iter()
-    .map(|(id, name, muted, deafened)| RosterEntry {
-        guild: Id(10),
-        channel: Id(25),
-        participant: Participant {
-            user: Id(id),
-            muted,
-            deafened,
-            server_muted: false,
-            server_deafened: false,
-        },
-        member: Some(Member {
-            roles: vec![],
-            user: User {
-                id: Id(id),
-                name: name.into(),
-                avatar: None,
-                discriminator: 0,
-            },
-            nick: None,
-            status: None,
-            custom_status: None,
-        }),
-    })
-    .collect();
-    state.voice.active = Some(Call {
-        channel: Id(25),
-        guild: Some(Id(10)),
-        request: 0,
-        phase: Phase::Connected,
-        connected_at: Some(Instant::now() - Duration::from_secs(3663)),
-        muted: false,
-        deafened: false,
-        server_muted: false,
-        server_deafened: false,
-        participants: state
-            .voice
-            .roster
-            .iter()
-            .map(|entry| entry.participant)
-            .collect(),
-        error: None,
-    });
-    state.select(Id(25));
-    state.status = "Offline voice fixture · no microphone or network access";
-    state
+	use client_core::voice::{Call, Participant, Phase, RosterEntry};
+	use std::time::{Duration, Instant};
+	let mut state = demo_state();
+	state
+		.channels
+		.iter_mut()
+		.find(|c| c.id == Id(25))
+		.unwrap()
+		.name = "Room 3,5".into();
+	state.channels.push(Channel {
+		id: Id(26),
+		guild: Some(Id(10)),
+		parent_id: Some(Id(24)),
+		position: 2,
+		name: "Quiet room".into(),
+		kind: 2,
+		recipients: vec![],
+		member_list_id: None,
+		last_message: None,
+	});
+	state.voice.roster = [
+		(1, "You (synthetic)", false, false),
+		(2, "Robin with a rather long display name", true, true),
+		(3, "Fern and the midnight orchestra", true, false),
+	]
+	.into_iter()
+	.map(|(id, name, muted, deafened)| RosterEntry {
+		guild: Id(10),
+		channel: Id(25),
+		participant: Participant {
+			user: Id(id),
+			muted,
+			deafened,
+			server_muted: false,
+			server_deafened: false,
+		},
+		member: Some(Member {
+			roles: vec![],
+			user: User {
+				id: Id(id),
+				name: name.into(),
+				avatar: None,
+				discriminator: 0,
+			},
+			nick: None,
+			status: None,
+			custom_status: None,
+			activities: vec![],
+		}),
+	})
+	.collect();
+	state.voice.active = Some(Call {
+		channel: Id(25),
+		guild: Some(Id(10)),
+		request: 0,
+		phase: Phase::Connected,
+		connected_at: Some(Instant::now() - Duration::from_secs(3663)),
+		muted: false,
+		deafened: false,
+		server_muted: false,
+		server_deafened: false,
+		participants: state
+			.voice
+			.roster
+			.iter()
+			.map(|entry| entry.participant)
+			.collect(),
+		error: None,
+	});
+	state.select(Id(25));
+	state.status = "Offline voice fixture · no microphone or network access";
+	state
+}
+/// Synthetic direct-message call: two participants, connected for a while. Never live audio.
+pub fn call_demo_state() -> State {
+	use client_core::voice::{Call, Participant, Phase};
+	use std::time::{Duration, Instant};
+	let mut state = demo_state();
+	let _ = state.select(Id(22));
+	load_page(&mut state, None);
+	let participant = |user, muted| Participant {
+		user: Id(user),
+		muted,
+		deafened: false,
+		server_muted: false,
+		server_deafened: false,
+	};
+	state.voice.active = Some(Call {
+		channel: Id(22),
+		guild: None,
+		request: 0,
+		phase: Phase::Connected,
+		connected_at: Some(Instant::now() - Duration::from_secs(754)),
+		muted: false,
+		deafened: false,
+		server_muted: false,
+		server_deafened: false,
+		participants: vec![participant(1, false), participant(2, true)],
+		error: None,
+	});
+	state.status = "Offline call fixture · no microphone or network access";
+	state
 }
 pub fn load_page(state: &mut State, before: Option<Id>) {
-    load_page_with_cursors(state, before, None);
+	load_page_with_cursors(state, before, None);
 }
 pub fn load_page_with_cursors(state: &mut State, before: Option<Id>, after: Option<Id>) {
-    assert!(before.is_none() || after.is_none());
-    let channel = state.selected.unwrap();
-    let latest = state
-        .channels
-        .iter()
-        .find(|c| c.id == channel)
-        .and_then(|c| c.last_message)
-        .map_or(500, |id| id.0.max(500));
-    let (start, end) = if let Some(after) = after {
-        let start = after.0.saturating_add(1);
-        (
-            start,
-            start.saturating_add(50).min(latest.saturating_add(1)),
-        )
-    } else {
-        let end = before.map_or_else(|| latest.saturating_add(1), |id| id.0);
-        (end.saturating_sub(50).max(1), end)
-    };
-    state.apply(Envelope {
-        generation: state.generation,
-        event: Event::History {
-            channel,
-            request: state.request,
-            older: before.is_some(),
-            messages: (start..end).map(|id| message(id, channel)).collect(),
-        },
-    });
+	assert!(before.is_none() || after.is_none());
+	let channel = state.selected.unwrap();
+	let latest = state
+		.channels
+		.iter()
+		.find(|c| c.id == channel)
+		.and_then(|c| c.last_message)
+		.map_or(500, |id| id.0.max(500));
+	let (start, end) = if let Some(after) = after {
+		let start = after.0.saturating_add(1);
+		(
+			start,
+			start.saturating_add(50).min(latest.saturating_add(1)),
+		)
+	} else {
+		let end = before.map_or_else(|| latest.saturating_add(1), |id| id.0);
+		(end.saturating_sub(50).max(1), end)
+	};
+	state.apply(Envelope {
+		generation: state.generation,
+		event: Event::History {
+			channel,
+			request: state.request,
+			older: before.is_some(),
+			messages: (start..end).map(|id| message(id, channel)).collect(),
+		},
+	});
 }
 /// Additional native chat scenario: fixed dates, grouped authors and unread events.
 pub fn chat_demo_state() -> State {
-    let mut state = demo_state();
-    state.timeline.clear();
-    state.older_exhausted = true;
-    let texts = [
-        "Can we keep the conversation simple?",
-        "Names and times, with room for the messages.",
-        "And keep my place when earlier history arrives.",
-        "Yes. History loads in small pages as you scroll up.",
-        "Only nearby messages are rendered. The cache has a fixed memory budget.",
-        "A new day, same conversation.",
-        "This looks much easier to read.",
-        "Two new messages arrived while you were away.",
-        "Welcome back. All of this is synthetic, offline data.",
-    ];
-    for (i, text) in texts.iter().enumerate() {
-        let mut m = message(i as u64 + 1, Id(20));
-        // September 9, 2026, 23:55 UTC, one minute between records.
-        m.id = Id(((1_788_998_100_000u64 + i as u64 * 60_000 - 1_420_070_400_000) << 22) | 1);
-        m.author = message(if !(3..7).contains(&i) { 1 } else { 2 }, Id(20)).author;
-        m.content = (*text).into();
-        if i < 7 {
-            state.timeline.insert(m, false, false).unwrap();
-        } else {
-            state.apply(Envelope {
-                generation: state.generation,
-                event: Event::Message(m),
-            });
-        }
-    }
-    let read = state.timeline.iter().nth(6).unwrap().id;
-    state.apply(Envelope {
-        generation: state.generation,
-        event: Event::ReadState(client_core::read_state::Event::Ack {
-            channel: Id(20),
-            message: Some(read),
-            manual: true,
-            mention_count: None,
-            version: Some(2),
-        }),
-    });
-    state.revision += 1;
-    state
+	let mut state = demo_state();
+	state.timeline.clear();
+	state.older_exhausted = true;
+	let texts = [
+		"Can we keep the conversation simple?",
+		"Names and times, with room for the messages.",
+		"And keep my place when earlier history arrives.",
+		"Yes. History loads in small pages as you scroll up.",
+		"Only nearby messages are rendered. The cache has a fixed memory budget.",
+		"A new day, same conversation.",
+		"This looks much easier to read.",
+		"Two new messages arrived while you were away.",
+		"Welcome back. All of this is synthetic, offline data.",
+	];
+	for (i, text) in texts.iter().enumerate() {
+		let mut m = message(i as u64 + 1, Id(20));
+		// September 9, 2026, 23:55 UTC, one minute between records.
+		m.id = Id(((1_788_998_100_000u64 + i as u64 * 60_000 - 1_420_070_400_000) << 22) | 1);
+		m.author = message(if !(3..7).contains(&i) { 1 } else { 2 }, Id(20)).author;
+		m.content = (*text).into();
+		if i < 7 {
+			state.timeline.insert(m, false, false).unwrap();
+		} else {
+			state.apply(Envelope {
+				generation: state.generation,
+				event: Event::Message(m),
+			});
+		}
+	}
+	let read = state.timeline.iter().nth(6).unwrap().id;
+	state.apply(Envelope {
+		generation: state.generation,
+		event: Event::ReadState(client_core::read_state::Event::Ack {
+			channel: Id(20),
+			message: Some(read),
+			manual: true,
+			mention_count: None,
+			version: Some(2),
+		}),
+	});
+	state.revision += 1;
+	state
 }
 /// Explicit synthetic permissions, separate from the production unknown-metadata path.
 pub fn permission_snapshot(state: &State) -> model::permissions::Snapshot {
-    use model::permissions as p;
-    let bits = p::VIEW_CHANNEL
-        | p::READ_MESSAGE_HISTORY
-        | p::SEND_MESSAGES
-        | p::SEND_MESSAGES_IN_THREADS
-        | p::ATTACH_FILES
-        | p::ADD_REACTIONS
-        | p::CONNECT
-        | p::SPEAK
-        | p::USE_VAD
-        | p::MANAGE_THREADS;
-    p::Snapshot {
-        guilds: state
-            .guilds
-            .iter()
-            .map(|guild| p::Guild {
-                id: guild.id,
-                owner: Some(Id(u64::MAX)),
-                roles: Some(vec![p::Role {
-                    name: String::new(),
-                    color: 0,
-                    position: 0,
-                    hoist: false,
-                    id: guild.id,
-                    bits,
-                }]),
-                member: Some(p::Member {
-                    roles: vec![],
-                    timeout_until: None,
-                }),
-            })
-            .collect(),
-        channels: state
-            .channels
-            .iter()
-            .filter_map(|channel| {
-                channel.guild.map(|guild| p::Channel {
-                    id: channel.id,
-                    guild,
-                    overwrites: Some(vec![]),
-                })
-            })
-            .collect(),
-    }
+	use model::permissions as p;
+	let bits = p::VIEW_CHANNEL
+		| p::READ_MESSAGE_HISTORY
+		| p::SEND_MESSAGES
+		| p::SEND_MESSAGES_IN_THREADS
+		| p::ATTACH_FILES
+		| p::ADD_REACTIONS
+		| p::CONNECT
+		| p::SPEAK
+		| p::USE_VAD
+		| p::MANAGE_THREADS;
+	p::Snapshot {
+		guilds: state
+			.guilds
+			.iter()
+			.map(|guild| p::Guild {
+				id: guild.id,
+				owner: Some(Id(u64::MAX)),
+				roles: Some(vec![p::Role {
+					name: String::new(),
+					color: 0,
+					position: 0,
+					hoist: false,
+					id: guild.id,
+					bits,
+				}]),
+				member: Some(p::Member {
+					roles: vec![],
+					timeout_until: None,
+				}),
+			})
+			.collect(),
+		channels: state
+			.channels
+			.iter()
+			.filter_map(|channel| {
+				channel.guild.map(|guild| p::Channel {
+					id: channel.id,
+					guild,
+					overwrites: Some(vec![]),
+				})
+			})
+			.collect(),
+	}
 }
 
 /// Synthetic system events; never live Discord history.
 pub fn system_demo_state() -> State {
-    let mut state = chat_demo_state();
-    state.timeline.clear();
-    for (i, (kind, content)) in [
-        (7, ""),
-        (1, ""),
-        (6, ""),
-        (9, ""),
-        (4, "welcome-and-updates"),
-        (18, "Introductions"),
-        (3, ""),
-        (222, ""),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let mut m = message(i as u64 + 1, Id(20));
-        m.id = Id(((1_788_998_100_000u64 + i as u64 * 60_000 - 1_420_070_400_000) << 22) | 1);
-        m.kind = kind;
-        m.unsupported = true;
-        m.content = content.into();
-        m.embeds.clear();
-        m.attachments.clear();
-        m.reactions = Some(vec![]);
-        m.mentions = vec![User {
-            id: Id(42),
-            name: "Casey (synthetic)".into(),
-            avatar: None,
-            discriminator: 0,
-        }];
-        state.timeline.insert(m, false, false).unwrap();
-    }
-    state.revision += 1;
-    state
+	let mut state = chat_demo_state();
+	state.timeline.clear();
+	for (i, (kind, content)) in [
+		(7, ""),
+		(1, ""),
+		(6, ""),
+		(9, ""),
+		(4, "welcome-and-updates"),
+		(18, "Introductions"),
+		(3, ""),
+		(222, ""),
+	]
+	.into_iter()
+	.enumerate()
+	{
+		let mut m = message(i as u64 + 1, Id(20));
+		m.id = Id(((1_788_998_100_000u64 + i as u64 * 60_000 - 1_420_070_400_000) << 22) | 1);
+		m.kind = kind;
+		m.unsupported = true;
+		m.content = content.into();
+		m.embeds.clear();
+		m.attachments.clear();
+		m.reactions = Some(vec![]);
+		m.mentions = vec![User {
+			id: Id(42),
+			name: "Casey (synthetic)".into(),
+			avatar: None,
+			discriminator: 0,
+		}];
+		state.timeline.insert(m, false, false).unwrap();
+	}
+	state.revision += 1;
+	state
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    #[test]
-    fn unread_demo_pages_start_after_marker_and_advance_without_latest_substitution() {
-        use client_core::Command;
-        for (marker, first, last) in [
-            (None, 1, 50),
-            (Some(Id(10)), 11, 60),
-            (Some(Id(490)), 491, 500),
-        ] {
-            let mut state = demo_state();
-            state
-                .apply_read_state(client_core::read_state::Event::Snapshot {
-                    entries: Some(vec![(Id(20), marker, 0)]),
-                    partial: false,
-                    version: Some(2),
-                })
-                .unwrap();
-            let Some(Command::History { before, after, .. }) = state.open_unread() else {
-                panic!()
-            };
-            assert_eq!(before, None);
-            assert_eq!(after, Some(marker.unwrap_or(Id(0))));
-            load_page_with_cursors(&mut state, before, after);
-            assert_eq!(state.timeline.row_ids().next(), Some(Id(first)));
-            assert_eq!(state.timeline.row_ids().last(), Some(Id(last)));
-            assert_eq!(state.search_target, Some(Id(first)));
-            assert_eq!(state.read_marker(Id(20)), Some(marker));
-            if last < 500 {
-                let Some(Command::History { before, after, .. }) = state.newer_history() else {
-                    panic!()
-                };
-                assert_eq!(after, Some(Id(last)));
-                load_page_with_cursors(&mut state, before, after);
-                assert_eq!(state.timeline.row_ids().next(), Some(Id(last + 1)));
-                assert_eq!(state.timeline.row_ids().last(), Some(Id(last + 50)));
-            } else {
-                assert!(state.newer_history().is_none());
-            }
-        }
-    }
-    #[test]
-    fn notification_preview_history_reaches_latest_and_clears_viewed_badge() {
-        let mut state = notification_demo_state();
-        let dm = state
-            .channels
-            .iter()
-            .find(|c| c.guild.is_none() && c.supports_text())
-            .unwrap()
-            .id;
-        assert_eq!(state.unread_count(dm), 2);
-        state.select(dm);
-        load_page(&mut state, None);
-        let latest = state.timeline.iter().last().unwrap().id;
-        assert_eq!(latest, Id(1003));
-        let client_core::Command::MarkRead {
-            channel,
-            message,
-            request,
-        } = state.prepare_mark_read(latest).unwrap()
-        else {
-            panic!()
-        };
-        state
-            .apply_read_state(client_core::read_state::Event::Result {
-                channel,
-                message,
-                request,
-                result: Ok(()),
-            })
-            .unwrap();
-        assert_eq!(state.unread_count(dm), 0);
-        assert_eq!(state.unread(dm), Some(false));
-    }
-    #[test]
-    fn notification_activity_deduplicates_and_preserves_partial_ack() {
-        use client_core::{notifications as n, read_state as r};
-        let mut state = demo_state();
-        let channel = state
-            .channels
-            .iter()
-            .find(|c| c.guild.is_none() && c.supports_text())
-            .unwrap()
-            .id;
-        state
-            .apply_notification_preferences(n::Event::Settings {
-                entries: vec![n::Setting {
-                    guild: None,
-                    muted: Some(false),
-                    suppress_everyone: Some(false),
-                    suppress_roles: Some(false),
-                    level: Some(0),
-                    channels: vec![],
-                }],
-                replace: true,
-            })
-            .unwrap();
-        state
-            .apply_notification_preferences(n::Event::Presence(Some(false)))
-            .unwrap();
-        for id in [1001, 1001, 1000, 1003] {
-            state.apply(Envelope {
-                generation: state.generation,
-                event: Event::Message(message(id, channel)),
-            });
-        }
-        assert_eq!(state.unread_count(channel), 2);
-        assert_eq!(state.mention_count(channel), 2);
-        assert_eq!(state.take_notification().unwrap().message, Id(1001));
-        assert_eq!(state.take_notification().unwrap().message, Id(1003));
-        assert!(state.take_notification().is_none());
-        state
-            .apply_read_state(r::Event::Ack {
-                channel,
-                message: Some(Id(1001)),
-                manual: false,
-                mention_count: None,
-                version: Some(2),
-            })
-            .unwrap();
-        assert_eq!(state.unread_count(channel), 1);
-        state.apply(Envelope {
-            generation: state.generation,
-            event: Event::Message(message(1001, channel)),
-        });
-        assert_eq!(state.unread_count(channel), 1);
-        assert!(state.take_notification().is_none());
-        state
-            .apply_read_state(r::Event::Ack {
-                channel,
-                message: Some(Id(1003)),
-                manual: false,
-                mention_count: Some(0),
-                version: Some(3),
-            })
-            .unwrap();
-        assert_eq!(state.unread_count(channel), 0);
-        state
-            .apply_read_state(r::Event::Ack {
-                channel,
-                message: None,
-                manual: true,
-                mention_count: Some(7),
-                version: Some(4),
-            })
-            .unwrap();
-        assert_eq!(state.mention_count(channel), 7);
-        state
-            .apply_read_state(r::Event::Ack {
-                channel,
-                message: Some(Id(1003)),
-                manual: false,
-                mention_count: Some(0),
-                version: Some(3),
-            })
-            .unwrap();
-        assert_eq!(state.mention_count(channel), 7);
-        state.apply(Envelope {
-            generation: state.generation,
-            event: Event::Message(message(1004, channel)),
-        });
-        assert_eq!(state.unread_count(channel), 0);
-        assert_eq!(state.unread(channel), Some(false));
-        assert!(state.take_notification().is_none());
-        let mut new_dm = state
-            .channels
-            .iter()
-            .find(|c| c.id == channel)
-            .unwrap()
-            .clone();
-        new_dm.id = Id(909);
-        new_dm.last_message = Some(Id(2001));
-        state.apply(Envelope {
-            generation: state.generation,
-            event: Event::ChannelCreated(new_dm),
-        });
-        state.apply(Envelope {
-            generation: state.generation,
-            event: Event::Message(message(2001, Id(909))),
-        });
-        assert_eq!(state.unread_count(Id(909)), 1);
-        assert_eq!(state.take_notification().unwrap().message, Id(2001));
-        state.apply(Envelope {
-            generation: state.generation,
-            event: Event::Unavailable(channel),
-        });
-        assert_eq!(state.unread_count(channel), 0);
-        assert!(state.take_notification().is_none());
-    }
-    #[test]
-    fn guild_notification_levels_and_category_mutes_are_respected() {
-        use client_core::notifications as n;
-        let mut state = demo_state();
-        let channel = state
-            .channels
-            .iter()
-            .find(|c| c.guild.is_some() && c.supports_text())
-            .unwrap()
-            .clone();
-        let setting = n::Setting {
-            guild: channel.guild,
-            muted: Some(false),
-            suppress_everyone: Some(false),
-            suppress_roles: Some(false),
-            level: Some(1),
-            channels: vec![],
-        };
-        state
-            .apply_notification_preferences(n::Event::Settings {
-                entries: vec![setting.clone()],
-                replace: true,
-            })
-            .unwrap();
-        state
-            .apply_notification_preferences(n::Event::Presence(Some(false)))
-            .unwrap();
-        state.apply(Envelope {
-            generation: state.generation,
-            event: Event::Message(message(1001, channel.id)),
-        });
-        assert!(state.take_notification().is_none());
-        let mut mention = message(1003, channel.id);
-        mention.mentions = vec![state.user.clone().unwrap()];
-        state.apply(Envelope {
-            generation: state.generation,
-            event: Event::Message(mention),
-        });
-        assert_eq!(state.take_notification().unwrap().message, Id(1003));
-        let mut all = setting.clone();
-        all.level = Some(0);
-        state
-            .apply_notification_preferences(n::Event::Settings {
-                entries: vec![all.clone()],
-                replace: true,
-            })
-            .unwrap();
-        state.apply(Envelope {
-            generation: state.generation,
-            event: Event::Message(message(1005, channel.id)),
-        });
-        assert_eq!(state.take_notification().unwrap().message, Id(1005));
-        all.channels = vec![(channel.parent_id.unwrap_or(channel.id), Some(true), Some(0))];
-        state
-            .apply_notification_preferences(n::Event::Settings {
-                entries: vec![all],
-                replace: true,
-            })
-            .unwrap();
-        assert!(!state.notification_allowed(channel.id));
-        let mut oversized = setting;
-        oversized.channels = Vec::with_capacity(100_000);
-        assert!(
-            state
-                .apply_notification_preferences(n::Event::Settings {
-                    entries: vec![oversized],
-                    replace: true
-                })
-                .is_err()
-        );
-        assert!(!state.notification_preferences_known());
-    }
-    #[test]
-    fn notifications_honor_unknown_preferences_mutes_dnd_and_queue_bounds() {
-        use client_core::notifications as n;
-        let mut state = demo_state();
-        let channel = state
-            .channels
-            .iter()
-            .find(|c| c.guild.is_none() && c.supports_text())
-            .unwrap()
-            .id;
-        state.apply(Envelope {
-            generation: state.generation,
-            event: Event::Message(message(1001, channel)),
-        });
-        assert!(state.take_notification().is_none());
-        state
-            .apply_notification_preferences(n::Event::Settings {
-                entries: vec![n::Setting {
-                    guild: None,
-                    muted: Some(false),
-                    suppress_everyone: Some(false),
-                    suppress_roles: Some(false),
-                    level: Some(0),
-                    channels: vec![],
-                }],
-                replace: true,
-            })
-            .unwrap();
-        state
-            .apply_notification_preferences(n::Event::Presence(Some(true)))
-            .unwrap();
-        state.apply(Envelope {
-            generation: state.generation,
-            event: Event::Message(message(1003, channel)),
-        });
-        assert!(state.take_notification().is_none());
-        state
-            .apply_notification_preferences(n::Event::Presence(Some(false)))
-            .unwrap();
-        state
-            .apply_notification_preferences(n::Event::Settings {
-                entries: vec![n::Setting {
-                    guild: None,
-                    muted: Some(false),
-                    suppress_everyone: Some(false),
-                    suppress_roles: Some(false),
-                    level: Some(0),
-                    channels: vec![(channel, Some(true), Some(0))],
-                }],
-                replace: true,
-            })
-            .unwrap();
-        state.apply(Envelope {
-            generation: state.generation,
-            event: Event::Message(message(1005, channel)),
-        });
-        assert!(state.take_notification().is_none());
-        state
-            .apply_notification_preferences(n::Event::Settings {
-                entries: vec![n::Setting {
-                    guild: None,
-                    muted: Some(false),
-                    suppress_everyone: Some(false),
-                    suppress_roles: Some(false),
-                    level: Some(0),
-                    channels: vec![],
-                }],
-                replace: true,
-            })
-            .unwrap();
-        for id in (1007..11007).step_by(2) {
-            state.apply(Envelope {
-                generation: state.generation,
-                event: Event::Message(message(id, channel)),
-            });
-        }
-        assert_eq!(state.unread_count(channel), 4096);
-        let mut count = 0;
-        while state.take_notification().is_some() {
-            count += 1;
-        }
-        assert_eq!(count, 32);
-        state.apply(Envelope {
-            generation: state.generation,
-            event: Event::Message(message(1007, channel)),
-        });
-        assert!(state.take_notification().is_none());
-        state.apply(Envelope {
-            generation: state.generation,
-            event: Event::Message(message(11009, channel)),
-        });
-        state.logout();
-        assert!(state.take_notification().is_none());
-        assert_eq!(state.unread_count(channel), 0);
-    }
-    #[test]
-    fn pin_snapshots_are_scoped_cancellable_and_open_revalidated_history() {
-        use client_core::{Command, search::Outcome};
-        let mut state = demo_state();
-        let page = || SearchPage {
-            hits: [480, 499]
-                .into_iter()
-                .map(|id| SearchHit {
-                    id: Id(id),
-                    channel: Id(20),
-                    author: "Synthetic".into(),
-                    excerpt: "pin".into(),
-                })
-                .collect(),
-            total: 0,
-            partial: true,
-            pin_cursor: Some(100),
-        };
-        assert!(state.request_older_pins().is_none());
-        let Command::Pins { request: old, .. } = state.request_pins().unwrap() else {
-            panic!()
-        };
-        let Command::Pins { request, .. } = state.request_pins().unwrap() else {
-            panic!()
-        };
-        state.apply_search(Id(20), old, Ok(Outcome::Pins(page())));
-        assert!(state.search.as_ref().unwrap().loading);
-        state.apply_search(Id(20), request, Ok(Outcome::Page(page())));
-        assert!(state.search.as_ref().unwrap().page.is_none());
-        let Command::Pins { request, .. } = state.request_pins().unwrap() else {
-            panic!()
-        };
-        state.apply_search(Id(21), request, Ok(Outcome::Pins(page())));
-        assert!(state.search.as_ref().unwrap().loading);
-        state.apply_search(Id(20), request, Ok(Outcome::Pins(page())));
-        assert_eq!(
-            state.search.as_ref().unwrap().page.as_ref().unwrap().hits[0].id,
-            Id(480)
-        );
-        let Command::Pins {
-            before, request, ..
-        } = state.request_older_pins().unwrap()
-        else {
-            panic!()
-        };
-        assert_eq!(before, Some(100));
-        assert!(state.search.as_ref().unwrap().page.is_none());
-        assert!(
-            state.request_older_pins().is_none(),
-            "Do not queue duplicate page requests"
-        );
-        state.apply_search(Id(20), request, Ok(Outcome::Pins(page())));
-        assert!(
-            state.search.as_ref().unwrap().error.is_some(),
-            "Reject a nonprogressing cursor"
-        );
-        let retry = state.request_older_pins().unwrap();
-        assert!(matches!(
-            retry,
-            Command::Pins {
-                before: Some(100),
-                ..
-            }
-        ));
-        state.command_rejected(retry);
-        let Command::Pins {
-            before, request, ..
-        } = state.request_older_pins().unwrap()
-        else {
-            panic!()
-        };
-        assert_eq!(
-            before,
-            Some(100),
-            "Retry the failed page without returning to newest"
-        );
-        let mut older_page = page();
-        older_page.hits[0].id = Id(420);
-        older_page.hits[1].id = Id(455);
-        older_page.partial = false;
-        older_page.pin_cursor = None;
-        state.apply_search(Id(20), request, Ok(Outcome::Pins(older_page)));
-        let loaded = state.search.as_ref().unwrap().page.as_ref().unwrap();
-        assert_eq!(loaded.hits.len(), 2, "Pages replace rather than accumulate");
-        assert_eq!(loaded.hits[0].id, Id(420));
-        assert!(
-            state.request_older_pins().is_none(),
-            "Exhaustion stops pagination"
-        );
-        assert!(
-            state.open_search_hit(Id(480)).is_none(),
-            "An old page is no longer actionable"
-        );
-        let Command::Pins {
-            before,
-            request: newest,
-            ..
-        } = state.request_pins().unwrap()
-        else {
-            panic!()
-        };
-        assert_eq!(before, None);
-        state.apply_search(Id(20), request, Ok(Outcome::Pins(page())));
-        assert!(
-            state.search.as_ref().unwrap().loading,
-            "A late older page cannot replace Reload"
-        );
-        state.apply_search(Id(20), newest, Ok(Outcome::Pins(page())));
-        assert!(state.open_search_hit(Id(478)).is_none());
-        assert!(matches!(
-            state.open_search_hit(Id(480)),
-            Some(Command::History {
-                before: Some(Id(481)),
-                ..
-            })
-        ));
-        load_page(&mut state, Some(Id(481)));
-        assert!(state.timeline.get(Id(480)).is_some());
-        let command = state.request_pins().unwrap();
-        state.command_rejected(command);
-        assert!(!state.search.as_ref().unwrap().loading);
-        assert!(state.search.as_ref().unwrap().error.is_some());
-        let Command::Pins { request, .. } = state.request_pins().unwrap() else {
-            panic!()
-        };
-        state.clear_search();
-        state.apply_search(Id(20), request, Ok(Outcome::Pins(page())));
-        assert!(state.search.is_none());
-        state.gateway_connected = false;
-        assert!(state.request_pins().is_none());
-    }
-    #[test]
-    fn search_pages_reject_late_results_and_open_only_revalidated_history() {
-        use client_core::{Command, auth::Failure, search::Outcome};
-        let mut state = demo_state();
-        let page = || {
-            Outcome::Page(SearchPage {
-                hits: vec![SearchHit {
-                    id: Id(499),
-                    channel: Id(20),
-                    author: "Synthetic".into(),
-                    excerpt: "index text".into(),
-                }],
-                total: 50,
-                partial: false,
-                pin_cursor: None,
-            })
-        };
-        assert!(state.request_search("x".into(), Some(Id(500))).is_none());
-        let Command::Search {
-            request: old,
-            guild,
-            ..
-        } = state.request_search("first".into(), None).unwrap()
-        else {
-            panic!()
-        };
-        assert_eq!(guild, Some(Id(10)));
-        let Command::Search { request, .. } = state.request_search("second".into(), None).unwrap()
-        else {
-            panic!()
-        };
-        state.apply_search(Id(20), old, Ok(page()));
-        assert!(state.search.as_ref().unwrap().loading);
-        state.apply_search(Id(20), request, Ok(page()));
-        assert_eq!(
-            state.timeline.get(Id(499)).unwrap().content,
-            message(499, Id(20)).content
-        );
-        assert!(state.open_search_hit(Id(498)).is_none());
-        assert!(matches!(
-            state.open_search_hit(Id(499)),
-            Some(Command::History {
-                channel: Id(20),
-                before: Some(Id(500)),
-                ..
-            })
-        ));
-        assert!(state.timeline.is_empty());
-        assert_eq!(state.search_target, Some(Id(499)));
-        load_page(&mut state, Some(Id(500)));
-        assert_eq!(state.timeline.iter().last().unwrap().id, Id(499));
-        assert_eq!(
-            state.timeline.get(Id(499)).unwrap().content,
-            message(499, Id(20)).content
-        );
-        let Command::Search { request, .. } = state
-            .request_search("second".into(), Some(Id(499)))
-            .unwrap()
-        else {
-            panic!()
-        };
-        state.apply_search(Id(20), request, Ok(page())); // inclusive cursor violates the requested page
-        assert!(state.search.as_ref().unwrap().page.is_none());
-        let command = state.request_search("third".into(), None).unwrap();
-        state.command_rejected(command);
-        assert!(!state.search.as_ref().unwrap().loading);
-        let Command::Search { request, .. } = state.request_search("fourth".into(), None).unwrap()
-        else {
-            panic!()
-        };
-        state.apply(Envelope {
-            generation: state.generation,
-            event: Event::Delete {
-                channel: Id(20),
-                id: Id(499),
-            },
-        });
-        state.apply_search(Id(20), request, Ok(page()));
-        assert!(state.search.is_none());
-        let Command::Search { request, .. } = state.request_search("fifth".into(), None).unwrap()
-        else {
-            panic!()
-        };
-        state.select(Id(22));
-        state.apply_search(Id(20), request, Err(Failure::Forbidden));
-        assert!(state.search.is_none());
-        let Command::Search { request, .. } = state.request_search("sixth".into(), None).unwrap()
-        else {
-            panic!()
-        };
-        state.apply_search(Id(22), request, Ok(Outcome::Indexing));
-        assert!(
-            state
-                .search
-                .as_ref()
-                .unwrap()
-                .error
-                .unwrap()
-                .contains("indexing")
-        );
-        state.apply(Envelope {
-            generation: state.generation,
-            event: Event::Disconnected,
-        });
-        assert!(state.search.is_none());
-        assert!(state.request_search("offline".into(), None).is_none());
-        state.logout();
-        state.apply(Envelope {
-            generation: state.generation - 1,
-            event: Event::Search {
-                channel: Id(20),
-                request,
-                result: Ok(page()),
-            },
-        });
-        assert!(state.search.is_none());
-    }
-    #[test]
-    fn read_markers_are_explicit_scoped_and_preserve_newer_service_updates() {
-        use client_core::{Command, auth::Failure, read_state::Event as R};
-        let mut state = demo_state();
-        assert_eq!(state.unread(Id(20)), Some(true));
-        assert!(!state.can_mark_read(Id(495)));
-        assert!(!state.can_mark_read(Id(900)));
-        let Command::MarkRead {
-            channel,
-            message,
-            request,
-        } = state.prepare_mark_read(Id(500)).unwrap()
-        else {
-            panic!()
-        };
-        assert!(state.prepare_mark_read(Id(499)).is_none());
-        assert_eq!(state.read_marker(channel), Some(Some(Id(495))));
-        state
-            .apply_read_state(R::Ack {
-                channel,
-                message: Some(Id(480)),
-                manual: true,
-                mention_count: None,
-                version: Some(3),
-            })
-            .unwrap();
-        state
-            .apply_read_state(R::Result {
-                channel,
-                message,
-                request,
-                result: Ok(()),
-            })
-            .unwrap();
-        assert_eq!(state.read_marker(channel), Some(Some(Id(480))));
-        state
-            .apply_read_state(R::Ack {
-                channel,
-                message: Some(Id(499)),
-                manual: false,
-                mention_count: None,
-                version: Some(2),
-            })
-            .unwrap();
-        assert_eq!(state.read_marker(channel), Some(Some(Id(480))));
-        let Command::MarkRead { request, .. } = state.prepare_mark_read(Id(500)).unwrap() else {
-            panic!()
-        };
-        state
-            .apply_read_state(R::Result {
-                channel,
-                message,
-                request,
-                result: Err(Failure::Ambiguous),
-            })
-            .unwrap();
-        assert_eq!(state.read_marker(channel), Some(Some(Id(480))));
-        let command = state.prepare_mark_read(Id(500)).unwrap();
-        state.command_rejected(command);
-        assert_eq!(state.freshness, Freshness::Fresh);
-        let Command::MarkRead { request, .. } = state.prepare_mark_read(Id(500)).unwrap() else {
-            panic!()
-        };
-        state.select(Id(22));
-        state
-            .apply_read_state(R::Result {
-                channel,
-                message,
-                request,
-                result: Ok(()),
-            })
-            .unwrap();
-        assert_eq!(state.unread(channel), Some(false));
-        state
-            .apply_read_state(R::Latest(vec![(channel, Patch::Value(Id(600)))]))
-            .unwrap();
-        assert_eq!(state.unread(channel), Some(true));
-        state.select(channel);
-        load_page(&mut state, None);
-        state
-            .apply_read_state(R::Ack {
-                channel,
-                message: None,
-                manual: true,
-                mention_count: None,
-                version: Some(4),
-            })
-            .unwrap();
-        let Command::MarkRead { request, .. } = state.prepare_mark_read(Id(600)).unwrap() else {
-            panic!()
-        };
-        state.apply(Envelope {
-            generation: state.generation,
-            event: Event::Disconnected,
-        });
-        state
-            .apply_read_state(R::Result {
-                channel,
-                message,
-                request,
-                result: Ok(()),
-            })
-            .unwrap();
-        assert_eq!(state.read_marker(channel), None);
-        assert!(state.prepare_mark_read(message).is_none());
-        state.gateway_connected = true;
-        assert_eq!(state.read_marker(channel), Some(None));
-        state.logout();
-        assert_eq!(state.read_marker(channel), None);
-        state = demo_state();
-        let Command::MarkRead { request: old, .. } = state.prepare_mark_read(message).unwrap()
-        else {
-            panic!()
-        };
-        state
-            .apply_read_state(R::Snapshot {
-                partial: false,
-                entries: None,
-                version: None,
-            })
-            .unwrap();
-        assert_eq!(state.unread(channel), None);
-        let Command::MarkRead { request: new, .. } = state.prepare_mark_read(message).unwrap()
-        else {
-            panic!()
-        };
-        assert_ne!(old, new);
-        state
-            .apply_read_state(R::Result {
-                channel,
-                message,
-                request: old,
-                result: Ok(()),
-            })
-            .unwrap();
-        assert_eq!(state.read_marker(channel), None);
-        state
-            .apply_read_state(R::Result {
-                channel,
-                message,
-                request: new,
-                result: Ok(()),
-            })
-            .unwrap();
-        assert_eq!(state.unread(channel), Some(false));
-        state.apply(Envelope {
-            generation: state.generation,
-            event: Event::RecipientRemoved {
-                channel,
-                user: Id(1),
-            },
-        });
-        assert_eq!(state.read_marker(channel), None);
-        assert!(
-            state
-                .apply_read_state(R::Snapshot {
-                    partial: false,
-                    entries: Some(vec![(Id(22), None, 0), (Id(22), None, 0)]),
-                    version: None
-                })
-                .is_err()
-        );
-        assert_eq!(state.read_marker(Id(22)), None);
-        state = demo_state();
-        state
-            .apply_read_state(R::Snapshot {
-                entries: Some(vec![(Id(20), Some(Id(495)), 0)]),
-                version: Some(1),
-                partial: true,
-            })
-            .unwrap();
-        assert_eq!(state.read_marker(Id(20)), Some(Some(Id(495))));
-        assert_eq!(state.read_marker(Id(22)), None);
-    }
-    #[test]
-    fn late_logout_events_and_duplicate_send_confirmations() {
-        let mut state = demo_state();
-        let old = state.generation;
-        state.logout();
-        state.apply(Envelope {
-            generation: old,
-            event: Event::Message(message(42, Id(20))),
-        });
-        assert!(state.timeline.is_empty());
-        assert!(state.user.is_none());
-        state = demo_state();
-        state.drafts.insert(Id(20), "synthetic outbound".into());
-        let client_core::Command::Send { nonce, .. } = state.prepare_send().unwrap() else {
-            panic!()
-        };
-        let mut m = message(900, Id(20));
-        m.nonce = Some(nonce.clone());
-        state.apply(Envelope {
-            generation: state.generation,
-            event: Event::Message(m.clone()),
-        });
-        state.apply(Envelope {
-            generation: state.generation,
-            event: Event::SendResult {
-                nonce,
-                result: Ok(m),
-            },
-        });
-        assert_eq!(state.timeline.iter().filter(|m| m.id == Id(900)).count(), 1);
-        assert!(state.pending.is_empty());
-    }
+	use super::*;
+	#[test]
+	fn unread_demo_pages_start_after_marker_and_advance_without_latest_substitution() {
+		use client_core::Command;
+		for (marker, first, last) in [
+			(None, 1, 50),
+			(Some(Id(10)), 11, 60),
+			(Some(Id(490)), 491, 500),
+		] {
+			let mut state = demo_state();
+			state
+				.apply_read_state(client_core::read_state::Event::Snapshot {
+					entries: Some(vec![(Id(20), marker, 0)]),
+					partial: false,
+					version: Some(2),
+				})
+				.unwrap();
+			let Some(Command::History { before, after, .. }) = state.open_unread() else {
+				panic!()
+			};
+			assert_eq!(before, None);
+			assert_eq!(after, Some(marker.unwrap_or(Id(0))));
+			load_page_with_cursors(&mut state, before, after);
+			assert_eq!(state.timeline.row_ids().next(), Some(Id(first)));
+			assert_eq!(state.timeline.row_ids().last(), Some(Id(last)));
+			assert_eq!(state.search_target, Some(Id(first)));
+			assert_eq!(state.read_marker(Id(20)), Some(marker));
+			if last < 500 {
+				let Some(Command::History { before, after, .. }) = state.newer_history() else {
+					panic!()
+				};
+				assert_eq!(after, Some(Id(last)));
+				load_page_with_cursors(&mut state, before, after);
+				assert_eq!(state.timeline.row_ids().next(), Some(Id(last + 1)));
+				assert_eq!(state.timeline.row_ids().last(), Some(Id(last + 50)));
+			} else {
+				assert!(state.newer_history().is_none());
+			}
+		}
+	}
+	#[test]
+	fn notification_preview_history_reaches_latest_and_clears_viewed_badge() {
+		let mut state = notification_demo_state();
+		let dm = state
+			.channels
+			.iter()
+			.find(|c| c.guild.is_none() && c.supports_text())
+			.unwrap()
+			.id;
+		assert_eq!(state.unread_count(dm), 2);
+		state.select(dm);
+		load_page(&mut state, None);
+		let latest = state.timeline.iter().last().unwrap().id;
+		assert_eq!(latest, Id(1003));
+		let client_core::Command::MarkRead {
+			channel,
+			message,
+			request,
+		} = state.prepare_mark_read(latest).unwrap()
+		else {
+			panic!()
+		};
+		state
+			.apply_read_state(client_core::read_state::Event::Result {
+				channel,
+				message,
+				request,
+				result: Ok(()),
+			})
+			.unwrap();
+		assert_eq!(state.unread_count(dm), 0);
+		assert_eq!(state.unread(dm), Some(false));
+	}
+	#[test]
+	fn notification_activity_deduplicates_and_preserves_partial_ack() {
+		use client_core::{notifications as n, read_state as r};
+		let mut state = demo_state();
+		let channel = state
+			.channels
+			.iter()
+			.find(|c| c.guild.is_none() && c.supports_text())
+			.unwrap()
+			.id;
+		state
+			.apply_notification_preferences(n::Event::Settings {
+				entries: vec![n::Setting {
+					guild: None,
+					muted: Some(false),
+					suppress_everyone: Some(false),
+					suppress_roles: Some(false),
+					level: Some(0),
+					channels: vec![],
+				}],
+				replace: true,
+			})
+			.unwrap();
+		state
+			.apply_notification_preferences(n::Event::Presence(Some(false)))
+			.unwrap();
+		for id in [1001, 1001, 1000, 1003] {
+			state.apply(Envelope {
+				generation: state.generation,
+				event: Event::Message(message(id, channel)),
+			});
+		}
+		assert_eq!(state.unread_count(channel), 2);
+		assert_eq!(state.mention_count(channel), 2);
+		assert_eq!(state.take_notification().unwrap().message, Id(1001));
+		assert_eq!(state.take_notification().unwrap().message, Id(1003));
+		assert!(state.take_notification().is_none());
+		state
+			.apply_read_state(r::Event::Ack {
+				channel,
+				message: Some(Id(1001)),
+				manual: false,
+				mention_count: None,
+				version: Some(2),
+			})
+			.unwrap();
+		assert_eq!(state.unread_count(channel), 1);
+		state.apply(Envelope {
+			generation: state.generation,
+			event: Event::Message(message(1001, channel)),
+		});
+		assert_eq!(state.unread_count(channel), 1);
+		assert!(state.take_notification().is_none());
+		state
+			.apply_read_state(r::Event::Ack {
+				channel,
+				message: Some(Id(1003)),
+				manual: false,
+				mention_count: Some(0),
+				version: Some(3),
+			})
+			.unwrap();
+		assert_eq!(state.unread_count(channel), 0);
+		state
+			.apply_read_state(r::Event::Ack {
+				channel,
+				message: None,
+				manual: true,
+				mention_count: Some(7),
+				version: Some(4),
+			})
+			.unwrap();
+		assert_eq!(state.mention_count(channel), 7);
+		state
+			.apply_read_state(r::Event::Ack {
+				channel,
+				message: Some(Id(1003)),
+				manual: false,
+				mention_count: Some(0),
+				version: Some(3),
+			})
+			.unwrap();
+		assert_eq!(state.mention_count(channel), 7);
+		state.apply(Envelope {
+			generation: state.generation,
+			event: Event::Message(message(1004, channel)),
+		});
+		assert_eq!(state.unread_count(channel), 0);
+		assert_eq!(state.unread(channel), Some(false));
+		assert!(state.take_notification().is_none());
+		let mut new_dm = state
+			.channels
+			.iter()
+			.find(|c| c.id == channel)
+			.unwrap()
+			.clone();
+		new_dm.id = Id(909);
+		new_dm.last_message = Some(Id(2001));
+		state.apply(Envelope {
+			generation: state.generation,
+			event: Event::ChannelCreated(new_dm),
+		});
+		state.apply(Envelope {
+			generation: state.generation,
+			event: Event::Message(message(2001, Id(909))),
+		});
+		assert_eq!(state.unread_count(Id(909)), 1);
+		assert_eq!(state.take_notification().unwrap().message, Id(2001));
+		state.apply(Envelope {
+			generation: state.generation,
+			event: Event::Unavailable(channel),
+		});
+		assert_eq!(state.unread_count(channel), 0);
+		assert!(state.take_notification().is_none());
+	}
+	#[test]
+	fn guild_notification_levels_and_category_mutes_are_respected() {
+		use client_core::notifications as n;
+		let mut state = demo_state();
+		let channel = state
+			.channels
+			.iter()
+			.find(|c| c.guild.is_some() && c.supports_text())
+			.unwrap()
+			.clone();
+		let setting = n::Setting {
+			guild: channel.guild,
+			muted: Some(false),
+			suppress_everyone: Some(false),
+			suppress_roles: Some(false),
+			level: Some(1),
+			channels: vec![],
+		};
+		state
+			.apply_notification_preferences(n::Event::Settings {
+				entries: vec![setting.clone()],
+				replace: true,
+			})
+			.unwrap();
+		state
+			.apply_notification_preferences(n::Event::Presence(Some(false)))
+			.unwrap();
+		state.apply(Envelope {
+			generation: state.generation,
+			event: Event::Message(message(1001, channel.id)),
+		});
+		assert!(state.take_notification().is_none());
+		let mut mention = message(1003, channel.id);
+		mention.mentions = vec![state.user.clone().unwrap()];
+		state.apply(Envelope {
+			generation: state.generation,
+			event: Event::Message(mention),
+		});
+		assert_eq!(state.take_notification().unwrap().message, Id(1003));
+		let mut all = setting.clone();
+		all.level = Some(0);
+		state
+			.apply_notification_preferences(n::Event::Settings {
+				entries: vec![all.clone()],
+				replace: true,
+			})
+			.unwrap();
+		state.apply(Envelope {
+			generation: state.generation,
+			event: Event::Message(message(1005, channel.id)),
+		});
+		assert_eq!(state.take_notification().unwrap().message, Id(1005));
+		all.channels = vec![(channel.parent_id.unwrap_or(channel.id), Some(true), Some(0))];
+		state
+			.apply_notification_preferences(n::Event::Settings {
+				entries: vec![all],
+				replace: true,
+			})
+			.unwrap();
+		assert!(!state.notification_allowed(channel.id));
+		let mut oversized = setting;
+		oversized.channels = Vec::with_capacity(100_000);
+		assert!(
+			state
+				.apply_notification_preferences(n::Event::Settings {
+					entries: vec![oversized],
+					replace: true
+				})
+				.is_err()
+		);
+		assert!(!state.notification_preferences_known());
+	}
+	#[test]
+	fn notifications_honor_unknown_preferences_mutes_dnd_and_queue_bounds() {
+		use client_core::notifications as n;
+		let mut state = demo_state();
+		let channel = state
+			.channels
+			.iter()
+			.find(|c| c.guild.is_none() && c.supports_text())
+			.unwrap()
+			.id;
+		state.apply(Envelope {
+			generation: state.generation,
+			event: Event::Message(message(1001, channel)),
+		});
+		assert!(state.take_notification().is_none());
+		state
+			.apply_notification_preferences(n::Event::Settings {
+				entries: vec![n::Setting {
+					guild: None,
+					muted: Some(false),
+					suppress_everyone: Some(false),
+					suppress_roles: Some(false),
+					level: Some(0),
+					channels: vec![],
+				}],
+				replace: true,
+			})
+			.unwrap();
+		state
+			.apply_notification_preferences(n::Event::Presence(Some(true)))
+			.unwrap();
+		state.apply(Envelope {
+			generation: state.generation,
+			event: Event::Message(message(1003, channel)),
+		});
+		assert!(state.take_notification().is_none());
+		state
+			.apply_notification_preferences(n::Event::Presence(Some(false)))
+			.unwrap();
+		state
+			.apply_notification_preferences(n::Event::Settings {
+				entries: vec![n::Setting {
+					guild: None,
+					muted: Some(false),
+					suppress_everyone: Some(false),
+					suppress_roles: Some(false),
+					level: Some(0),
+					channels: vec![(channel, Some(true), Some(0))],
+				}],
+				replace: true,
+			})
+			.unwrap();
+		state.apply(Envelope {
+			generation: state.generation,
+			event: Event::Message(message(1005, channel)),
+		});
+		assert!(state.take_notification().is_none());
+		state
+			.apply_notification_preferences(n::Event::Settings {
+				entries: vec![n::Setting {
+					guild: None,
+					muted: Some(false),
+					suppress_everyone: Some(false),
+					suppress_roles: Some(false),
+					level: Some(0),
+					channels: vec![],
+				}],
+				replace: true,
+			})
+			.unwrap();
+		for id in (1007..11007).step_by(2) {
+			state.apply(Envelope {
+				generation: state.generation,
+				event: Event::Message(message(id, channel)),
+			});
+		}
+		assert_eq!(state.unread_count(channel), 4096);
+		let mut count = 0;
+		while state.take_notification().is_some() {
+			count += 1;
+		}
+		assert_eq!(count, 32);
+		state.apply(Envelope {
+			generation: state.generation,
+			event: Event::Message(message(1007, channel)),
+		});
+		assert!(state.take_notification().is_none());
+		state.apply(Envelope {
+			generation: state.generation,
+			event: Event::Message(message(11009, channel)),
+		});
+		state.logout();
+		assert!(state.take_notification().is_none());
+		assert_eq!(state.unread_count(channel), 0);
+	}
+	#[test]
+	fn pin_snapshots_are_scoped_cancellable_and_open_revalidated_history() {
+		use client_core::{Command, search::Outcome};
+		let mut state = demo_state();
+		let page = || SearchPage {
+			hits: [480, 499]
+				.into_iter()
+				.map(|id| SearchHit {
+					id: Id(id),
+					channel: Id(20),
+					author: "Synthetic".into(),
+					excerpt: "pin".into(),
+				})
+				.collect(),
+			total: 0,
+			partial: true,
+			pin_cursor: Some(100),
+		};
+		assert!(state.request_older_pins().is_none());
+		let Command::Pins { request: old, .. } = state.request_pins().unwrap() else {
+			panic!()
+		};
+		let Command::Pins { request, .. } = state.request_pins().unwrap() else {
+			panic!()
+		};
+		state.apply_search(Id(20), old, Ok(Outcome::Pins(page())));
+		assert!(state.search.as_ref().unwrap().loading);
+		state.apply_search(Id(20), request, Ok(Outcome::Page(page())));
+		assert!(state.search.as_ref().unwrap().page.is_none());
+		let Command::Pins { request, .. } = state.request_pins().unwrap() else {
+			panic!()
+		};
+		state.apply_search(Id(21), request, Ok(Outcome::Pins(page())));
+		assert!(state.search.as_ref().unwrap().loading);
+		state.apply_search(Id(20), request, Ok(Outcome::Pins(page())));
+		assert_eq!(
+			state.search.as_ref().unwrap().page.as_ref().unwrap().hits[0].id,
+			Id(480)
+		);
+		let Command::Pins {
+			before, request, ..
+		} = state.request_older_pins().unwrap()
+		else {
+			panic!()
+		};
+		assert_eq!(before, Some(100));
+		assert!(state.search.as_ref().unwrap().page.is_none());
+		assert!(
+			state.request_older_pins().is_none(),
+			"Do not queue duplicate page requests"
+		);
+		state.apply_search(Id(20), request, Ok(Outcome::Pins(page())));
+		assert!(
+			state.search.as_ref().unwrap().error.is_some(),
+			"Reject a nonprogressing cursor"
+		);
+		let retry = state.request_older_pins().unwrap();
+		assert!(matches!(
+			retry,
+			Command::Pins {
+				before: Some(100),
+				..
+			}
+		));
+		state.command_rejected(retry);
+		let Command::Pins {
+			before, request, ..
+		} = state.request_older_pins().unwrap()
+		else {
+			panic!()
+		};
+		assert_eq!(
+			before,
+			Some(100),
+			"Retry the failed page without returning to newest"
+		);
+		let mut older_page = page();
+		older_page.hits[0].id = Id(420);
+		older_page.hits[1].id = Id(455);
+		older_page.partial = false;
+		older_page.pin_cursor = None;
+		state.apply_search(Id(20), request, Ok(Outcome::Pins(older_page)));
+		let loaded = state.search.as_ref().unwrap().page.as_ref().unwrap();
+		assert_eq!(loaded.hits.len(), 2, "Pages replace rather than accumulate");
+		assert_eq!(loaded.hits[0].id, Id(420));
+		assert!(
+			state.request_older_pins().is_none(),
+			"Exhaustion stops pagination"
+		);
+		assert!(
+			state.open_search_hit(Id(480)).is_none(),
+			"An old page is no longer actionable"
+		);
+		let Command::Pins {
+			before,
+			request: newest,
+			..
+		} = state.request_pins().unwrap()
+		else {
+			panic!()
+		};
+		assert_eq!(before, None);
+		state.apply_search(Id(20), request, Ok(Outcome::Pins(page())));
+		assert!(
+			state.search.as_ref().unwrap().loading,
+			"A late older page cannot replace Reload"
+		);
+		state.apply_search(Id(20), newest, Ok(Outcome::Pins(page())));
+		assert!(state.open_search_hit(Id(478)).is_none());
+		assert!(matches!(
+			state.open_search_hit(Id(480)),
+			Some(Command::History {
+				before: Some(Id(481)),
+				..
+			})
+		));
+		load_page(&mut state, Some(Id(481)));
+		assert!(state.timeline.get(Id(480)).is_some());
+		let command = state.request_pins().unwrap();
+		state.command_rejected(command);
+		assert!(!state.search.as_ref().unwrap().loading);
+		assert!(state.search.as_ref().unwrap().error.is_some());
+		let Command::Pins { request, .. } = state.request_pins().unwrap() else {
+			panic!()
+		};
+		state.clear_search();
+		state.apply_search(Id(20), request, Ok(Outcome::Pins(page())));
+		assert!(state.search.is_none());
+		state.gateway_connected = false;
+		assert!(state.request_pins().is_none());
+	}
+	#[test]
+	fn search_pages_reject_late_results_and_open_only_revalidated_history() {
+		use client_core::{Command, auth::Failure, search::Outcome};
+		let mut state = demo_state();
+		let page = || {
+			Outcome::Page(SearchPage {
+				hits: vec![SearchHit {
+					id: Id(499),
+					channel: Id(20),
+					author: "Synthetic".into(),
+					excerpt: "index text".into(),
+				}],
+				total: 50,
+				partial: false,
+				pin_cursor: None,
+			})
+		};
+		assert!(state.request_search("x".into(), Some(Id(500))).is_none());
+		let Command::Search {
+			request: old,
+			guild,
+			..
+		} = state.request_search("first".into(), None).unwrap()
+		else {
+			panic!()
+		};
+		assert_eq!(guild, Some(Id(10)));
+		let Command::Search { request, .. } = state.request_search("second".into(), None).unwrap()
+		else {
+			panic!()
+		};
+		state.apply_search(Id(20), old, Ok(page()));
+		assert!(state.search.as_ref().unwrap().loading);
+		state.apply_search(Id(20), request, Ok(page()));
+		assert_eq!(
+			state.timeline.get(Id(499)).unwrap().content,
+			message(499, Id(20)).content
+		);
+		assert!(state.open_search_hit(Id(498)).is_none());
+		assert!(matches!(
+			state.open_search_hit(Id(499)),
+			Some(Command::History {
+				channel: Id(20),
+				before: Some(Id(500)),
+				..
+			})
+		));
+		assert!(state.timeline.is_empty());
+		assert_eq!(state.search_target, Some(Id(499)));
+		load_page(&mut state, Some(Id(500)));
+		assert_eq!(state.timeline.iter().last().unwrap().id, Id(499));
+		assert_eq!(
+			state.timeline.get(Id(499)).unwrap().content,
+			message(499, Id(20)).content
+		);
+		let Command::Search { request, .. } = state
+			.request_search("second".into(), Some(Id(499)))
+			.unwrap()
+		else {
+			panic!()
+		};
+		state.apply_search(Id(20), request, Ok(page())); // inclusive cursor violates the requested page
+		assert!(state.search.as_ref().unwrap().page.is_none());
+		let command = state.request_search("third".into(), None).unwrap();
+		state.command_rejected(command);
+		assert!(!state.search.as_ref().unwrap().loading);
+		let Command::Search { request, .. } = state.request_search("fourth".into(), None).unwrap()
+		else {
+			panic!()
+		};
+		state.apply(Envelope {
+			generation: state.generation,
+			event: Event::Delete {
+				channel: Id(20),
+				id: Id(499),
+			},
+		});
+		state.apply_search(Id(20), request, Ok(page()));
+		assert!(state.search.is_none());
+		let Command::Search { request, .. } = state.request_search("fifth".into(), None).unwrap()
+		else {
+			panic!()
+		};
+		state.select(Id(22));
+		state.apply_search(Id(20), request, Err(Failure::Forbidden));
+		assert!(state.search.is_none());
+		let Command::Search { request, .. } = state.request_search("sixth".into(), None).unwrap()
+		else {
+			panic!()
+		};
+		state.apply_search(Id(22), request, Ok(Outcome::Indexing));
+		assert!(
+			state
+				.search
+				.as_ref()
+				.unwrap()
+				.error
+				.unwrap()
+				.contains("indexing")
+		);
+		state.apply(Envelope {
+			generation: state.generation,
+			event: Event::Disconnected,
+		});
+		assert!(state.search.is_none());
+		assert!(state.request_search("offline".into(), None).is_none());
+		state.logout();
+		state.apply(Envelope {
+			generation: state.generation - 1,
+			event: Event::Search {
+				channel: Id(20),
+				request,
+				result: Ok(page()),
+			},
+		});
+		assert!(state.search.is_none());
+	}
+	#[test]
+	fn read_markers_are_explicit_scoped_and_preserve_newer_service_updates() {
+		use client_core::{Command, auth::Failure, read_state::Event as R};
+		let mut state = demo_state();
+		assert_eq!(state.unread(Id(20)), Some(true));
+		assert!(!state.can_mark_read(Id(495)));
+		assert!(!state.can_mark_read(Id(900)));
+		let Command::MarkRead {
+			channel,
+			message,
+			request,
+		} = state.prepare_mark_read(Id(500)).unwrap()
+		else {
+			panic!()
+		};
+		assert!(state.prepare_mark_read(Id(499)).is_none());
+		assert_eq!(state.read_marker(channel), Some(Some(Id(495))));
+		state
+			.apply_read_state(R::Ack {
+				channel,
+				message: Some(Id(480)),
+				manual: true,
+				mention_count: None,
+				version: Some(3),
+			})
+			.unwrap();
+		state
+			.apply_read_state(R::Result {
+				channel,
+				message,
+				request,
+				result: Ok(()),
+			})
+			.unwrap();
+		assert_eq!(state.read_marker(channel), Some(Some(Id(480))));
+		state
+			.apply_read_state(R::Ack {
+				channel,
+				message: Some(Id(499)),
+				manual: false,
+				mention_count: None,
+				version: Some(2),
+			})
+			.unwrap();
+		assert_eq!(state.read_marker(channel), Some(Some(Id(480))));
+		let Command::MarkRead { request, .. } = state.prepare_mark_read(Id(500)).unwrap() else {
+			panic!()
+		};
+		state
+			.apply_read_state(R::Result {
+				channel,
+				message,
+				request,
+				result: Err(Failure::Ambiguous),
+			})
+			.unwrap();
+		assert_eq!(state.read_marker(channel), Some(Some(Id(480))));
+		let command = state.prepare_mark_read(Id(500)).unwrap();
+		state.command_rejected(command);
+		assert_eq!(state.freshness, Freshness::Fresh);
+		let Command::MarkRead { request, .. } = state.prepare_mark_read(Id(500)).unwrap() else {
+			panic!()
+		};
+		state.select(Id(22));
+		state
+			.apply_read_state(R::Result {
+				channel,
+				message,
+				request,
+				result: Ok(()),
+			})
+			.unwrap();
+		assert_eq!(state.unread(channel), Some(false));
+		state
+			.apply_read_state(R::Latest(vec![(channel, Patch::Value(Id(600)))]))
+			.unwrap();
+		assert_eq!(state.unread(channel), Some(true));
+		state.select(channel);
+		load_page(&mut state, None);
+		state
+			.apply_read_state(R::Ack {
+				channel,
+				message: None,
+				manual: true,
+				mention_count: None,
+				version: Some(4),
+			})
+			.unwrap();
+		let Command::MarkRead { request, .. } = state.prepare_mark_read(Id(600)).unwrap() else {
+			panic!()
+		};
+		state.apply(Envelope {
+			generation: state.generation,
+			event: Event::Disconnected,
+		});
+		state
+			.apply_read_state(R::Result {
+				channel,
+				message,
+				request,
+				result: Ok(()),
+			})
+			.unwrap();
+		assert_eq!(state.read_marker(channel), None);
+		assert!(state.prepare_mark_read(message).is_none());
+		state.gateway_connected = true;
+		assert_eq!(state.read_marker(channel), Some(None));
+		state.logout();
+		assert_eq!(state.read_marker(channel), None);
+		state = demo_state();
+		let Command::MarkRead { request: old, .. } = state.prepare_mark_read(message).unwrap()
+		else {
+			panic!()
+		};
+		state
+			.apply_read_state(R::Snapshot {
+				partial: false,
+				entries: None,
+				version: None,
+			})
+			.unwrap();
+		assert_eq!(state.unread(channel), None);
+		let Command::MarkRead { request: new, .. } = state.prepare_mark_read(message).unwrap()
+		else {
+			panic!()
+		};
+		assert_ne!(old, new);
+		state
+			.apply_read_state(R::Result {
+				channel,
+				message,
+				request: old,
+				result: Ok(()),
+			})
+			.unwrap();
+		assert_eq!(state.read_marker(channel), None);
+		state
+			.apply_read_state(R::Result {
+				channel,
+				message,
+				request: new,
+				result: Ok(()),
+			})
+			.unwrap();
+		assert_eq!(state.unread(channel), Some(false));
+		state.apply(Envelope {
+			generation: state.generation,
+			event: Event::RecipientRemoved {
+				channel,
+				user: Id(1),
+			},
+		});
+		assert_eq!(state.read_marker(channel), None);
+		assert!(
+			state
+				.apply_read_state(R::Snapshot {
+					partial: false,
+					entries: Some(vec![(Id(22), None, 0), (Id(22), None, 0)]),
+					version: None
+				})
+				.is_err()
+		);
+		assert_eq!(state.read_marker(Id(22)), None);
+		state = demo_state();
+		state
+			.apply_read_state(R::Snapshot {
+				entries: Some(vec![(Id(20), Some(Id(495)), 0)]),
+				version: Some(1),
+				partial: true,
+			})
+			.unwrap();
+		assert_eq!(state.read_marker(Id(20)), Some(Some(Id(495))));
+		assert_eq!(state.read_marker(Id(22)), None);
+	}
+	#[test]
+	fn late_logout_events_and_duplicate_send_confirmations() {
+		let mut state = demo_state();
+		let old = state.generation;
+		state.logout();
+		state.apply(Envelope {
+			generation: old,
+			event: Event::Message(message(42, Id(20))),
+		});
+		assert!(state.timeline.is_empty());
+		assert!(state.user.is_none());
+		state = demo_state();
+		state.drafts.insert(Id(20), "synthetic outbound".into());
+		let client_core::Command::Send { nonce, .. } = state.prepare_send().unwrap() else {
+			panic!()
+		};
+		let mut m = message(900, Id(20));
+		m.nonce = Some(nonce.clone());
+		state.apply(Envelope {
+			generation: state.generation,
+			event: Event::Message(m.clone()),
+		});
+		state.apply(Envelope {
+			generation: state.generation,
+			event: Event::SendResult {
+				nonce,
+				result: Ok(m),
+			},
+		});
+		assert_eq!(state.timeline.iter().filter(|m| m.id == Id(900)).count(), 1);
+		assert!(state.pending.is_empty());
+	}
 }

@@ -1,5 +1,14 @@
 # Third-party notices
 
+The egui main experiment pins the egui/eframe ecosystem to upstream commit
+`65e7db3c06d779c60ac56647bdd3011ed8ba1cbd` (version 0.36.2, MIT OR Apache-2.0).
+It adds unicode-properties 0.1.4 (MIT/Apache-2.0) and updates glifo to 0.3.0 and
+vello_common/vello_cpu to 0.2.0 (Apache-2.0 OR MIT). Epaint bundled fonts and
+their separate license obligations are unchanged. Native font fallback uses
+egui_system_fonts/fontique and platform font discovery; see docs/dependency-versions.md
+for the exact added dependency versions and declared licenses. OS emoji fonts
+remain installed system resources and are not bundled or redistributed.
+
 Linux login uses gtk4 0.11.4, webkit6 0.6.1, javascriptcore6 0.6.0, glib 0.22.9 and soup3
 0.9.0 Rust bindings (MIT). Windows/macOS retain Wry 0.57.0 (MIT OR Apache-2.0) via a documented
 manifest/build patch excluding obsolete Linux dependencies; backend sources are unchanged.
@@ -15,6 +24,14 @@ and development crates). MPL-only components and egui's combined font licenses h
 exceptions; they retain their original obligations. This automated check does not establish
 complete license-text/notice coverage, source delivery compliance or native-system-library
 redistribution clearance. See CONTRIBUTING.md for installation and fixture checks.
+
+Development-only fuzzing uses cargo-fuzz 0.13.2 (MIT OR Apache-2.0) and
+libfuzzer-sys 0.4.13 ((MIT OR Apache-2.0) AND NCSA), from the Rust Fuzz project.
+The isolated `fuzz/Cargo.lock` is checked separately by `cargo xtask licenses`; its exact-version
+NCSA exception does not apply to application dependencies. These tools and LLVM libFuzzer are
+not included in text or voice packages. The registry wrapper retains MIT/Apache license texts
+and upstream LLVM attribution in its bundled libFuzzer sources. This declaration is not a
+redistribution review of independently distributed fuzz executables.
 
 Core components include egui/eframe/wgpu (MIT OR Apache-2.0), Tokio (MIT), serde (MIT OR Apache-2.0), reqwest (MIT OR Apache-2.0), tokio-tungstenite/tungstenite (MIT OR Apache-2.0 / MIT), rustls and its crypto/provider dependencies, Wry (MIT OR Apache-2.0), keyring (MIT OR Apache-2.0), and rusqlite (MIT) with SQLite (public domain). Consult the resolved inventory for precise expressions and native transitive dependencies, including AWS-LC/BoringSSL notices, ring, Unicode data, and egui’s font licenses.
 
@@ -37,6 +54,8 @@ Native Save As uses rfd 0.17.2 (MIT) and its pollster 0.4.0 dependency (MIT OR A
 Single-file upload streaming enables existing reqwest's `stream` feature and Tokio's `fs` feature. The native dependency addition is **tokio-util 0.7.19** (MIT, Tokio Contributors); its unmodified registry `LICENSE` is included as `assets/licenses/files/tokio-util-LICENSE-MIT` and staged in both package variants. Existing futures-util remains MIT OR Apache-2.0. Cargo.lock also gains wasm-streams 0.5.0 through reqwest's wasm-only target declaration; it is not selected by these native builds. See the dated addendum in [the dependency inventory](docs/dependency-versions.md).
 
 Twemoji 17.0.3 graphics © Twitter, Inc. and other contributors are licensed under **CC BY 4.0**, separately from Serein code. Source: https://github.com/jdecked/twemoji/tree/v17.0.3. The bundled images are resized and packed into an atlas; see [assets/twemoji/README.md](assets/twemoji/README.md) for provenance and modifications. The full license is `assets/twemoji/LICENSE-GRAPHICS`, staged in both packages as `licenses/Twemoji-CC-BY-4.0.txt`. No Twemoji JavaScript is bundled.
+
+Interface icons are **Phosphor Icons 2.1.1**, Copyright (c) 2023 Phosphor Icons, licensed under the **MIT License** (npm package `@phosphor-icons/core`, https://github.com/phosphor-icons/core). Thirty-six upstream SVGs plus one derived slashed-headphones glyph are rasterized into `assets/icons/atlas.png`; the unmodified license is `assets/icons/LICENSE`, staged in both packages as `licenses/Phosphor-Icons-MIT.txt`. Provenance and file hashes are in [assets/icons/README.md](assets/icons/README.md).
 
 The emoji picker's English names and fully qualified sequences derive from Unicode 17.0
 `emoji-test.txt`, © 2025 Unicode, Inc., under Unicode License v3. Provenance and transformations

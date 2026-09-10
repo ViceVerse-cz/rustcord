@@ -13,1687 +13,1681 @@ const MAX_SPOILERS: u8 = 32;
 
 #[derive(Clone, Copy, Default)]
 struct Style {
-    strong: bool,
-    italic: bool,
-    code: bool,
-    strike: bool,
-    quote: bool,
-    link: Option<usize>,
-    mention: Option<Id>,
-    channel: Option<Id>,
-    no_autolink: bool,
-    spoiler: Option<u8>,
+	strong: bool,
+	italic: bool,
+	code: bool,
+	strike: bool,
+	quote: bool,
+	link: Option<usize>,
+	mention: Option<Id>,
+	channel: Option<Id>,
+	no_autolink: bool,
+	spoiler: Option<u8>,
 }
 pub struct Formatted {
-    spans: Vec<(String, Style)>,
-    mention_count: usize,
-    pub links: Vec<String>,
-    pub limited: bool,
-    pub spoilers: bool,
+	spans: Vec<(String, Style)>,
+	mention_count: usize,
+	pub links: Vec<String>,
+	pub limited: bool,
+	pub spoilers: bool,
 }
 
 #[derive(Default)]
 pub struct FormatCache {
-    entries: VecDeque<((Id, u16), String, Formatted)>,
-    bytes: usize,
+	entries: VecDeque<((Id, u16), String, Formatted)>,
+	bytes: usize,
 }
 impl FormatCache {
-    pub fn retain(&mut self, mut keep: impl FnMut(Id) -> bool) {
-        self.entries.retain(|((id, _), _, _)| keep(*id));
-        self.bytes = self
-            .entries
-            .iter()
-            .map(|(_, source, parsed)| source.capacity() + parsed.bytes())
-            .sum();
-    }
-    pub fn get(&mut self, id: Id, source: &str) -> &Formatted {
-        self.get_part(id, 0, source)
-    }
-    pub fn get_part(&mut self, message: Id, part: u16, source: &str) -> &Formatted {
-        let id = (message, part);
-        let existing = self.entries.iter().position(|(cached, _, _)| *cached == id);
-        let entry = existing.and_then(|index| self.entries.remove(index));
-        let entry = match entry {
-            Some((id, cached, parsed)) if cached == source => (id, cached, parsed),
-            _ => {
-                let mut end = source.len().min(64 * 1024);
-                while !source.is_char_boundary(end) {
-                    end -= 1;
-                }
-                (id, source[..end].to_owned(), Formatted::parse(source))
-            }
-        };
-        self.entries.push_back(entry);
-        self.retain(|_| true);
-        while self.entries.len() > 64 || self.bytes > 1024 * 1024 {
-            let (_, source, parsed) = self.entries.pop_front().expect("cache over budget");
-            self.bytes -= source.capacity() + parsed.bytes();
-        }
-        &self.entries.back().expect("one bounded message fits").2
-    }
+	pub fn retain(&mut self, mut keep: impl FnMut(Id) -> bool) {
+		self.entries.retain(|((id, _), _, _)| keep(*id));
+		self.bytes = self
+			.entries
+			.iter()
+			.map(|(_, source, parsed)| source.capacity() + parsed.bytes())
+			.sum();
+	}
+	pub fn get(&mut self, id: Id, source: &str) -> &Formatted {
+		self.get_part(id, 0, source)
+	}
+	pub fn get_part(&mut self, message: Id, part: u16, source: &str) -> &Formatted {
+		let id = (message, part);
+		let existing = self.entries.iter().position(|(cached, _, _)| *cached == id);
+		let entry = existing.and_then(|index| self.entries.remove(index));
+		let entry = match entry {
+			Some((id, cached, parsed)) if cached == source => (id, cached, parsed),
+			_ => {
+				let mut end = source.len().min(64 * 1024);
+				while !source.is_char_boundary(end) {
+					end -= 1;
+				}
+				(id, source[..end].to_owned(), Formatted::parse(source))
+			}
+		};
+		self.entries.push_back(entry);
+		self.retain(|_| true);
+		while self.entries.len() > 64 || self.bytes > 1024 * 1024 {
+			let (_, source, parsed) = self.entries.pop_front().expect("cache over budget");
+			self.bytes -= source.capacity() + parsed.bytes();
+		}
+		&self.entries.back().expect("one bounded message fits").2
+	}
 }
 
 /// The URL passed to the OS is exactly the normalized target displayed for confirmation.
 pub fn external_url(input: &str) -> Option<String> {
-    if input.len() > 2048 || input.chars().any(|c| c.is_control() || c == '\\') {
-        return None;
-    }
-    let url = url::Url::parse(input).ok()?;
-    (matches!(url.scheme(), "https" | "http")
-        && url.host_str().is_some()
-        && url.username().is_empty()
-        && url.password().is_none())
-    .then(|| url.to_string())
+	if input.len() > 2048 || input.chars().any(|c| c.is_control() || c == '\\') {
+		return None;
+	}
+	let url = url::Url::parse(input).ok()?;
+	(matches!(url.scheme(), "https" | "http")
+		&& url.host_str().is_some()
+		&& url.username().is_empty()
+		&& url.password().is_none())
+	.then(|| url.to_string())
 }
 
 pub(super) fn discord_url(channel: &model::Channel, message: Option<Id>) -> Option<String> {
-    if channel.id.0 == 0 || message.is_some_and(|id| id.0 == 0) {
-        return None;
-    }
-    let scope = match channel.guild {
-        Some(guild) if guild.0 != 0 && !matches!(channel.kind, 1 | 3) => guild.to_string(),
-        None if matches!(channel.kind, 1 | 3) => "@me".into(),
-        _ => return None,
-    };
-    let mut url = format!("https://discord.com/channels/{scope}/{}", channel.id);
-    if let Some(message) = message {
-        url.push('/');
-        url.push_str(&message.to_string());
-    }
-    Some(url)
+	if channel.id.0 == 0 || message.is_some_and(|id| id.0 == 0) {
+		return None;
+	}
+	let scope = match channel.guild {
+		Some(guild) if guild.0 != 0 && !matches!(channel.kind, 1 | 3) => guild.to_string(),
+		None if matches!(channel.kind, 1 | 3) => "@me".into(),
+		_ => return None,
+	};
+	let mut url = format!("https://discord.com/channels/{scope}/{}", channel.id);
+	if let Some(message) = message {
+		url.push('/');
+		url.push_str(&message.to_string());
+	}
+	Some(url)
 }
 
 pub(super) fn confirm_external_link(ctx: &egui::Context, opening: &mut Option<String>) {
-    let Some(target) = opening.as_deref().and_then(external_url) else {
-        *opening = None;
-        return;
-    };
-    let mut confirm = false;
-    let mut cancel = false;
-    let modal = egui::Modal::new(egui::Id::new("confirm-external-link")).show(ctx, |ui| {
-        ui.set_width((ctx.content_rect().width() - 48.0).clamp(180.0, 440.0));
-        ui.heading("Open external link?");
-        ui.label("Open this destination in your default browser:");
-        ui.add(egui::Label::new(&target).wrap().selectable(true));
-        ui.horizontal_wrapped(|ui| {
-            confirm = ui.button("Open in browser").clicked();
-            cancel = ui.button("Cancel").clicked();
-        });
-    });
-    cancel |= modal.should_close();
-    if confirm && !cancel {
-        // Revalidate the exact normalized destination shown above before emitting an OS action.
-        if let Some(url) = external_url(&target) {
-            ctx.open_url(egui::OpenUrl::new_tab(url));
-        }
-    }
-    if confirm || cancel {
-        *opening = None;
-    }
+	let Some(target) = opening.as_deref().and_then(external_url) else {
+		*opening = None;
+		return;
+	};
+	let mut confirm = false;
+	let mut cancel = false;
+	let modal = egui::Modal::new(egui::Id::unique("confirm-external-link")).show(ctx, |ui| {
+		ui.set_width((ctx.content_rect().width() - 48.0).clamp(180.0, 440.0));
+		ui.heading("Open external link?");
+		ui.label("Open this destination in your default browser:");
+		ui.add(egui::Label::new(&target).wrap().selectable(true));
+		ui.horizontal_wrapped(|ui| {
+			confirm = ui.button("Open in browser").clicked();
+			cancel = ui.button("Cancel").clicked();
+		});
+	});
+	cancel |= modal.should_close();
+	if confirm && !cancel {
+		// Revalidate the exact normalized destination shown above before emitting an OS action.
+		if let Some(url) = external_url(&target) {
+			ctx.open_url(egui::OpenUrl::new_tab(url));
+		}
+	}
+	if confirm || cancel {
+		*opening = None;
+	}
 }
 
 impl Formatted {
-    pub fn parse(source: &str) -> Self {
-        let mut end = source.len().min(MAX_INPUT);
-        while !source.is_char_boundary(end) {
-            end -= 1;
-        }
-        if let Some((line_end, _)) = source[..end].match_indices('\n').nth(127) {
-            end = line_end;
-        }
-        let input = &source[..end];
-        let mut output = Self {
-            spans: Vec::new(),
-            mention_count: 0,
-            links: Vec::new(),
-            limited: end < source.len(),
-            spoilers: false,
-        };
-        let mut stack = Vec::new();
-        let mut style = Style::default();
-        // Spoiler scope is independent of Markdown's style stack: emphasis and
-        // link boundaries may start or end inside a concealed region.
-        let mut open_spoiler: Option<(usize, u8)> = None;
-        let mut regions = 0;
-        let literal = |text: &str, range: &std::ops::Range<usize>| {
-            text == &input[range.clone()]
-                && input[..range.start]
-                    .bytes()
-                    .rev()
-                    .take_while(|b| *b == b'\\')
-                    .count()
-                    % 2
-                    == 0
-        };
-        let mut events = Parser::new_ext(input, Options::ENABLE_STRIKETHROUGH)
-            .into_offset_iter()
-            .peekable();
-        // Merge only unchanged source text. Entity/escape expansions stay separate and inert,
-        // even when followed by an identical literal reference.
-        let events = std::iter::from_fn(|| {
-            let (event, mut range) = events.next()?;
-            let event = match event {
-                Event::Text(text) if literal(&text, &range) => {
-                    let mut joined = text.into_string();
-                    while let Some((Event::Text(next), next_range)) = events.peek() {
-                        if range.end != next_range.start || !literal(next, next_range) {
-                            break;
-                        }
-                        joined.push_str(next);
-                        range.end = next_range.end;
-                        events.next();
-                    }
-                    Event::Text(joined.into())
-                }
-                event => event,
-            };
-            Some((event, range))
-        });
-        for (count, (event, range)) in events.enumerate() {
-            if count >= MAX_EVENTS || stack.len() > MAX_DEPTH {
-                return Self::limited_literal(input, source.contains("||"));
-            }
-            style.spoiler = open_spoiler.map(|(_, region)| region);
-            match event {
-                Event::Start(tag) => {
-                    stack.push(style);
-                    match tag {
-                        Tag::Strong | Tag::Heading { .. } => style.strong = true,
-                        Tag::Emphasis => style.italic = true,
-                        Tag::Strikethrough => style.strike = true,
-                        Tag::CodeBlock(_) => style.code = true,
-                        Tag::BlockQuote(_) => {
-                            output.push("│ ", style);
-                            style.quote = true;
-                        }
-                        Tag::Item => output.push("• ", style),
-                        Tag::Link { dest_url, .. } => {
-                            style.no_autolink = true;
-                            style.link = output.add_link(&dest_url);
-                        }
-                        Tag::Image { .. } => {
-                            style.no_autolink = true;
-                            output.push("[image: ", style);
-                        }
-                        _ => {}
-                    }
-                }
-                Event::End(tag) => {
-                    match tag {
-                        TagEnd::Paragraph
-                        | TagEnd::Heading(_)
-                        | TagEnd::CodeBlock
-                        | TagEnd::BlockQuote(_)
-                        | TagEnd::Item => output.push("\n", style),
-                        TagEnd::Image => output.push("]", style),
-                        _ => {}
-                    }
-                    style = stack.pop().unwrap_or_default();
-                }
-                Event::Text(text) => {
-                    if style.code || text.as_ref() != &input[range.clone()] {
-                        output.push(&text, style);
-                    } else {
-                        // A raw-equal Text event can begin with one escaped character
-                        // followed by ordinary source text. Keep that first character
-                        // inert without suppressing later literal spoiler delimiters.
-                        let escaped = if literal(&text, &range) {
-                            0
-                        } else {
-                            text.chars().next().map_or(0, char::len_utf8)
-                        };
-                        output.push(&text[..escaped], style);
-                        if !output.push_spoiler_literal(
-                            &text[escaped..],
-                            style,
-                            &mut open_spoiler,
-                            &mut regions,
-                        ) {
-                            return Self::limited_literal(input, true);
-                        }
-                    }
-                }
-                Event::Html(text) | Event::InlineHtml(text) => {
-                    let inert = Style {
-                        no_autolink: true,
-                        ..style
-                    };
-                    if literal(&text, &range) {
-                        if !output.push_spoiler_literal(
-                            &text,
-                            inert,
-                            &mut open_spoiler,
-                            &mut regions,
-                        ) {
-                            return Self::limited_literal(input, true);
-                        }
-                    } else {
-                        output.push(&text, inert);
-                    }
-                }
-                Event::Code(text) => output.push(
-                    &text,
-                    Style {
-                        code: true,
-                        ..style
-                    },
-                ),
-                Event::SoftBreak | Event::HardBreak => output.push("\n", style),
-                Event::Rule => output.push("────────\n", style),
-                _ => {}
-            }
-        }
-        if let Some((opening, region)) = open_spoiler {
-            if end < source.len() {
-                // A closing delimiter may be outside our byte/line window.
-                return Self::limited_literal(input, true);
-            }
-            // An unmatched opening delimiter is literal, including its contents.
-            for (_, style) in &mut output.spans[opening..] {
-                if style.spoiler == Some(region) {
-                    style.spoiler = None;
-                }
-            }
-        }
-        // Block endings separate content, but the final one must not add an empty chat line.
-        for (text, _) in output.spans.iter_mut().rev() {
-            text.truncate(text.trim_end_matches('\n').len());
-            if !text.is_empty() {
-                break;
-            }
-        }
-        output
-    }
-    fn limited_literal(input: &str, concealed: bool) -> Self {
-        Self {
-            spans: vec![(
-                input.to_owned(),
-                Style {
-                    spoiler: concealed.then_some(0),
-                    ..Default::default()
-                },
-            )],
-            mention_count: 0,
-            links: Vec::new(),
-            limited: true,
-            spoilers: concealed,
-        }
-    }
-    fn push_spoiler_literal(
-        &mut self,
-        text: &str,
-        mut style: Style,
-        open: &mut Option<(usize, u8)>,
-        regions: &mut u8,
-    ) -> bool {
-        let mut consumed = 0;
-        let mut search = 0;
-        while let Some(offset) = text[search..].find("||") {
-            let start = search + offset;
-            search = start + 1;
-            if text[..start]
-                .bytes()
-                .rev()
-                .take_while(|byte| *byte == b'\\')
-                .count()
-                % 2
-                != 0
-            {
-                continue;
-            }
-            self.push_literal(&text[consumed..start], style);
-            if let Some((opening, region)) = open.take() {
-                // Retain an empty marker so an empty paired region still has a reveal control.
-                self.spans[opening].0.clear();
-                self.spans[opening].1.spoiler = Some(region);
-                *regions += 1;
-                self.spoilers = true;
-                style.spoiler = None;
-            } else {
-                if *regions == MAX_SPOILERS {
-                    return false;
-                }
-                let opening = self.spans.len();
-                self.push("||", style);
-                *open = Some((opening, *regions));
-                style.spoiler = Some(*regions);
-            }
-            consumed = start + 2;
-            search = consumed;
-        }
-        self.push_literal(&text[consumed..], style);
-        true
-    }
-    fn push_literal(&mut self, text: &str, style: Style) {
-        if style.no_autolink {
-            self.push(text, style);
-        } else {
-            self.push_mentions(text, style, text);
-        }
-    }
-    fn add_link(&mut self, target: &str) -> Option<usize> {
-        let url = external_url(target)?;
-        if let Some(index) = self.links.iter().position(|existing| *existing == url) {
-            return Some(index);
-        }
-        if self.links.len() >= MAX_LINKS {
-            return None;
-        }
-        self.links.push(url);
-        Some(self.links.len() - 1)
-    }
-    fn push_autolinks(&mut self, text: &str, style: Style) {
-        let mut consumed = 0;
-        let mut scanned = 0;
-        for word in text.split_whitespace() {
-            let start = scanned + text[scanned..].find(word).expect("word from source");
-            scanned = start + word.len();
-            let candidate = word.trim_start_matches(['(', '[', '{']);
-            let mut target = candidate.trim_end_matches(['.', ',', ';', '!', '?', ']', '}']);
-            while target.ends_with(')') && target.matches(')').count() > target.matches('(').count()
-            {
-                target = &target[..target.len() - 1];
-            }
-            if (target.starts_with("https://") || target.starts_with("http://"))
-                && let Some(link) = self.add_link(target)
-            {
-                let link_start = start + word.len() - candidate.len();
-                self.push(&text[consumed..link_start], style);
-                self.push(
-                    target,
-                    Style {
-                        link: Some(link),
-                        ..style
-                    },
-                );
-                consumed = link_start + target.len();
-            }
-        }
-        self.push(&text[consumed..], style);
-    }
-    fn push_mentions(&mut self, text: &str, style: Style, source: &str) {
-        let mut consumed = 0;
-        let mut raw_cursor = 0;
-        for (start, _) in text.match_indices('<') {
-            let reference = &text[start..];
-            let is_channel = reference.starts_with("<#");
-            let Some((id, len)) = (if is_channel {
-                model::channel_mention_prefix(reference)
-            } else {
-                model::user_mention_prefix(reference)
-            }) else {
-                continue;
-            };
-            if self.mention_count >= model::MAX_MENTIONS {
-                self.limited = true;
-                break;
-            }
-            let token = &text[start..start + len];
-            let Some(raw_start) = source[raw_cursor..].find(token).map(|i| i + raw_cursor) else {
-                continue;
-            };
-            raw_cursor = raw_start + len;
-            if source[..raw_start]
-                .bytes()
-                .rev()
-                .take_while(|b| *b == b'\\')
-                .count()
-                % 2
-                == 1
-            {
-                continue;
-            }
-            self.push_autolinks(&text[consumed..start], style);
-            self.push(
-                token,
-                Style {
-                    mention: (!is_channel).then_some(id),
-                    channel: is_channel.then_some(id),
-                    ..style
-                },
-            );
-            self.mention_count += 1;
-            consumed = start + len;
-        }
-        self.push_autolinks(&text[consumed..], style);
-    }
-    #[cfg(test)]
-    pub fn show(&self, ui: &mut egui::Ui, opening: &mut Option<String>) {
-        self.show_mentions(ui, opening, &[], &mut None);
-    }
-    #[cfg(test)]
-    pub fn show_mentions(
-        &self,
-        ui: &mut egui::Ui,
-        opening: &mut Option<String>,
-        users: &[model::User],
-        profile: &mut Option<model::User>,
-    ) {
-        self.show_with_images(
-            ui,
-            opening,
-            users,
-            profile,
-            &mut crate::avatars::Avatars::default(),
-            true,
-        );
-    }
-    pub fn show_with_images(
-        &self,
-        ui: &mut egui::Ui,
-        opening: &mut Option<String>,
-        users: &[model::User],
-        profile: &mut Option<model::User>,
-        images: &mut crate::avatars::Avatars,
-        demo: bool,
-    ) {
-        let mut revealed = u32::MAX;
-        self.show_references(
-            ui,
-            opening,
-            users,
-            profile,
-            (&[], &mut None),
-            (images, demo, &mut revealed),
-        );
-    }
-    pub fn show_references(
-        &self,
-        ui: &mut egui::Ui,
-        opening: &mut Option<String>,
-        users: &[model::User],
-        profile: &mut Option<model::User>,
-        references: (&[model::Channel], &mut Option<Id>),
-        media: (&mut crate::avatars::Avatars, bool, &mut u32),
-    ) {
-        let (channels, channel) = references;
-        let (images, demo, revealed) = media;
-        ui.allocate_ui_with_layout(
-            egui::vec2(ui.available_width(), 0.0),
-            egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true),
-            |ui| {
-                ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
-                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-                let mut start = 0;
-                while start < self.spans.len() {
-                    let spoiler = self.spans[start].1.spoiler;
-                    if let Some(region) = spoiler
-                        && *revealed & (1_u32 << region) == 0
-                    {
-                        // Hidden text never reaches labels, selection, tooltips, links,
-                        // mention actions, accessibility values or emoji image requests.
-                        let count = self.spans[start..]
-                            .iter()
-                            .take_while(|(_, style)| style.spoiler == spoiler)
-                            .count();
-                        if ui
-                            .push_id(("spoiler", region), |ui| ui.button("Reveal spoiler"))
-                            .inner
-                            .clicked()
-                        {
-                            *revealed |= 1_u32 << region;
-                        }
-                        start += count;
-                        continue;
-                    }
-                    if self.spans[start].0.is_empty() {
-                        start += 1;
-                        continue;
-                    }
-                    if let Some(id) = self.spans[start].1.channel {
-                        if let Some(target) = channels.iter().find(|target| {
-                            target.id == id && target.guild.is_some() && target.supports_text()
-                        }) {
-                            let label = format!("#{}", target.name);
-                            let response = ui
-                                .add(egui::Link::new(egui::RichText::new(&label).strong()))
-                                .on_hover_text("Open channel");
-                            response.widget_info(|| {
-                                egui::WidgetInfo::labeled(
-                                    egui::WidgetType::Link,
-                                    ui.is_enabled(),
-                                    format!("{label}, open channel"),
-                                )
-                            });
-                            if response.clicked() {
-                                *channel = Some(id);
-                            }
-                        } else {
-                            ui.add(egui::Label::new(&self.spans[start].0).selectable(true))
-                                .on_hover_text(
-                                    "Channel unavailable or unsupported in this session",
-                                );
-                        }
-                        start += 1;
-                        continue;
-                    }
-                    if let Some(id) = self.spans[start].1.mention {
-                        let user = users.iter().find(|user| user.id == id);
-                        let label = format!(
-                            "@{}",
-                            user.map_or_else(|| id.to_string(), |u| u.name.clone())
-                        );
-                        let response = ui
-                            .add(egui::Link::new(egui::RichText::new(&label).strong()))
-                            .on_hover_text("Open user profile");
-                        response.widget_info(|| {
-                            egui::WidgetInfo::labeled(
-                                egui::WidgetType::Link,
-                                ui.is_enabled(),
-                                format!("{label}, user profile"),
-                            )
-                        });
-                        if response.clicked() {
-                            *profile = Some(user.cloned().unwrap_or(model::User {
-                                id,
-                                name: format!("User {id}"),
-                                avatar: None,
-                                discriminator: 0,
-                            }));
-                        }
-                        start += 1;
-                        continue;
-                    }
-                    let target = self.spans[start].1.link;
-                    let count = self.spans[start..]
-                        .iter()
-                        .take_while(|(_, style)| {
-                            style.link == target
-                                && style.spoiler == spoiler
-                                && style.mention.is_none()
-                                && style.channel.is_none()
-                        })
-                        .count();
-                    let spans = &self.spans[start..start + count];
-                    if let Some(index) = target {
-                        let url = &self.links[index];
-                        let label: String = spans.iter().map(|(text, _)| text.as_str()).collect();
-                        let response =
-                            Self::show_emoji(spans, ui, true, images, demo).on_hover_text(url);
-                        // Text selection in egui's Link overwrites its accessibility role.
-                        response.widget_info(|| {
-                            egui::WidgetInfo::labeled(
-                                egui::WidgetType::Link,
-                                ui.is_enabled(),
-                                &label,
-                            )
-                        });
-                        if response.clicked() {
-                            *opening = Some(url.clone());
-                        }
-                    } else {
-                        Self::show_emoji(spans, ui, false, images, demo);
-                    }
-                    start += count;
-                }
-            },
-        );
-    }
-    fn show_emoji(
-        spans: &[(String, Style)],
-        ui: &mut egui::Ui,
-        link: bool,
-        images: &mut crate::avatars::Avatars,
-        demo: bool,
-    ) -> egui::Response {
-        let mut response: Option<egui::Response> = None;
-        let mut pending = Vec::new();
-        let size = egui::TextStyle::Body.resolve(ui.style()).size * 1.25;
-        let flush = |pending: &mut Vec<(String, Style)>, ui: &mut egui::Ui| {
-            let job = Self::layout(pending, ui);
-            pending.clear();
-            if link {
-                ui.add(egui::Link::new(job))
-            } else {
-                ui.add(egui::Label::new(job).wrap().selectable(true))
-            }
-        };
-        for (text, style) in spans {
-            let mut start = 0;
-            let mut offset = 0;
-            while offset < text.len() {
-                let custom = (!style.code)
-                    .then(|| crate::emoji::custom_prefix(&text[offset..]))
-                    .flatten();
-                let len = custom.map_or_else(
-                    || {
-                        text[offset..]
-                            .graphemes(true)
-                            .next()
-                            .expect("remaining text")
-                            .len()
-                    },
-                    |(_, len)| len,
-                );
-                let cluster = &text[offset..offset + len];
-                let image = if custom.is_none() && !style.code {
-                    crate::emoji::image(ui.ctx(), cluster, size)
-                } else {
-                    None
-                };
-                if image.is_none() && custom.is_none() {
-                    offset += len;
-                    continue;
-                }
-                if offset > start {
-                    pending.push((text[start..offset].to_owned(), *style));
-                }
-                if !pending.is_empty() {
-                    let next = flush(&mut pending, ui);
-                    response = Some(response.map_or(next.clone(), |r| r.union(next)));
-                }
-                let next = crate::emoji::selectable(
-                    ui,
-                    cluster,
-                    |ui| {
-                        if let Some((id, _)) = custom {
-                            images.custom_image(ui.ctx(), id, size, demo)
-                        } else {
-                            image
-                        }
-                    },
-                    size,
-                    link,
-                );
-                response = Some(response.map_or(next.clone(), |r| r.union(next)));
-                offset += len;
-                start = offset;
-            }
-            if start < text.len() {
-                pending.push((text[start..].to_owned(), *style));
-            }
-        }
-        if !pending.is_empty() || response.is_none() {
-            let next = flush(&mut pending, ui);
-            response = Some(response.map_or(next.clone(), |r| r.union(next)));
-        }
-        response.expect("text or emoji response")
-    }
-    fn push(&mut self, text: &str, style: Style) {
-        if !text.is_empty() {
-            self.spans.push((text.to_owned(), style));
-        }
-    }
-    pub fn bytes(&self) -> usize {
-        self.spans.capacity() * size_of::<(String, Style)>()
-            + self.spans.iter().map(|(s, _)| s.capacity()).sum::<usize>()
-            + self.links.capacity() * size_of::<String>()
-            + self.links.iter().map(String::capacity).sum::<usize>()
-    }
-    fn layout(spans: &[(String, Style)], ui: &egui::Ui) -> LayoutJob {
-        let mut job = LayoutJob::default();
-        let visuals = ui.visuals();
-        let body = egui::TextStyle::Body.resolve(ui.style());
-        for (text, style) in spans {
-            let color = if style.link.is_some() {
-                visuals.hyperlink_color
-            } else if style.strong {
-                visuals.strong_text_color()
-            } else if style.quote {
-                visuals.weak_text_color()
-            } else {
-                visuals.text_color()
-            };
-            job.append(
-                text,
-                0.0,
-                TextFormat {
-                    font_id: if style.code {
-                        FontId::monospace(body.size)
-                    } else {
-                        body.clone()
-                    },
-                    color,
-                    background: if style.code {
-                        visuals.code_bg_color
-                    } else {
-                        egui::Color32::TRANSPARENT
-                    },
-                    italics: style.italic,
-                    strikethrough: if style.strike {
-                        Stroke::new(1.0, color)
-                    } else {
-                        Stroke::NONE
-                    },
-                    underline: if style.link.is_some() {
-                        Stroke::new(1.0, color)
-                    } else {
-                        Stroke::NONE
-                    },
-                    ..Default::default()
-                },
-            );
-        }
-        job
-    }
+	pub fn parse(source: &str) -> Self {
+		let mut end = source.len().min(MAX_INPUT);
+		while !source.is_char_boundary(end) {
+			end -= 1;
+		}
+		if let Some((line_end, _)) = source[..end].match_indices('\n').nth(127) {
+			end = line_end;
+		}
+		let input = &source[..end];
+		let mut output = Self {
+			spans: Vec::new(),
+			mention_count: 0,
+			links: Vec::new(),
+			limited: end < source.len(),
+			spoilers: false,
+		};
+		let mut stack = Vec::new();
+		let mut style = Style::default();
+		// Spoiler scope is independent of Markdown's style stack: emphasis and
+		// link boundaries may start or end inside a concealed region.
+		let mut open_spoiler: Option<(usize, u8)> = None;
+		let mut regions = 0;
+		let literal = |text: &str, range: &std::ops::Range<usize>| {
+			text == &input[range.clone()]
+				&& input[..range.start]
+					.bytes()
+					.rev()
+					.take_while(|b| *b == b'\\')
+					.count() % 2 == 0
+		};
+		let mut events = Parser::new_ext(input, Options::ENABLE_STRIKETHROUGH)
+			.into_offset_iter()
+			.peekable();
+		// Merge only unchanged source text. Entity/escape expansions stay separate and inert,
+		// even when followed by an identical literal reference.
+		let events = std::iter::from_fn(|| {
+			let (event, mut range) = events.next()?;
+			let event = match event {
+				Event::Text(text) if literal(&text, &range) => {
+					let mut joined = text.into_string();
+					while let Some((Event::Text(next), next_range)) = events.peek() {
+						if range.end != next_range.start || !literal(next, next_range) {
+							break;
+						}
+						joined.push_str(next);
+						range.end = next_range.end;
+						events.next();
+					}
+					Event::Text(joined.into())
+				}
+				event => event,
+			};
+			Some((event, range))
+		});
+		for (count, (event, range)) in events.enumerate() {
+			if count >= MAX_EVENTS || stack.len() > MAX_DEPTH {
+				return Self::limited_literal(input, source.contains("||"));
+			}
+			style.spoiler = open_spoiler.map(|(_, region)| region);
+			match event {
+				Event::Start(tag) => {
+					stack.push(style);
+					match tag {
+						Tag::Strong | Tag::Heading { .. } => style.strong = true,
+						Tag::Emphasis => style.italic = true,
+						Tag::Strikethrough => style.strike = true,
+						Tag::CodeBlock(_) => style.code = true,
+						Tag::BlockQuote(_) => {
+							output.push("│ ", style);
+							style.quote = true;
+						}
+						Tag::Item => output.push("• ", style),
+						Tag::Link { dest_url, .. } => {
+							style.no_autolink = true;
+							style.link = output.add_link(&dest_url);
+						}
+						Tag::Image { .. } => {
+							style.no_autolink = true;
+							output.push("[image: ", style);
+						}
+						_ => {}
+					}
+				}
+				Event::End(tag) => {
+					match tag {
+						TagEnd::Paragraph
+						| TagEnd::Heading(_)
+						| TagEnd::CodeBlock
+						| TagEnd::BlockQuote(_)
+						| TagEnd::Item => output.push("\n", style),
+						TagEnd::Image => output.push("]", style),
+						_ => {}
+					}
+					style = stack.pop().unwrap_or_default();
+				}
+				Event::Text(text) => {
+					if style.code || text.as_ref() != &input[range.clone()] {
+						output.push(&text, style);
+					} else {
+						// A raw-equal Text event can begin with one escaped character
+						// followed by ordinary source text. Keep that first character
+						// inert without suppressing later literal spoiler delimiters.
+						let escaped = if literal(&text, &range) {
+							0
+						} else {
+							text.chars().next().map_or(0, char::len_utf8)
+						};
+						output.push(&text[..escaped], style);
+						if !output.push_spoiler_literal(
+							&text[escaped..],
+							style,
+							&mut open_spoiler,
+							&mut regions,
+						) {
+							return Self::limited_literal(input, true);
+						}
+					}
+				}
+				Event::Html(text) | Event::InlineHtml(text) => {
+					let inert = Style {
+						no_autolink: true,
+						..style
+					};
+					if literal(&text, &range) {
+						if !output.push_spoiler_literal(
+							&text,
+							inert,
+							&mut open_spoiler,
+							&mut regions,
+						) {
+							return Self::limited_literal(input, true);
+						}
+					} else {
+						output.push(&text, inert);
+					}
+				}
+				Event::Code(text) => output.push(
+					&text,
+					Style {
+						code: true,
+						..style
+					},
+				),
+				Event::SoftBreak | Event::HardBreak => output.push("\n", style),
+				Event::Rule => output.push("────────\n", style),
+				_ => {}
+			}
+		}
+		if let Some((opening, region)) = open_spoiler {
+			if end < source.len() {
+				// A closing delimiter may be outside our byte/line window.
+				return Self::limited_literal(input, true);
+			}
+			// An unmatched opening delimiter is literal, including its contents.
+			for (_, style) in &mut output.spans[opening..] {
+				if style.spoiler == Some(region) {
+					style.spoiler = None;
+				}
+			}
+		}
+		// Block endings separate content, but the final one must not add an empty chat line.
+		for (text, _) in output.spans.iter_mut().rev() {
+			text.truncate(text.trim_end_matches('\n').len());
+			if !text.is_empty() {
+				break;
+			}
+		}
+		output
+	}
+	fn limited_literal(input: &str, concealed: bool) -> Self {
+		Self {
+			spans: vec![(
+				input.to_owned(),
+				Style {
+					spoiler: concealed.then_some(0),
+					..Default::default()
+				},
+			)],
+			mention_count: 0,
+			links: Vec::new(),
+			limited: true,
+			spoilers: concealed,
+		}
+	}
+	fn push_spoiler_literal(
+		&mut self,
+		text: &str,
+		mut style: Style,
+		open: &mut Option<(usize, u8)>,
+		regions: &mut u8,
+	) -> bool {
+		let mut consumed = 0;
+		let mut search = 0;
+		while let Some(offset) = text[search..].find("||") {
+			let start = search + offset;
+			search = start + 1;
+			if text[..start]
+				.bytes()
+				.rev()
+				.take_while(|byte| *byte == b'\\')
+				.count() % 2 != 0
+			{
+				continue;
+			}
+			self.push_literal(&text[consumed..start], style);
+			if let Some((opening, region)) = open.take() {
+				// Retain an empty marker so an empty paired region still has a reveal control.
+				self.spans[opening].0.clear();
+				self.spans[opening].1.spoiler = Some(region);
+				*regions += 1;
+				self.spoilers = true;
+				style.spoiler = None;
+			} else {
+				if *regions == MAX_SPOILERS {
+					return false;
+				}
+				let opening = self.spans.len();
+				self.push("||", style);
+				*open = Some((opening, *regions));
+				style.spoiler = Some(*regions);
+			}
+			consumed = start + 2;
+			search = consumed;
+		}
+		self.push_literal(&text[consumed..], style);
+		true
+	}
+	fn push_literal(&mut self, text: &str, style: Style) {
+		if style.no_autolink {
+			self.push(text, style);
+		} else {
+			self.push_mentions(text, style, text);
+		}
+	}
+	fn add_link(&mut self, target: &str) -> Option<usize> {
+		let url = external_url(target)?;
+		if let Some(index) = self.links.iter().position(|existing| *existing == url) {
+			return Some(index);
+		}
+		if self.links.len() >= MAX_LINKS {
+			return None;
+		}
+		self.links.push(url);
+		Some(self.links.len() - 1)
+	}
+	fn push_autolinks(&mut self, text: &str, style: Style) {
+		let mut consumed = 0;
+		let mut scanned = 0;
+		for word in text.split_whitespace() {
+			let start = scanned + text[scanned..].find(word).expect("word from source");
+			scanned = start + word.len();
+			let candidate = word.trim_start_matches(['(', '[', '{']);
+			let mut target = candidate.trim_end_matches(['.', ',', ';', '!', '?', ']', '}']);
+			while target.ends_with(')') && target.matches(')').count() > target.matches('(').count()
+			{
+				target = &target[..target.len() - 1];
+			}
+			if (target.starts_with("https://") || target.starts_with("http://"))
+				&& let Some(link) = self.add_link(target)
+			{
+				let link_start = start + word.len() - candidate.len();
+				self.push(&text[consumed..link_start], style);
+				self.push(
+					target,
+					Style {
+						link: Some(link),
+						..style
+					},
+				);
+				consumed = link_start + target.len();
+			}
+		}
+		self.push(&text[consumed..], style);
+	}
+	fn push_mentions(&mut self, text: &str, style: Style, source: &str) {
+		let mut consumed = 0;
+		let mut raw_cursor = 0;
+		for (start, _) in text.match_indices('<') {
+			let reference = &text[start..];
+			let is_channel = reference.starts_with("<#");
+			let Some((id, len)) = (if is_channel {
+				model::channel_mention_prefix(reference)
+			} else {
+				model::user_mention_prefix(reference)
+			}) else {
+				continue;
+			};
+			if self.mention_count >= model::MAX_MENTIONS {
+				self.limited = true;
+				break;
+			}
+			let token = &text[start..start + len];
+			let Some(raw_start) = source[raw_cursor..].find(token).map(|i| i + raw_cursor) else {
+				continue;
+			};
+			raw_cursor = raw_start + len;
+			if source[..raw_start]
+				.bytes()
+				.rev()
+				.take_while(|b| *b == b'\\')
+				.count() % 2 == 1
+			{
+				continue;
+			}
+			self.push_autolinks(&text[consumed..start], style);
+			self.push(
+				token,
+				Style {
+					mention: (!is_channel).then_some(id),
+					channel: is_channel.then_some(id),
+					..style
+				},
+			);
+			self.mention_count += 1;
+			consumed = start + len;
+		}
+		self.push_autolinks(&text[consumed..], style);
+	}
+	#[cfg(test)]
+	pub fn show(&self, ui: &mut egui::Ui, opening: &mut Option<String>) {
+		self.show_mentions(ui, opening, &[], &mut None);
+	}
+	#[cfg(test)]
+	pub fn show_mentions(
+		&self,
+		ui: &mut egui::Ui,
+		opening: &mut Option<String>,
+		users: &[model::User],
+		profile: &mut Option<model::User>,
+	) {
+		self.show_with_images(
+			ui,
+			opening,
+			users,
+			profile,
+			&mut crate::avatars::Avatars::default(),
+			true,
+		);
+	}
+	pub fn show_with_images(
+		&self,
+		ui: &mut egui::Ui,
+		opening: &mut Option<String>,
+		users: &[model::User],
+		profile: &mut Option<model::User>,
+		images: &mut crate::avatars::Avatars,
+		demo: bool,
+	) {
+		let mut revealed = u32::MAX;
+		self.show_references(
+			ui,
+			opening,
+			users,
+			profile,
+			(&[], &mut None),
+			(images, demo, &mut revealed),
+		);
+	}
+	pub fn show_references(
+		&self,
+		ui: &mut egui::Ui,
+		opening: &mut Option<String>,
+		users: &[model::User],
+		profile: &mut Option<model::User>,
+		references: (&[model::Channel], &mut Option<Id>),
+		media: (&mut crate::avatars::Avatars, bool, &mut u32),
+	) {
+		let (channels, channel) = references;
+		let (images, demo, revealed) = media;
+		ui.allocate_ui_with_layout(
+			egui::vec2(ui.available_width(), 0.0),
+			egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true),
+			|ui| {
+				ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+				ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+				let mut start = 0;
+				while start < self.spans.len() {
+					let spoiler = self.spans[start].1.spoiler;
+					if let Some(region) = spoiler
+						&& *revealed & (1_u32 << region) == 0
+					{
+						// Hidden text never reaches labels, selection, tooltips, links,
+						// mention actions, accessibility values or emoji image requests.
+						let count = self.spans[start..]
+							.iter()
+							.take_while(|(_, style)| style.spoiler == spoiler)
+							.count();
+						if ui
+							.push_id(("spoiler", region), |ui| ui.button("Reveal spoiler"))
+							.inner
+							.clicked()
+						{
+							*revealed |= 1_u32 << region;
+						}
+						start += count;
+						continue;
+					}
+					if self.spans[start].0.is_empty() {
+						start += 1;
+						continue;
+					}
+					if let Some(id) = self.spans[start].1.channel {
+						if let Some(target) = channels.iter().find(|target| {
+							target.id == id && target.guild.is_some() && target.supports_text()
+						}) {
+							let label = format!("#{}", target.name);
+							let response = ui
+								.add(egui::Link::new(egui::RichText::new(&label).strong()))
+								.on_hover_text("Open channel");
+							response.widget_info(|| {
+								egui::WidgetInfo::labeled(
+									egui::WidgetType::Link,
+									ui.is_enabled(),
+									format!("{label}, open channel"),
+								)
+							});
+							if response.clicked() {
+								*channel = Some(id);
+							}
+						} else {
+							ui.add(egui::Label::new(&self.spans[start].0).selectable(true))
+								.on_hover_text(
+									"Channel unavailable or unsupported in this session",
+								);
+						}
+						start += 1;
+						continue;
+					}
+					if let Some(id) = self.spans[start].1.mention {
+						let user = users.iter().find(|user| user.id == id);
+						let label = format!(
+							"@{}",
+							user.map_or_else(|| id.to_string(), |u| u.name.clone())
+						);
+						let response = ui
+							.add(egui::Link::new(egui::RichText::new(&label).strong()))
+							.on_hover_text("Open user profile");
+						response.widget_info(|| {
+							egui::WidgetInfo::labeled(
+								egui::WidgetType::Link,
+								ui.is_enabled(),
+								format!("{label}, user profile"),
+							)
+						});
+						if response.clicked() {
+							*profile = Some(user.cloned().unwrap_or(model::User {
+								id,
+								name: format!("User {id}"),
+								avatar: None,
+								discriminator: 0,
+							}));
+						}
+						start += 1;
+						continue;
+					}
+					let target = self.spans[start].1.link;
+					let count = self.spans[start..]
+						.iter()
+						.take_while(|(_, style)| {
+							style.link == target
+								&& style.spoiler == spoiler
+								&& style.mention.is_none()
+								&& style.channel.is_none()
+						})
+						.count();
+					let spans = &self.spans[start..start + count];
+					if let Some(index) = target {
+						let url = &self.links[index];
+						let label: String = spans.iter().map(|(text, _)| text.as_str()).collect();
+						let response =
+							Self::show_emoji(spans, ui, true, images, demo).on_hover_text(url);
+						// Text selection in egui's Link overwrites its accessibility role.
+						response.widget_info(|| {
+							egui::WidgetInfo::labeled(
+								egui::WidgetType::Link,
+								ui.is_enabled(),
+								&label,
+							)
+						});
+						if response.clicked() {
+							*opening = Some(url.clone());
+						}
+					} else {
+						Self::show_emoji(spans, ui, false, images, demo);
+					}
+					start += count;
+				}
+			},
+		);
+	}
+	fn show_emoji(
+		spans: &[(String, Style)],
+		ui: &mut egui::Ui,
+		link: bool,
+		images: &mut crate::avatars::Avatars,
+		demo: bool,
+	) -> egui::Response {
+		let mut response: Option<egui::Response> = None;
+		let mut pending = Vec::new();
+		let size = egui::TextStyle::Body.resolve(ui.style()).size * 1.25;
+		let flush = |pending: &mut Vec<(String, Style)>, ui: &mut egui::Ui| {
+			let job = Self::layout(pending, ui);
+			pending.clear();
+			if link {
+				ui.add(egui::Link::new(job))
+			} else {
+				ui.add(egui::Label::new(job).wrap().selectable(true))
+			}
+		};
+		for (text, style) in spans {
+			let mut start = 0;
+			let mut offset = 0;
+			while offset < text.len() {
+				let custom = (!style.code)
+					.then(|| crate::emoji::custom_prefix(&text[offset..]))
+					.flatten();
+				let len = custom.map_or_else(
+					|| {
+						text[offset..]
+							.graphemes(true)
+							.next()
+							.expect("remaining text")
+							.len()
+					},
+					|(_, len)| len,
+				);
+				let cluster = &text[offset..offset + len];
+				let image = if custom.is_none() && !style.code {
+					crate::emoji::image(ui.ctx(), cluster, size)
+				} else {
+					None
+				};
+				if image.is_none() && custom.is_none() {
+					offset += len;
+					continue;
+				}
+				if offset > start {
+					pending.push((text[start..offset].to_owned(), *style));
+				}
+				if !pending.is_empty() {
+					let next = flush(&mut pending, ui);
+					response = Some(response.map_or(next.clone(), |r| r.union(next)));
+				}
+				let next = crate::emoji::selectable(
+					ui,
+					cluster,
+					|ui| {
+						if let Some((id, _)) = custom {
+							images.custom_image(ui.ctx(), id, size, demo)
+						} else {
+							image
+						}
+					},
+					size,
+					link,
+				);
+				response = Some(response.map_or(next.clone(), |r| r.union(next)));
+				offset += len;
+				start = offset;
+			}
+			if start < text.len() {
+				pending.push((text[start..].to_owned(), *style));
+			}
+		}
+		if !pending.is_empty() || response.is_none() {
+			let next = flush(&mut pending, ui);
+			response = Some(response.map_or(next.clone(), |r| r.union(next)));
+		}
+		response.expect("text or emoji response")
+	}
+	fn push(&mut self, text: &str, style: Style) {
+		if !text.is_empty() {
+			self.spans.push((text.to_owned(), style));
+		}
+	}
+	pub fn bytes(&self) -> usize {
+		self.spans.capacity() * size_of::<(String, Style)>()
+			+ self.spans.iter().map(|(s, _)| s.capacity()).sum::<usize>()
+			+ self.links.capacity() * size_of::<String>()
+			+ self.links.iter().map(String::capacity).sum::<usize>()
+	}
+	fn layout(spans: &[(String, Style)], ui: &egui::Ui) -> LayoutJob {
+		let mut job = LayoutJob::default();
+		let visuals = ui.visuals();
+		let body = egui::TextStyle::Body.resolve(ui.style());
+		for (text, style) in spans {
+			let color = if style.link.is_some() {
+				visuals.hyperlink_color
+			} else if style.strong {
+				visuals.strong_text_color()
+			} else if style.quote {
+				visuals.weak_text_color()
+			} else {
+				visuals.text_color()
+			};
+			job.append(
+				text,
+				0.0,
+				TextFormat {
+					font_id: if style.code {
+						FontId::monospace(body.size)
+					} else {
+						body.clone()
+					},
+					color,
+					background: if style.code {
+						visuals.code_bg_color
+					} else {
+						egui::Color32::TRANSPARENT
+					},
+					italics: style.italic,
+					strikethrough: if style.strike {
+						Stroke::new(1.0, color)
+					} else {
+						Stroke::NONE
+					},
+					underline: if style.link.is_some() {
+						Stroke::new(1.0, color)
+					} else {
+						Stroke::NONE
+					},
+					..Default::default()
+				},
+			);
+		}
+		job
+	}
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    #[test]
-    fn block_endings_do_not_leave_a_blank_final_line() {
-        for (source, expected) in [
-            ("Hello", "Hello"),
-            ("**Hello**", "Hello"),
-            ("One\nTwo", "One\nTwo"),
-            ("One\n\nTwo", "One\nTwo"),
-            ("```\none\ntwo\n```", "one\ntwo"),
-            ("[Link](https://example.org)", "Link"),
-            ("||Hidden||", "Hidden"),
-            ("", ""),
-        ] {
-            let parsed = Formatted::parse(source);
-            let text: String = parsed.spans.iter().map(|(text, _)| text.as_str()).collect();
-            assert_eq!(text, expected, "{source:?}");
-        }
-    }
-    #[test]
-    fn discord_routes_use_only_valid_typed_ids() {
-        let mut channel = model::Channel {
-            id: Id(10),
-            guild: Some(Id(20)),
-            kind: 0,
-            name: "https://malicious.invalid/secret".into(),
-            parent_id: None,
-            position: 0,
-            recipients: vec![],
-            member_list_id: None,
-            last_message: None,
-        };
-        assert_eq!(
-            discord_url(&channel, None).as_deref(),
-            Some("https://discord.com/channels/20/10")
-        );
-        for kind in [10, 11, 12, 13, 14, 15, 16, 255] {
-            channel.kind = kind;
-            assert_eq!(
-                discord_url(&channel, Some(Id(30))).as_deref(),
-                Some("https://discord.com/channels/20/10/30")
-            );
-        }
-        for kind in [1, 3] {
-            channel.kind = kind;
-            assert!(
-                discord_url(&channel, None).is_none(),
-                "DMs cannot have a guild route"
-            );
-            channel.guild = None;
-            assert_eq!(
-                discord_url(&channel, Some(Id(30))).as_deref(),
-                Some("https://discord.com/channels/@me/10/30")
-            );
-            channel.guild = Some(Id(20));
-        }
-        channel.kind = 0;
-        channel.guild = None;
-        assert!(discord_url(&channel, None).is_none());
-        channel.guild = Some(Id(0));
-        assert!(discord_url(&channel, None).is_none());
-        channel.guild = Some(Id(u64::MAX));
-        channel.id = Id(u64::MAX);
-        assert_eq!(
-            discord_url(&channel, Some(Id(u64::MAX))).unwrap(),
-            format!("https://discord.com/channels/{0}/{0}/{0}", u64::MAX)
-        );
-        assert!(discord_url(&channel, Some(Id(0))).is_none());
-        channel.id = Id(0);
-        assert!(discord_url(&channel, None).is_none());
-    }
+	use super::*;
+	#[test]
+	fn block_endings_do_not_leave_a_blank_final_line() {
+		for (source, expected) in [
+			("Hello", "Hello"),
+			("**Hello**", "Hello"),
+			("One\nTwo", "One\nTwo"),
+			("One\n\nTwo", "One\nTwo"),
+			("```\none\ntwo\n```", "one\ntwo"),
+			("[Link](https://example.org)", "Link"),
+			("||Hidden||", "Hidden"),
+			("", ""),
+		] {
+			let parsed = Formatted::parse(source);
+			let text: String = parsed.spans.iter().map(|(text, _)| text.as_str()).collect();
+			assert_eq!(text, expected, "{source:?}");
+		}
+	}
+	#[test]
+	fn discord_routes_use_only_valid_typed_ids() {
+		let mut channel = model::Channel {
+			id: Id(10),
+			guild: Some(Id(20)),
+			kind: 0,
+			name: "https://malicious.invalid/secret".into(),
+			parent_id: None,
+			position: 0,
+			recipients: vec![],
+			member_list_id: None,
+			last_message: None,
+		};
+		assert_eq!(
+			discord_url(&channel, None).as_deref(),
+			Some("https://discord.com/channels/20/10")
+		);
+		for kind in [10, 11, 12, 13, 14, 15, 16, 255] {
+			channel.kind = kind;
+			assert_eq!(
+				discord_url(&channel, Some(Id(30))).as_deref(),
+				Some("https://discord.com/channels/20/10/30")
+			);
+		}
+		for kind in [1, 3] {
+			channel.kind = kind;
+			assert!(
+				discord_url(&channel, None).is_none(),
+				"DMs cannot have a guild route"
+			);
+			channel.guild = None;
+			assert_eq!(
+				discord_url(&channel, Some(Id(30))).as_deref(),
+				Some("https://discord.com/channels/@me/10/30")
+			);
+			channel.guild = Some(Id(20));
+		}
+		channel.kind = 0;
+		channel.guild = None;
+		assert!(discord_url(&channel, None).is_none());
+		channel.guild = Some(Id(0));
+		assert!(discord_url(&channel, None).is_none());
+		channel.guild = Some(Id(u64::MAX));
+		channel.id = Id(u64::MAX);
+		assert_eq!(
+			discord_url(&channel, Some(Id(u64::MAX))).unwrap(),
+			format!("https://discord.com/channels/{0}/{0}/{0}", u64::MAX)
+		);
+		assert!(discord_url(&channel, Some(Id(0))).is_none());
+		channel.id = Id(0);
+		assert!(discord_url(&channel, None).is_none());
+	}
 
-    #[test]
-    fn external_confirmation_requires_explicit_action_and_displays_emitted_target() {
-        fn text_position(shape: &egui::Shape, label: &str) -> Option<egui::Pos2> {
-            match shape {
-                egui::Shape::Text(text) if text.galley.job.text == label => {
-                    Some(text.pos + text.galley.size() / 2.0)
-                }
-                egui::Shape::Vec(shapes) => {
-                    shapes.iter().find_map(|shape| text_position(shape, label))
-                }
-                _ => None,
-            }
-        }
-        for action in ["Cancel", "Escape", "Open in browser"] {
-            let ctx = egui::Context::default();
-            let normalized = "https://example.com/b%20c";
-            let mut opening = Some("HTTPS://EXAMPLE.COM:443/a/../b c".into());
-            let frame = |opening: &mut Option<String>, events| {
-                ctx.run_ui(
-                    egui::RawInput {
-                        screen_rect: Some(egui::Rect::from_min_size(
-                            egui::Pos2::ZERO,
-                            egui::vec2(340.0, 420.0),
-                        )),
-                        events,
-                        ..Default::default()
-                    },
-                    |_| confirm_external_link(&ctx, opening),
-                )
-            };
-            let mut position = None;
-            for pass in 0..3 {
-                let mut output = frame(&mut opening, vec![]);
-                output.textures_delta.clear();
-                assert!(output.platform_output.commands.is_empty());
-                assert!(opening.is_some());
-                assert!(
-                    pass == 0
-                        || output.shapes.iter().any(|shape| text_position(
-                            &shape.shape,
-                            normalized
-                        )
-                        .is_some())
-                );
-                position = output
-                    .shapes
-                    .iter()
-                    .find_map(|shape| text_position(&shape.shape, action));
-                output.drop_without_applying_deltas();
-            }
-            let events = if action == "Escape" {
-                vec![egui::Event::Key {
-                    key: egui::Key::Escape,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers: egui::Modifiers::NONE,
-                }]
-            } else {
-                let pos = position.expect("Visible confirmation control");
-                vec![
-                    egui::Event::PointerMoved(pos),
-                    egui::Event::PointerButton {
-                        pos,
-                        button: egui::PointerButton::Primary,
-                        pressed: true,
-                        modifiers: egui::Modifiers::NONE,
-                    },
-                    egui::Event::PointerButton {
-                        pos,
-                        button: egui::PointerButton::Primary,
-                        pressed: false,
-                        modifiers: egui::Modifiers::NONE,
-                    },
-                ]
-            };
-            let output = frame(&mut opening, events);
-            let opened: Vec<_> = output
-                .platform_output
-                .commands
-                .iter()
-                .filter_map(|command| match command {
-                    egui::OutputCommand::OpenUrl(url) => Some(url.url.as_str()),
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(
-                opened,
-                if action == "Open in browser" {
-                    vec![normalized]
-                } else {
-                    vec![]
-                }
-            );
-            assert!(opening.is_none());
-            output.drop_without_applying_deltas();
-            let output = frame(&mut opening, vec![]);
-            assert!(output.platform_output.commands.is_empty());
-            output.drop_without_applying_deltas();
-        }
-        let ctx = egui::Context::default();
-        let mut invalid = Some("javascript:alert(1)".into());
-        let output = ctx.run_ui(Default::default(), |_| {
-            confirm_external_link(&ctx, &mut invalid)
-        });
-        assert!(invalid.is_none());
-        assert!(output.platform_output.commands.is_empty());
-        output.drop_without_applying_deltas();
-    }
+	#[test]
+	fn external_confirmation_requires_explicit_action_and_displays_emitted_target() {
+		fn text_position(shape: &egui::Shape, label: &str) -> Option<egui::Pos2> {
+			match shape {
+				egui::Shape::Text(text) if text.galley.job.text == label => {
+					Some(text.pos + text.galley.size() / 2.0)
+				}
+				egui::Shape::Vec(shapes) => {
+					shapes.iter().find_map(|shape| text_position(shape, label))
+				}
+				_ => None,
+			}
+		}
+		for action in ["Cancel", "Escape", "Open in browser"] {
+			let ctx = egui::Context::default();
+			let normalized = "https://example.com/b%20c";
+			let mut opening = Some("HTTPS://EXAMPLE.COM:443/a/../b c".into());
+			let frame = |opening: &mut Option<String>, events| {
+				ctx.run_ui(
+					egui::RawInput {
+						screen_rect: Some(egui::Rect::from_min_size(
+							egui::Pos2::ZERO,
+							egui::vec2(340.0, 420.0),
+						)),
+						events,
+						..Default::default()
+					},
+					|_| confirm_external_link(&ctx, opening),
+				)
+			};
+			let mut position = None;
+			for pass in 0..3 {
+				let mut output = frame(&mut opening, vec![]);
+				output.textures_delta.clear();
+				assert!(output.platform_output.commands.is_empty());
+				assert!(opening.is_some());
+				assert!(
+					pass == 0
+						|| output.shapes.iter().any(|shape| text_position(
+							&shape.shape,
+							normalized
+						)
+						.is_some())
+				);
+				position = output
+					.shapes
+					.iter()
+					.find_map(|shape| text_position(&shape.shape, action));
+				output.drop_without_applying_deltas();
+			}
+			let events = if action == "Escape" {
+				vec![egui::Event::Key {
+					key: egui::Key::Escape,
+					physical_key: None,
+					pressed: true,
+					repeat: false,
+					modifiers: egui::Modifiers::NONE,
+				}]
+			} else {
+				let pos = position.expect("Visible confirmation control");
+				vec![
+					egui::Event::PointerMoved(pos),
+					egui::Event::PointerButton {
+						pos,
+						button: egui::PointerButton::Primary,
+						pressed: true,
+						modifiers: egui::Modifiers::NONE,
+					},
+					egui::Event::PointerButton {
+						pos,
+						button: egui::PointerButton::Primary,
+						pressed: false,
+						modifiers: egui::Modifiers::NONE,
+					},
+				]
+			};
+			let output = frame(&mut opening, events);
+			let opened: Vec<_> = output
+				.platform_output
+				.commands
+				.iter()
+				.filter_map(|command| match command {
+					egui::OutputCommand::OpenUrl(url) => Some(url.url.as_str()),
+					_ => None,
+				})
+				.collect();
+			assert_eq!(
+				opened,
+				if action == "Open in browser" {
+					vec![normalized]
+				} else {
+					vec![]
+				}
+			);
+			assert!(opening.is_none());
+			output.drop_without_applying_deltas();
+			let output = frame(&mut opening, vec![]);
+			assert!(output.platform_output.commands.is_empty());
+			output.drop_without_applying_deltas();
+		}
+		let ctx = egui::Context::default();
+		let mut invalid = Some("javascript:alert(1)".into());
+		let output = ctx.run_ui(Default::default(), |_| {
+			confirm_external_link(&ctx, &mut invalid)
+		});
+		assert!(invalid.is_none());
+		assert!(output.platform_output.commands.is_empty());
+		output.drop_without_applying_deltas();
+	}
 
-    #[test]
-    fn inline_spoilers_preserve_crossing_styles_and_ignore_nonliteral_delimiters() {
-        let parsed = Formatted::parse(
-            "**Visible ||secret** still hidden|| end ||<@42> <#43> [link](https://hidden.example) 👩🏽‍💻||.",
-        );
-        assert!(parsed.spoilers && !parsed.limited);
-        assert!(
-            parsed
-                .spans
-                .iter()
-                .any(|(text, style)| text == "secret" && style.strong && style.spoiler == Some(0))
-        );
-        assert!(
-            parsed
-                .spans
-                .iter()
-                .any(|(text, style)| text.contains("still hidden")
-                    && !style.strong
-                    && style.spoiler == Some(0))
-        );
-        assert!(
-            parsed
-                .spans
-                .iter()
-                .any(|(_, style)| style.mention == Some(Id(42)) && style.spoiler == Some(1))
-        );
-        assert!(
-            parsed
-                .spans
-                .iter()
-                .any(|(_, style)| style.channel == Some(Id(43)) && style.spoiler == Some(1))
-        );
-        let visible: String = parsed
-            .spans
-            .iter()
-            .filter(|(_, style)| style.spoiler.is_none())
-            .map(|(text, _)| text.as_str())
-            .collect();
-        assert_eq!(visible.trim_end(), "Visible  end .");
-        let crossing = Formatted::parse("||hidden **also hidden|| visible**");
-        assert!(
-            crossing
-                .spans
-                .iter()
-                .any(|(text, style)| text == " visible" && style.strong && style.spoiler.is_none())
-        );
-        for source in [
-            "`||code||`",
-            "```\n||code||\n```",
-            r"\|\|escaped\|\|",
-            "&#124;&#124;entity&#124;&#124;",
-            "||unmatched",
-            "unmatched||",
-        ] {
-            let parsed = Formatted::parse(source);
-            assert!(!parsed.spoilers, "not a spoiler: {source}");
-            assert!(
-                parsed
-                    .spans
-                    .iter()
-                    .all(|(_, style)| style.spoiler.is_none())
-            );
-        }
-        let mixed = Formatted::parse(r"\|\|literal\|\| then ||hidden `||code||`||");
-        assert!(mixed.spoilers);
-        assert!(
-            mixed
-                .spans
-                .iter()
-                .any(|(text, style)| style.code && text == "||code||" && style.spoiler == Some(0))
-        );
-        let unmatched = Formatted::parse("plain ||unmatched **bold**");
-        assert_eq!(
-            unmatched
-                .spans
-                .iter()
-                .map(|(text, _)| text.as_str())
-                .collect::<String>()
-                .trim_end(),
-            "plain ||unmatched bold"
-        );
-    }
+	#[test]
+	fn inline_spoilers_preserve_crossing_styles_and_ignore_nonliteral_delimiters() {
+		let parsed = Formatted::parse(
+			"**Visible ||secret** still hidden|| end ||<@42> <#43> [link](https://hidden.example) 👩🏽‍💻||.",
+		);
+		assert!(parsed.spoilers && !parsed.limited);
+		assert!(
+			parsed
+				.spans
+				.iter()
+				.any(|(text, style)| text == "secret" && style.strong && style.spoiler == Some(0))
+		);
+		assert!(
+			parsed
+				.spans
+				.iter()
+				.any(|(text, style)| text.contains("still hidden")
+					&& !style.strong
+					&& style.spoiler == Some(0))
+		);
+		assert!(
+			parsed
+				.spans
+				.iter()
+				.any(|(_, style)| style.mention == Some(Id(42)) && style.spoiler == Some(1))
+		);
+		assert!(
+			parsed
+				.spans
+				.iter()
+				.any(|(_, style)| style.channel == Some(Id(43)) && style.spoiler == Some(1))
+		);
+		let visible: String = parsed
+			.spans
+			.iter()
+			.filter(|(_, style)| style.spoiler.is_none())
+			.map(|(text, _)| text.as_str())
+			.collect();
+		assert_eq!(visible.trim_end(), "Visible  end .");
+		let crossing = Formatted::parse("||hidden **also hidden|| visible**");
+		assert!(
+			crossing
+				.spans
+				.iter()
+				.any(|(text, style)| text == " visible" && style.strong && style.spoiler.is_none())
+		);
+		for source in [
+			"`||code||`",
+			"```\n||code||\n```",
+			r"\|\|escaped\|\|",
+			"&#124;&#124;entity&#124;&#124;",
+			"||unmatched",
+			"unmatched||",
+		] {
+			let parsed = Formatted::parse(source);
+			assert!(!parsed.spoilers, "not a spoiler: {source}");
+			assert!(
+				parsed
+					.spans
+					.iter()
+					.all(|(_, style)| style.spoiler.is_none())
+			);
+		}
+		let mixed = Formatted::parse(r"\|\|literal\|\| then ||hidden `||code||`||");
+		assert!(mixed.spoilers);
+		assert!(
+			mixed
+				.spans
+				.iter()
+				.any(|(text, style)| style.code && text == "||code||" && style.spoiler == Some(0))
+		);
+		let unmatched = Formatted::parse("plain ||unmatched **bold**");
+		assert_eq!(
+			unmatched
+				.spans
+				.iter()
+				.map(|(text, _)| text.as_str())
+				.collect::<String>()
+				.trim_end(),
+			"plain ||unmatched bold"
+		);
+	}
 
-    #[test]
-    fn spoiler_limits_never_fall_back_to_visible_secret_text() {
-        let exact = Formatted::parse(&"||x|| ".repeat(32));
-        assert!(exact.spoilers && !exact.limited);
-        assert!(
-            exact
-                .spans
-                .iter()
-                .any(|(_, style)| style.spoiler == Some(31))
-        );
-        for source in [
-            "||x|| ".repeat(33),
-            format!("visible ||{}", "s".repeat(MAX_INPUT)),
-            format!("visible ||{}", "secret\n".repeat(130)),
-            format!("||secret|| {}", "*a* ".repeat(MAX_EVENTS)),
-            format!("{}||secret||", "> ".repeat(MAX_DEPTH + 2)),
-        ] {
-            let parsed = Formatted::parse(&source);
-            assert!(parsed.limited && parsed.spoilers);
-            assert!(parsed.links.is_empty());
-            assert!(
-                parsed
-                    .spans
-                    .iter()
-                    .all(|(_, style)| style.spoiler == Some(0))
-            );
-            assert!(parsed.bytes() < 16 * 1024);
-        }
-    }
+	#[test]
+	fn spoiler_limits_never_fall_back_to_visible_secret_text() {
+		let exact = Formatted::parse(&"||x|| ".repeat(32));
+		assert!(exact.spoilers && !exact.limited);
+		assert!(
+			exact
+				.spans
+				.iter()
+				.any(|(_, style)| style.spoiler == Some(31))
+		);
+		for source in [
+			"||x|| ".repeat(33),
+			format!("visible ||{}", "s".repeat(MAX_INPUT)),
+			format!("visible ||{}", "secret\n".repeat(130)),
+			format!("||secret|| {}", "*a* ".repeat(MAX_EVENTS)),
+			format!("{}||secret||", "> ".repeat(MAX_DEPTH + 2)),
+		] {
+			let parsed = Formatted::parse(&source);
+			assert!(parsed.limited && parsed.spoilers);
+			assert!(parsed.links.is_empty());
+			assert!(
+				parsed
+					.spans
+					.iter()
+					.all(|(_, style)| style.spoiler == Some(0))
+			);
+			assert!(parsed.bytes() < 16 * 1024);
+		}
+	}
 
-    #[test]
-    fn concealed_regions_skip_actions_images_and_text_until_keyboard_or_pointer_reveal() {
-        fn collect(shape: &egui::Shape, texts: &mut Vec<(String, egui::Rect)>) {
-            match shape {
-                egui::Shape::Text(text) => texts.push((
-                    text.galley.text().into(),
-                    egui::Rect::from_min_size(text.pos, text.galley.size()),
-                )),
-                egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, texts)),
-                _ => {}
-            }
-        }
-        let key = |key| egui::Event::Key {
-            key,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        };
-        for (width, dark) in [(220.0, false), (700.0, true)] {
-            let parsed = Formatted::parse(
-                "Visible ||secret <@42> <#43> [hidden link](https://hidden.example) <:wave:9001>|| end",
-            );
-            let ctx = egui::Context::default();
-            ctx.set_visuals(if dark {
-                egui::Visuals::dark()
-            } else {
-                egui::Visuals::light()
-            });
-            let mut images = crate::avatars::Avatars::default();
-            let mut opening = None;
-            let mut profile = None;
-            let mut channel = None;
-            let mut mask = 0;
-            let mut render = |mask: &mut u32, events| {
-                let mut output = ctx.run_ui(
-                    egui::RawInput {
-                        screen_rect: Some(egui::Rect::from_min_size(
-                            egui::Pos2::ZERO,
-                            egui::vec2(width, 500.0),
-                        )),
-                        events,
-                        ..Default::default()
-                    },
-                    |ui| {
-                        parsed.show_references(
-                            ui,
-                            &mut opening,
-                            &[],
-                            &mut profile,
-                            (&[], &mut channel),
-                            (&mut images, false, mask),
-                        )
-                    },
-                );
-                assert!(output.platform_output.commands.is_empty());
-                assert!(opening.is_none() && profile.is_none() && channel.is_none());
-                let requests = images.take_requests();
-                if *mask == 0 {
-                    assert!(requests.is_empty());
-                }
-                let mut texts = Vec::new();
-                for shape in &output.shapes {
-                    collect(&shape.shape, &mut texts);
-                }
-                output.textures_delta.clear();
-                output.drop_without_applying_deltas();
-                texts
-            };
-            render(&mut mask, vec![]);
-            let texts = render(&mut mask, vec![]);
-            assert_eq!(
-                texts
-                    .iter()
-                    .filter(|(text, _)| text == "Reveal spoiler")
-                    .count(),
-                1
-            );
-            assert!(texts.iter().any(|(text, _)| text.contains("Visible")));
-            assert!(!texts.iter().any(|(text, _)| text.contains("secret")
-                || text.contains("hidden")
-                || text.contains("9001")
-                || text.contains("42")));
-            render(&mut mask, vec![key(egui::Key::Tab)]);
-            render(&mut mask, vec![key(egui::Key::Enter)]);
-            assert_eq!(mask, 1);
-            let texts = render(&mut mask, vec![]);
-            assert!(texts.iter().any(|(text, _)| text.contains("secret")));
-            mask = 0;
-            let texts = render(&mut mask, vec![]);
-            assert!(!texts.iter().any(|(text, _)| text.contains("secret")));
-            let pos = texts
-                .iter()
-                .find(|(text, _)| text == "Reveal spoiler")
-                .unwrap()
-                .1
-                .center();
-            render(
-                &mut mask,
-                vec![
-                    egui::Event::PointerMoved(pos),
-                    egui::Event::PointerButton {
-                        pos,
-                        button: egui::PointerButton::Primary,
-                        pressed: true,
-                        modifiers: egui::Modifiers::NONE,
-                    },
-                ],
-            );
-            render(
-                &mut mask,
-                vec![egui::Event::PointerButton {
-                    pos,
-                    button: egui::PointerButton::Primary,
-                    pressed: false,
-                    modifiers: egui::Modifiers::NONE,
-                }],
-            );
-            assert_eq!(mask, 1);
-        }
-    }
+	#[test]
+	fn concealed_regions_skip_actions_images_and_text_until_keyboard_or_pointer_reveal() {
+		fn collect(shape: &egui::Shape, texts: &mut Vec<(String, egui::Rect)>) {
+			match shape {
+				egui::Shape::Text(text) => texts.push((
+					text.galley.text().into(),
+					egui::Rect::from_min_size(text.pos, text.galley.size()),
+				)),
+				egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, texts)),
+				_ => {}
+			}
+		}
+		let key = |key| egui::Event::Key {
+			key,
+			physical_key: None,
+			pressed: true,
+			repeat: false,
+			modifiers: egui::Modifiers::NONE,
+		};
+		for (width, dark) in [(220.0, false), (700.0, true)] {
+			let parsed = Formatted::parse(
+				"Visible ||secret <@42> <#43> [hidden link](https://hidden.example) <:wave:9001>|| end",
+			);
+			let ctx = egui::Context::default();
+			ctx.set_visuals(if dark {
+				egui::Visuals::dark()
+			} else {
+				egui::Visuals::light()
+			});
+			let mut images = crate::avatars::Avatars::default();
+			let mut opening = None;
+			let mut profile = None;
+			let mut channel = None;
+			let mut mask = 0;
+			let mut render = |mask: &mut u32, events| {
+				let mut output = ctx.run_ui(
+					egui::RawInput {
+						screen_rect: Some(egui::Rect::from_min_size(
+							egui::Pos2::ZERO,
+							egui::vec2(width, 500.0),
+						)),
+						events,
+						..Default::default()
+					},
+					|ui| {
+						parsed.show_references(
+							ui,
+							&mut opening,
+							&[],
+							&mut profile,
+							(&[], &mut channel),
+							(&mut images, false, mask),
+						)
+					},
+				);
+				assert!(output.platform_output.commands.is_empty());
+				assert!(opening.is_none() && profile.is_none() && channel.is_none());
+				let requests = images.take_requests();
+				if *mask == 0 {
+					assert!(requests.is_empty());
+				}
+				let mut texts = Vec::new();
+				for shape in &output.shapes {
+					collect(&shape.shape, &mut texts);
+				}
+				output.textures_delta.clear();
+				output.drop_without_applying_deltas();
+				texts
+			};
+			render(&mut mask, vec![]);
+			let texts = render(&mut mask, vec![]);
+			assert_eq!(
+				texts
+					.iter()
+					.filter(|(text, _)| text == "Reveal spoiler")
+					.count(),
+				1
+			);
+			assert!(texts.iter().any(|(text, _)| text.contains("Visible")));
+			assert!(!texts.iter().any(|(text, _)| text.contains("secret")
+				|| text.contains("hidden")
+				|| text.contains("9001")
+				|| text.contains("42")));
+			render(&mut mask, vec![key(egui::Key::Tab)]);
+			render(&mut mask, vec![key(egui::Key::Enter)]);
+			assert_eq!(mask, 1);
+			let texts = render(&mut mask, vec![]);
+			assert!(texts.iter().any(|(text, _)| text.contains("secret")));
+			mask = 0;
+			let texts = render(&mut mask, vec![]);
+			assert!(!texts.iter().any(|(text, _)| text.contains("secret")));
+			let pos = texts
+				.iter()
+				.find(|(text, _)| text == "Reveal spoiler")
+				.unwrap()
+				.1
+				.center();
+			render(
+				&mut mask,
+				vec![
+					egui::Event::PointerMoved(pos),
+					egui::Event::PointerButton {
+						pos,
+						button: egui::PointerButton::Primary,
+						pressed: true,
+						modifiers: egui::Modifiers::NONE,
+					},
+				],
+			);
+			render(
+				&mut mask,
+				vec![egui::Event::PointerButton {
+					pos,
+					button: egui::PointerButton::Primary,
+					pressed: false,
+					modifiers: egui::Modifiers::NONE,
+				}],
+			);
+			assert_eq!(mask, 1);
+		}
+	}
 
-    #[test]
-    fn selecting_across_a_concealed_region_cannot_copy_its_text() {
-        let ctx = egui::Context::default();
-        let parsed = Formatted::parse("A ||private spoiler|| Z");
-        let mut images = crate::avatars::Avatars::default();
-        let mut mask = 0;
-        let mut clock = 0.0;
-        let mut run = |events| {
-            clock += 1.0;
-            ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(700.0, 200.0),
-                    )),
-                    events,
-                    time: Some(clock),
-                    ..Default::default()
-                },
-                |ui| {
-                    parsed.show_references(
-                        ui,
-                        &mut None,
-                        &[],
-                        &mut None,
-                        (&[], &mut None),
-                        (&mut images, false, &mut mask),
-                    )
-                },
-            )
-        };
-        run(vec![]).drop_without_applying_deltas();
-        let output = run(vec![]);
-        let text_rect = |prefix: &str| {
-            output
-                .shapes
-                .iter()
-                .find_map(|shape| {
-                    if let egui::Shape::Text(text) = &shape.shape
-                        && text.galley.text().starts_with(prefix)
-                    {
-                        Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
-                    } else {
-                        None
-                    }
-                })
-                .expect("visible selectable text")
-        };
-        let start = text_rect("A ").left_top() + egui::vec2(0.0, 5.0);
-        let end = text_rect(" Z").right_top() + egui::vec2(0.0, 5.0);
-        output.drop_without_applying_deltas();
-        for events in [
-            vec![
-                egui::Event::PointerMoved(start),
-                egui::Event::PointerButton {
-                    pos: start,
-                    button: egui::PointerButton::Primary,
-                    pressed: true,
-                    modifiers: egui::Modifiers::NONE,
-                },
-            ],
-            vec![egui::Event::PointerMoved(end)],
-            vec![egui::Event::PointerButton {
-                pos: end,
-                button: egui::PointerButton::Primary,
-                pressed: false,
-                modifiers: egui::Modifiers::NONE,
-            }],
-        ] {
-            run(events).drop_without_applying_deltas();
-        }
-        let output = run(vec![egui::Event::Copy]);
-        let copied = output
-            .platform_output
-            .commands
-            .iter()
-            .find_map(|command| match command {
-                egui::OutputCommand::CopyText(text) => Some(text.as_str()),
-                _ => None,
-            })
-            .expect("selected visible text");
-        assert!(
-            copied.contains('A') && copied.contains('Z') && !copied.contains("private spoiler")
-        );
-        output.drop_without_applying_deltas();
-        assert_eq!(mask, 0);
-    }
+	#[test]
+	fn selecting_across_a_concealed_region_cannot_copy_its_text() {
+		let ctx = egui::Context::default();
+		let parsed = Formatted::parse("A ||private spoiler|| Z");
+		let mut images = crate::avatars::Avatars::default();
+		let mut mask = 0;
+		let mut clock = 0.0;
+		let mut run = |events| {
+			clock += 1.0;
+			ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(700.0, 200.0),
+					)),
+					events,
+					time: Some(clock),
+					..Default::default()
+				},
+				|ui| {
+					parsed.show_references(
+						ui,
+						&mut None,
+						&[],
+						&mut None,
+						(&[], &mut None),
+						(&mut images, false, &mut mask),
+					)
+				},
+			)
+		};
+		run(vec![]).drop_without_applying_deltas();
+		let output = run(vec![]);
+		let text_rect = |prefix: &str| {
+			output
+				.shapes
+				.iter()
+				.find_map(|shape| {
+					if let egui::Shape::Text(text) = &shape.shape
+						&& text.galley.text().starts_with(prefix)
+					{
+						Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+					} else {
+						None
+					}
+				})
+				.expect("visible selectable text")
+		};
+		let start = text_rect("A ").left_top() + egui::vec2(0.0, 5.0);
+		let end = text_rect(" Z").right_top() + egui::vec2(0.0, 5.0);
+		output.drop_without_applying_deltas();
+		for events in [
+			vec![
+				egui::Event::PointerMoved(start),
+				egui::Event::PointerButton {
+					pos: start,
+					button: egui::PointerButton::Primary,
+					pressed: true,
+					modifiers: egui::Modifiers::NONE,
+				},
+			],
+			vec![egui::Event::PointerMoved(end)],
+			vec![egui::Event::PointerButton {
+				pos: end,
+				button: egui::PointerButton::Primary,
+				pressed: false,
+				modifiers: egui::Modifiers::NONE,
+			}],
+		] {
+			run(events).drop_without_applying_deltas();
+		}
+		let output = run(vec![egui::Event::Copy]);
+		let copied = output
+			.platform_output
+			.commands
+			.iter()
+			.find_map(|command| match command {
+				egui::OutputCommand::CopyText(text) => Some(text.as_str()),
+				_ => None,
+			})
+			.expect("selected visible text");
+		assert!(
+			copied.contains('A') && copied.contains('Z') && !copied.contains("private spoiler")
+		);
+		output.drop_without_applying_deltas();
+		assert_eq!(mask, 0);
+	}
 
-    #[test]
-    fn channel_references_keep_literals_bounded_and_activate_only_loaded_text_channels() {
-        let parsed = Formatted::parse(
-            "**<#42>** `<#43>` \\<#44> &lt;#45&gt; [<#46>](https://example.com) <#0>\n\n```\n<#47>\n```",
-        );
-        assert_eq!(
-            parsed
-                .spans
-                .iter()
-                .filter_map(|(_, style)| style.channel)
-                .collect::<Vec<_>>(),
-            vec![Id(42)]
-        );
-        assert!(
-            parsed
-                .spans
-                .iter()
-                .any(|(_, style)| style.channel == Some(Id(42)) && style.strong)
-        );
-        for source in ["&lt;#42&gt; <#42>", "&#60;#42&#62; <#42>", "\\<#42> <#42>"] {
-            let parsed = Formatted::parse(source);
-            assert_eq!(
-                parsed
-                    .spans
-                    .iter()
-                    .take_while(|(_, style)| style.channel.is_none())
-                    .map(|(text, _)| text.as_str())
-                    .collect::<String>(),
-                "<#42> "
-            );
-            assert_eq!(
-                parsed
-                    .spans
-                    .iter()
-                    .filter_map(|(_, style)| style.channel)
-                    .collect::<Vec<_>>(),
-                vec![Id(42)]
-            );
-        }
-        let bounded = Formatted::parse(&"<#42> <@43> ".repeat(60));
-        assert_eq!(bounded.mention_count, model::MAX_MENTIONS);
-        assert!(bounded.limited);
-        assert_eq!(
-            bounded
-                .spans
-                .iter()
-                .filter(|(_, style)| style.mention.is_some() || style.channel.is_some())
-                .count(),
-            model::MAX_MENTIONS
-        );
-        let channels: Vec<_> = [
-            (1, 2, Some(Id(9))),
-            (2, 4, Some(Id(9))),
-            (3, 1, None),
-            (4, 0, Some(Id(9))),
-        ]
-        .into_iter()
-        .map(|(id, kind, guild)| model::Channel {
-            id: Id(id),
-            kind,
-            guild,
-            name: "synthetic-text".into(),
-            last_message: None,
-            parent_id: None,
-            position: 0,
-            recipients: vec![],
-            member_list_id: None,
-        })
-        .collect();
-        for id in [1, 2, 3, 4, 5] {
-            let parsed = Formatted::parse(&format!("<#{}>", id));
-            let ctx = egui::Context::default();
-            let mut opening = None;
-            let mut profile = None;
-            let mut channel = None;
-            let mut revealed = u32::MAX;
-            for key in [egui::Key::Tab, egui::Key::Enter] {
-                let mut output = ctx.run_ui(
-                    egui::RawInput {
-                        events: vec![egui::Event::Key {
-                            key,
-                            physical_key: None,
-                            pressed: true,
-                            repeat: false,
-                            modifiers: egui::Modifiers::NONE,
-                        }],
-                        ..Default::default()
-                    },
-                    |ui| {
-                        parsed.show_references(
-                            ui,
-                            &mut opening,
-                            &[],
-                            &mut profile,
-                            (&channels, &mut channel),
-                            (&mut crate::avatars::Avatars::default(), true, &mut revealed),
-                        )
-                    },
-                );
-                assert!(output.platform_output.commands.is_empty());
-                output.textures_delta.clear();
-            }
-            assert_eq!(channel, (id == 4).then_some(Id(4)));
-            assert!(opening.is_none() && profile.is_none());
-        }
-    }
-    #[test]
-    fn selecting_across_images_copies_unicode_and_custom_markup() {
-        let ctx = egui::Context::default();
-        crate::emoji::install(&ctx).unwrap();
-        let source = "A 👩🏽‍💻 ❤️ <:serein_wave:9001> Z";
-        let parsed = Formatted::parse(source);
-        let mut avatars = crate::avatars::Avatars::default();
-        let mut clock = 0.0;
-        let mut run = |events| {
-            clock += 1.0;
-            ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(800.0, 200.0),
-                    )),
-                    events,
-                    time: Some(clock),
-                    ..Default::default()
-                },
-                |ui| parsed.show_with_images(ui, &mut None, &[], &mut None, &mut avatars, true),
-            )
-        };
-        let mut output = run(vec![]);
-        let mut start = egui::Pos2::ZERO;
-        let mut end = egui::Pos2::ZERO;
-        let mut custom_rect = egui::Rect::NOTHING;
-        for shape in &output.shapes {
-            if let egui::Shape::Text(text) = &shape.shape {
-                if text.galley.text() == "A " {
-                    start = text.pos + egui::vec2(0.0, 5.0);
-                }
-                if text.galley.text() == "<:serein_wave:9001>" {
-                    custom_rect = egui::Rect::from_min_size(text.pos, text.galley.size());
-                }
-                if text.galley.text().starts_with(" Z") {
-                    end = text.pos + egui::vec2(text.galley.size().x, 5.0);
-                }
-            }
-        }
-        output.textures_delta.clear();
-        assert!(end.x > start.x);
-        for events in [
-            vec![
-                egui::Event::PointerMoved(start),
-                egui::Event::PointerButton {
-                    pos: start,
-                    button: egui::PointerButton::Primary,
-                    pressed: true,
-                    modifiers: egui::Modifiers::NONE,
-                },
-            ],
-            vec![egui::Event::PointerMoved(end)],
-            vec![egui::Event::PointerButton {
-                pos: end,
-                button: egui::PointerButton::Primary,
-                pressed: false,
-                modifiers: egui::Modifiers::NONE,
-            }],
-        ] {
-            run(events).drop_without_applying_deltas();
-        }
-        let mut output = run(vec![egui::Event::Copy]);
-        output.textures_delta.clear();
-        let copied = output
-            .platform_output
-            .commands
-            .iter()
-            .find_map(|command| match command {
-                egui::OutputCommand::CopyText(text) => Some(text.as_str()),
-                _ => None,
-            });
-        assert_eq!(copied.map(str::trim_end), Some(source));
-        for fraction in [0.25, 0.75] {
-            let start = custom_rect.left_top() + egui::vec2(custom_rect.width() * fraction, 5.0);
-            for events in [
-                vec![
-                    egui::Event::PointerMoved(start),
-                    egui::Event::PointerButton {
-                        pos: start,
-                        button: egui::PointerButton::Primary,
-                        pressed: true,
-                        modifiers: egui::Modifiers::NONE,
-                    },
-                ],
-                vec![egui::Event::PointerMoved(end)],
-                vec![egui::Event::PointerButton {
-                    pos: end,
-                    button: egui::PointerButton::Primary,
-                    pressed: false,
-                    modifiers: egui::Modifiers::NONE,
-                }],
-            ] {
-                run(events).drop_without_applying_deltas();
-            }
-            let mut output = run(vec![egui::Event::Copy]);
-            output.textures_delta.clear();
-            let copied = output
-                .platform_output
-                .commands
-                .iter()
-                .find_map(|command| match command {
-                    egui::OutputCommand::CopyText(text) => Some(text.as_str()),
-                    _ => None,
-                });
-            assert!(
-                matches!(
-                    copied.map(str::trim_end),
-                    Some("<:serein_wave:9001> Z" | " Z")
-                ),
-                "partial emoji copied: {copied:?}"
-            );
-        }
-    }
-    #[test]
-    fn emoji_render_as_whole_images_but_code_and_source_stay_literal() {
-        let ctx = egui::Context::default();
-        crate::emoji::install(&ctx).unwrap();
-        let source = "👩🏽‍💻 `😀` 🇨🇿";
-        let parsed = Formatted::parse(source);
-        assert!(
-            parsed
-                .spans
-                .iter()
-                .any(|(text, style)| style.code && text == "😀")
-        );
-        let output = ctx.run_ui(Default::default(), |ui| {
-            parsed.show(ui, &mut None);
-        });
-        let images = output
-            .shapes
-            .iter()
-            .filter(|shape| {
-                matches!(
-                    &shape.shape, egui::Shape::Rect(rect) if rect.brush.is_some()
-                )
-            })
-            .count();
-        output.drop_without_applying_deltas();
-        assert_eq!(images, 2, "one image per complete grapheme, none in code");
-    }
-    #[test]
-    fn user_mentions_preserve_literals_and_open_native_profiles() {
-        let parsed = Formatted::parse(
-            "Hello **<@42>** <@!42> `<@43>` \\<@44> &lt;@45&gt; [<@46>](https://example.com) <@&47>",
-        );
-        assert_eq!(
-            parsed
-                .spans
-                .iter()
-                .filter_map(|(_, style)| style.mention)
-                .collect::<Vec<_>>(),
-            vec![Id(42), Id(42)]
-        );
-        assert!(
-            parsed
-                .spans
-                .iter()
-                .any(|(_, style)| style.mention == Some(Id(42)) && style.strong)
-        );
-        let parsed = Formatted::parse("<@42>");
-        let ctx = egui::Context::default();
-        let mut profile = None;
-        let mut opening = None;
-        let users = vec![model::User {
-            id: Id(42),
-            name: "Synthetic Robin".into(),
-            avatar: None,
-            discriminator: 0,
-        }];
-        for key in [egui::Key::Tab, egui::Key::Enter] {
-            let mut output = ctx.run_ui(
-                egui::RawInput {
-                    events: vec![egui::Event::Key {
-                        key,
-                        physical_key: None,
-                        pressed: true,
-                        repeat: false,
-                        modifiers: egui::Modifiers::NONE,
-                    }],
-                    ..Default::default()
-                },
-                |ui| parsed.show_mentions(ui, &mut opening, &users, &mut profile),
-            );
-            assert!(output.platform_output.commands.is_empty());
-            output.textures_delta.clear();
-        }
-        assert_eq!(profile.unwrap().name, "Synthetic Robin");
-        assert!(opening.is_none());
-    }
-    #[test]
-    fn inline_links_preserve_markdown_and_activate_their_own_destinations() {
-        let source = "Before [**Markdown** *label*](https://example.com/masked) then (https://example.org/a_(b)). `https://code.test` [https://label.test](javascript:bad)";
-        let parsed = Formatted::parse(source);
-        assert_eq!(
-            parsed.links,
-            ["https://example.com/masked", "https://example.org/a_(b)"]
-        );
-        assert!(
-            parsed
-                .spans
-                .iter()
-                .any(|(s, f)| s == "Markdown" && f.strong && f.link == Some(0))
-        );
-        assert!(
-            parsed
-                .spans
-                .iter()
-                .any(|(s, f)| s == "label" && f.italic && f.link == Some(0))
-        );
-        assert!(
-            parsed
-                .spans
-                .iter()
-                .any(|(s, f)| s == "https://example.org/a_(b)" && f.link == Some(1))
-        );
-        let repeated = Formatted::parse("nothttps://example.org https://example.org");
-        assert_eq!(repeated.spans[0].0, "nothttps://example.org ");
-        assert!(repeated.spans[0].1.link.is_none());
+	#[test]
+	fn channel_references_keep_literals_bounded_and_activate_only_loaded_text_channels() {
+		let parsed = Formatted::parse(
+			"**<#42>** `<#43>` \\<#44> &lt;#45&gt; [<#46>](https://example.com) <#0>\n\n```\n<#47>\n```",
+		);
+		assert_eq!(
+			parsed
+				.spans
+				.iter()
+				.filter_map(|(_, style)| style.channel)
+				.collect::<Vec<_>>(),
+			vec![Id(42)]
+		);
+		assert!(
+			parsed
+				.spans
+				.iter()
+				.any(|(_, style)| style.channel == Some(Id(42)) && style.strong)
+		);
+		for source in ["&lt;#42&gt; <#42>", "&#60;#42&#62; <#42>", "\\<#42> <#42>"] {
+			let parsed = Formatted::parse(source);
+			assert_eq!(
+				parsed
+					.spans
+					.iter()
+					.take_while(|(_, style)| style.channel.is_none())
+					.map(|(text, _)| text.as_str())
+					.collect::<String>(),
+				"<#42> "
+			);
+			assert_eq!(
+				parsed
+					.spans
+					.iter()
+					.filter_map(|(_, style)| style.channel)
+					.collect::<Vec<_>>(),
+				vec![Id(42)]
+			);
+		}
+		let bounded = Formatted::parse(&"<#42> <@43> ".repeat(60));
+		assert_eq!(bounded.mention_count, model::MAX_MENTIONS);
+		assert!(bounded.limited);
+		assert_eq!(
+			bounded
+				.spans
+				.iter()
+				.filter(|(_, style)| style.mention.is_some() || style.channel.is_some())
+				.count(),
+			model::MAX_MENTIONS
+		);
+		let channels: Vec<_> = [
+			(1, 2, Some(Id(9))),
+			(2, 4, Some(Id(9))),
+			(3, 1, None),
+			(4, 0, Some(Id(9))),
+		]
+		.into_iter()
+		.map(|(id, kind, guild)| model::Channel {
+			id: Id(id),
+			kind,
+			guild,
+			name: "synthetic-text".into(),
+			last_message: None,
+			parent_id: None,
+			position: 0,
+			recipients: vec![],
+			member_list_id: None,
+		})
+		.collect();
+		for id in [1, 2, 3, 4, 5] {
+			let parsed = Formatted::parse(&format!("<#{}>", id));
+			let ctx = egui::Context::default();
+			let mut opening = None;
+			let mut profile = None;
+			let mut channel = None;
+			let mut revealed = u32::MAX;
+			for key in [egui::Key::Tab, egui::Key::Enter] {
+				let mut output = ctx.run_ui(
+					egui::RawInput {
+						events: vec![egui::Event::Key {
+							key,
+							physical_key: None,
+							pressed: true,
+							repeat: false,
+							modifiers: egui::Modifiers::NONE,
+						}],
+						..Default::default()
+					},
+					|ui| {
+						parsed.show_references(
+							ui,
+							&mut opening,
+							&[],
+							&mut profile,
+							(&channels, &mut channel),
+							(&mut crate::avatars::Avatars::default(), true, &mut revealed),
+						)
+					},
+				);
+				assert!(output.platform_output.commands.is_empty());
+				output.textures_delta.clear();
+			}
+			assert_eq!(channel, (id == 4).then_some(Id(4)));
+			assert!(opening.is_none() && profile.is_none());
+		}
+	}
+	#[test]
+	fn selecting_across_images_copies_unicode_and_custom_markup() {
+		let ctx = egui::Context::default();
+		crate::emoji::install(&ctx).unwrap();
+		let source = "A 👩🏽‍💻 ❤️ <:serein_wave:9001> Z";
+		let parsed = Formatted::parse(source);
+		let mut avatars = crate::avatars::Avatars::default();
+		let mut clock = 0.0;
+		let mut run = |events| {
+			clock += 1.0;
+			ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(800.0, 200.0),
+					)),
+					events,
+					time: Some(clock),
+					..Default::default()
+				},
+				|ui| parsed.show_with_images(ui, &mut None, &[], &mut None, &mut avatars, true),
+			)
+		};
+		let mut output = run(vec![]);
+		let mut start = egui::Pos2::ZERO;
+		let mut end = egui::Pos2::ZERO;
+		let mut custom_rect = egui::Rect::NOTHING;
+		for shape in &output.shapes {
+			if let egui::Shape::Text(text) = &shape.shape {
+				if text.galley.text() == "A " {
+					start = text.pos + egui::vec2(0.0, 5.0);
+				}
+				if text.galley.text() == "<:serein_wave:9001>" {
+					custom_rect = egui::Rect::from_min_size(text.pos, text.galley.size());
+				}
+				if text.galley.text().starts_with(" Z") {
+					end = text.pos + egui::vec2(text.galley.size().x, 5.0);
+				}
+			}
+		}
+		output.textures_delta.clear();
+		assert!(end.x > start.x);
+		for events in [
+			vec![
+				egui::Event::PointerMoved(start),
+				egui::Event::PointerButton {
+					pos: start,
+					button: egui::PointerButton::Primary,
+					pressed: true,
+					modifiers: egui::Modifiers::NONE,
+				},
+			],
+			vec![egui::Event::PointerMoved(end)],
+			vec![egui::Event::PointerButton {
+				pos: end,
+				button: egui::PointerButton::Primary,
+				pressed: false,
+				modifiers: egui::Modifiers::NONE,
+			}],
+		] {
+			run(events).drop_without_applying_deltas();
+		}
+		let mut output = run(vec![egui::Event::Copy]);
+		output.textures_delta.clear();
+		let copied = output
+			.platform_output
+			.commands
+			.iter()
+			.find_map(|command| match command {
+				egui::OutputCommand::CopyText(text) => Some(text.as_str()),
+				_ => None,
+			});
+		assert_eq!(copied.map(str::trim_end), Some(source));
+		for fraction in [0.25, 0.75] {
+			let start = custom_rect.left_top() + egui::vec2(custom_rect.width() * fraction, 5.0);
+			for events in [
+				vec![
+					egui::Event::PointerMoved(start),
+					egui::Event::PointerButton {
+						pos: start,
+						button: egui::PointerButton::Primary,
+						pressed: true,
+						modifiers: egui::Modifiers::NONE,
+					},
+				],
+				vec![egui::Event::PointerMoved(end)],
+				vec![egui::Event::PointerButton {
+					pos: end,
+					button: egui::PointerButton::Primary,
+					pressed: false,
+					modifiers: egui::Modifiers::NONE,
+				}],
+			] {
+				run(events).drop_without_applying_deltas();
+			}
+			let mut output = run(vec![egui::Event::Copy]);
+			output.textures_delta.clear();
+			let copied = output
+				.platform_output
+				.commands
+				.iter()
+				.find_map(|command| match command {
+					egui::OutputCommand::CopyText(text) => Some(text.as_str()),
+					_ => None,
+				});
+			assert!(
+				matches!(
+					copied.map(str::trim_end),
+					Some("<:serein_wave:9001> Z" | " Z")
+				),
+				"partial emoji copied: {copied:?}"
+			);
+		}
+	}
+	#[test]
+	fn emoji_render_as_whole_images_but_code_and_source_stay_literal() {
+		let ctx = egui::Context::default();
+		crate::emoji::install(&ctx).unwrap();
+		let source = "👩🏽‍💻 `😀` 🇨🇿";
+		let parsed = Formatted::parse(source);
+		assert!(
+			parsed
+				.spans
+				.iter()
+				.any(|(text, style)| style.code && text == "😀")
+		);
+		let output = ctx.run_ui(Default::default(), |ui| {
+			parsed.show(ui, &mut None);
+		});
+		let images = output
+			.shapes
+			.iter()
+			.filter(|shape| {
+				matches!(
+					&shape.shape, egui::Shape::Rect(rect) if rect.brush.is_some()
+				)
+			})
+			.count();
+		output.drop_without_applying_deltas();
+		assert_eq!(images, 2, "one image per complete grapheme, none in code");
+	}
+	#[test]
+	fn user_mentions_preserve_literals_and_open_native_profiles() {
+		let parsed = Formatted::parse(
+			"Hello **<@42>** <@!42> `<@43>` \\<@44> &lt;@45&gt; [<@46>](https://example.com) <@&47>",
+		);
+		assert_eq!(
+			parsed
+				.spans
+				.iter()
+				.filter_map(|(_, style)| style.mention)
+				.collect::<Vec<_>>(),
+			vec![Id(42), Id(42)]
+		);
+		assert!(
+			parsed
+				.spans
+				.iter()
+				.any(|(_, style)| style.mention == Some(Id(42)) && style.strong)
+		);
+		let parsed = Formatted::parse("<@42>");
+		let ctx = egui::Context::default();
+		let mut profile = None;
+		let mut opening = None;
+		let users = vec![model::User {
+			id: Id(42),
+			name: "Synthetic Robin".into(),
+			avatar: None,
+			discriminator: 0,
+		}];
+		for key in [egui::Key::Tab, egui::Key::Enter] {
+			let mut output = ctx.run_ui(
+				egui::RawInput {
+					events: vec![egui::Event::Key {
+						key,
+						physical_key: None,
+						pressed: true,
+						repeat: false,
+						modifiers: egui::Modifiers::NONE,
+					}],
+					..Default::default()
+				},
+				|ui| parsed.show_mentions(ui, &mut opening, &users, &mut profile),
+			);
+			assert!(output.platform_output.commands.is_empty());
+			output.textures_delta.clear();
+		}
+		assert_eq!(profile.unwrap().name, "Synthetic Robin");
+		assert!(opening.is_none());
+	}
+	#[test]
+	fn inline_links_preserve_markdown_and_activate_their_own_destinations() {
+		let source = "Before [**Markdown** *label*](https://example.com/masked) then (https://example.org/a_(b)). `https://code.test` [https://label.test](javascript:bad)";
+		let parsed = Formatted::parse(source);
+		assert_eq!(
+			parsed.links,
+			["https://example.com/masked", "https://example.org/a_(b)"]
+		);
+		assert!(
+			parsed
+				.spans
+				.iter()
+				.any(|(s, f)| s == "Markdown" && f.strong && f.link == Some(0))
+		);
+		assert!(
+			parsed
+				.spans
+				.iter()
+				.any(|(s, f)| s == "label" && f.italic && f.link == Some(0))
+		);
+		assert!(
+			parsed
+				.spans
+				.iter()
+				.any(|(s, f)| s == "https://example.org/a_(b)" && f.link == Some(1))
+		);
+		let repeated = Formatted::parse("nothttps://example.org https://example.org");
+		assert_eq!(repeated.spans[0].0, "nothttps://example.org ");
+		assert!(repeated.spans[0].1.link.is_none());
 
-        let ctx = egui::Context::default();
-        let mut opening = None;
-        let mut render = |events| {
-            let mut output = ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(220.0, 500.0),
-                    )),
-                    events,
-                    ..Default::default()
-                },
-                |ui| parsed.show(ui, &mut opening),
-            );
-            assert!(
-                output.platform_output.commands.is_empty(),
-                "Links must use confirmation, never open while rendering or on first activation"
-            );
-            output.textures_delta.clear();
-            opening.take()
-        };
-        assert!(render(vec![]).is_none());
-        // Native links participate in keyboard focus; each targets its own normalized URL.
-        for target in &parsed.links {
-            assert!(
-                render(vec![egui::Event::Key {
-                    key: egui::Key::Tab,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers: egui::Modifiers::NONE,
-                }])
-                .is_none()
-            );
-            assert_eq!(
-                render(vec![egui::Event::Key {
-                    key: egui::Key::Enter,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers: egui::Modifiers::NONE,
-                }]),
-                Some(target.clone())
-            );
-            render(vec![egui::Event::Key {
-                key: egui::Key::Enter,
-                physical_key: None,
-                pressed: false,
-                repeat: false,
-                modifiers: egui::Modifiers::NONE,
-            }]);
-        }
-    }
-    #[test]
-    fn bounded_formatting_and_inert_external_content() {
-        let parsed = Formatted::parse(
-            "**strong** *em* ~~gone~~ `code`\n> quote\n\n[site](https://example.com/a) ![alt](https://example.com/image) <script>inert</script>",
-        );
-        assert!(parsed.spans.iter().any(|(s, f)| s == "strong" && f.strong));
-        assert!(parsed.spans.iter().any(|(s, f)| s == "em" && f.italic));
-        assert!(parsed.spans.iter().any(|(s, f)| s == "gone" && f.strike));
-        assert!(parsed.spans.iter().any(|(s, f)| s == "code" && f.code));
-        assert_eq!(parsed.links, ["https://example.com/a"]);
-        assert!(parsed.spans.iter().any(|(s, _)| s.contains("<script>")));
-        for unsafe_url in [
-            "javascript:alert(1)",
-            "file:///tmp/test",
-            "data:text/html,x",
-            "https://owner:secret@example.com",
-            "https://example.com\n",
-            "https:\\example.com",
-        ] {
-            assert!(external_url(unsafe_url).is_none());
-        }
-        assert_eq!(
-            external_url("https://例え.jp"),
-            Some("https://xn--r8jz45g.jp/".into())
-        );
-        let deep = Formatted::parse(&format!("{}text", "> ".repeat(100)));
-        assert!(deep.limited && deep.links.is_empty());
-        let huge = Formatted::parse(&"日本語".repeat(10_000));
-        assert!(huge.limited && huge.bytes() < 16 * 1024);
-        assert!(Formatted::parse("||**concealed**||").spoilers);
-        assert_eq!(
-            Formatted::parse("https://example.com/a, `https://example.com/private`").links,
-            ["https://example.com/a"]
-        );
-        let mut cache = FormatCache::default();
-        for id in 0..500 {
-            cache.get(Id(id), &format!("{id} {}", "日本語".repeat(2000)));
-        }
-        assert!(cache.entries.len() <= 64 && cache.bytes <= 1024 * 1024);
-        assert!(cache.get(Id(499), "||changed||").spoilers);
-        cache.retain(|_| false);
-        assert!(cache.entries.is_empty() && cache.bytes == 0);
-    }
+		let ctx = egui::Context::default();
+		let mut opening = None;
+		let mut render = |events| {
+			let mut output = ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(220.0, 500.0),
+					)),
+					events,
+					..Default::default()
+				},
+				|ui| parsed.show(ui, &mut opening),
+			);
+			assert!(
+				output.platform_output.commands.is_empty(),
+				"Links must use confirmation, never open while rendering or on first activation"
+			);
+			output.textures_delta.clear();
+			opening.take()
+		};
+		assert!(render(vec![]).is_none());
+		// Native links participate in keyboard focus; each targets its own normalized URL.
+		for target in &parsed.links {
+			assert!(
+				render(vec![egui::Event::Key {
+					key: egui::Key::Tab,
+					physical_key: None,
+					pressed: true,
+					repeat: false,
+					modifiers: egui::Modifiers::NONE,
+				}])
+				.is_none()
+			);
+			assert_eq!(
+				render(vec![egui::Event::Key {
+					key: egui::Key::Enter,
+					physical_key: None,
+					pressed: true,
+					repeat: false,
+					modifiers: egui::Modifiers::NONE,
+				}]),
+				Some(target.clone())
+			);
+			render(vec![egui::Event::Key {
+				key: egui::Key::Enter,
+				physical_key: None,
+				pressed: false,
+				repeat: false,
+				modifiers: egui::Modifiers::NONE,
+			}]);
+		}
+	}
+	#[test]
+	fn bounded_formatting_and_inert_external_content() {
+		let parsed = Formatted::parse(
+			"**strong** *em* ~~gone~~ `code`\n> quote\n\n[site](https://example.com/a) ![alt](https://example.com/image) <script>inert</script>",
+		);
+		assert!(parsed.spans.iter().any(|(s, f)| s == "strong" && f.strong));
+		assert!(parsed.spans.iter().any(|(s, f)| s == "em" && f.italic));
+		assert!(parsed.spans.iter().any(|(s, f)| s == "gone" && f.strike));
+		assert!(parsed.spans.iter().any(|(s, f)| s == "code" && f.code));
+		assert_eq!(parsed.links, ["https://example.com/a"]);
+		assert!(parsed.spans.iter().any(|(s, _)| s.contains("<script>")));
+		for unsafe_url in [
+			"javascript:alert(1)",
+			"file:///tmp/test",
+			"data:text/html,x",
+			"https://owner:secret@example.com",
+			"https://example.com\n",
+			"https:\\example.com",
+		] {
+			assert!(external_url(unsafe_url).is_none());
+		}
+		assert_eq!(
+			external_url("https://例え.jp"),
+			Some("https://xn--r8jz45g.jp/".into())
+		);
+		let deep = Formatted::parse(&format!("{}text", "> ".repeat(100)));
+		assert!(deep.limited && deep.links.is_empty());
+		let huge = Formatted::parse(&"日本語".repeat(10_000));
+		assert!(huge.limited && huge.bytes() < 16 * 1024);
+		assert!(Formatted::parse("||**concealed**||").spoilers);
+		assert_eq!(
+			Formatted::parse("https://example.com/a, `https://example.com/private`").links,
+			["https://example.com/a"]
+		);
+		let mut cache = FormatCache::default();
+		for id in 0..500 {
+			cache.get(Id(id), &format!("{id} {}", "日本語".repeat(2000)));
+		}
+		assert!(cache.entries.len() <= 64 && cache.bytes <= 1024 * 1024);
+		assert!(cache.get(Id(499), "||changed||").spoilers);
+		cache.retain(|_| false);
+		assert!(cache.entries.is_empty() && cache.bytes == 0);
+	}
 }

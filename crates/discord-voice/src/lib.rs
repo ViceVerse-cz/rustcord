@@ -9,17 +9,17 @@ pub use transport::run;
 pub type Frame = [f32; 960];
 #[derive(Clone, Copy, Default)]
 pub struct Controls {
-    pub muted: bool,
-    pub deafened: bool,
+	pub muted: bool,
+	pub deafened: bool,
 }
 pub enum Status {
-    Connecting,
-    Discovering,
-    TransportReady,
-    Securing,
-    WaitingForPeer,
-    Ready { privacy_code: String },
-    RemoteAudio,
+	Connecting,
+	Discovering,
+	TransportReady,
+	Securing,
+	WaitingForPeer,
+	Ready { privacy_code: String },
+	RemoteAudio,
 }
 
 #[cfg(test)]

@@ -11,7 +11,7 @@ mod signing_key_pair;
 
 pub use aes_gcm::*;
 pub use cryptor::{
-  Codec, DecryptionStats, EncryptionStats, MAX_FRAMES_PER_SECOND, MediaType, OPUS_SILENCE_PACKET,
+	Codec, DecryptionStats, EncryptionStats, MAX_FRAMES_PER_SECOND, MediaType, OPUS_SILENCE_PACKET,
 };
 pub use displayable_code::*;
 pub use fingerprint::*;
