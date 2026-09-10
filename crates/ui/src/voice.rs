@@ -8,6 +8,19 @@ use egui::RichText;
 use model::Id;
 
 impl MessagingUi {
+	fn is_speaking(&self, state: &State, channel: Id, participant: &Participant) -> bool {
+		!participant.muted
+			&& !participant.deafened
+			&& !participant.server_muted
+			&& !participant.server_deafened
+			&& state.voice.active.as_ref().is_some_and(|call| {
+				call.channel == channel
+					&& call.phase == Phase::Connected
+					&& !call.deafened
+					&& !call.server_deafened
+			}) && self.voice_speaking.contains(&participant.user)
+	}
+
 	pub(super) fn voice_channel_button(
 		&mut self,
 		ui: &mut egui::Ui,
@@ -125,12 +138,18 @@ impl MessagingUi {
 				ui.horizontal(|ui| {
 					ui.set_min_height(36.0);
 					ui.spacing_mut().item_spacing.x = 6.0;
-					if let Some(user) = user {
-						if self.avatars.show(ui, user, 28.0, state.demo).clicked() {
-							self.profile = Some(user.clone());
-						}
+					let avatar = if let Some(user) = user {
+						self.avatars.show(ui, user, 28.0, state.demo)
 					} else {
-						design::avatar(ui, name, 28.0);
+						design::avatar(ui, name, 28.0)
+					};
+					if self.is_speaking(state, entry.channel, &entry.participant) {
+						speaking_avatar(ui, &avatar, name);
+					}
+					if avatar.clicked()
+						&& let Some(user) = user
+					{
+						self.profile = Some(user.clone());
 					}
 					ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 						if entry.participant.deafened {
@@ -330,6 +349,15 @@ impl MessagingUi {
 		} else {
 			design::avatar(&mut avatar_ui, name, avatar_size)
 		};
+		if self.is_speaking(state, entry.channel, &entry.participant) {
+			speaking_avatar(ui, &avatar, name);
+			ui.painter().rect_stroke(
+				rect.shrink(1.0),
+				8,
+				egui::Stroke::new(2.0, design::palette(ui).positive),
+				egui::StrokeKind::Inside,
+			);
+		}
 		if avatar.clicked()
 			&& let Some(user) = user
 		{
@@ -544,9 +572,16 @@ impl MessagingUi {
 			ui.label(self.voice_device_status);
 		}
 		ui.separator();
+		ui.label("Echo cancellation · Always on");
+		ui.checkbox(&mut self.voice_noise_suppression, "Noise suppression")
+			.on_hover_text(
+				"Reduces background sounds locally while keeping your voice. Echo cancellation stays on.",
+			);
+		ui.label(RichText::new("Reduces keyboard noise, breathing and fans. Strong wind or distorted audio may still get through.").small());
+		ui.separator();
 		ui.checkbox(&mut self.voice_push_to_talk, "Push to talk");
 		ui.label(RichText::new("Hold V while this window is focused and you are not typing. Mute and deafen always take priority.").small());
-		ui.label(RichText::new("Device choices and levels apply to this session. Microphone capture begins only after you join a secured call.").small());
+		ui.label(RichText::new("Voice settings apply to this session. Microphone capture begins only after you join a secured call.").small());
 	}
 
 	/// Whether the local mute/deafen controls may emit commands for the active call.
@@ -886,6 +921,9 @@ impl MessagingUi {
 							Some(user) => self.avatars.show(&mut row_ui, user, 80.0, state.demo),
 							None => design::avatar(&mut row_ui, name, 80.0),
 						};
+						if self.is_speaking(state, channel, participant) {
+							speaking_avatar(&row_ui, &avatar, name);
+						}
 						let badge_icon = if participant.deafened {
 							Some(crate::icons::Icon::HeadphonesSlash)
 						} else if participant.muted {
@@ -1160,6 +1198,32 @@ const STAGE_TEXT: egui::Color32 = egui::Color32::from_rgb(0xdb, 0xde, 0xe1);
 const STAGE_MUTED: egui::Color32 = egui::Color32::from_rgb(0x9a, 0x9b, 0xa1);
 const STAGE_MARGIN: f32 = 16.0;
 const TILE_GAP: f32 = 8.0;
+
+/// Ring plus sound glyph keeps activity legible without relying on color alone.
+fn speaking_avatar(ui: &egui::Ui, avatar: &egui::Response, name: &str) {
+	let colors = design::palette(ui);
+	ui.painter().circle_stroke(
+		avatar.rect.center(),
+		avatar.rect.width() * 0.5 + 2.0,
+		egui::Stroke::new(2.0, colors.positive),
+	);
+	let size = (avatar.rect.width() * 0.3).clamp(10.0, 18.0);
+	let badge = egui::Rect::from_center_size(
+		avatar.rect.right_bottom() - egui::Vec2::splat(size * 0.4),
+		egui::Vec2::splat(size),
+	);
+	ui.painter()
+		.circle_filled(badge.center(), size * 0.65, colors.raised);
+	crate::icons::paint(
+		ui.painter(),
+		crate::icons::Icon::Speaker,
+		badge,
+		colors.positive,
+	);
+	let label = format!("{name} · Speaking");
+	avatar.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Image, true, &label));
+	avatar.clone().on_hover_text(label);
+}
 
 fn stage_notices(ui: &mut egui::Ui, notices: &[(String, bool)]) {
 	ui.spacing_mut().item_spacing.y = 2.0;

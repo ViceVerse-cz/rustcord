@@ -204,6 +204,11 @@ async fn run_inner(
 	tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
 	let mut signal_window = Instant::now();
 	let mut signal_count = 0u16;
+	let mut capture_pacer = crate::capture::CapturePacer::default();
+	let mut capture_at = Instant::now();
+	let mut local_activity = 0;
+	let mut last_speakers = [0; 64];
+	let mut speakers_at = Instant::now();
 	loop {
 		tokio::select! {
 			changed=controls.changed()=>{ if changed.is_err(){return Ok(());} },
@@ -227,9 +232,14 @@ async fn run_inner(
 					emit(Status::Ready{privacy_code:dave.session.voice_privacy_code().unwrap_or_default().into()}).map_err(|_|"Call interface closed")?;
 				}
 				let control=*controls.borrow();
-				let mut latest=None;
-				// A delayed tick never transmits a burst of stale microphone audio.
-				for _ in 0..8 {match capture.try_recv(){Ok(frame)=>latest=Some(frame),Err(_)=>break}}
+				// Preserve ordinary callback batches. Only a real stall (four packet
+				// intervals) discards queued speech; mute/security gates always flush.
+				let stalled=now.duration_since(capture_at)>=Duration::from_millis(80);
+				capture_at=now;
+				let latest=capture_pacer.next(&capture,enabled && !control.muted && !control.deafened,stalled);
+				local_activity=if enabled && !control.muted && !control.deafened && !stalled {
+					crate::activity::hold(latest.as_ref().map_or(0.0, |frame| frame.iter().filter(|s| s.is_finite()).map(|s| s*s).sum()),local_activity)
+				} else {0};
 				let active=enabled && !control.muted && !control.deafened && latest.is_some();
 				if active && !speaking {json_send(&mut ws,json!({"op":5,"d":{"speaking":1,"delay":0,"ssrc":ssrc}})).await?;speaking=true;}
 				if !active && speaking && silence==0 {silence=5;}
@@ -253,6 +263,16 @@ async fn run_inner(
 					if let Some(frame)=frame {let _=playback.try_send(frame);}
 					if !heard && remote_audio {heard=true;emit(Status::RemoteAudio).map_err(|_|"Call interface closed")?;}
 				} else {mixer.clear();}
+				if now >= speakers_at {
+					let mut users=[0;64];
+					users[0]=if local_activity>0 {credentials.user.0} else {0};
+					for (slot,user) in users[1..].iter_mut().zip(mixer.speaking()) {*slot=user;}
+					if users != last_speakers {
+						emit(Status::Speaking(Box::new(users))).map_err(|_|"Call interface closed")?;
+						last_speakers=users;
+					}
+					speakers_at=now+Duration::from_millis(100);
+				}
 			},
 			result=async {match &udp {Some(socket)=>socket.recv(&mut packet).await,None=>std::future::pending().await}}=>{
 				let length=result.map_err(|_|"Voice UDP receive failed")?;
@@ -761,7 +781,8 @@ mod tests {
 					Status::Connecting
 					| Status::Discovering
 					| Status::Securing
-					| Status::TransportReady => {}
+					| Status::TransportReady
+					| Status::Speaking(_) => {}
 				}
 				if ready == 2 && heard {
 					assert_eq!(waiting, guild);

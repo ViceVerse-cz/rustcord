@@ -10,6 +10,7 @@ struct Speaker {
 	pcm: Box<[f32; 5760]>,
 	offset: usize,
 	length: usize,
+	activity: u8,
 }
 #[derive(Default)]
 pub(crate) struct Mixer {
@@ -44,6 +45,7 @@ impl Mixer {
 			pcm: Box::new([0.0; 5760]),
 			offset: 0,
 			length: 0,
+			activity: 0,
 		});
 		Ok(())
 	}
@@ -67,7 +69,14 @@ impl Mixer {
 			speaker.pcm.fill(0.0);
 			speaker.offset = 0;
 			speaker.length = 0;
+			speaker.activity = 0;
 		}
+	}
+	pub fn speaking(&self) -> impl Iterator<Item = u64> + '_ {
+		self.speakers
+			.iter()
+			.filter(|s| s.activity > 0)
+			.map(|s| s.user)
 	}
 	/// Mix one 20ms frame, preserving up to 120ms packets without bursting playback queues.
 	pub fn pop(&mut self) -> (Option<Frame>, bool) {
@@ -75,6 +84,7 @@ impl Mixer {
 		let mut active = false;
 		let mut heard = false;
 		for speaker in &mut self.speakers {
+			let mut energy = 0.0;
 			let mut filled = 0;
 			let mut decoded = 0;
 			while filled < output.len() {
@@ -115,12 +125,14 @@ impl Mixer {
 				{
 					if sample.is_finite() {
 						*mixed += sample;
+						energy += sample * sample;
 					}
 				}
 				speaker.offset += count;
 				filled += count;
 				active |= count != 0;
 			}
+			speaker.activity = crate::activity::hold(energy, speaker.activity);
 		}
 		// ponytail: hard limiting bounds simultaneous speakers; add a soft limiter if clipping is audible.
 		output

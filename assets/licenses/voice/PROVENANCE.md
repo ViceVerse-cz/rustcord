@@ -42,3 +42,34 @@ Vendored hpke-rs 0.6.1 followup: the [release-pinned manifest](https://raw.githu
 - `keccak-LICENSE-MIT`: unmodified from crates.io keccak 0.1.6 / `LICENSE-MIT`; SHA-256 `bdebaf9156a298f8fdab56dd26cb5144673de522d80f4c0d88e0039145f147f9`.
 - `sha3-LICENSE-APACHE`: unmodified from crates.io sha3 0.10.9 / `LICENSE-APACHE`; SHA-256 `a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5`.
 - `sha3-LICENSE-MIT`: unmodified from crates.io sha3 0.10.9 / `LICENSE-MIT`; SHA-256 `f18f6229547ab07f0b7b3e1f83acad8bb436f5f4c95a8a98b44f876caa00f04e`.
+
+Sonora 0.2.0 and its sonora-aec3, sonora-agc2, sonora-common-audio, sonora-fft,
+sonora-ns and sonora-simd 0.2.0 components belong to the BSD-3-Clause licensed
+Sonora workspace. Its license is retained as `sonora-LICENSE.txt`, copied
+unmodified from [the sonora 0.2.0 registry archive](https://docs.rs/crate/sonora/0.2.0/source/LICENSE).
+The component archives omit a root license file; their VCS metadata points to
+[the shared workspace](https://github.com/dignifiedquire/sonora/tree/a024d6ef8351add55be5e8b1d6cc35f555787660).
+SHA-256: `d130affc26760004865ad4fb009f8daf7f6d4b1b738f01fb7623e99c1a275a4a`.
+
+## RNNoise noise suppression — September 11, 2026
+
+Unmodified license and notice files from the pinned registry packages. The anymap3 COPYING notice offers a choice of licenses. Realfft 3.5.0 declares MIT, but its registry archive and pinned upstream tree (`d0d4eee0525fd27c96c8a046d6d107acd5ed84a6`) omit the license text; its complete redistribution notice remains part of the existing per-artifact release review.
+
+| File | Exact source | SHA-256 |
+|---|---|---|
+| nnnoiseless-COPYING.txt | [registry source](https://docs.rs/crate/nnnoiseless/0.5.2/source/COPYING) | `26e8aae6fb3622e281d8d99aa7ba0df8ef3a83465d8717f2e4cacbcbed8efc92` |
+| easyfft-LICENSE-APACHE.txt | [registry source](https://docs.rs/crate/easyfft/0.4.2/source/LICENSE-APACHE) | `c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08` |
+| easyfft-LICENSE-MIT.txt | [registry source](https://docs.rs/crate/easyfft/0.4.2/source/LICENSE-MIT) | `cb22dce3ea93e49e43b70059c193184e27612526591db29a4cd95a369a2a5645` |
+| anymap3-COPYING.txt | [registry source](https://docs.rs/crate/anymap3/1.1.0/source/COPYING) | `cce3eaac7d45535f0c5421e1a7330933e816265e766f4a94f20442de9da548df` |
+| array-init-LICENSE-APACHE.txt | [registry source](https://docs.rs/crate/array-init/2.1.0/source/LICENSE-APACHE) | `c8d9a0d15dd76ca3bf277b6bf6da56799e266eac60bdc321a97ebc6d76d5153c` |
+| array-init-LICENSE-MIT.txt | [registry source](https://docs.rs/crate/array-init/2.1.0/source/LICENSE-MIT) | `e27fb2953c088c71285a4f2f54a0ac53323460ee7c2b1b838d563bd2687a38af` |
+| generic_singleton-LICENSE-APACHE.txt | [registry source](https://docs.rs/crate/generic_singleton/0.5.3/source/LICENSE-APACHE) | `c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08` |
+| generic_singleton-LICENSE-MIT.txt | [registry source](https://docs.rs/crate/generic_singleton/0.5.3/source/LICENSE-MIT) | `cb22dce3ea93e49e43b70059c193184e27612526591db29a4cd95a369a2a5645` |
+| primal-check-LICENSE-APACHE.txt | [registry source](https://docs.rs/crate/primal-check/0.3.4/source/LICENSE-APACHE) | `a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2` |
+| primal-check-LICENSE-MIT.txt | [registry source](https://docs.rs/crate/primal-check/0.3.4/source/LICENSE-MIT) | `6d3a9431e65e69c73a8923e6517b889d17549b23db406b9ec027710d16af701f` |
+| rustfft-LICENSE-APACHE.txt | [registry source](https://docs.rs/crate/rustfft/6.4.1/source/LICENSE-APACHE) | `2e54cd84a645bea25943c75dd8ae67cb291e66a47a11578333c9b4b3b6b86c85` |
+| rustfft-LICENSE-MIT.txt | [registry source](https://docs.rs/crate/rustfft/6.4.1/source/LICENSE-MIT) | `8f5442dfa8e9169045697e386bc91d19f393c939635741fa2a665ec36ca6f0ad` |
+| strength_reduce-LICENSE-APACHE.txt | [registry source](https://docs.rs/crate/strength_reduce/0.2.4/source/LICENSE-APACHE) | `2e54cd84a645bea25943c75dd8ae67cb291e66a47a11578333c9b4b3b6b86c85` |
+| strength_reduce-LICENSE-MIT.txt | [registry source](https://docs.rs/crate/strength_reduce/0.2.4/source/LICENSE-MIT) | `8f5442dfa8e9169045697e386bc91d19f393c939635741fa2a665ec36ca6f0ad` |
+| transpose-LICENSE-APACHE.txt | [registry source](https://docs.rs/crate/transpose/0.2.3/source/LICENSE-APACHE) | `8797ef61538ec5ee9222ebef7ca4e0f3ec5761b145ca9943d358c450efb644dd` |
+| transpose-LICENSE-MIT.txt | [registry source](https://docs.rs/crate/transpose/0.2.3/source/LICENSE-MIT) | `5080149357fd0be590bdc10cf92165412bb4d61ce496284d56f2d12874ae3121` |

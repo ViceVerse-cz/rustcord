@@ -75,3 +75,26 @@ as `licenses/Unicode-LICENSE.txt`. Custom server emoji are service content fetch
 not redistributed in this repository; demo custom images are original synthetic shapes.
 
 Native system notifications use **notify-rust 4.18.0** (MIT OR Apache-2.0), with the opt-in modern macOS UserNotifications backend **mac-usernotifications 0.3.1** (MIT OR Apache-2.0). Its manifest also links **mac-notification-sys 0.6.15** (MIT/Apache-2.0), although the legacy notification backend is not selected. Additional host dependencies include **futures-timer 3.0.4** (MIT/Apache-2.0) and **objc2-core-location / objc2-user-notifications 0.3.2** (Zlib OR Apache-2.0 OR MIT). The notification adapters’ unmodified MIT texts, objc2’s upstream licensing notice and pinned source provenance are in [assets/licenses/notifications](assets/licenses/notifications). Linux uses the existing zbus dependency family; Windows uses **tauri-winrt-notification 0.7.3** and **windows 0.61.3** (MIT OR Apache-2.0). OS notification services/frameworks retain their platform terms. Notifications carry only generic Serein text; server content is not bundled in these assets.
+
+Optional voice echo cancellation uses **Sonora 0.2.0**, a Rust port of WebRTC
+AEC3, and its sonora-aec3/agc2/common-audio/fft/ns/simd 0.2.0 components
+(BSD-3-Clause, WebRTC Project Authors, Arun Raghavan and contributors, and
+dignifiedquire). The unmodified workspace license is
+`assets/licenses/voice/sonora-LICENSE.txt`, staged by existing voice packaging.
+Krisp is not bundled. No extra native SDK or model download is required.
+Sonora noise suppression and AGC are not enabled by this integration.
+
+The macOS voice permission adapter additionally uses **objc2-av-foundation
+0.3.2** (Zlib OR Apache-2.0 OR MIT) and existing objc2 0.6.4 / block2 0.6.2.
+The objc2 upstream licensing notice already retained under
+`assets/licenses/notifications` covers these generated framework bindings.
+AVFoundation is supplied by macOS and is not redistributed.
+
+Optional microphone noise suppression uses **nnnoiseless 0.5.2**, a Rust port of
+Xiph RNNoise, with the built-in model (BSD-3-Clause). Its original COPYING is
+`assets/licenses/voice/nnnoiseless-COPYING.txt`. Default crate features are disabled.
+New support crates are easyfft 0.4.2, anymap3 1.1.0, array-init 2.1.0,
+generic_singleton 0.5.3, primal-check 0.3.4, realfft 3.5.0, rustfft 6.4.1,
+strength_reduce 0.2.4 and transpose 0.2.3. Their license declarations and retained
+texts/notices are recorded in docs/dependency-versions.md and
+assets/licenses/voice/PROVENANCE.md and staged by the existing voice packager.

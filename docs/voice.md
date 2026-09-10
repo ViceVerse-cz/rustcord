@@ -27,7 +27,7 @@ Reset levels, mute/deafen/PTT precedence and changing devices while custom level
 
 Start calls the selected existing DM; incoming calls require Answer or Decline. One active call is retained while navigating text conversations. Start rings once after Discord voice transport allocation is confirmed; Answer never rings. Required DAVE group readiness and native device readiness precede the connected-audio state. An allocation with no endpoint waits within the deadline; incompatible states fail visibly. Hangup closes local audio immediately and sends departure; another call waits for the service's departure acknowledgment. No uncertain ring write or failed main Gateway session automatically starts another call.
 
-Mute/deafen, session-local input/output selection and focused V push-to-talk are implemented. Push-to-talk releases when focus is lost and is disabled while text entry has focus. It is not a global hotkey. Devices are initialized only following an explicit call and encrypted readiness; no microphone test runs at startup. Headphones are recommended because acoustic echo cancellation is absent. Device loss requires selecting a usable device and calling again; there is no automatic device fallback.
+Mute/deafen, session-local input/output selection and focused V push-to-talk are implemented. Push-to-talk releases when focus is lost and is disabled while text entry has focus. It is not a global hotkey. Devices are initialized only following an explicit call and encrypted readiness; no microphone test runs at startup. Acoustic echo cancellation is enabled automatically; see below for its limits. Device loss requires selecting a usable device and calling again; there is no automatic device fallback.
 
 DM calls accept only their expected peer. Server calls support up to 64 total participants, with independent bounded decoder/jitter state and mixed mono playback. Only DAVE version 1 is accepted; encryption downgrades and group identities outside the authenticated participant roster fail closed. Group DMs, Stage channels, recording, video and screen sharing are unsupported. Voice WebSocket resumption has a finite retry budget; failed resumption or main Gateway disconnect requires an explicit new call. Voice credentials, ephemeral DAVE identities and audio stay in bounded session memory. The displayed privacy code applies to the current group epoch; identities are not remembered across calls. Comparing codes does not establish long-term identity verification or text-message encryption.
 
@@ -114,3 +114,75 @@ restarting Serein. The watchdog cannot forcibly cancel an operating-system drive
 The outgoing DAVE key-package encoding was corrected to match reference implementations; see
 [the adapter's source comparison](../crates/discord-voice/README.md#key-package-interoperability-correction).
 Actual two-way audio still requires the owner-operated test above.
+
+## Acoustic echo cancellation
+
+The voice build automatically runs Sonora 0.2.0 (a Rust port of WebRTC AEC3) on
+the audio worker, before microphone gain and Opus encoding. It uses mixed
+speaker output after software volume and resampling, including silence on
+underrun/deafen, as the echo reference. Devices and encryption changes recreate
+the processor; mute transitions and dropped callback frames reset its history.
+No settings, SDK account, model downloads or additional device access are needed.
+Echo cancellation stays enabled independently of optional noise suppression.
+Automatic gain control is off. Krisp SDK embedding requires a
+[commercial license](https://sdk-docs.krisp.ai/docs/licensing-information).
+
+The device-free debug command is `cargo run --locked -p discord-voice --example echo`.
+It checks synthetic delayed/reflected echo reduction and preservation of a local
+signal. It does not establish real-room quality or Discord interoperability.
+AEC needs time to adapt after resets. Bluetooth latency, separate device clocks,
+very loud/clipped speakers, simultaneous speech and non-48 kHz hardware need
+owner-operated listening checks. The existing linear resampling fallback remains.
+
+## macOS microphone permission
+
+Before opening a microphone for an explicitly joined, secured call, Serein checks
+AVFoundation authorization and requests access if undecided. Denied/restricted
+access produces a visible error directing the owner to System Settings > Privacy
+& Security > Microphone. The worker waits at most 20 seconds, checks call/device
+cancellation while waiting, and never opens input after an obsolete grant.
+Listen-only calls do not request microphone access. Windows/Linux are unchanged.
+
+Voice-enabled macOS executables embed the same Info.plist used by the packaged
+app, including NSMicrophoneUsageDescription, so cargo-run builds also supply the
+required explanation. Terminal-launched builds can have permission attributed to
+the launching terminal; an existing denial must be changed by the owner in macOS
+settings. Restart a rebuilt app before retrying. Actual prompt/capture behavior
+still requires the owner-operated check; a successful build is not that check.
+
+## Microphone packet pacing
+
+Outgoing audio preserves callback batches in order instead of retaining only
+the newest frame each network tick. One 20 ms lookahead frame smooths normal
+callback/worker scheduling variation. Mute, deafen, encryption pauses and a
+transport stall of at least 80 ms discard queued capture rather than replaying
+stale speech. The existing eight-frame capture channel plus lookahead retains
+at most nine frames (34,560 PCM bytes). This adds 20 ms of intentional buffering.
+The offline echo example also checks alternating two-frame/no-frame arrivals
+and mute/stall flushing; physical cutout resolution still needs a listening check.
+
+Speaking indicators use post-processing outgoing microphone audio and each remote
+participant's decoded playout audio. A display-only −45 dBFS level threshold with
+200 ms release lights the avatar ring and sound glyph in DM calls, guild tiles,
+and the channel roster. This detects sound, not speech, and never gates packets.
+Activity snapshots contain at most 64 IDs (512 bytes), update at most ten times per
+second, and replace the previous value rather than queueing UI events. Mute,
+deafen, permission and call lifecycle gates hide ineligible activity.
+
+## Optional noise suppression
+
+Voice settings → Noise suppression enables the bundled nnnoiseless 0.5.2 RNNoise
+model, off by default and session-local like the other audio settings. Processing
+runs locally after AEC and before input gain/Opus, in 480-sample mono 48 kHz blocks.
+The signed-i16 float scale is converted at this boundary. Its fixed model/history
+and 10 ms overlap add no growing queue, file recording, network service or download.
+Only the microphone is denoised; playback remains unchanged. Toggling replaces or
+drops the worker-owned denoiser without reopening devices or resetting AEC.
+Mute/device/security resets discard denoiser history with AEC history.
+
+This reduces background noise rather than guaranteeing voice-only output. Typing,
+breathing, strong wind and clipping require owner listening checks; another human
+voice may remain audible. There is no extra hard speech gate to cut quiet syllables.
+The offline echo example checks synthetic hiss/click reduction, retention of a
+synthetic voiced vowel, finite output and exact AEC-only behavior after disabling
+suppression. These signals do not establish Krisp-equivalent real-world quality.

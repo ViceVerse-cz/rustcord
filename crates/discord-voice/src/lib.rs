@@ -1,5 +1,7 @@
 //! Discord DM and guild voice media. No bot manager, relay, recording, or key persistence.
+mod activity;
 pub mod audio;
+mod capture;
 mod crypto;
 mod jitter;
 mod mixer;
@@ -18,8 +20,12 @@ pub enum Status {
 	TransportReady,
 	Securing,
 	WaitingForPeer,
-	Ready { privacy_code: String },
+	Ready {
+		privacy_code: String,
+	},
 	RemoteAudio,
+	/// Latest active user IDs, zero-padded to the 64-participant limit.
+	Speaking(Box<[u64; 64]>),
 }
 
 #[cfg(test)]

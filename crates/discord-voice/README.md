@@ -15,16 +15,15 @@ Budgets: 64 KiB voice WebSocket frames/messages; 4 KiB UDP receive limit; 1,275-
 
 `cargo test -p discord-voice --lib` uses synthetic keys and local sockets only. It exercises real MLS group creation, DAVE encryption/decryption and tamper/replay rejection; RTP authentication/truncation/nonce exhaustion; Opus encode/decode; bounded reorder/loss handling; and the actual voice event loop through local WebSocket + UDP discovery and two-way encrypted audio, followed by socket resumption. The three-party tests cover join/removal, post-removal decryption rejection, independent SSRC decoder state, simultaneous mixing, empty-room waiting, guild Identify/Resume IDs, and media resumption. The audio module separately tests its device-free resampling and capture gates. `cargo test --locked -p discord-voice --release synthetic_mix_workload -- --ignored --nocapture` measures device-free 1/8/63-speaker decoding/mixing (one warmup and five 1,000-tick runs); it does not measure live audio, callback latency or process RSS. A test-only path module checks the exact vendored HPKE SHAKE adapter against independent 32/64-byte output vectors.
 
-These tests do not establish Discord compatibility or microphone/speaker quality. Actual two-way audio with an official Discord client remains an owner-operated live gate. No hardware audio access is performed by default tests. Receive streams mix into one 20 ms playback frame with hard clipping to the valid sample range; this is not an automatic gain controller. This implementation has fixed jitter buffering, no acoustic echo cancellation, no automatic device fallback, and no globally captured push-to-talk. Use headphones for live validation. Windows/Linux audio and macOS microphone permission remain unverified until explicitly exercised on those systems.
+These tests do not establish Discord compatibility or microphone/speaker quality. Actual two-way audio with an official Discord client remains an owner-operated live gate. No hardware audio access is performed by default tests. Receive streams mix into one 20 ms playback frame with hard clipping to the valid sample range; this is not an automatic gain controller. This implementation has fixed jitter buffering, automatic AEC3 echo cancellation, no automatic device fallback, and no globally captured push-to-talk. Use headphones for live validation. Windows/Linux audio and macOS microphone permission remain unverified until explicitly exercised on those systems.
 
 The HPKE dependency has a small [source security backport](../../vendor/hpke-rs/SEREIN-PATCH.md) replacing its affected SHAKE dependency with RustCrypto sha3. All modified MPL-2.0 component source ships in voice packages. Current dependency findings and remediation are recorded in [the audit](../../docs/dependency-audit.md).
 
 `Audio::set_gain(input_percent, output_percent)` adjusts session-only software levels without
 opening/restarting devices. Values are clamped to 0..=200%, with 100% defaults. Two integer
-atomics survive device replacement; each callback reads its relevant gain once. Capture gain
-is applied before resampling/enqueue, playback gain after resampling and mixing. Finite samples
-are clipped to [-1, 1]; invalid PCM becomes silence. No callback allocations, locks, queues or
-codec/protocol changes are added. Already-captured resampler endpoints and queued frames keep
+atomics survive device replacement. Capture gain is applied on the worker after AEC;
+playback gain is read by the callback and applied after resampling and mixing. Finite samples
+are clipped to [-1, 1]; invalid PCM becomes silence. Callbacks retain preallocated lock-free rings; codec/protocol behavior is unchanged. Already-captured resampler endpoints and queued frames keep
 their existing latency; gain is not a privacy substitute for mute/deafen. Existing gates reset
 the callback buffers. Synthetic helper tests exercise the same processing used by CPAL, without
 constructing a host/device/stream. Physical audio quality and real-time timing remain unverified.
@@ -52,3 +51,37 @@ MLSMessage wrapper. We follow those implementation paths here; the previous extr
 also appeared in our test server's assumed format. The fixture now independently deserializes
 and cryptographically validates a raw KeyPackage. This resolves a reference-format mismatch,
 but does not prove that the owner's live no-audio report is resolved.
+
+AEC uses Sonora 0.2.0 with its default adaptive delay estimator and high-pass filter,
+in two 10 ms blocks per 20 ms mono frame. AGC remains off; optional RNNoise suppression follows AEC.
+The rendered-reference ring holds eight frames (30,720 PCM bytes / 160 ms), in
+addition to existing input/output rings. A single worker owns the processor;
+its fixed mono/rate configuration bounds internal filter/render history. Full
+callback rings discard new frames and signal a worker reset/drain; no growing
+queue or AEC processing runs in CPAL callbacks. Mute/deafen transitions discard processor
+history without reopening devices. New device/security revisions recreate it.
+The offline debug example uses the same AEC wrapper as the worker. Hardware
+delay, long-term clock drift and echo quality remain unverified.
+
+macOS microphone authorization uses a small isolated Objective-C boundary in
+`src/audio/permission_macos.rs`. Only that module permits unsafe code; the rest
+of this crate denies it. The two AVFoundation class calls use the framework audio
+media constant and an owned completion block with a one-item result channel.
+Authorization runs on the device worker, before input creation; no callback or
+render-thread blocking and no camera/system-audio permissions are requested.
+The completion handler cannot open devices; the worker rechecks the active
+revision after permission is granted.
+
+Outgoing capture is paced FIFO with one 20 ms lookahead frame. Callback batches
+are preserved during ordinary ticks; the previous drain-to-latest policy could
+drop valid speech. The channel stays capped at eight frames, plus one lookahead
+frame (34,560 PCM bytes combined). Mute/security gates and gaps of at least 80 ms
+between transport ticks flush it. `cargo run --locked -p discord-voice --example echo`
+checks batched capture continuity and gate/stall flushing alongside synthetic AEC.
+
+Noise suppression is an independent, session-local toggle (default off), using
+nnnoiseless 0.5.2 with its bundled model and no default crate features. One
+worker-owned denoiser consumes the existing 10 ms AEC output blocks before gain
+and Opus. It does not gate packets or reset AEC when toggled. The offline echo
+example covers synthetic noise reduction, voiced-signal retention and bypass;
+actual keyboard/breath/wind rejection still requires owner-operated listening.

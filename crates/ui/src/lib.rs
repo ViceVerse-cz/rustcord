@@ -90,8 +90,11 @@ pub struct MessagingUi {
 	pub voice_refresh_devices: bool,
 	pub voice_device_status: &'static str,
 	pub voice_push_to_talk: bool,
+	pub voice_noise_suppression: bool,
 	pub voice_ptt_active: bool,
 	pub voice_privacy_code: Option<String>,
+	/// Latest media activity, capped at 64 IDs (512 bytes) by the voice host.
+	pub voice_speaking: Vec<Id>,
 	pub notifications_enabled: bool,
 	pub notification_test_available: bool,
 	pub notification_test_requested: bool,

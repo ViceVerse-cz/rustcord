@@ -78,6 +78,7 @@ struct Live {
 	audio: Audio,
 	controls: watch::Sender<Controls>,
 	events: mpsc::Receiver<Notice>,
+	speakers: watch::Receiver<[u64; 64]>,
 	task: JoinHandle<()>,
 	devices: Devices,
 	device_deadline: Option<Instant>,
@@ -250,6 +251,7 @@ impl Voice {
 		ctx: &egui::Context,
 	) -> Option<Command> {
 		self.reap();
+		ui.voice_speaking.clear();
 		if ui.voice_refresh_devices {
 			ui.voice_refresh_devices = false;
 			if !state.demo && self.device_scan.is_none() {
@@ -360,6 +362,7 @@ impl Voice {
 				) || call.server_muted
 				|| deafened || (ui.voice_push_to_talk && !ui.voice_ptt_active);
 			live.audio.set_controls(muted, deafened);
+			live.audio.set_noise_suppression(ui.voice_noise_suppression);
 			live.audio.set_input_enabled(state.can_speak(call.channel));
 			live.audio
 				.set_gain(ui.voice_gain.input_percent, ui.voice_gain.output_percent);
@@ -462,6 +465,27 @@ impl Voice {
 				failure = Some("Voice connection ended; start a new call explicitly");
 			}
 		}
+		if failure.is_none()
+			&& let Some(live) = &self.live
+			&& let Some(call) = &state.voice.active
+			&& call.phase == Phase::Connected
+			&& !call.deafened
+			&& !call.server_deafened
+		{
+			let controls = *live.controls.borrow();
+			ui.voice_speaking.extend(
+				live.speakers
+					.borrow()
+					.iter()
+					.copied()
+					.filter(|user| {
+						*user != 0
+							&& !(controls.muted
+								&& state.user.as_ref().is_some_and(|own| own.id.0 == *user))
+					})
+					.map(Id),
+			);
+		}
 		if let Some(error) = failure {
 			self.fail(state, error)
 		} else {
@@ -480,6 +504,7 @@ impl Voice {
 		let (capture_send, capture) = mpsc::sync_channel(8);
 		let (playback, playback_receive) = mpsc::sync_channel(8);
 		let (send, events) = mpsc::sync_channel(8);
+		let (speaking, speakers) = watch::channel([0; 64]);
 		let audio_send = send.clone();
 		let wake = ctx.clone();
 		let devices = Devices {
@@ -504,6 +529,7 @@ impl Voice {
 		});
 		audio.set_controls(listen_only || ui.voice_push_to_talk, false);
 		audio.set_input_enabled(input_enabled);
+		audio.set_noise_suppression(ui.voice_noise_suppression);
 		audio.set_gain(ui.voice_gain.input_percent, ui.voice_gain.output_percent);
 		let session = pending.session.ok_or("Missing voice session")?;
 		let session_copy = Zeroizing::new(session.expose().to_owned());
@@ -541,6 +567,11 @@ impl Voice {
 							Notice::MediaReady(privacy_code)
 						}
 						Status::RemoteAudio => Notice::RemoteAudio,
+						Status::Speaking(users) => {
+							speaking.send_replace(*users);
+							status_wake.request_repaint();
+							return Ok(());
+						}
 					};
 					status.try_send(notice).map_err(|_| ())?;
 					status_wake.request_repaint();
@@ -562,6 +593,7 @@ impl Voice {
 			audio,
 			controls,
 			events,
+			speakers,
 			task,
 			devices,
 			device_deadline: None,

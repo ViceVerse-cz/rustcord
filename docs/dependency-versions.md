@@ -493,3 +493,38 @@ optional voice, now supplies attachment output in the default build as well. It 
 not initialize devices until Play. DAVE/Opus/microphone integration remains optional.
 Exact unmodified Symphonia source archives and license provenance ship in
 `licenses/audio`; Linux runtime library dependencies are derived by dpkg-shlibdeps.
+
+## Voice AEC addition — September 11, 2026
+
+The optional discord-voice dependency adds sonora 0.2.0 with default features
+disabled, plus sonora-aec3, sonora-agc2, sonora-common-audio, sonora-fft,
+sonora-ns and sonora-simd 0.2.0 (all BSD-3-Clause). Its existing derive_more
+dependency also enables unicode-xid 0.2.6 (MIT OR Apache-2.0). Cargo.lock pins
+archive checksums; existing packages were not upgraded. This is a Rust DSP
+implementation; no new native build tools, SDK credentials or models are needed.
+The integration enables only AEC3 and its high-pass filter. Text-only builds
+do not select discord-voice or Sonora. See assets/licenses/voice/PROVENANCE.md.
+
+The macOS microphone fix adds objc2-av-foundation 0.3.2
+(Zlib OR Apache-2.0 OR MIT), selecting only std, AVCaptureDevice, AVMediaFormat
+and block2. Existing objc2 0.6.4 and block2 0.6.2 become direct macOS-only voice
+dependencies. AVFoundation remains a system framework. The objc2 licensing
+notice already staged in licenses/notifications also covers this framework
+binding; complete transitive license assembly remains the existing release gate.
+
+## Optional noise suppression — September 11, 2026
+
+The voice-only dependency nnnoiseless 0.5.2 embeds its default RNNoise model. Default features are disabled: no CLI, WAV I/O, training, C API, or dasp. Cargo.lock adds these ten packages without upgrading existing packages:
+
+- nnnoiseless 0.5.2: BSD-3-Clause.
+- easyfft 0.4.2: MIT OR Apache-2.0.
+- anymap3 1.1.0: BlueOak-1.0.0 OR MIT OR Apache-2.0.
+- array-init 2.1.0: MIT OR Apache-2.0.
+- generic_singleton 0.5.3: MIT OR Apache-2.0.
+- primal-check 0.3.4: MIT OR Apache-2.0.
+- realfft 3.5.0: MIT.
+- rustfft 6.4.1: MIT OR Apache-2.0.
+- strength_reduce 0.2.4: MIT OR Apache-2.0.
+- transpose 0.2.3: MIT OR Apache-2.0.
+
+Available license texts/notices and provenance are under `assets/licenses/voice`; existing voice packaging stages that directory. Realfft omits its standalone MIT text from both the registry archive and the pinned Git tree; full redistribution notice assembly remains outstanding. Default text-only builds do not select this processor.
