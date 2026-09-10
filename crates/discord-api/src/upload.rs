@@ -360,6 +360,7 @@ mod tests {
                 .await
                 .unwrap();
             file.write_all(bytes).await.unwrap();
+            file.flush().await.unwrap();
             Self(path)
         }
     }
