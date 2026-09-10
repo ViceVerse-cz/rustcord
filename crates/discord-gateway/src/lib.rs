@@ -1261,6 +1261,26 @@ mod member_tests {
         }
     }
     #[test]
+    fn member_sync_and_updates_replace_role_membership() {
+        let mut list = ActiveMembers::new(MemberSubscription {
+            guild: Id(1),
+            channel: Id(2),
+            request: 7,
+            list_id: "everyone".into(),
+        });
+        list.update(decode(br#"{"guild_id":"1","id":"everyone","member_count":1,"ops":[{"op":"SYNC","range":[0,99],"items":[{"member":{"user":{"id":"3","username":"Synthetic"},"roles":["12","11"]}}]}]}"#).unwrap()).unwrap();
+        assert_eq!(list.rows[0].as_ref().unwrap().roles, vec![Id(11), Id(12)]);
+        list.update(decode(br#"{"guild_id":"1","id":"everyone","member_count":1,"ops":[{"op":"UPDATE","index":0,"item":{"member":{"user":{"id":"3","username":"Synthetic"},"roles":["13"]}}}]}"#).unwrap()).unwrap();
+        assert_eq!(
+            list.snapshot(Freshness::Fresh).rows[0]
+                .as_ref()
+                .unwrap()
+                .roles,
+            vec![Id(13)]
+        );
+    }
+
+    #[test]
     fn presence_coalesces_loaded_rows_at_a_fixed_deadline_and_snapshots_supersede_it() {
         let mut list = ActiveMembers::new(MemberSubscription {
             guild: Id(1),

@@ -1346,3 +1346,33 @@ measurement is materially slower than the earlier baseline and has wide variatio
 improvement is claimed. The changed queue and Gateway decoder are outside this reducer
 workload. This is not member latency, RSS or frame timing. Reliable queue admission is tested
 at 4,008 items and its unchanged 32 MiB estimated-byte ceiling; the UI still drains eight/frame.
+
+### Member role display — September 10, 2026
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable bytes | 47,435,472 | 47,476,192 | +40,720 (+0.09%) |
+| Text installed bytes | 48,029,580 | 48,074,988 | +45,408 (+0.09%) |
+| Text gzip distribution bytes | 30,599,671 | 30,615,929 | +16,258 (+0.05%) |
+| Voice executable bytes | 50,254,960 | 50,295,552 | +40,592 (+0.08%) |
+| Voice installed bytes | 51,079,279 | 51,124,559 | +45,280 (+0.09%) |
+| Voice gzip distribution bytes | 31,909,408 | 31,926,452 | +17,044 (+0.05%) |
+| Reducer median ms / 100,000 events | 37.213 | 38.166 | +0.953 (+2.56%) |
+| Peak sampled RSS KiB | 141,072 | 154,672 | +13,600 |
+| Final sampled RSS KiB | 92,752 | 152,080 | +59,328 |
+| Median idle CPU % | 0.0 | 0.0 | +0.0 |
+
+Baseline `7221390`; final role-display working tree. macOS 27.0 (26A428), Apple M1 Pro,
+16 GiB RAM, Rust 1.98.1, locked text/voice release builds. Wgpu native demo at 1120×760
+logical pixels, 2× display scale. Packages are verified ad-hoc builds; gzip archives include
+the complete app. One warmup and five alternating baseline/after reducer runs; retained
+timeline stays 228,992–229,477 estimated bytes / 500 records. No member latency/frame-time claim.
+
+Native memory: fresh `--demo` process, automatically open member pane, 10-second warmup then
+10 one-second `ps rss,%cpu` samples, no helper processes. After fixture adds two roles and two
+member rows. A matched repeat followed an initial noisy comparison (peak 140,592→150,464 KiB;
+final 79,936→133,600 KiB). The table records the repeat, not a selected minimum. Baseline RSS
+fell sharply during sampling while the changed build stayed higher. Other worktrees were
+compiling on this shared host, so memory pressure and fixture differences prevent attributing
+this RSS increase solely to role code. The measured increase is material; no memory improvement
+or isolated regression estimate is claimed. Startup and p95 frame latency are unmeasured.

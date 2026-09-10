@@ -80,6 +80,7 @@ impl Calls {
     }
     fn member(&self, member: VoiceMemberDto) -> Option<Member> {
         Some(Member {
+            roles: vec![],
             user: member
                 .user
                 .map(UserDto::into_model)

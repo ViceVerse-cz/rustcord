@@ -833,6 +833,8 @@ fn member_list_id(everyone: u128, overwrites: &[Overwrite]) -> Option<String> {
 }
 #[derive(Deserialize)]
 pub struct MemberDto {
+    #[serde(default, deserialize_with = "permissions::member_roles")]
+    pub roles: Vec<Id>,
     pub user: UserDto,
     #[serde(default)]
     pub nick: Option<String>,
@@ -900,6 +902,7 @@ impl MemberItem {
         match self {
             Self::Group { .. } => None,
             Self::Member { member: m } => Some(model::Member {
+                roles: m.roles,
                 user: m.user.into_model(),
                 nick: m.nick.map(|n| n.chars().take(128).collect()),
                 custom_status: m.presence.as_ref().and_then(PresenceDto::custom_status),
@@ -939,6 +942,26 @@ pub struct MemberUpdate {
 #[cfg(test)]
 mod member_tests {
     use super::*;
+    #[test]
+    fn member_roles_are_retained_sorted_and_bounded_before_list_admission() {
+        let member: MemberItem =
+            decode(br#"{"member":{"user":{"id":"5","username":"Synthetic"},"roles":["12","11"]}}"#)
+                .unwrap();
+        let mut member = member.into_model().unwrap();
+        assert_eq!(member.roles, vec![Id(11), Id(12)]);
+        let bytes = member.bytes();
+        member.roles.reserve(100);
+        assert!(member.bytes() >= bytes + 100 * size_of::<Id>());
+        for roles in [
+            serde_json::json!(["0"]),
+            serde_json::json!(["11", "11"]),
+            serde_json::json!((1..=513).map(|id| id.to_string()).collect::<Vec<_>>()),
+        ] {
+            let value = serde_json::json!({"member":{"user":{"id":"5","username":"Synthetic"},"roles":roles}});
+            assert!(decode::<MemberItem>(&serde_json::to_vec(&value).unwrap()).is_err());
+        }
+    }
+
     #[test]
     fn avatars_recipients_and_permission_scoped_list_ids() {
         let mut nested: Ready = decode(br#"{"user":{"id":"1","username":"Synthetic"},"session_id":"synthetic","resume_gateway_url":"wss://gateway.discord.gg","guilds":[{"id":"2","properties":{"name":"Nested","icon":"0123456789abcdef0123456789abcdef"}},{"id":"3","name":"Flat fallback","icon":"0123456789abcdef0123456789abcdef","properties":{"icon":null}}]}"#).unwrap();

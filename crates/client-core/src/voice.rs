@@ -674,6 +674,7 @@ mod tests {
         crate::tests::grant_permissions(&mut state);
         let mut oversized = entry(2, 20);
         oversized.member = Some(Member {
+            roles: vec![],
             user: User {
                 id: Id(2),
                 name: "x".repeat(MAX_ROSTER_BYTES),
@@ -715,6 +716,10 @@ mod tests {
                     id: Id(10),
                     owner: Some(Id(999)),
                     roles: Some(vec![p::Role {
+                        name: String::new(),
+                        color: 0,
+                        position: 0,
+                        hoist: false,
                         id: Id(10),
                         bits: p::VIEW_CHANNEL | p::CONNECT,
                     }]),

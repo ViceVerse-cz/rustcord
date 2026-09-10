@@ -259,6 +259,7 @@ pub enum Delivery {
 /// Only the active member pane is retained; group rows and unloaded slots remain None.
 #[derive(Clone)]
 pub struct Member {
+    pub roles: Vec<Id>,
     pub user: User,
     pub nick: Option<String>,
     pub status: Option<String>,
@@ -268,6 +269,7 @@ pub struct Member {
 impl Member {
     pub fn bytes(&self) -> usize {
         size_of::<Self>()
+            + self.roles.capacity() * size_of::<Id>()
             + self.user.heap_bytes()
             + self.nick.as_ref().map_or(0, String::capacity)
             + self.status.as_ref().map_or(0, String::capacity)

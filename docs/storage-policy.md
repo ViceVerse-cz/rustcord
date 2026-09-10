@@ -231,3 +231,10 @@ envelope releases its permits; full/oversized admission still fails visibly. The
 eight reliable events per frame and repaints only while work remains. This fixes normal
 GUILD_CREATE channel fanout exceeding the old eight-item queue; it does not enlarge the
 byte budget or silently discard reliable events. These are component limits, not RSS.
+
+Member role display reuses session-only permission metadata: at most 512 roles per guild,
+16,384 across the mirror, within its existing byte budget. Each name retains at most 100
+non-control characters; owned string capacities count toward both event and mirror budgets.
+Member rows retain at most 512 role IDs, bounded while decoding and checked at state admission;
+their vector capacities count toward the existing active-pane byte bound. No role directory,
+new cache, persistent schema, or network endpoint is introduced.
