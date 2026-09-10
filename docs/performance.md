@@ -1618,6 +1618,30 @@ screenshots remain unavailable while desktop automation is owner-paused. No live
 audio action occurred.
 
 
+## Offline fuzzing tools - September 10, 2026
+
+No application runtime or dependency change; release packages and replay were not rebuilt.
+The new isolated developer workspace uses libFuzzer 0.4.13 through cargo-fuzz 0.13.2 and
+nightly-2026-09-09, with ASAN, optimizations, debug assertions and overflow checks. Local
+Windows 11/MSVC 14.44 runs on the Ryzen 7 7800X3D host reported:
+
+| Target | Seed cases | Executions | Initial/final coverage counters | Reported RSS | Duration |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| decode | 19 | 158,424 | 2,469 / 5,486 | 297 MiB | 31 s |
+| state_transitions | 7 | 8,842 | 2,436 / 3,339 | 382 MiB | 31 s |
+
+These are libFuzzer counters and its reported process RSS, not repository line coverage,
+client process memory or native latency. One smoke run per target, one worker, 30-second
+budget (checked between executions), five-second case timeout, one-million execution and
+512 MiB RSS limits. Baseline had no fuzz target, so there is no before/after speed comparison.
+No crash was found in these runs. Coverage growth proves feedback-guided mutation occurred;
+it does not prove all inputs are safe. Generated corpora were removed after completion.
+
+After integrating main `4325dd1`, a second smoke run passed: decoder 112,015 executions,
+coverage counters 2,489 to 5,284, reported RSS 281 MiB; state 2,892 executions, counters
+2,466 to 3,227, reported RSS 350 MiB. Each ran 31 seconds. Mutation is stochastic and the
+shared host was running concurrent builds; these runs are not a throughput comparison.
+
 ## Rich presence - September 10, 2026
 
 Baseline `5f11cb92644d06e2302678211ac21d9445fad692`, clean disposable worktree;
