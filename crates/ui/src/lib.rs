@@ -3129,6 +3129,133 @@ mod composer_tests {
     }
 
     #[test]
+    fn incoming_custom_status_updates_people_and_open_profile_without_refetch() {
+        fn collect(shape: &egui::Shape, labels: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(text) => labels.push(text.galley.job.text.clone()),
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        collect(shape, labels);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut state = test_support::demo_state();
+        state.demo = false; // Exercise normal command admission using synthetic loaded data.
+        let channel = state.selected.unwrap();
+        let guild = state
+            .channels
+            .iter()
+            .find(|entry| entry.id == channel)
+            .unwrap()
+            .guild
+            .unwrap();
+        let user = test_support::message(499, channel).author;
+        state.timeline.clear(); // No read acknowledgement is part of this presence-only scenario.
+        state.members = Some(model::MemberList {
+            channel,
+            guild: Some(guild),
+            request: 7,
+            total: 1,
+            freshness: Freshness::Fresh,
+            rows: vec![Some(model::Member {
+                user: user.clone(),
+                nick: None,
+                status: Some("online".into()),
+                custom_status: Some("Initial synthetic status".into()),
+            })],
+        });
+        state.profile = Some(client_core::profile::ProfileView {
+            user: user.id,
+            guild: Some(guild),
+            request: 314,
+            loading: false,
+            error: None,
+            data: Some(profiles::synthetic(&user, Some(guild))),
+        });
+        state
+            .drafts
+            .insert(channel, "Keep this unsent draft".into());
+        let mut messaging = MessagingUi {
+            navigation_channel: Some(channel),
+            guild: Some(guild),
+            profile: Some(user.clone()),
+            profile_anchor: Some((user.id, egui::pos2(420.0, 150.0))),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        design::apply(&ctx);
+        let frame = |messaging: &mut MessagingUi, state: &mut State| {
+            let mut commands = vec![];
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1280.0, 900.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| commands = messaging.show(ui, state),
+            );
+            assert!(
+                commands.is_empty(),
+                "Presence rendering must not fetch a profile or emit other commands"
+            );
+            assert!(output.platform_output.commands.is_empty());
+            let mut labels = vec![];
+            for shape in &output.shapes {
+                collect(&shape.shape, &mut labels);
+            }
+            output.drop_without_applying_deltas();
+            labels
+        };
+        for _ in 0..3 {
+            frame(&mut messaging, &mut state);
+        }
+        let labels = frame(&mut messaging, &mut state);
+        assert_eq!(
+            labels
+                .iter()
+                .filter(|text| text.as_str() == "Initial synthetic status")
+                .count(),
+            2,
+            "People and the already-open profile both show the loaded status"
+        );
+        for custom_status in [Some("Updated synthetic status"), None] {
+            state.apply(client_core::Envelope {
+                generation: state.generation,
+                event: client_core::Event::MemberPresence {
+                    guild,
+                    channel,
+                    request: 7,
+                    updates: vec![model::MemberPresence {
+                        user: user.id,
+                        status: Some("online".into()),
+                        custom_status: custom_status.map(str::to_owned),
+                    }],
+                },
+            });
+            for _ in 0..2 {
+                frame(&mut messaging, &mut state);
+            }
+            let labels = frame(&mut messaging, &mut state);
+            assert!(!labels.iter().any(|text| text == "Initial synthetic status"));
+            assert_eq!(
+                labels
+                    .iter()
+                    .filter(|text| text.as_str() == "Updated synthetic status")
+                    .count(),
+                if custom_status.is_some() { 2 } else { 0 }
+            );
+            assert_eq!(state.profile.as_ref().unwrap().request, 314);
+            assert_eq!(messaging.profile.as_ref().unwrap().id, user.id);
+            assert_eq!(state.drafts[&channel], "Keep this unsent draft");
+            assert!(messaging.draft_changes.is_empty());
+        }
+    }
+
+    #[test]
     fn profile_uses_open_conversation_not_browsed_sidebar_server() {
         for guild in [None, Some(Id(10))] {
             let user = model::User {

@@ -24,6 +24,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const MAX_DRAFT_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_CONTENT: usize = 2000;
 pub const MAX_NAV: usize = 4000;
+pub const MAX_MEMBER_PRESENCE_BYTES: usize = 64 * 1024;
 pub const MAX_EVENT_BYTES: usize = 4 * 1024 * 1024;
 pub const EVENT_SLOTS: usize = 8; // <= 32 MiB wire-derived data, not including one decoder
 pub const COMMAND_SLOTS: usize = 16; // each admitted command <= 16 KiB
@@ -138,7 +139,7 @@ pub enum Event {
         guild: Id,
         channel: Id,
         request: u64,
-        updates: Vec<(Id, Option<String>)>,
+        updates: Vec<MemberPresence>,
     },
     RecipientAdded {
         channel: Id,
@@ -673,7 +674,7 @@ impl State {
             updates,
         } = &envelope.event
         {
-            if envelope.event.bytes() <= 8 * 1024 {
+            if envelope.event.bytes() <= MAX_MEMBER_PRESENCE_BYTES {
                 self.apply_member_presence(*guild, *channel, *request, updates);
             }
             return;
@@ -1604,10 +1605,10 @@ impl Event {
                         + channels.iter().map(Channel::bytes).sum::<usize>()
                 }
                 Self::MemberPresence { updates, .. } => {
-                    updates.capacity() * size_of::<(Id, Option<String>)>()
+                    updates.capacity() * size_of::<MemberPresence>()
                         + updates
                             .iter()
-                            .map(|(_, status)| status.as_ref().map_or(0, String::capacity))
+                            .map(MemberPresence::heap_bytes)
                             .sum::<usize>()
                 }
                 Self::Members(list) => {
