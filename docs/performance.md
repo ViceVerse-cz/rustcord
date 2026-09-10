@@ -549,3 +549,21 @@ Both unsigned Windows packages passed. Same Windows 11 Home 10.0.26200, Ryzen 7 
 | Retained timeline estimate | 220,992-221,477 bytes | Same | 500 records |
 
 One release reducer executable per revision, one warmup plus five direct measured runs, 100,000 synthetic events each. Baseline samples: [27.4948, 27.5046, 26.2998, 28.5269, 29.6689] ms. Integrated: [26.4394, 27.3291, 27.4944, 26.3761, 26.5682] ms. This short reducer benchmark is not native frame time, process RSS, network or audio performance; no user-visible speed claim is made. Existing per-feature native evidence is retained from its original PRs. New combined native inspection/process samples remain unverified while this session's desktop automation is paused.
+
+
+## Image aspect ratios — September 10, 2026
+
+| Metric / method | Baseline | After | Delta |
+| --- | --- | --- | --- |
+| text executable, bytes | 46,098,496 | 46,098,512 | +16 (+0.0000%) |
+| text package, bytes | 69,734,675 | 69,736,433 | +1,758 (+0.0025%) |
+| text compressed, bytes | 53,074,332 | 53,075,144 | +812 (+0.0015%) |
+| voice executable, bytes | 48,917,808 | 48,917,808 | +0 (+0.0000%) |
+| voice package, bytes | 74,162,600 | 74,164,342 | +1,742 (+0.0023%) |
+| voice compressed, bytes | 55,695,929 | 55,697,942 | +2,013 (+0.0036%) |
+| Settled RSS, KiB (`ps`, 10 × 1 s) | 152,592 | 99,328 | −53,264; noisy, no improvement claim |
+| Settled CPU, median / maximum | 0 / 0% | 0 / 2.4% | median unchanged |
+
+macOS 27.0 arm64, Apple M1 Pro (8 CPU / 14 GPU cores), 16 GB RAM, wgpu/Metal, built-in 3024×1964 Retina display at unchanged system scale; default ~1087×768 captured window. Rust 1.98.1 locked release text-only/voice packages, baseline clean `2879fbc`; native runs explicitly `--demo`, default synthetic timeline followed by opening its image viewer. Separate baseline/final app copies. Full package totals count files, excluding the nested voice distribution from text; gzip tarballs include package files. Package measurements precede appending these measurements to docs.
+
+Ten OS RSS/CPU samples at one-second intervals after interaction settled (baseline at least 10 s; final resampled after at least 30 s). Initial final capture/packaging-period samples were 108,400–108,928 KiB and 1.7–41.1% CPU; the settled retry above is reported separately, not hidden. Different warmup/background capture/packaging activity and OS memory accounting prevent interpreting the RSS drop as an improvement. These are sampled process RSS, not allocation limits or physical footprint; startup/interaction peak, GPU allocations and p95 frame/startup latency are unmeasured. Baseline had no child processes; no voice call or audio measurement. No performance improvement claim.

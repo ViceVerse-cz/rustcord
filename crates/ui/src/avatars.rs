@@ -111,7 +111,7 @@ impl Avatars {
         }
         if let Some(index) = self.textures.iter().position(|(stored, _)| stored == &key) {
             let entry = self.textures.remove(index).expect("located emoji texture");
-            let image = egui::Image::new((entry.1.id(), egui::Vec2::splat(size)));
+            let image = egui::Image::new(&entry.1).fit_to_exact_size(egui::Vec2::splat(size));
             self.textures.push_back(entry);
             Some(image)
         } else {
@@ -187,7 +187,14 @@ impl Avatars {
                 self.attempts.insert(key.clone(), (Instant::now(), false));
                 self.accept(ui.ctx(), key.clone(), Some(image));
             }
-            if !self.paint(ui, &key, response.rect, (size * 0.5) as u8) && !demo {
+            if !self.paint(
+                ui,
+                &key,
+                ui.layout()
+                    .align_size_within_rect(egui::Vec2::splat(size), response.rect),
+                (size * 0.5) as u8,
+            ) && !demo
+            {
                 self.request(key);
             }
         }
@@ -205,9 +212,13 @@ impl Avatars {
             return false;
         };
         let entry = self.textures.remove(index).expect("located texture");
-        egui::Image::new((entry.1.id(), rect.size()))
+        // paint_at stretches to its rectangle; fit actual pixels inside the stable layout slot.
+        let source = entry.1.size_vec2();
+        let scale = (rect.width() / source.x).min(rect.height() / source.y);
+        let fitted = egui::Rect::from_center_size(rect.center(), source * scale);
+        egui::Image::new(&entry.1)
             .corner_radius(radius)
-            .paint_at(ui, rect);
+            .paint_at(ui, fitted);
         self.textures.push_back(entry);
         true
     }
@@ -225,7 +236,7 @@ impl Avatars {
             .take(2)
             .collect();
         let response = ui.add_sized(
-            [48.0, 44.0],
+            [44.0, 44.0],
             egui::Button::selectable(selected, egui::RichText::new(short).strong())
                 .corner_radius(15),
         );
@@ -244,7 +255,9 @@ impl Avatars {
                 self.attempts.insert(key.clone(), (Instant::now(), false));
                 self.accept(ui.ctx(), key.clone(), Some(image));
             }
-            if !self.paint(ui, &key, response.rect.shrink(3.0), 12) && !demo {
+            let icon_rect =
+                egui::Rect::from_center_size(response.rect.center(), egui::Vec2::splat(38.0));
+            if !self.paint(ui, &key, icon_rect, 12) && !demo {
                 self.request(key);
             }
         }
@@ -404,19 +417,18 @@ impl Avatars {
                 self.attempts.insert(key.clone(), (Instant::now(), false));
                 self.accept(ui.ctx(), key.clone(), Some(image));
             }
-            if let Some(index) = self.textures.iter().position(|(stored, _)| stored == &key) {
-                let entry = self.textures.remove(index).expect("located texture");
-                egui::Image::new((entry.1.id(), egui::vec2(size, size)))
-                    .corner_radius((size * 0.5) as u8)
-                    .paint_at(ui, response.rect);
-                self.textures.push_back(entry);
-            } else if !demo {
+            let rect = ui
+                .layout()
+                .align_size_within_rect(egui::Vec2::splat(size), response.rect);
+            if !self.paint(ui, &key, rect, (size * 0.5) as u8) && !demo {
                 self.request(key);
             }
         }
         if response.hovered() || response.has_focus() {
             ui.painter().circle_stroke(
-                response.rect.center(),
+                ui.layout()
+                    .align_size_within_rect(egui::Vec2::splat(size), response.rect)
+                    .center(),
                 size * 0.5,
                 egui::Stroke::new(1.5, crate::design::palette(ui).accent),
             );
@@ -435,6 +447,111 @@ impl Avatars {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn avatar_artwork_matches_fallback_in_justified_layout() {
+        let ctx = egui::Context::default();
+        let mut images = Avatars::default();
+        let user = User {
+            id: model::Id(1),
+            name: "Synthetic user".into(),
+            avatar: None,
+            discriminator: 0,
+        };
+        let mut response_rect = egui::Rect::NOTHING;
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            ui.with_layout(
+                egui::Layout::top_down(egui::Align::Min).with_cross_justify(true),
+                |ui| {
+                    ui.set_width(200.0);
+                    response_rect = images.show(ui, &user, 36.0, true).rect;
+                },
+            );
+        });
+        output.textures_delta.clear();
+        let texture = images.textures[0].1.id();
+        let fallback = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Circle(circle) if circle.radius == 18.0 => Some(circle.center),
+                _ => None,
+            })
+            .unwrap();
+        let artwork = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect) if rect.fill_texture_id() == texture => Some(rect.rect),
+                _ => None,
+            })
+            .unwrap();
+        assert!(response_rect.width() > 36.0);
+        assert_ne!(fallback, response_rect.center());
+        assert_eq!(artwork.center(), fallback);
+        assert_eq!(artwork.size(), egui::Vec2::splat(36.0));
+        output.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn media_pixels_keep_aspect_without_moving_the_loading_slot() {
+        for dimensions in [[120, 40], [40, 120], [80, 80]] {
+            for metadata in [(640, 240), (0, 0), (240, 640)] {
+                for large in [false, true] {
+                    let ctx = egui::Context::default();
+                    let mut images = Avatars::default();
+                    let media = model::EmbedMedia {
+                        url: Some("https://cdn.discordapp.com/attachments/1/2/test.png".into()),
+                        width: metadata.0,
+                        height: metadata.1,
+                        ..Default::default()
+                    };
+                    let mut slot = egui::Rect::NOTHING;
+                    let output = ctx.run_ui(Default::default(), |ui| {
+                        slot = images
+                            .show_media(ui, &media, egui::vec2(280.0, 180.0), false, large)
+                            .rect;
+                    });
+                    output.drop_without_applying_deltas();
+                    let key = images.take_requests().pop().unwrap();
+                    images.accept(
+                        &ctx,
+                        key,
+                        Some(ColorImage::filled(dimensions, egui::Color32::WHITE)),
+                    );
+                    let texture = images.textures[0].1.id();
+                    let output = ctx.run_ui(Default::default(), |ui| {
+                        assert_eq!(
+                            slot,
+                            images
+                                .show_media(ui, &media, egui::vec2(280.0, 180.0), false, large)
+                                .rect
+                        );
+                    });
+                    let meshes = ctx.tessellate(output.shapes.clone(), output.pixels_per_point);
+                    let bounds = meshes
+                        .iter()
+                        .filter_map(|shape| match &shape.primitive {
+                            egui::epaint::Primitive::Mesh(mesh) if mesh.texture_id == texture => {
+                                Some(mesh.calc_bounds())
+                            }
+                            _ => None,
+                        })
+                        .reduce(|a, b| a.union(b))
+                        .unwrap();
+                    // paint_at rounds to device pixels; allow one pixel of rounding.
+                    assert!(
+                        (bounds.width()
+                            - bounds.height() * dimensions[0] as f32 / dimensions[1] as f32)
+                            .abs()
+                            <= 2.0
+                    );
+                    assert!(slot.expand(1.0).contains_rect(bounds));
+                    output.drop_without_applying_deltas();
+                }
+            }
+        }
+    }
+
     #[test]
     fn texture_requests_and_decoded_memory_stay_bounded() {
         let ctx = egui::Context::default();
