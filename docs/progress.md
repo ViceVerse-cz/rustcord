@@ -1876,3 +1876,31 @@ profile status visibly changes from the striped missing-glyph marker to a yellow
 moon. This validates native label rendering on this Mac, not every emoji sequence
 or live Discord behavior. Temporary preview copies used distinct bundle IDs to
 keep automation separate from the owner's running app.
+
+## Combined DM/group activity ordering - September 11, 2026
+
+DMs and group DMs now share newest-message-first sidebar ordering. Incoming messages
+and confirmed sends update placement; composing or pending sends do not. Existing
+bounded activity cursors retain ordering across deleted latest messages and stale/null
+metadata replacements. Empty conversations fall back to their channel IDs; equal
+activity uses channel ID as a deterministic tie-breaker. Guild/category ordering and
+selection by channel ID remain unchanged. No new storage, dependencies or network calls.
+
+Baseline: clean task worktree from origin/main `fd20dc9`; original local main was
+`2d17054` with unrelated `target-relocation-remainder/`, preserved. Rust 1.98.1.
+The new regression failed against baseline ordering, then passed. Final
+`cargo xtask check` passed all 359 tests, formatting, strict Clippy and policy checks;
+`cargo xtask package` and `cargo xtask package-voice` passed on Windows. Independent
+read-only review found no remaining blockers. Release package/replay comparisons are
+recorded in `docs/performance.md` (text and voice executables each +48,640 bytes).
+
+The existing native `--demo` baseline was inspected; Computer Use was stopped with
+physical Escape before the matched before/after pair, so no visual-pair claim is made.
+The temporary screenshot-only fixture was removed from the delivered change.
+No live Discord session, microphone, macOS or Linux validation was performed.
+The owner explicitly requested rebase and direct push to main instead of a PR.
+
+Protocol basis checked September 11: Discord's [channel fields](https://docs.discord.com/developers/resources/channel)
+provide last_message_id and [snowflake IDs](https://docs.discord.com/developers/reference#snowflakes)
+encode creation time. Ordering is a local interpretation of available metadata;
+synthetic tests do not prove exact official-client ordering or live interoperability.

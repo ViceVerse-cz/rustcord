@@ -140,6 +140,16 @@ pub struct Preferences {
 	dnd: Option<bool>,
 }
 impl State {
+	/// Latest known message activity, retained across deletion for navigation ordering.
+	pub fn channel_activity(&self, channel: &model::Channel) -> Id {
+		self.read_state
+			.activity
+			.high_water
+			.get(&channel.id)
+			.copied()
+			.max(channel.last_message)
+			.unwrap_or(channel.id)
+	}
 	/// Service badge count plus bounded activity observed since that count. A lower bound
 	/// when history or settings are incomplete; this is not an exact total unread count.
 	pub fn unread_count(&self, channel: Id) -> u32 {

@@ -281,6 +281,11 @@ impl State {
 				}
 				for (id, latest) in channels {
 					if let Some(channel) = self.channels.iter_mut().find(|c| c.id == id) {
+						if let Some(previous) = channel.last_message {
+							self.read_state
+								.activity
+								.observe_latest(channel.id, previous);
+						}
 						match latest {
 							Patch::Value(id) => channel.last_message = Some(id),
 							Patch::Null => channel.last_message = None,

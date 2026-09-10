@@ -1,5 +1,32 @@
 # Initial performance evidence
 
+## Combined DM/group activity ordering - September 11, 2026
+
+Baseline `fd20dc9`, compared with this change on Windows 11 Home 10.0.26200,
+Ryzen 7 7800X3D, 31.1 GiB visible RAM, Rust 1.98.1; locked release builds,
+thin LTO, one codegen unit, wgpu. Text and optional voice packages were built
+separately with `cargo xtask package` and `cargo xtask package-voice`.
+Installed bytes include all package files; ZIP uses Python zipfile DEFLATE level 9.
+One package sample per variant, before this documentation addendum.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable bytes | 51,146,752 | 51,195,392 | +48,640 |
+| Text installed bytes | 51,843,054 | 51,891,694 | +48,640 |
+| Text ZIP bytes | 31,772,864 | 31,790,250 | +17,386 |
+| Voice executable bytes | 54,500,864 | 54,549,504 | +48,640 |
+| Voice installed bytes | 55,405,357 | 55,453,997 | +48,640 |
+| Voice ZIP bytes | 33,149,123 | 33,165,994 | +16,871 |
+| 100,000-event reducer replay median ms | 42.1050 | 40.3613 | -1.7437 (-4.1%) |
+| Retained timeline estimated bytes | 236,992..237,477 | 236,992..237,477 | unchanged |
+
+Replay: `cargo build --release --locked -p replay-bench`, then one direct executable
+warmup and five measured runs per revision; 500 retained records. This small noisy
+difference is not a speedup claim or a measurement of sidebar sorting, RSS or frames.
+Sorting reuses bounded navigation/activity metadata and allocates no additional cache.
+Native before/after CPU, memory and frame comparisons remain unmeasured: the owner
+stopped Computer Use with Escape before the matched visual capture completed.
+
 ## Inline message spoilers - September 10, 2026
 
 Baseline main b92a082a4b06c480fe6509252712f6513cd7dc62 / PR #35. Its verified text/voice

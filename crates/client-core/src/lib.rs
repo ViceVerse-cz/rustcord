@@ -948,6 +948,9 @@ impl State {
 					{
 						self.archived_thread = None;
 					}
+					if let Some(latest) = self.channels[index].last_message {
+						self.read_state.activity.observe_latest(channel.id, latest);
+					}
 					self.channels[index] = channel;
 				} else {
 					self.channels.push(channel);
@@ -963,6 +966,9 @@ impl State {
 					self.clear_archives();
 				}
 				if let Some(channel) = self.channels.iter_mut().find(|c| c.id == patch.id) {
+					if let Some(latest) = channel.last_message {
+						self.read_state.activity.observe_latest(channel.id, latest);
+					}
 					match patch.last_message {
 						Patch::Value(id) => channel.last_message = Some(id),
 						Patch::Null => channel.last_message = None,
@@ -1321,6 +1327,7 @@ impl State {
 					.iter_mut()
 					.find(|c| c.id == channel && c.last_message == Some(id))
 				{
+					self.read_state.activity.observe_latest(channel.id, id);
 					channel.last_message = None;
 				}
 				if self.selected == Some(channel) {
@@ -1342,8 +1349,9 @@ impl State {
 					.channels
 					.iter_mut()
 					.find(|c| c.id == channel && c.last_message.is_some_and(|id| ids.contains(&id)))
+					&& let Some(id) = channel.last_message.take()
 				{
-					channel.last_message = None;
+					self.read_state.activity.observe_latest(channel.id, id);
 				}
 				if ids.len() > 100 {
 					Err("Bulk deletion exceeds safe capacity")
