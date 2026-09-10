@@ -139,7 +139,7 @@ impl Switcher {
             } else if modal
                 == Some(egui::LayerId::new(
                     egui::Order::Foreground,
-                    egui::Id::new("conversation-switcher"),
+                    egui::Id::unique("conversation-switcher"),
                 ))
             {
                 // Finish the modal's closing pass before restoring or changing focus.
@@ -166,7 +166,7 @@ impl Switcher {
         });
         let blocked = self.composing || ime_frame;
         let query_focused = ctx.memory(|memory| memory.focused())
-            == Some(egui::Id::new("conversation-switcher-query"));
+            == Some(egui::Id::unique("conversation-switcher-query"));
         let (up, down, enter, escape) = ctx.input_mut(|input| {
             if blocked {
                 input.consume_key(egui::Modifiers::NONE, egui::Key::Enter);
@@ -186,7 +186,8 @@ impl Switcher {
         }
         let mut target = None;
         let mut cancel = escape;
-        let response = egui::Modal::new(egui::Id::new("conversation-switcher")).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::unique("conversation-switcher"));
+        let response = modal.show(ctx, |ui| {
             ui.set_width((ctx.content_rect().width() - 48.0).clamp(180.0, 480.0));
             ui.heading("Find conversation");
             ui.weak("Loaded conversations · ↑↓ choose · Enter open · Esc close");
@@ -195,7 +196,7 @@ impl Switcher {
             }
             let input = ui.add(
                 egui::TextEdit::singleline(&mut self.query)
-                    .id(egui::Id::new("conversation-switcher-query"))
+                    .id(egui::Id::unique("conversation-switcher-query"))
                     .event_filter(egui::EventFilter {
                         horizontal_arrows: true,
                         vertical_arrows: true,
@@ -357,7 +358,7 @@ mod tests {
             });
             let state = state();
             let mut switcher = Switcher::default();
-            let prior = egui::Id::new("previous-input");
+            let prior = egui::Id::unique("previous-input");
             ctx.memory_mut(|memory| memory.request_focus(prior));
             switcher.open(&ctx);
             let mut previous_text = String::from("Unsent draft");
@@ -384,7 +385,7 @@ mod tests {
             assert_eq!(frame(&mut switcher, vec![key(egui::Key::ArrowDown)]), None);
             assert_eq!(
                 ctx.memory(|m| m.focused()),
-                Some(egui::Id::new("conversation-switcher-query"))
+                Some(egui::Id::unique("conversation-switcher-query"))
             );
             assert_eq!(
                 frame(&mut switcher, vec![key(egui::Key::Enter)]),

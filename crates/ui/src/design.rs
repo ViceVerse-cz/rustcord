@@ -266,10 +266,10 @@ const WEIGHTS_KEY: &str = "serein-font-weights";
 /// Called by `fonts::install` for one context; until then the weight families resolve to
 /// the default face so headless contexts (tests) never reference an unknown family.
 pub fn weights_installed(ctx: &egui::Context) {
-    ctx.data_mut(|d| d.insert_temp(egui::Id::new(WEIGHTS_KEY), true));
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique(WEIGHTS_KEY), true));
 }
 fn weight(ctx: &egui::Context, name: &str) -> FontFamily {
-    if ctx.data(|d| d.get_temp::<bool>(egui::Id::new(WEIGHTS_KEY))) == Some(true) {
+    if ctx.data(|d| d.get_temp::<bool>(egui::Id::unique(WEIGHTS_KEY))) == Some(true) {
         FontFamily::Name(name.into())
     } else {
         FontFamily::Proportional

@@ -221,7 +221,7 @@ pub fn show(
     } else {
         (anchor.x - 12.0 - WIDTH).max(bounds.left())
     };
-    let response = egui::Area::new(egui::Id::new("user-profile-popout"))
+    let response = egui::Area::new(egui::Id::unique("user-profile-popout"))
         .kind(egui::UiKind::Popup)
         .order(egui::Order::Foreground)
         .fixed_pos(pos2(x, (anchor.y - 40.0).max(bounds.top())))
@@ -659,7 +659,7 @@ pub fn show(
     if let Some(url) = opening.as_ref() {
         let mut close = false;
         let response =
-            egui::Modal::new(egui::Id::new("profile-external-link")).show(ui.ctx(), |ui| {
+            egui::Modal::new(egui::Id::unique("profile-external-link")).show(ui.ctx(), |ui| {
                 ui.heading("Open external link?");
                 ui.add(egui::Label::new(url).wrap());
                 ui.horizontal(|ui| {
@@ -841,7 +841,7 @@ mod tests {
                 && painted.contains("SRN")
         );
         assert!(images.take_requests().is_empty());
-        let rect = ctx.memory(|m| m.area_rect(egui::Id::new("user-profile-popout")));
+        let rect = ctx.memory(|m| m.area_rect(egui::Id::unique("user-profile-popout")));
         let rect = rect.expect("popout area");
         assert!((rect.left() - (anchor.x + 12.0)).abs() < 1.0);
         assert!((rect.width() - WIDTH).abs() <= 2.0);
@@ -862,7 +862,7 @@ mod tests {
         });
         output.drop_without_applying_deltas();
         let rect = ctx
-            .memory(|m| m.area_rect(egui::Id::new("user-profile-popout")))
+            .memory(|m| m.area_rect(egui::Id::unique("user-profile-popout")))
             .unwrap();
         assert!(rect.right() <= right_anchor.x - 12.0 + 1.0);
 
@@ -913,7 +913,7 @@ mod tests {
         });
         output.drop_without_applying_deltas();
         let rect = ctx
-            .memory(|m| m.area_rect(egui::Id::new("user-profile-popout")))
+            .memory(|m| m.area_rect(egui::Id::unique("user-profile-popout")))
             .unwrap();
         for (pos, closes) in [(rect.center(), false), (pos2(700.0, 550.0), true)] {
             let output = ctx.run_ui(

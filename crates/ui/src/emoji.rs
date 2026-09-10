@@ -27,7 +27,7 @@ pub fn install(ctx: &Context) -> Result<(), image::ImageError> {
         egui::ColorImage::from_rgba_unmultiplied(size, &image),
         egui::TextureOptions::LINEAR,
     );
-    ctx.data_mut(|data| data.insert_temp(egui::Id::new("twemoji"), texture));
+    ctx.data_mut(|data| data.insert_temp(egui::Id::unique("twemoji"), texture));
     entries();
     Ok(())
 }
@@ -52,7 +52,7 @@ fn lookup(text: &str) -> Option<usize> {
 
 pub(crate) fn image(ctx: &Context, text: &str, size: f32) -> Option<Image<'static>> {
     let cell = lookup(text)?;
-    let texture = ctx.data(|data| data.get_temp::<TextureHandle>(egui::Id::new("twemoji")))?;
+    let texture = ctx.data(|data| data.get_temp::<TextureHandle>(egui::Id::unique("twemoji")))?;
     let [width, height] = texture.size();
     let x = (cell % 64) as f32 * 32.0;
     let y = (cell / 64) as f32 * 32.0;

@@ -110,7 +110,7 @@ pub(super) fn confirm_external_link(ctx: &egui::Context, opening: &mut Option<St
     };
     let mut confirm = false;
     let mut cancel = false;
-    let modal = egui::Modal::new(egui::Id::new("confirm-external-link")).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::unique("confirm-external-link")).show(ctx, |ui| {
         ui.set_width((ctx.content_rect().width() - 48.0).clamp(180.0, 440.0));
         ui.heading("Open external link?");
         ui.label("Open this destination in your default browser:");

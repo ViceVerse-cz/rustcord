@@ -358,7 +358,7 @@ mod tests {
         let mut avatars = Avatars::default();
         let mut layout = Layout::default();
         let mut text = "hi <@42>!".to_owned();
-        let id = egui::Id::new("rich-editor-test");
+        let id = egui::Id::unique("rich-editor-test");
         let mut frame = |time, events: Vec<egui::Event>, cursor: Option<usize>| {
             if let Some(cursor) = cursor {
                 ctx.memory_mut(|m| m.request_focus(id));
