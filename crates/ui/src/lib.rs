@@ -521,7 +521,8 @@ impl MessagingUi {
         egui::Panel::bottom("account-footer")
             .show_separator_line(false)
             .frame(egui::Frame::new().inner_margin(8))
-            .show(ui, |ui| self.account_card(ui, state));
+            .show(ui, |ui| self.account_card(ui, state, commands));
+        self.voice_connection_panel(ui, state, commands);
         egui::Frame::new()
             .inner_margin(egui::Margin {
                 left: 8,
@@ -583,7 +584,7 @@ impl MessagingUi {
                 }
             });
     }
-    fn account_card(&mut self, ui: &mut egui::Ui, state: &State) {
+    fn account_card(&mut self, ui: &mut egui::Ui, state: &mut State, commands: &mut Vec<Command>) {
         let colors = design::palette(ui);
         egui::Frame::new()
             .fill(colors.raised)
@@ -604,6 +605,8 @@ impl MessagingUi {
                         ui.spacing_mut().item_spacing.x = 2.0;
                         let settings = icons::button(ui, icons::Icon::Gear, 32.0, "User settings");
                         egui::Popup::menu(&settings).show(|ui| self.settings_menu(ui, state));
+                        self.mute_toggle(ui, state, commands, true, 32.0);
+                        self.mute_toggle(ui, state, commands, false, 32.0);
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 0.0;
@@ -992,6 +995,25 @@ impl MessagingUi {
                                     }
                                 }
                             });
+                            let in_call = state.voice.active.as_ref().is_some_and(|call| {
+                                Some(call.channel) == state.selected
+                                    && matches!(
+                                        call.phase,
+                                        client_core::voice::Phase::Connected
+                                            | client_core::voice::Phase::Waiting
+                                    )
+                            });
+                            if in_call {
+                                ui.add_space(4.0);
+                                icons::inline(ui, icons::Icon::InCall, 16.0, colors.positive);
+                                ui.add(
+                                    egui::Label::new(
+                                        design::medium(ui, "In a call", 14.0)
+                                            .color(colors.positive),
+                                    )
+                                    .selectable(false),
+                                );
+                            }
                         });
                     });
                 });

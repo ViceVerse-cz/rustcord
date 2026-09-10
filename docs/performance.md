@@ -1671,3 +1671,28 @@ Rich-presence integration with main `dc49d64`: rebuilt text/voice executables ar
 they are not a controlled feature delta against the earlier 5f11cb9 baseline. The original
 paired measurements above remain historical pre-integration evidence. Native after sampling
 remains owner-stopped; 351 integrated tests and both packages passed before the authorized merge.
+
+## Discord-style voice UI and Phosphor icon atlas - September 10, 2026
+
+| Metric / method | Main c4ae54d | Voice UI + icons | Delta |
+| --- | ---: | ---: | ---: |
+| text executable, bytes | 47,434,160 | 47,544,112 | +109,952 (+0.232%) |
+| text installed, bytes | 48,034,667 | 48,147,235 | +112,568 (+0.234%) |
+| text zip, bytes | 30,645,493 | 30,700,479 | +54,986 (+0.179%) |
+| voice executable, bytes | 50,270,384 | 50,363,856 | +93,472 (+0.186%) |
+| voice installed, bytes | 51,101,102 | 51,197,190 | +96,088 (+0.188%) |
+| voice zip, bytes | 31,998,719 | 32,048,840 | +50,121 (+0.157%) |
+| `--demo --demo-voice` settled resident memory, MiB | 117 | 119 | +2 (+1.7%; single run) |
+| `--demo --demo-voice` peak resident memory, MiB | 118 | 120 | +2 |
+| `--demo --demo-voice` idle CPU, % | 0.0 | 0.0 | 0 |
+
+macOS 27.0, Apple M1 Pro, 16 GiB RAM, Rust 1.98.1, release thin LTO/one codegen unit, wgpu Metal
+renderer at 2× display scale, 1120×760 window. Both ad-hoc-signed macOS packages were built
+from a disposable baseline worktree at `c4ae54d` and this branch with separate target
+directories; installed sums cover `Serein.app`, ZIPs are `zip -9` of the bundle; text excludes
+the nested voice package. The executable growth is the 38,534-byte icon atlas plus its index
+and the new voice views. Process figures are `top -l 1` resident memory and CPU sampled once per
+second for 20 s after an 8 s launch and 4 s activation warmup, one run per build, with the
+window frontmost and the fixture's one-second elapsed-time repaint active. They are not p95
+frame or startup latency, which remain unmeasured. The atlas texture is 655,360 decoded bytes.
+Replay, mixer and codec workloads are unchanged and were not rerun; no dependency changed.
