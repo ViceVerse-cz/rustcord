@@ -3,8 +3,8 @@
 ## Current scope and gates
 
 Current slice: bounded offline fuzzing after authorized deletion PR #49,
-from main dc49d64. Full SPEC completion remains active; native automation and live-account
-validation remain owner-controlled. See the final dated entry for verification.
+from main dc49d64, integrated with main 4325dd1. Full SPEC completion remains active; native automation and live-account
+validation remain owner-controlled. See the bounded fuzzing entry for verification.
 
 ## Inline message spoilers (merged PR #36)
 
@@ -1644,6 +1644,11 @@ tests, `cargo xtask check`, and `cargo build --locked -p serein` passed against 
   fuzz formatter, both license graphs and all six license fixtures passed. Independent review
   found no blockers. Native application builds were not repeated for this tooling-only change.
   Linux/macOS fuzz execution and remote CI remain unverified until their checks finish.
+- Integration with main `4325dd1` preserved the presence and voice UI changes. The combined
+  `cargo xtask check` passed 351 offline Rust tests plus all format, Clippy, compile and policy
+  checks; both license graphs and the separate fuzz formatter passed again. A second ASAN
+  smoke passed on the integrated code: decoder 112,015 executions/281 MiB reported RSS,
+  state 2,892/350 MiB, 31 seconds each. No crash, lock changes or retained generated corpus.
 - Remaining spec implementation candidates include Linux distribution packaging and bounded
   unknown-event diagnostics. Native accessibility/resource/storage tracing and owner-controlled
   live text/voice interoperability remain separate, incomplete gates.

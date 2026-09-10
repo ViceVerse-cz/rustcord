@@ -1637,6 +1637,11 @@ budget (checked between executions), five-second case timeout, one-million execu
 No crash was found in these runs. Coverage growth proves feedback-guided mutation occurred;
 it does not prove all inputs are safe. Generated corpora were removed after completion.
 
+After integrating main `4325dd1`, a second smoke run passed: decoder 112,015 executions,
+coverage counters 2,489 to 5,284, reported RSS 281 MiB; state 2,892 executions, counters
+2,466 to 3,227, reported RSS 350 MiB. Each ran 31 seconds. Mutation is stochastic and the
+shared host was running concurrent builds; these runs are not a throughput comparison.
+
 ## Rich presence - September 10, 2026
 
 Baseline `5f11cb92644d06e2302678211ac21d9445fad692`, clean disposable worktree;
