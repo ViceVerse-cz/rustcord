@@ -46,6 +46,60 @@ pub struct Overwrite {
     pub allow: u128,
     pub deny: u128,
 }
+// Unofficial list identity observed by discord.py-self (abc.GuildChannel.member_list_id).
+// This hash selects a server list; it never grants permissions.
+pub fn member_list_id(everyone: u128, overwrites: &[Overwrite]) -> Option<String> {
+    if overwrites.len() > MAX_OVERWRITES {
+        return None;
+    }
+    if everyone & VIEW_CHANNEL != 0 && !overwrites.iter().any(|o| o.deny & VIEW_CHANNEL != 0) {
+        return Some("everyone".into());
+    }
+    let mut entries: Vec<_> = overwrites
+        .iter()
+        .filter_map(|o| {
+            if o.allow & VIEW_CHANNEL != 0 {
+                Some(format!("allow:{}", o.id))
+            } else if o.deny & VIEW_CHANNEL != 0 {
+                Some(format!("deny:{}", o.id))
+            } else {
+                None
+            }
+        })
+        .collect();
+    entries.sort();
+    Some(murmur3(entries.join(",").as_bytes()).to_string())
+}
+fn murmur3(bytes: &[u8]) -> u32 {
+    let mix = |n: u32| {
+        n.wrapping_mul(0xcc9e2d51)
+            .rotate_left(15)
+            .wrapping_mul(0x1b873593)
+    };
+    let mut hash = 0u32;
+    let (chunks, remainder) = bytes.as_chunks::<4>();
+    for part in chunks {
+        hash ^= mix(u32::from_le_bytes(*part));
+        hash = hash
+            .rotate_left(13)
+            .wrapping_mul(5)
+            .wrapping_add(0xe6546b64);
+    }
+    let tail = remainder
+        .iter()
+        .enumerate()
+        .fold(0u32, |n, (i, b)| n | (u32::from(*b) << (i * 8)));
+    if !remainder.is_empty() {
+        hash ^= mix(tail);
+    }
+    hash ^= bytes.len() as u32;
+    hash ^= hash >> 16;
+    hash = hash.wrapping_mul(0x85ebca6b);
+    hash ^= hash >> 13;
+    hash = hash.wrapping_mul(0xc2b2ae35);
+    hash ^ (hash >> 16)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Member {
     pub roles: Vec<Id>,
@@ -191,6 +245,42 @@ pub fn effective(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn member_list_identity_matches_wire_hash_and_bounds() {
+        assert_eq!(murmur3(b""), 0);
+        assert_eq!(murmur3(b"foo"), 0xf6a5c420);
+        assert_eq!(murmur3(b"hello"), 0x248bfa47);
+        assert_eq!(
+            member_list_id(VIEW_CHANNEL, &[]).as_deref(),
+            Some("everyone")
+        );
+        assert_eq!(member_list_id(0, &[]).as_deref(), Some("0"));
+        let deny = Overwrite {
+            id: Id(5),
+            kind: 0,
+            allow: 0,
+            deny: VIEW_CHANNEL,
+        };
+        let allow = Overwrite {
+            id: Id(9),
+            kind: 1,
+            allow: VIEW_CHANNEL | (1 << 100),
+            deny: VIEW_CHANNEL,
+        };
+        assert_eq!(
+            member_list_id(VIEW_CHANNEL, &[deny, allow]),
+            Some(murmur3(b"allow:9,deny:5").to_string())
+        );
+        assert_eq!(
+            member_list_id(0, &[allow, deny]),
+            member_list_id(0, &[deny, allow])
+        );
+        assert_eq!(
+            member_list_id(VIEW_CHANNEL, &[deny; MAX_OVERWRITES + 1]),
+            None
+        );
+    }
 
     fn guild() -> Guild {
         Guild {

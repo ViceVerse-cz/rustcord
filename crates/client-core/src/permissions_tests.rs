@@ -420,3 +420,114 @@ fn malformed_snapshots_are_atomic_and_rejected_permission_events_fail_closed() {
         "Rejected reducer updates cannot keep granting old access"
     );
 }
+
+#[test]
+fn member_requests_survive_guild_hydration_and_follow_current_permissions() {
+    let mut state = state();
+    state.channels[0].member_list_id = Some("everyone".into());
+    let request = |state: &mut State| {
+        let Some(Command::Members {
+            guild: Some(Id(10)),
+            list_id: Some(id),
+            request,
+            ..
+        }) = state.request_members()
+        else {
+            panic!("Known channel permissions must produce a member subscription")
+        };
+        (id, request)
+    };
+    let (id, first) = request(&mut state);
+    assert_eq!(id, "everyone");
+    // Subscribing can hydrate a guild: permission snapshot precedes recreated channels.
+    permission(&mut state, PermissionEvent::Snapshot(snapshot()));
+    apply(&mut state, Event::ChannelCreated(channel(20, 0, None)));
+    assert_eq!(state.members.as_ref().unwrap().request, first);
+    let mut loaded = model::MemberList {
+        guild: Some(Id(10)),
+        channel: Id(20),
+        request: first,
+        total: 1,
+        rows: vec![Some(model::Member {
+            user: user(),
+            nick: None,
+            status: None,
+            custom_status: None,
+        })],
+        freshness: Freshness::Fresh,
+    };
+    apply(&mut state, Event::Members(loaded.clone()));
+    assert_eq!(state.members.as_ref().unwrap().freshness, Freshness::Fresh);
+    let (id, reloaded) = request(&mut state);
+    assert_eq!(
+        id, "everyone",
+        "Reload after GUILD_CREATE must retain a usable identity"
+    );
+    loaded.request = reloaded;
+    apply(&mut state, Event::Members(loaded.clone()));
+
+    // Changing another role's VIEW overwrite changes the list, but not our access.
+    permission(
+        &mut state,
+        PermissionEvent::Channel {
+            channel: Id(20),
+            guild: Some(Id(10)),
+            overwrites: Patch::Value(vec![p::Overwrite {
+                id: Id(11),
+                kind: 0,
+                allow: 0,
+                deny: p::VIEW_CHANNEL,
+            }]),
+        },
+    );
+    assert!(state.can_view(Id(20)) && state.members.is_none());
+    apply(&mut state, Event::Members(loaded));
+    assert!(
+        state.members.is_none(),
+        "Late old-list rows must not return"
+    );
+    assert_ne!(request(&mut state).0, "everyone");
+    permission(
+        &mut state,
+        PermissionEvent::Channel {
+            channel: Id(20),
+            guild: Some(Id(10)),
+            overwrites: Patch::Null,
+        },
+    );
+    assert!(state.members.is_none());
+    // Owner access doesn't make missing list metadata known.
+    permission(
+        &mut state,
+        PermissionEvent::Owner {
+            guild: Id(10),
+            owner: Patch::Value(Id(2)),
+        },
+    );
+    assert!(matches!(
+        state.request_members(),
+        Some(Command::Members {
+            guild: None,
+            list_id: None,
+            ..
+        })
+    ));
+    assert_eq!(
+        state.members.as_ref().unwrap().freshness,
+        Freshness::Unavailable
+    );
+    permission(&mut state, PermissionEvent::Snapshot(snapshot()));
+    assert!(
+        state.members.is_none(),
+        "Hydration must wake an unavailable open pane"
+    );
+    state.history(None);
+    let current = state.request;
+    history(&mut state, Id(20), current, 100);
+    assert_eq!(request(&mut state).0, "everyone");
+    assert!(
+        state
+            .member_list_id(&channel(30, 11, Some(Id(20))))
+            .is_none()
+    );
+}

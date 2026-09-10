@@ -1264,3 +1264,40 @@ Resumed `feat/discord-theme-shell` at `37a0956` with an existing UI diff and bas
 The header now gives its controls their actual width before truncating the channel name. Clicking a People avatar opens its profile; draft-storage status remains visible beside the composer. Independent review caught and fixed two additional regressions: title/status text now occupies separate regions (full status available on hover), and active download progress/cancellation remains visible after switching to voice or clearing selection. A regression test covers both download cases. A native gradient capture also exposed text bleed-through in the archive window; the shared window fill is now opaque for every preset.
 
 `cargo xtask check` passes, including all 75 UI tests, workspace tests/doctests, strict Clippy and policy checks. Final text/voice release packages and strict ad-hoc signature verification pass. Native macOS synthetic before/after dark, after-light and Midnight Blurple captures were inspected under `docs/pr-evidence/discord-theme-rebase/`. Baseline is the existing clean `dff0975` worktree/package; it precedes the incoming-typing main commit. Both runs use `--demo --demo-chat`, the same default 1120×760 requested viewport and 2× capture scale; the baseline outer window includes its old native title bar. No account session, messages, calls or microphone use occurred. Pointer/keyboard-only interaction, narrow-window interaction, screen readers, IME, Windows/Linux and live compatibility remain unverified. The gradient archive window itself has not been recaptured after the opacity fix. The PR remains draft for those interaction evidence gaps and pending CI. Refreshed package and process measurements are in `docs/performance.md`.
+
+
+## Server member list hydration repair — September 10, 2026
+
+Baseline: clean `main` at `9fcce51`, matching fetched `origin/main`; task branch
+`fix/server-member-sync`, pinned Rust 1.98.1 on macOS 27 / Apple M1 Pro / 16 GiB.
+The prior opcode-37/typing repair was already present. A GUILD_CREATE refresh replaced
+READY channel records with records lacking their computed member-list ID, making Reload
+people unable to request the server list. New/restored channels and changed overwrites
+had the same dependency on stale navigation metadata.
+
+Member requests now derive their ID from the existing bounded permission mirror, sharing
+the existing hash with the protocol layer and retaining u128 permission precision.
+An identity change clears the open request for the visible pane to refresh; identical
+hydration preserves pending replies. Missing metadata stays unavailable, stale replies
+remain rejected and threads retain their separate-protocol limitation. No dependency,
+additional directory request, UI layout or DM recipient behavior changed.
+
+Verification: the synthetic hydration/reload regression fails against `9fcce51` and
+passes after the fix. It also covers overwrite changes, late replies from the active
+old request, missing metadata and subsequent hydration. Shared hash tests cover known
+vectors, ordering, capacity and high permission bits. An independent review found no
+blocking issue. The baseline regression used a detached worktree; affected Cargo package
+caches were cleared before final validation to eliminate reuse across the two source trees.
+Native screenshots are not applicable: this fixes state/request selection; the synthetic
+member rendering is unchanged and identical pictures cannot demonstrate service acceptance.
+No saved account, Discord messages, calls, microphone or private payloads were accessed.
+
+Release package measurements and synthetic reducer results are recorded in
+`docs/performance.md`. Owner-operated live validation and Windows/Linux runtime testing
+remain unrun; this repair is not a claim of complete normal-user interoperability.
+
+Final local verification: `cargo xtask check` passed formatting, all workspace tests,
+strict all-feature Clippy and policy checks; the strengthened focused hydration regression
+also passed. `cargo xtask package` and `cargo xtask package-voice` built and verified their
+ad-hoc signatures. Text/voice executables grew by 1,216/1,200 bytes; synthetic reducer
+median was 37.244→37.569 ms with identical retained bounds, within run variation.

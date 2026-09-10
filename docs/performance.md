@@ -1294,3 +1294,33 @@ The size increase is the three embedded Inter faces (799,444 bytes of OFL font d
 Clean baseline `dff0975` (existing isolated worktree) versus final theme code `70e4f54`, integrated on `b92a082`. Baseline predates the incoming-typing commit; these chat fixtures contain no typing events. Same macOS 27.0 arm64, Apple M1 Pro / 16 GiB, Rust 1.98.1, release thin-LTO, wgpu/Metal, 2× capture scale, requested 1120×760 viewport. Both text/voice packages pass strict local ad-hoc signature verification; they are not notarized. Installed sizes sum files within each app bundle, ZIPs use Python DEFLATE 9, separately for text/voice. Packaged documentation reflects its build-time snapshot before this final report.
 
 Fresh text processes use `--demo --demo-chat`, Default dark, ten-second warmup and ten one-second `ps -p PID -o %cpu=,rss=` samples, no scripted interaction. These short samples ran on a shared development host during builds; CPU varied and RSS differences are noise, not a performance improvement. No child processes were launched by these offline text fixtures. Long sessions, interactive p95 frame/startup timing, GPU allocations and live memory remain unmeasured. Gradient screenshots are visual checks, not equivalent performance comparisons. This addendum supersedes the original theme measurements for the rebased code.
+
+
+## Server member identity repair — September 10, 2026
+
+Baseline `9fcce51` versus `fix/server-member-sync`; macOS 27.0 (26A428), Apple M1 Pro,
+16 GiB RAM, Rust 1.98.1, locked release profile. Both text-only and optional voice packages
+were rebuilt and ad-hoc signature verification passed. Installed bytes sum all files in
+the app bundle, including required resources/notices; compressed bytes use Python tarfile
+`w:gz` with the bundle named `Serein.app`. Snapshot outputs were kept separately under
+`target/member-sync-baseline` and `target/member-sync-after`. Bundles include documentation
+at packaging time, before these final measurement notes were appended.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable bytes | 47,431,712 | 47,432,928 | +1,216 (+0.003%) |
+| Text installed bytes | 48,014,712 | 48,019,348 | +4,636 (+0.010%) |
+| Text compressed bytes | 30,590,560 | 30,593,122 | +2,562 (+0.008%) |
+| Voice executable bytes | 50,251,296 | 50,252,496 | +1,200 (+0.002%) |
+| Voice installed bytes | 51,064,507 | 51,069,127 | +4,620 (+0.009%) |
+| Voice compressed bytes | 31,901,498 | 31,904,374 | +2,876 (+0.009%) |
+| Reducer median ms | 37.244 | 37.569 | +0.325 (+0.87%) |
+
+`cargo replay` was built for each revision; the resulting binary ran one warmup followed
+by five measured executions. Both retained 228,992–229,477 estimated timeline bytes and
+500 records for 100,000 synthetic events. Baseline runs: 40.181, 37.590, 37.244, 36.541,
+36.311 ms; after: 37.830, 37.724, 36.808, 37.278, 37.569 ms. The 0.325-ms median difference
+is within observed run variation; no speed improvement is claimed. This message-reducer
+workload does not measure member-list synchronization latency, process RSS, UI frame time
+or live service behavior. No protocol range, persistent cache or dependency was added;
+member snapshots remain bounded to 100 positions and 128 KiB.

@@ -314,6 +314,25 @@ impl Permissions {
 }
 
 impl State {
+    pub(crate) fn member_list_id(&self, channel: &model::Channel) -> Option<String> {
+        // Threads use a different member protocol; never borrow their parent's list.
+        if matches!(channel.kind, 10..=12) {
+            return None;
+        }
+        let guild_id = channel.guild?;
+        let guild = self.permissions.guilds.get(&guild_id)?;
+        let metadata = self.permissions.channels.get(&channel.id)?;
+        if metadata.guild != guild_id {
+            return None;
+        }
+        let everyone = guild
+            .roles
+            .as_ref()?
+            .iter()
+            .find(|role| role.id == guild_id)?;
+        p::member_list_id(everyone.bits, metadata.overwrites.as_deref()?)
+    }
+
     pub fn permission(&self, channel: Id, bits: u128) -> Option<bool> {
         let channel = self.channels.iter().find(|c| c.id == channel)?;
         let Some(guild) = channel.guild else {
