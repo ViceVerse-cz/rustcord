@@ -2,6 +2,7 @@
 pub mod archives;
 mod attachments;
 mod embeds;
+mod extra_content;
 pub mod notifications;
 pub mod permissions;
 pub mod pins;
@@ -402,6 +403,14 @@ pub struct MentionList(#[serde(deserialize_with = "model::deserialize_mentions")
 #[derive(Deserialize)]
 pub struct MessageDto {
     #[serde(default)]
+    pub poll: Option<extra_content::Object>,
+    #[serde(default)]
+    pub sticker_items: Option<extra_content::Array>,
+    #[serde(default)]
+    pub stickers: Option<extra_content::Array>,
+    #[serde(default)]
+    pub components: Option<extra_content::Array>,
+    #[serde(default)]
     pub reactions: reactions::ReactionList,
     pub id: Id,
     pub channel_id: Id,
@@ -438,6 +447,13 @@ pub struct Reference {
 impl MessageDto {
     pub fn into_model(self) -> Message {
         Message {
+            extra_content: model::ExtraContent {
+                poll: self.poll.is_some(),
+                sticker_items: self.sticker_items.is_some_and(|a| a.0),
+                stickers: self.stickers.is_some_and(|a| a.0),
+                components: self.components.is_some_and(|a| a.0),
+                components_v2: self.flags & (1 << 15) != 0,
+            },
             reactions: Some(self.reactions.0),
             id: self.id,
             channel: self.channel_id,
@@ -457,6 +473,7 @@ impl MessageDto {
                 Nonce::Number(n) => n.to_string(),
             }),
             reply_to: self.message_reference.and_then(|r| r.message_id),
+            kind: self.kind,
             unsupported: !matches!(self.kind, 0 | 19 | 20 | 23),
             attachments: self.attachments.0,
             embeds: embeds::bounded(self.embeds.0),
@@ -466,6 +483,14 @@ impl MessageDto {
 }
 #[derive(Deserialize)]
 pub struct PatchDto {
+    #[serde(default)]
+    pub poll: Patch<extra_content::Object>,
+    #[serde(default)]
+    pub sticker_items: Patch<extra_content::Array>,
+    #[serde(default)]
+    pub stickers: Patch<extra_content::Array>,
+    #[serde(default)]
+    pub components: Patch<extra_content::Array>,
     #[serde(default)]
     pub reactions: Patch<reactions::ReactionList>,
     pub id: Id,
@@ -486,6 +511,17 @@ pub struct PatchDto {
 impl PatchDto {
     pub fn into_model(self) -> MessagePatch {
         MessagePatch {
+            extra_content: model::ExtraContentPatch {
+                poll: extra_content::object_patch(self.poll),
+                sticker_items: extra_content::array_patch(self.sticker_items),
+                stickers: extra_content::array_patch(self.stickers),
+                components: extra_content::array_patch(self.components),
+                components_v2: match &self.flags {
+                    Patch::Absent => Patch::Absent,
+                    Patch::Null => Patch::Null,
+                    Patch::Value(flags) => Patch::Value(flags & (1 << 15) != 0),
+                },
+            },
             reactions: match self.reactions {
                 Patch::Absent => Patch::Absent,
                 Patch::Null => Patch::Null,
@@ -566,6 +602,64 @@ pub struct ErrorBody {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn system_types_keep_original_content_and_describe_known_events() {
+        let wire = |kind| {
+            serde_json::json!({
+                "id":"1", "channel_id":"2", "author":{"id":"3", "username":"Robin"},
+                "type":kind, "content":"original text", "mentions":[{"id":"4", "username":"Casey"}]
+            })
+        };
+        for kind in [
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 21, 22, 24, 25, 26, 27, 28,
+            29, 31, 32, 36, 37, 38, 39, 44, 46,
+        ] {
+            let message = decode::<MessageDto>(&serde_json::to_vec(&wire(kind)).unwrap())
+                .unwrap()
+                .into_model();
+            assert_eq!(message.kind, kind);
+            assert_eq!(message.content, "original text");
+            assert!(message.system_summary().is_some(), "type {kind}");
+            assert!(message.display_text().ends_with("\noriginal text"));
+        }
+        for kind in [0, 19, 20, 23, 222, 255] {
+            let message = decode::<MessageDto>(&serde_json::to_vec(&wire(kind)).unwrap())
+                .unwrap()
+                .into_model();
+            assert_eq!(message.kind, kind);
+            assert!(message.system_summary().is_none());
+            assert_eq!(message.display_text(), "original text");
+            assert_eq!(message.unsupported, matches!(kind, 222 | 255));
+        }
+        let mut message = decode::<MessageDto>(&serde_json::to_vec(&wire(7)).unwrap())
+            .unwrap()
+            .into_model();
+        message.content.clear();
+        assert_eq!(message.display_text(), "Welcome, Robin! Joined the server.");
+        message.kind = 1;
+        assert_eq!(
+            message.system_summary().unwrap(),
+            "Robin added Casey to the conversation."
+        );
+        message.kind = 2;
+        message.mentions[0] = message.author.clone();
+        assert_eq!(
+            message.system_summary().unwrap(),
+            "Robin left the conversation."
+        );
+        message.mentions.clear();
+        assert_eq!(
+            message.system_summary().unwrap(),
+            "Robin removed a member from the conversation."
+        );
+        message.author.name = "界".repeat(1000);
+        assert!(message.system_summary().unwrap().chars().count() < 150);
+        let mut invalid = wire(0);
+        invalid["type"] = serde_json::json!(256);
+        assert!(decode::<MessageDto>(&serde_json::to_vec(&invalid).unwrap()).is_err());
+        invalid["type"] = serde_json::json!(-1);
+        assert!(decode::<MessageDto>(&serde_json::to_vec(&invalid).unwrap()).is_err());
+    }
     #[test]
     fn bounded_message_mentions_and_patch_presence() {
         let message=decode::<MessageDto>(br#"{"id":"1","channel_id":"2","author":{"id":"3","username":"author"},"content":"<@4>","mentions":[{"id":"4","username":"user","global_name":"Display name"}]}"#).unwrap().into_model();
@@ -686,6 +780,48 @@ pub struct MemberDto {
 #[derive(Deserialize)]
 pub struct PresenceDto {
     pub status: String,
+    #[serde(default)]
+    pub activities: Vec<ActivityDto>,
+}
+/// Only the custom status (type 4) is retained; rich activities are ignored.
+#[derive(Deserialize)]
+pub struct ActivityDto {
+    #[serde(rename = "type")]
+    pub kind: u8,
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default)]
+    pub emoji: Option<ActivityEmojiDto>,
+}
+#[derive(Deserialize)]
+pub struct ActivityEmojiDto {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub id: Option<Id>,
+}
+impl PresenceDto {
+    /// Bounded custom status text; unicode emoji are kept, custom emoji are not fabricated.
+    pub fn custom_status(&self) -> Option<String> {
+        let activity = self.activities.iter().take(16).find(|a| a.kind == 4)?;
+        let emoji = activity
+            .emoji
+            .as_ref()
+            .filter(|e| e.id.is_none())
+            .and_then(|e| e.name.as_deref())
+            .filter(|name| name.chars().count() <= 8);
+        let state = activity.state.as_deref().map(str::trim).unwrap_or_default();
+        let text: String = emoji
+            .into_iter()
+            .chain((!state.is_empty()).then_some(state))
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(128)
+            .collect();
+        (!text.is_empty()).then_some(text)
+    }
 }
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -705,6 +841,7 @@ impl MemberItem {
             Self::Member { member: m } => Some(model::Member {
                 user: m.user.into_model(),
                 nick: m.nick.map(|n| n.chars().take(128).collect()),
+                custom_status: m.presence.as_ref().and_then(PresenceDto::custom_status),
                 status: m.presence.and_then(|p| match p.status.as_str() {
                     "online" | "idle" | "dnd" | "offline" => Some(p.status),
                     _ => None,
@@ -776,6 +913,25 @@ mod member_tests {
         assert_eq!(
             user.avatar_url(),
             "https://cdn.discordapp.com/embed/avatars/1.png"
+        );
+        let member: MemberItem = decode(br#"{"member":{"user":{"id":"5","username":"Presence"},"presence":{"status":"idle","activities":[{"type":0,"name":"Game","state":"ignored"},{"type":4,"name":"Custom Status","state":" semifluent in computerspeak ","emoji":{"name":"\ud83c\udf19","id":null}}]}}}"#).unwrap();
+        let member = member.into_model().unwrap();
+        assert_eq!(member.status.as_deref(), Some("idle"));
+        assert_eq!(
+            member.custom_status.as_deref(),
+            Some("🌙 semifluent in computerspeak")
+        );
+        let custom_emoji: MemberItem = decode(br#"{"member":{"user":{"id":"5","username":"Presence"},"presence":{"status":"online","activities":[{"type":4,"emoji":{"name":"serein_wave","id":"9001"}}]}}}"#).unwrap();
+        assert!(custom_emoji.into_model().unwrap().custom_status.is_none());
+        let long: MemberItem = decode(format!(r#"{{"member":{{"user":{{"id":"5","username":"P"}},"presence":{{"status":"dnd","activities":[{{"type":4,"state":"{}"}}]}}}}}}"#, "x".repeat(400)).as_bytes()).unwrap();
+        assert_eq!(
+            long.into_model()
+                .unwrap()
+                .custom_status
+                .unwrap()
+                .chars()
+                .count(),
+            128
         );
         assert_eq!(murmur3(b""), 0);
         assert_eq!(murmur3(b"foo"), 0xf6a5c420);

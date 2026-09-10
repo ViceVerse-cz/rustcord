@@ -850,6 +850,7 @@ mod tests {
                     },
                     nick: None,
                     status: None,
+                    custom_status: None,
                 }),
             })
             .collect();
