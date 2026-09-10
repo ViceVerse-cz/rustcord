@@ -2104,3 +2104,33 @@ with physical Escape before the final capture, then explicitly requested merging
 to main. Final native after/light/narrow captures, native process measurements,
 live account playback and other OS verification remain unverified; no substitute
 image or live-compatibility claim is made. No account or microphone action occurred.
+
+### Missing audio player with conflicting metadata — September 11, 2026
+
+The owner reports only Download/Open original when launching with
+`cargo run --features voice`. The player and styling commits remain on main.
+On baseline `2b75ba3`, a supported `.mp3`/`.wav` filename was rejected when its
+non-generic MIME type was unexpected. Preview eligibility now accepts either
+supported hint, and audio takes precedence over image grouping in the shared model.
+Actual byte validation, explicit playback, URL admission and payload limits remain
+unchanged. The owner's raw attachment metadata was not inspected.
+
+Both the model regression and the existing keyboard UI test failed before the fix.
+The UI test now routes a synthetic MP3 labeled `text/plain` through the real
+attachment renderer at 220/380 points in dark/light themes, exercising explicit
+Play/Pause/seek/volume. `cargo test --locked -p model -p ui -p discord-protocol`
+passed 151 tests; `cargo test --locked -p serein --features voice audio::tests`
+passed three decoder/callback/transfer tests. Independent read-only review: ship.
+Both `cargo xtask package` and `cargo xtask package-voice` passed.
+
+The all-feature workspace run encountered a 10-second timeout in
+`local_guild_voice_waiting_mixed_audio_and_resume` at `transport.rs:794`; that test
+passed its isolated retry (0.57 seconds). The remaining workspace passed 347 tests
+with `cargo test --workspace --all-features --locked --exclude discord-voice`.
+Strict Clippy for model/UI passed. This is not a clean full-workspace run.
+
+`cargo xtask check` remains blocked by two baseline `chunks_exact_to_as_chunks`
+Clippy errors in unchanged `crates/discord-voice/src/audio/echo.rs:39,48`.
+Package measurements are in `docs/performance.md`. Native before/after screenshots,
+process CPU/RSS/frame timing and live attachment playback remain unverified because
+the owner stopped Computer Use with Escape; automation was not resumed.
