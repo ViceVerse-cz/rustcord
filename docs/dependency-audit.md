@@ -1,6 +1,11 @@
 # Dependency audit — September 10, 2026
 
-The strict workspace audit still fails with six vulnerability advisories and five warnings after the HPKE security backport. All six vulnerability advisories are now on locked, unselected optional libcrux packages; inverse trees confirm they are absent from the workspace voice build across all targets. Active maintenance/unsoundness warnings remain for the native timer path and Linux authentication webview. The original two-warning result below is historical. No finding is suppressed, and this report is not release approval.
+The native dependency patch now reports **zero vulnerability-class findings and two denied
+warnings**, down from six and five at baseline e4ef4a8. `cargo-audit 0.22.2` with the unchanged
+`--deny warnings` gate still exits 1 for Linux GLib 0.18.5 (RUSTSEC-2024-0429, unsound) and
+proc-macro-error 1.0.4 (RUSTSEC-2024-0370, unmaintained). Neither warning is suppressed.
+This is partial remediation, not a clean audit or release approval. Older results below are
+historical; the native timer/libcrux follow-up at the end records the current change.
 
 ## Earlier text-client result
 
@@ -127,3 +132,32 @@ The September 10 follow-up reran `target/audit-tool/bin/cargo-audit audit --json
 ## Guild voice implementation check — September 10, 2026
 
 Re-ran `target/audit-tool/bin/cargo-audit audit --deny warnings --json` for the guild voice branch: exit 1, six vulnerability advisories and five warnings (four unmaintained, one unsound), matching the previously documented blocked audit. This task adds no dependencies and does not change Cargo.lock or the vendored code. Existing dependency/source notices remain in both packages; the new mixer and group handling are original repository code. This is not a clean security audit or release approval.
+
+
+## Remove unused native dependency paths - September 10, 2026
+
+Starting from e4ef4a8 (conversation switcher PR #22), the existing hpke-rs 0.6.1 fork no longer
+declares the unused optional hpke-rs-libcrux backend or its dev dependency. Its backend feature
+and re-export are removed; examples, KDF tests and benchmarks use RustCrypto, and duplicate
+libcrux AEAD test cases are omitted. OpenMLS continues selecting HpkeRustCrypto. The existing
+SHAKE256 backport is unchanged. This is removal of unused dependency declarations, not a fix
+to libcrux cryptographic implementations.
+
+A local Davey 0.1.4 manifest patch removes OpenMLS's unconditional `js` feature. Davey Rust
+sources, dependency versions and native DAVE behavior are unchanged; OpenMLS uses std::time
+on native platforms. Serein does not target WebAssembly. The crate checksum, original manifest,
+VCS revision and upstream MIT text are retained under vendor/davey. A newer compatible release
+without the unconditional feature was not available when checked. Both fork removal conditions
+are documented in their SEREIN-PATCH.md files.
+
+Cargo.lock drops 37 packages net (775 to 738); Davey changes from registry to the documented
+local patch. No remaining package version is changed. Removed paths include hpke-rs-libcrux,
+libcrux/hax packages, proc-macro-error2, fluvio-wasm-timer, parking_lot 0.11 and instant.
+The same cargo-audit 0.22.2 and 1,243-advisory database at
+`b50980aad8b8f14f77e25a97b32dd94bf008b0af` were used before and after: six vulnerability-class findings and
+five denied warnings before; zero and two after. Logs are target/audit-before.log and
+target/audit-after.log in the isolated development checkout. The CI command is unchanged.
+
+The remaining supported Linux webview paths and remediation constraints above still apply.
+No algorithm rewrite, advisory ignore, vulnerable-package relabeling, native window, account,
+microphone or live Discord action is part of this change.

@@ -758,3 +758,41 @@ or search worker was added. No improvement in native latency or memory is claime
 Measured executable SHA256:
 - text: F127A6ACB7F1857A39C174BBF348603DAF623A3BE4D3BEB74FC4424103D6EF39
 - voice: 8BDE5C39E0E383BA323BEB7E9021D51D640684861D2F4104F8A84B567732B8E3
+
+
+## Native dependency hardening - September 10, 2026
+
+Baseline e4ef4a852415e5061735f9183ca65dd202406ecd (PR #22), separately copied and hash-verified
+before edits. Same Windows 11 Home 10.0.26200 host, Ryzen 7 7800X3D (16 logical CPUs), about
+31 GiB RAM, Rust 1.98.1, release thin LTO / one codegen unit / wgpu; text default and optional
+voice packages built separately. No native process was launched. One package measurement per
+variant; ZIP uses Python zipfile DEFLATE level 9, excluding the voice subdirectory from text.
+Both unsigned cargo xtask package and package-voice commands passed.
+
+| Metric / method | Baseline e4ef4a8 | Dependency patch | Delta |
+| --- | ---: | ---: | ---: |
+| text executable bytes | 49,658,368 | 49,658,368 | +0 (+0.000%) |
+| text installed bytes | 50,098,393 | 50,105,951 | +7,558 (+0.015%) |
+| text zip bytes | 31,104,011 | 31,106,640 | +2,629 (+0.008%) |
+| voice executable bytes | 52,990,464 | 53,016,064 | +25,600 (+0.048%) |
+| voice installed bytes | 53,654,047 | 53,687,168 | +33,121 (+0.062%) |
+| voice zip bytes | 32,466,873 | 32,480,689 | +13,816 (+0.043%) |
+
+Text/voice installed file counts remain 42/88. Text executable size is unchanged; the voice
+executable grows 25,600 bytes (0.048%). Removing unused lockfile paths is not an executable-size
+or runtime-speed optimization claim. Installed/ZIP totals include the actual staged docs and
+modified HPKE source before this measurement addendum. Packages contain no PR screenshots.
+Packaged HPKE source and the existing Davey MIT notice were byte-checked against the workspace.
+Davey Rust source is unchanged; its manifest loses browser timer features, and the HPKE fork
+loses its unused libcrux provider declaration. DAVE/MLS, SHAKE vectors and encrypted local Opus
+transport pass in the 190-test workspace suite. No reducer, cache, UI or audio algorithm changes
+were made, so the unrelated reducer workload was not rerun. Native CPU/RSS and real voice
+latency remain unmeasured under the owner's paused desktop/live gate.
+
+Cargo.lock package count falls from 775 to 738; strict cargo-audit 0.22.2 falls from six
+vulnerability-class findings/five denied warnings to zero/two. It still fails on Linux GLib
+unsoundness and proc-macro-error maintenance; no suppression or release approval is implied.
+
+Measured executable SHA256:
+- text: 16F944D856C896C9D5EC2A388E6434E20BEC5F972302B5884B56922FE770826F
+- voice: 161A9A1ADD3F4A90A5B7448E4B46633ED4A7515CF993C0EA0BDC5F95F55ED8F2

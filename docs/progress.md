@@ -891,3 +891,42 @@ and memory remain unmeasured. Original seven dirty-source hashes were rechecked 
 
 Next concrete hardening step: repair the inherited dependency/security audit failures without
 waiving checks, then continue the remaining text/platform/live gates from the full specification.
+
+
+## Native dependency hardening - September 10, 2026
+
+This SPEC 12/14.5 slice starts at e4ef4a852415e5061735f9183ca65dd202406ecd (PR #22) in an
+isolated worktree. Baseline text/voice packages were copied before edits and their recorded
+SHA256 hashes verified. Main's independent image-aspect-ratio PR #20 remains outside this
+stack's baseline; the original dirty checkout is preserved.
+
+The existing HPKE fork removes its unused optional libcrux backend. A documented Davey 0.1.4
+manifest-only fork removes OpenMLS browser timer features from the native build; all Davey
+Rust sources and the selected RustCrypto provider are unchanged. No new runtime dependency,
+service route, UI behavior, persistence, queue or payload limit is introduced. Original crate
+checksums, manifests and licenses are retained; voice packages continue shipping the modified
+MPL HPKE source and Davey's existing MIT notice.
+
+The unchanged strict cargo-audit 0.22.2 command improves from six vulnerability-class findings
+and five denied warnings to zero and two, dropping 37 packages net from Cargo.lock. It still
+exits 1 for Linux glib 0.18.5 unsoundness and proc-macro-error 1.0.4 maintenance. No finding
+is suppressed. The Linux authentication migration/backport decision remains a release gate;
+see dependency-audit.md. This delivery remains draft while those findings and platform/live
+evidence are open. No native UI, OS notification, account, browser, call or microphone action
+was taken; desktop automation remains paused after owner Escape stops.
+
+
+cargo xtask check passed all 190 offline Rust tests, doctests, formatting, strict all-feature
+Clippy, text-only compilation and policy checks. This includes the exact SHAKE adapter vectors,
+two-party DAVE encryption/decryption and tampering/transition handling, and localhost encrypted
+Opus transport. These checks do not establish Discord interoperability. Feature trees confirm
+OpenMLS no longer enables js and retains its existing RustCrypto provider. Independent review
+verified all 17 vendored Davey Rust source files byte-for-byte against the pinned registry
+release, checked the lockfile scope and license/source packaging, and found no actionable issue.
+
+
+Both unsigned Windows packages passed. Text executable size is unchanged; voice grows 25,600
+bytes (0.048%). Exact installed/ZIP deltas and hashes are in performance.md. Packaged modified
+HPKE source and Davey's existing MIT notice were verified. Original seven dirty-source hashes
+were rechecked unchanged. The complete SPEC objective, native/live acceptance and Linux audit
+remediation remain open; this slice does not claim a working live Discord client.

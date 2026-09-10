@@ -52,3 +52,5 @@ debug = "line-tables-only"
 [patch.crates-io]
 # Replace an affected SHAKE dependency while retaining the compatible HPKE API.
 hpke-rs = { path = "vendor/hpke-rs" }
+# Native DAVE does not need OpenMLS browser timers; see vendor/davey/SEREIN-PATCH.md.
+davey = { path = "vendor/davey" }
