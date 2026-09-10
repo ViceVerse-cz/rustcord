@@ -1,5 +1,11 @@
 # Local storage policy and audit
 
+The September 10 PR integration uses schema 9 to combine system-message `message_kind`,
+unsupported-content `extra_content` and the reading/layout singleton. Both independent
+schema-7 layouts and schema 8 are migrated by detecting the actual message columns. Existing
+rows, drafts and settings are retained; older binaries with a lower schema ceiling cannot
+reopen the upgraded cache. No unpublished reply-navigation metadata is included.
+
 Reading/layout settings use one application-wide schema 8 SQLite singleton: integer display
 scale 80..150 percent, sidebar width 190..360 logical points, and wide-layout People visibility.
 Missing row means 100 percent / 236 points / visible. Reset removes just this override in an
@@ -189,3 +195,7 @@ channel/guild names; each field is limited to 128 characters. Matching normalize
 channel's bounded names and at most 64 known DM recipient names at a time, then drops them.
 It reuses the existing navigation limits and permission cache, with no persistent query history,
 search index, directory fetch or new worker/queue. Closing clears the query; logout resets the UI.
+
+## September 10: message type retention
+
+Schema 7 adds one checked integer `message_kind` (0..255) per cached message, with no new payload or cache. Existing unsupported rows migrate to the unknown sentinel 255; ordinary rows use 0. Reloaded history supplies the actual type. Existing account/item/byte/page limits remain in force. Migration and reopen/roundtrip tests cover retained rows and invalid values. Builds limited to schema 6 cannot reopen this cache. PR #28 independently uses schema 7 for content markers; merge both column-detected migrations and both save/load fields when integrating these branches.

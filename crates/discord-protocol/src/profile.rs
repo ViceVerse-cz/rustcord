@@ -1,6 +1,8 @@
 //! Unofficial normal-user profile response; see docs/profiles.md for source evidence.
 use crate::{DecodeError, UserDto};
-use model::{GuildProfile, Id, ProfileBadge, ProfileConnection, ProfileGuild, UserProfile};
+use model::{
+    ClanTag, GuildProfile, Id, ProfileBadge, ProfileConnection, ProfileGuild, UserProfile,
+};
 use serde::{
     Deserialize, Deserializer,
     de::{SeqAccess, Visitor},
@@ -35,6 +37,32 @@ struct ProfileUser {
     banner: Option<String>,
     #[serde(default)]
     accent_color: Option<u32>,
+    /// Current name of the displayed server tag object; `clan` is its older name.
+    #[serde(default)]
+    primary_guild: Option<ClanDto>,
+    #[serde(default)]
+    clan: Option<ClanDto>,
+}
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct ClanDto {
+    identity_guild_id: Option<GuildId>,
+    identity_enabled: Option<bool>,
+    tag: Option<String>,
+    badge: Option<String>,
+}
+impl ClanDto {
+    fn into_model(self, limited: &mut bool) -> Option<ClanTag> {
+        if self.identity_enabled == Some(false) {
+            return None;
+        }
+        let tag = self.tag.filter(|t| !t.trim().is_empty())?;
+        Some(ClanTag {
+            guild: self.identity_guild_id?.id(),
+            tag: text(tag, 8, limited),
+            badge: hash(self.badge),
+        })
+    }
 }
 #[derive(Deserialize, Default)]
 #[serde(default)]
@@ -43,6 +71,7 @@ struct Metadata {
     pronouns: Option<String>,
     banner: Option<String>,
     accent_color: Option<u32>,
+    theme_colors: Option<Small<u32, 2>>,
     guild_id: Option<GuildId>,
 }
 #[derive(Deserialize)]
@@ -73,6 +102,8 @@ struct Member {
 struct Badge {
     id: String,
     description: String,
+    #[serde(default)]
+    icon: Option<String>,
 }
 #[derive(Deserialize)]
 struct Connection {
@@ -181,8 +212,9 @@ pub fn decode_profile(bytes: &[u8], guild: Option<Id>) -> Result<UserProfile, De
         .into_iter()
         .chain(dto.guild_badges.items)
         .map(|badge| ProfileBadge {
-            id: text(badge.id, 16, &mut limited),
+            id: text(badge.id, 64, &mut limited),
             description: text(badge.description, 256, &mut limited),
+            icon: hash(badge.icon),
         })
         .collect();
     limited |= badges.len() > 16;
@@ -207,6 +239,22 @@ pub fn decode_profile(bytes: &[u8], guild: Option<Id>) -> Result<UserProfile, De
         }
         _ => None,
     };
+    // Exactly two colors are documented by observation; anything else is not a theme.
+    let theme_colors = metadata
+        .theme_colors
+        .as_ref()
+        .filter(|colors| !colors.limited)
+        .and_then(|colors| {
+            let [top, bottom] = colors.items[..] else {
+                return None;
+            };
+            (top <= 0xff_ffff && bottom <= 0xff_ffff).then_some([top, bottom])
+        });
+    let clan = dto
+        .user
+        .primary_guild
+        .or(dto.user.clan)
+        .and_then(|clan| clan.into_model(&mut limited));
     let mut profile = UserProfile {
         user: dto.user.user.into_model(),
         username,
@@ -243,6 +291,8 @@ pub fn decode_profile(bytes: &[u8], guild: Option<Id>) -> Result<UserProfile, De
             })
             .collect(),
         guild,
+        theme_colors,
+        clan,
         limited,
     };
     // Keep identity/about fields; large returned mutual lists are the first expendable summaries.
@@ -267,11 +317,11 @@ mod tests {
     use serde_json::json;
     #[test]
     fn profile_metadata_is_bounded_and_guild_identity_is_checked() {
-        let value = json!({"user":{"id":"1","username":"name","global_name":"Display","avatar":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","bio":"global bio"},
-            "user_profile":{"bio":"About me","pronouns":"they/them","banner":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","accent_color":123},
+        let value = json!({"user":{"id":"1","username":"name","global_name":"Display","avatar":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","bio":"global bio","primary_guild":{"identity_guild_id":"2","identity_enabled":true,"tag":"SRN","badge":"ffffffffffffffffffffffffffffffff"}},
+            "user_profile":{"bio":"About me","pronouns":"they/them","banner":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","accent_color":123,"theme_colors":[1193046,16777215]},
             "guild_member":{"nick":"Server name","avatar":"cccccccccccccccccccccccccccccccc","joined_at":"2026-01-01T00:00:00Z"},
             "guild_member_profile":{"guild_id":2,"banner":"dddddddddddddddddddddddddddddddd","bio":"Server bio"},
-            "badges":[{"id":"badge","description":"Synthetic badge"}],"connected_accounts":[{"type":"github","name":"synthetic","verified":true}],"mutual_guilds":[{"id":"2","nick":"Server name"}]});
+            "badges":[{"id":"badge","description":"Synthetic badge","icon":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}],"connected_accounts":[{"type":"github","name":"synthetic","verified":true}],"mutual_guilds":[{"id":"2","nick":"Server name"}]});
         let profile = decode_profile(value.to_string().as_bytes(), Some(Id(2))).unwrap();
         assert_eq!(profile.user.name, "Display");
         assert_eq!(profile.username, "name");
@@ -284,7 +334,32 @@ mod tests {
         );
         assert!(profile.avatar_key().starts_with("member-avatar-2-1-"));
         assert_eq!(profile.guild.as_ref().unwrap().bio, "Server bio");
+        assert_eq!(profile.theme_colors, Some([0x123456, 0xffffff]));
+        let clan = profile.clan.as_ref().unwrap();
+        assert_eq!((clan.guild, clan.tag.as_str()), (Id(2), "SRN"));
+        assert_eq!(
+            clan.badge_key().as_deref(),
+            Some("clan-2-ffffffffffffffffffffffffffffffff")
+        );
+        assert_eq!(
+            profile.badges[0].icon_key().as_deref(),
+            Some("badge-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+        );
         assert!(profile.valid());
+        let disabled = json!({"user":{"id":"1","username":"n","clan":{"identity_guild_id":"2","identity_enabled":false,"tag":"OFF"}},
+            "user_profile":{"theme_colors":[1,2,3]},"badges":[{"id":"b","description":"d","icon":"../evil"}]});
+        let profile = decode_profile(disabled.to_string().as_bytes(), None).unwrap();
+        assert!(profile.clan.is_none());
+        assert!(profile.theme_colors.is_none());
+        assert!(profile.badges[0].icon.is_none());
+        let too_bright =
+            json!({"user":{"id":"1","username":"n"},"user_profile":{"theme_colors":[16777216,0]}});
+        assert!(
+            decode_profile(too_bright.to_string().as_bytes(), None)
+                .unwrap()
+                .theme_colors
+                .is_none()
+        );
         assert!(decode_profile(value.to_string().as_bytes(), Some(Id(3))).is_err());
         assert!(decode_profile(&vec![0; MAX_PROFILE_WIRE + 1], None).is_err());
         let huge = json!({"user":{"id":"1","username":"x".repeat(10000)},"user_profile":{"bio":"世".repeat(5000),"banner":"../invalid"},"mutual_guilds":vec![json!({"id":"2","nick":"文".repeat(300)});70]});

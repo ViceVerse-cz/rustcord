@@ -2,6 +2,26 @@
 
 ## Current scope and gates
 
+Current work: owner-requested integration of all twelve open implementation PRs (#17, #19,
+#21, #22, #23, #24, #26, #27, #28, #29, #31 and #32) with main 85fde15. All twelve heads are
+ancestors of published PR #32 at 57927c7. The isolated integration preserves main's image
+aspect ratios, anchored profile popouts/profile cache and system-message descriptions alongside
+the stack's permission, deletion, resident-history and reading-preference behavior.
+Unpublished reply-navigation work stays in its separate dirty worktree and is not included.
+
+Conflicts are resolved with combined schema 9: both independently introduced schema-7 message columns
+(system message kind and unsupported-content markers), plus schema-8 reading preferences.
+Migration regressions cover both schema-7 histories and schema 8 without losing drafts/settings,
+including atomic rollback on failure. Integration review also repaired typed permission changes
+leaving profile snapshots/in-flight responses alive, and presence updates leaving old custom-status
+text visible. Compact presence updates invalidate that text until a new member-list snapshot.
+Combined `cargo xtask check` passed: 248 offline tests, strict all-feature Clippy, formatting,
+text-only compilation and policy checks. `node tests/login-handoff.cjs` passed. Both text and
+voice release packages passed; measurements are recorded in docs/performance.md. Local `cargo audit --deny warnings` could not run because cargo-audit is not installed;
+the unchanged lockfile passed both PR #32 security jobs (runs 34506026424 and 34506044467).
+Fresh integration CI is still required for platform evidence. Existing native screenshots remain historical evidence;
+no new native/account/audio automation is permitted by this merge request or was performed.
+
 Current work: saved reading and layout preferences (SPEC 2.2 / 9.1). Add application-wide
 display scale (80..150%), sidebar width (190..360 points) and wide-layout People visibility,
 with reset/retry controls in sign-in and messaging settings. SQLite schema 8 adds one fixed
@@ -1122,3 +1142,31 @@ bytes (0.048%). Exact installed/ZIP deltas and hashes are in performance.md. Pac
 HPKE source and Davey's existing MIT notice were verified. Original seven dirty-source hashes
 were rechecked unchanged. The complete SPEC objective, native/live acceptance and Linux audit
 remediation remain open; this slice does not claim a working live Discord client.
+
+## Image aspect ratios — September 10, 2026
+
+Task baseline: clean `main` at `2879fbc`, fetched `origin/main`; branch `fix/image-aspect-ratios`, Rust 1.98.1. The shared texture painter previously stretched decoded pixels into metadata/layout rectangles. It now contains them at their actual aspect ratio without changing reserved message geometry. Server icons use a square 38-point image slot, profile avatars use their requested square size, and non-square custom emoji preserve proportions in messages, the composer and picker. Existing banner cropping and bounded worker/cache policies remain intact.
+
+Validation: focused media rendering and custom-emoji checks pass; `cargo xtask check` passes (workspace tests, format, strict Clippy, policy). Rendering coverage includes portrait, landscape and square textures, absent/mismatched metadata, inline/enlarged media, and unchanged geometry after loading. Native synthetic before/after evidence and release measurement details are recorded with this task. The existing demo landscape is a vector placeholder, so its screenshots establish layout/viewer behavior; decoded-pixel aspect correctness is verified by the rendering tests. No Discord session, messages, downloads, calls or microphone were used. Windows/Linux and live CDN behavior remain unverified.
+
+Final host text/voice packages pass. Text executable +16 bytes; voice executable unchanged. Settled median CPU remained 0%; RSS samples were noisy (see performance report). Native dark/default-size timeline and enlarged viewer were captured and inspected. Further light/narrow native interaction was blocked by CUA `noWindowsAvailable` / ScreenCaptureKit invalid-parameter errors after repeated target refresh; those variants remain unverified. PR stays draft for that visual verification limitation and pending CI.
+
+## Profile popout — September 10, 2026
+
+Task baseline: clean `main` at `74709e2`, fetched `origin/main`; branch `feat/profile-popout`, Rust 1.98.1. The modal profile card was replaced by a compact 300-point popout anchored beside the clicked user (People row, message author, mention, footer avatar). It flips left near the right edge, stays in the window, and closes on Escape or an outside click. The card now paints the account's two profile theme colors as a gradient when returned, shows the server tag (primary guild/clan) with its badge, badge artwork, a presence dot and custom-status bubble from the retained People rows, and a full-width Message action. The People pane lists custom status under names. Parsing adds `theme_colors` (exactly two bounded RGB values), `primary_guild`/`clan` (disabled tags hidden, 8-character text), `badges[].icon` and the type-4 custom-status activity (128 characters, unicode emoji only). Badge and server-tag artwork use two new validated CDN key forms through the existing bounded image worker. The profile event payload is boxed so the core event enum did not grow. No animated decoration or profile effect is rendered.
+
+Follow-up in the same task: the owner asked that profiles be cached instead of reloaded on every click. A RAM-only cache in `State` keeps up to 32 profiles / 1 MiB for 15 minutes, keyed by user and server scope, cleared on session start, resync/permission change, server removal, session failure and logout. Reopening a cached card issues no command.
+
+Validation: `cargo xtask check` (see the final line of this section), focused UI tests for anchor placement/flip/Escape/outside-click/no requests, parser tests for the new fields, CDN key tests. Native macOS dark-mode capture used the new disclosed `--demo --demo-profile` fixture because pointer automation was unavailable without accessibility permission; before/after images are under `docs/pr-evidence/profile-popout`. Light mode, narrow windows, keyboard-only use and any live payload remain unverified. No Discord session, messages or media requests were used.
+
+## September 10: welcome and other system messages
+
+Implemented native descriptions for all 33 documented nonordinary message types, including welcome joins, recipient changes, pins, boosts, channel/thread notices and calls. Preserve the numeric type through REST/Gateway models and SQLite; render original content separately. Copy and loaded reply previews include descriptions. Unknown types retain a numbered fallback. System rows stay ungrouped and cannot use the own-message edit control. Rich call/subscription/poll details are not invented; search/pins snapshot excerpts remain content-only.
+
+Checked all repository PRs and inspected #27/#28: they cover external fallback and unsupported content markers, not welcome rendering. This PR is based on main, not stacked on them. Integration must combine the timeline controls and the independently introduced schema7 columns. Legacy unsupported cached messages migrate to unknown255 and need ordinary history reload to recover actual kinds. No dependencies/notices changed.
+
+Verification: `cargo test --locked -p discord-protocol -p local-store -p ui` passed. `cargo xtask check` passed 160 offline tests, doctests, format, strict all-feature Clippy, text compilation and policy checks after correcting the fixture-placement lint. Protocol checks cover all documented kinds, ordinary/unknown variants, missing recipient data, bounded Unicode names, original/copy text and invalid type ranges; SQLite checks cover migration, roundtrip/reopen and invalid values; egui checks cover known/unknown rows and light/narrow/wide/dark rendering. Independent diff review found no correctness blocker. Text and voice macOS release packages passed strict ad-hoc signature verification. Native synthetic before/after screenshots are under `docs/pr-evidence/system-messages/`; no account, Discord message, call or microphone action was performed.
+
+Performance methods/results are in the system-message section of `docs/performance.md`: text executable +18,464 bytes, voice +2,064 bytes; idle CPU median 0% both; short native RSS median +1,312 KiB; ordinary reducer replay 29.332→28.687 ms, unchanged retained byte range, no speed claim.
+
+Reproduce: `cargo run --locked -p serein -- --demo --demo-system-messages`, scroll to top for welcome, addition, pin and boost events; scroll down for rename/thread/call/unknown examples. Before screenshot uses the same fixture backported to the baseline without production changes. Native dark screenshots/scrolling were inspected; native light selection via automation did not visibly apply and native keyboard behavior remains unverified (headless light/narrow checks pass). Live account behavior, other OSes and p95 timing remain unverified. Delivered draft [PR #30](https://github.com/ViceVerse-cz/rustcord/pull/30), branch `feat/system-messages`, implementation commit `49a2459`. Native macOS/Windows/Linux and security CI jobs were queued/in progress at handoff; no remote pass is claimed. Both commit-pinned screenshot files were verified through the GitHub contents API. Draft also records outstanding native light/keyboard verification.

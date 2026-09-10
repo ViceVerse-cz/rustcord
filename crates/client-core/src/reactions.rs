@@ -287,6 +287,7 @@ mod tests {
             .timeline
             .insert(
                 Message {
+                    kind: 0,
                     id: Id(50),
                     channel: Id(10),
                     author: user,

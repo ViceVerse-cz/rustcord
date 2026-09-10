@@ -82,6 +82,7 @@ fn layout_key(message: &Message) -> u64 {
     message.reply_to.hash(&mut key);
     message.unsupported.hash(&mut key);
     message.extra_content.hash(&mut key);
+    message.kind.hash(&mut key);
     message.attachments.hash(&mut key);
     message.embeds.hash(&mut key);
     message.embeds_suppressed.hash(&mut key);
@@ -198,7 +199,7 @@ fn message_actions(
     .ui(ui, |ui| {
         ui.set_min_width(140.0);
         if ui.button("Copy message").clicked() {
-            ui.ctx().copy_text(message.content.clone());
+            ui.ctx().copy_text(message.display_text().into_owned());
             ui.close();
         }
         if ui
@@ -487,9 +488,12 @@ impl TimelineView {
                                         // Reuse only loaded content; never fetch a thread while painting.
                                         let preview = state.timeline.get(reply).map_or_else(
                                             || "↳ Earlier message · outside loaded history".into(),
-                                            |m| if crate::embeds::has_spoilers(m) { format!("↳ {} · Spoiler", m.author.name) } else { format!("↳ {}: {}", m.author.name, m.content.chars().take(120).collect::<String>().replace('\n', " ")) },
+                                            |m| if crate::embeds::has_spoilers(m) { format!("↳ {} · Spoiler", m.author.name) } else { format!("↳ {}: {}", m.author.name, m.display_text().chars().take(120).collect::<String>().replace('\n', " ")) },
                                         );
                                         ui.add(egui::Label::new(RichText::new(preview).small().color(colors.muted)).truncate());
+                                    }
+                                    if let Some(summary) = message.system_summary() {
+                                        ui.label(RichText::new(summary).color(colors.muted));
                                     }
                                     let formatted = self.formatted.get(*id, &message.content);
                                     let spoilers = formatted.spoilers || crate::embeds::has_spoilers(message);
@@ -513,9 +517,12 @@ impl TimelineView {
                                     if message.edited {
                                         ui.label(RichText::new("(edited)").small().color(colors.muted));
                                     }
-                                    if message.unsupported || message.extra_content.any() {
+                                    let unknown_system = message.unsupported && message.system_summary().is_none();
+                                    if unknown_system || message.extra_content.any() {
+                                        if unknown_system {
+                                            ui.label(RichText::new(format!("Unsupported message type {} · Preview unavailable", message.kind)).small().color(colors.muted));
+                                        }
                                         for (present, label) in [
-                                            (message.unsupported, "System content · Preview unavailable"),
                                             (message.extra_content.poll, "Poll · Preview unavailable"),
                                             (message.extra_content.sticker_items || message.extra_content.stickers, "Sticker · Preview unavailable"),
                                             (message.extra_content.components || message.extra_content.components_v2, "Components · Preview unavailable"),
@@ -560,7 +567,7 @@ impl TimelineView {
                             self.reaction = Some((*id, action));
                         }
                         let can_reply = state.can_send(message.channel);
-                        let can_edit = state.can_edit(message.channel, *id);
+                        let can_edit = !message.unsupported && state.can_edit(message.channel, *id);
                         let can_delete = state.can_delete(message.channel, *id);
                         if toolbar.add_enabled_ui(can_reply, |ui| action_button(ui, "↩", "Reply")).inner.clicked() { selected_reply = Some(*id); }
                         if own && toolbar.add_enabled_ui(can_edit, |ui| action_button(ui, "✎", "Edit message")).inner.clicked() { *editing = Some((message.channel, *id, message.content.clone())); self.edit_started = true; }
@@ -684,6 +691,7 @@ mod tests {
             revision: 0,
             nonce: None,
             reply_to: None,
+            kind: 0,
             unsupported: false,
             extra_content: Default::default(),
             embeds: vec![],
@@ -691,6 +699,92 @@ mod tests {
             mentions: vec![],
             reactions: Some(vec![]),
             embeds_suppressed: false,
+        }
+    }
+    #[test]
+    fn system_events_render_wrap_and_keep_unknown_fallbacks() {
+        fn text(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(t) => out.push(t.galley.job.text.clone()),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| text(s, out)),
+                _ => {}
+            }
+        }
+        for (width, dark) in [(900.0, true), (280.0, false)] {
+            let ctx = egui::Context::default();
+            crate::design::apply(&ctx);
+            ctx.set_visuals(if dark {
+                egui::Visuals::dark()
+            } else {
+                egui::Visuals::light()
+            });
+            let mut state = State {
+                selected: Some(Id(20)),
+                demo: true,
+                ..Default::default()
+            };
+            for (id, kind, content) in [(1, 7, ""), (2, 4, "new channel name"), (3, 222, "")] {
+                let mut message = text_message(id);
+                let old_key = layout_key(&message);
+                message.kind = kind;
+                assert_ne!(old_key, layout_key(&message));
+                message.unsupported = true;
+                message.content = content.into();
+                assert!(!grouped(Some(&message), &message, None));
+                state.timeline.insert(message, false, false).unwrap();
+            }
+            let mut view = TimelineView::default();
+            let mut avatars = crate::avatars::Avatars::default();
+            let mut painted = vec![];
+            for _ in 0..5 {
+                painted.clear();
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 800.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        view.show(
+                            ui,
+                            &mut state,
+                            &mut None,
+                            &mut None,
+                            &mut avatars,
+                            &mut None,
+                        )
+                    },
+                );
+                for shape in &output.shapes {
+                    text(&shape.shape, &mut painted);
+                }
+                output.drop_without_applying_deltas();
+            }
+            assert!(
+                painted
+                    .iter()
+                    .any(|s| s == "Welcome, Robin! Joined the server.")
+            );
+            assert!(
+                painted
+                    .iter()
+                    .any(|s| s == "Robin changed the channel name.")
+            );
+            assert!(painted.iter().any(|s| s.contains("new channel name")));
+            assert_eq!(
+                painted
+                    .iter()
+                    .filter(|s| s.contains("Preview unavailable"))
+                    .count(),
+                1
+            );
+            assert!(
+                painted
+                    .iter()
+                    .any(|s| s.contains("Unsupported message type 222"))
+            );
         }
     }
     #[test]
@@ -1547,6 +1641,7 @@ mod tests {
             revision: 0,
             nonce: None,
             reply_to: None,
+            kind: 0,
             unsupported: false,
             extra_content: Default::default(),
             embeds: vec![],
@@ -1683,6 +1778,7 @@ mod tests {
             revision: 0,
             nonce: None,
             reply_to: None,
+            kind: 0,
             unsupported: false,
             extra_content: Default::default(),
             embeds: vec![],
@@ -1769,6 +1865,7 @@ mod tests {
             revision: 0,
             nonce: None,
             reply_to: None,
+            kind: 0,
             unsupported: false,
             extra_content: Default::default(),
             attachments: vec![],

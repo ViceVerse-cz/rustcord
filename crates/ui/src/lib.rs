@@ -59,6 +59,8 @@ pub struct MessagingUi {
     reading_sidebar_applied: Option<u16>,
     reading_sidebar_constrained: bool,
     reading_zoom_pending: bool,
+    /// Where the open profile was requested from; the popout is placed beside it.
+    profile_anchor: Option<(Id, egui::Pos2)>,
     members_narrow_open: bool,
     member_reload_requested: bool,
     guild: Option<Id>,
@@ -101,6 +103,11 @@ pub struct MessagingUi {
 }
 
 impl MessagingUi {
+    /// Fixture-only entry point: opens People and the profile card for `user` as if clicked.
+    pub fn preview_profile(&mut self, user: model::User) {
+        self.members_narrow_open = true;
+        self.profile = Some(user);
+    }
     pub fn downloads(&mut self) -> &mut DownloadUi {
         &mut self.timeline.download
     }
@@ -269,17 +276,26 @@ impl MessagingUi {
                                 {
                                     self.profile = Some(member.user.clone());
                                 }
-                                ui.label(
-                                    RichText::new(match member.status.as_deref() {
-                                        Some("online") => "Online",
-                                        Some("idle") => "Away",
-                                        Some("dnd") => "Do not disturb",
-                                        Some("offline") => "Offline",
-                                        _ => "Presence unavailable",
-                                    })
-                                    .size(10.0)
-                                    .color(colors.muted),
-                                );
+                                if let Some(custom) = member.custom_status.as_deref() {
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(custom).size(10.0).color(colors.muted),
+                                        )
+                                        .truncate(),
+                                    );
+                                } else {
+                                    ui.label(
+                                        RichText::new(match member.status.as_deref() {
+                                            Some("online") => "Online",
+                                            Some("idle") => "Away",
+                                            Some("dnd") => "Do not disturb",
+                                            Some("offline") => "Offline",
+                                            _ => "Presence unavailable",
+                                        })
+                                        .size(10.0)
+                                        .color(colors.muted),
+                                    );
+                                }
                             });
                         });
                     });
@@ -1386,6 +1402,16 @@ impl MessagingUi {
                     commands.push(command);
                 }
             }
+            let anchor = match self.profile_anchor {
+                Some((id, pos)) if id == user.id => pos,
+                _ => {
+                    let pos = ctx
+                        .input(|i| i.pointer.interact_pos().or(i.pointer.latest_pos()))
+                        .unwrap_or_else(|| ctx.content_rect().center());
+                    self.profile_anchor = Some((user.id, pos));
+                    pos
+                }
+            };
             match profiles::show(
                 ui,
                 user,
@@ -1393,6 +1419,7 @@ impl MessagingUi {
                 state,
                 &mut self.avatars,
                 &mut self.profile_link,
+                anchor,
             ) {
                 Some(profiles::Action::Profile(user)) => {
                     self.profile = Some(user);
@@ -1402,6 +1429,7 @@ impl MessagingUi {
                 Some(profiles::Action::Close) => {
                     self.profile = None;
                     self.profile_link = None;
+                    self.profile_anchor = None;
                     commands.push(state.clear_profile());
                 }
                 Some(profiles::Action::Retry) => {
@@ -1412,6 +1440,7 @@ impl MessagingUi {
                 Some(profiles::Action::Message(channel)) => {
                     self.profile = None;
                     self.profile_link = None;
+                    self.profile_anchor = None;
                     commands.push(state.clear_profile());
                     if let Some(command) = state.select(channel) {
                         commands.push(command);
@@ -1419,6 +1448,8 @@ impl MessagingUi {
                 }
                 None => {}
             }
+        } else {
+            self.profile_anchor = None;
         }
 
         self.reconcile_edit(state);
@@ -1509,6 +1540,7 @@ mod composer_tests {
                     revision: 0,
                     nonce: None,
                     reply_to: None,
+                    kind: 0,
                     unsupported: false,
                     extra_content: Default::default(),
                     embeds: vec![],
@@ -2270,6 +2302,7 @@ mod composer_tests {
                                 _ => None,
                             }
                             .map(str::to_owned),
+                            custom_status: None,
                         })
                     })
                     .collect(),

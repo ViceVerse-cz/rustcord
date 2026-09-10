@@ -39,6 +39,7 @@ fn message(id: u64, channel: Id) -> Message {
     Message {
         id: Id(id),
         channel,
+        kind: 0,
         author: user(),
         content: "Synthetic server content".into(),
         reactions: Some(vec![]),

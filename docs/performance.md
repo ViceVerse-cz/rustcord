@@ -1070,3 +1070,92 @@ unsoundness and proc-macro-error maintenance; no suppression or release approval
 Measured executable SHA256:
 - text: 16F944D856C896C9D5EC2A388E6434E20BEC5F972302B5884B56922FE770826F
 - voice: 161A9A1ADD3F4A90A5B7448E4B46633ED4A7515CF993C0EA0BDC5F95F55ED8F2
+
+## Image aspect ratios — September 10, 2026
+
+| Metric / method | Baseline | After | Delta |
+| --- | --- | --- | --- |
+| text executable, bytes | 46,098,496 | 46,098,512 | +16 (+0.0000%) |
+| text package, bytes | 69,734,675 | 69,736,433 | +1,758 (+0.0025%) |
+| text compressed, bytes | 53,074,332 | 53,075,144 | +812 (+0.0015%) |
+| voice executable, bytes | 48,917,808 | 48,917,808 | +0 (+0.0000%) |
+| voice package, bytes | 74,162,600 | 74,164,342 | +1,742 (+0.0023%) |
+| voice compressed, bytes | 55,695,929 | 55,697,942 | +2,013 (+0.0036%) |
+| Settled RSS, KiB (`ps`, 10 × 1 s) | 152,592 | 99,328 | −53,264; noisy, no improvement claim |
+| Settled CPU, median / maximum | 0 / 0% | 0 / 2.4% | median unchanged |
+
+macOS 27.0 arm64, Apple M1 Pro (8 CPU / 14 GPU cores), 16 GB RAM, wgpu/Metal, built-in 3024×1964 Retina display at unchanged system scale; default ~1087×768 captured window. Rust 1.98.1 locked release text-only/voice packages, baseline clean `2879fbc`; native runs explicitly `--demo`, default synthetic timeline followed by opening its image viewer. Separate baseline/final app copies. Full package totals count files, excluding the nested voice distribution from text; gzip tarballs include package files. Package measurements precede appending these measurements to docs.
+
+Ten OS RSS/CPU samples at one-second intervals after interaction settled (baseline at least 10 s; final resampled after at least 30 s). Initial final capture/packaging-period samples were 108,400–108,928 KiB and 1.7–41.1% CPU; the settled retry above is reported separately, not hidden. Different warmup/background capture/packaging activity and OS memory accounting prevent interpreting the RSS drop as an improvement. These are sampled process RSS, not allocation limits or physical footprint; startup/interaction peak, GPU allocations and p95 frame/startup latency are unmeasured. Baseline had no child processes; no voice call or audio measurement. No performance improvement claim.
+
+## Profile popout — September 10, 2026
+
+Same macOS arm64 host, Rust 1.98.1, release profile (thin LTO), lockfile unchanged. Baseline is `main` at `74709e2` built with `cargo build --release --locked -p serein` before editing; the after build is the same command on the task branch. Package outputs come from `cargo xtask package` / `package-voice` on the task branch only; no voice baseline was built for this task.
+
+| Metric / method | Baseline | After | Delta |
+| --- | --- | --- | --- |
+| Text executable, unsigned `cargo build --release` | 46,367,952 B | 46,408,896 B | +40,944 B (+0.09%) |
+| Text package executable, ad-hoc signed (`dist/Serein.app`) | not built | 46,139,168 B | — |
+| Voice package executable, ad-hoc signed (`dist/voice/Serein.app`) | not built | 48,958,768 B | — |
+| Full package directory (`du -sk`) text / voice | not built | 45,556 KiB / 48,652 KiB | — |
+| Idle `ps` RSS, release `--demo`, 10 s warmup, 5 samples at 2 s | 153,280–153,328 KiB | 155,072–155,216 KiB | ≈ +1.2% (noise-level) |
+| Idle `ps` RSS, release `--demo --demo-profile` (popout + People open) | n/a | 153,424 KiB (stable) | — |
+| Sampled CPU after warmup | 0.0% | 0.0–1.0% (one 7.1% first sample) | no sustained change |
+
+Method: wgpu/Metal renderer, 1120×792 logical window at 2× scale, no interaction after launch beyond activating the window, no network, no helper processes. RSS is whole-process resident memory of the single executable; GPU and driver allocations are not included. The two-sample difference is inside run-to-run noise and is not called a regression or improvement. Frame time and p95 latency were not instrumented. A new RAM-only profile cache holds at most 32 entries / 1 MiB estimated model bytes for 15 minutes (cleared on session changes), so reopening a card costs one clone instead of a REST round-trip. Other new retained data is bounded inside existing caps: profile ≤64 KiB (theme colors 8 B, tag ≤8 chars + 32-hex badge hash, ≤16 badge icon hashes), member custom status ≤128 chars inside the 128 KiB member budget; badge/tag artwork uses the existing 16 MiB / 64-texture allowance with 64-pixel requests.
+
+## September 10: welcome and system messages
+
+Baseline `6053299` (clean main, origin/main fetched and unchanged), task branch `feat/system-messages`.
+macOS 27.0 (26A428), MacBookPro18,3 / Apple M1 Pro, 16 GiB, arm64, pinned Rust 1.98.1, release thin LTO / one codegen unit, wgpu. No dependency or lockfile changes.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| text executable bytes | 46,141,408 | 46,159,872 | +18,464 (+0.040%) |
+| text installed bytes | 46,581,502 | 46,599,966 | +18,464 (+0.040%) |
+| text zip bytes | 29,911,653 | 29,918,046 | +6,393 (+0.021%) |
+| voice executable bytes | 48,977,264 | 48,979,328 | +2,064 (+0.004%) |
+| voice installed bytes | 49,648,319 | 49,652,424 | +4,105 (+0.008%) |
+| voice zip bytes | 31,253,839 | 31,258,631 | +4,792 (+0.015%) |
+| Native RSS median KiB | 153888 | 155200 | +1312 |
+| Native RSS sample peak KiB | 153952 | 155584 | +1632 |
+| Native CPU median % | 0 | 0 | +0 |
+| Reducer replay median ms | 29.331958 | 28.687209 | -0.644749 (-2.20%) |
+
+Both `cargo xtask package` and `cargo xtask package-voice` passed with strict ad-hoc signature verification. Package file counts are 47 text / 93 voice. Sizes are one measurement per variant: executable, sum of staged installed files, Python ZIP DEFLATE level 9. Excludes prior distribution ZIPs left in dist and the separate voice subdirectory from text. Outputs were copied to separate before/after directories; baseline voice was built from an isolated baseline checkout. Staged docs precede this measurement addendum; changed voice includes the compatibility/storage notes written between package builds. No PR evidence or debug symbols are bundled.
+
+Native samples use the same existing `--demo --demo-chat` fixture, default viewport (observed 1087×768 screenshot), system dark appearance, no extra navigation, 10-second warmup and ten `ps -p PID -o %cpu=,rss=` samples at one-second intervals for each fresh process. Median and sample peak RSS are not launch peak, GPU memory or macOS physical footprint. CPU ranges were 0..0.2% before and 0..3.0% after; medians 0%. No login/voice helpers were started by these demo processes. Display scale was not instrumented; both runs used the same display without changing its settings. RSS rose about 1.3 MiB; this short synthetic sample does not establish long-run memory or live-channel acceptance.
+
+Replay: `cargo replay`, then one warmup and five direct `replay-bench` runs per revision. Baseline measured runs: 29.622583, 29.331958, 29.198583, 29.183917, 29.527458 ms. After: 29.256916, 29.038542, 28.407292, 28.603875, 28.687209 ms. Both retain 500 records / 220,992–221,477 estimated bytes. These timings overlap; no speed improvement is claimed. Replay measures the existing 100,000 ordinary synthetic reducer events, not system-message rendering or SQLite migration. A stale cross-worktree Cargo artifact initially failed the changed replay compile; rebuilding the model resolved it before these measured runs.
+
+The screenshot pair uses an identical new eight-event synthetic fixture (`--demo --demo-system-messages`) and scroll-to-top at the same viewport/appearance. Baseline screenshot was rebuilt at `6053299` with only the fixture and demo selector backported; it still discards kinds and renders the old placeholder. Package size and CPU/RSS baseline use the unmodified baseline. Dark native rendering/scrolling inspected; light/narrow rendering checked with headless egui at 280px, wide/dark at 900px. Native light-theme selection did not visibly change via automation, so native light/keyboard, display scale, p95 startup/frame latency, GPU allocation and other platforms remain unverified. No live Discord compatibility claim.
+
+## Integration of PRs #17 through #32 with main (2026-09-10)
+
+Baseline is published PR #32 at 57927c7, not a separately built main. Its text/voice
+executables and package reports were copied and hash-verified before integration.
+After includes main 85fde15 (image aspect ratio, profile popout/cache, system messages)
+plus schema-union and permission/profile/presence integration repairs. Both release
+package commands passed; text uses no default features, voice explicitly enables voice.
+
+| Metric | Published PR #32 baseline | Integrated main + stack | Delta |
+| --- | ---: | ---: | ---: |
+| text executable, bytes | 49,855,488 | 49,938,944 | +83,456 (+0.17%) |
+| text installed, bytes | 50,370,977 | 50,478,583 | +107,606 (+0.21%) |
+| text zip, bytes | 31,205,377 | 31,244,819 | +39,442 (+0.13%) |
+| voice executable, bytes | 53,213,184 | 53,297,152 | +83,968 (+0.16%) |
+| voice installed, bytes | 53,951,446 | 54,059,969 | +108,523 (+0.20%) |
+| voice zip, bytes | 32,576,903 | 32,615,326 | +38,423 (+0.12%) |
+| Replay median, ms | 38.5417 | 38.4845 | -0.0572 (-0.15%; noise) |
+| Retained 500-message timeline, estimated bytes | 220,992..221,477 | 228,992..229,477 | +8,000 |
+
+Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical CPUs), approximately 31 GiB RAM,
+Rust 1.98.1, release thin LTO/one codegen unit and wgpu. Reducer: one warmup plus five
+direct executable runs, 100,000 synthetic events each. Before: 36.6465, 39.2736, 37.5642,
+38.5417, 38.7553 ms; after: 42.3323, 36.6533, 36.7709, 38.4845, 38.8944 ms. The small
+timing difference is noise; the new message-kind field accounts for the retained-size
+increase. This workload measures neither process RSS nor native frame or startup latency.
+Native automation remains owner-paused, so those metrics and new screenshots are unmeasured.
+ZIPs use Python DEFLATE level 9; text excludes nested voice, both exclude PR screenshots.
+Installed packages contain the documentation snapshot staged during packaging, before
+this final measurement addendum. No live Discord, microphone or account test was run.

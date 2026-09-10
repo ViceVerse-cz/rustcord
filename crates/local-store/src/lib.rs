@@ -76,10 +76,10 @@ impl LocalStore {
     pub fn open(path: &Path) -> Result<Self> {
         Self::initialize(Connection::open(path)?)
     }
-    fn initialize(connection: Connection) -> Result<Self> {
+    fn initialize(mut connection: Connection) -> Result<Self> {
         connection.busy_timeout(std::time::Duration::from_secs(2))?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 8 {
+        if version > 9 {
             return Err(StoreError::Incompatible);
         }
         connection.execute_batch("PRAGMA page_size=4096; PRAGMA max_page_count=16384; PRAGMA cache_size=-2048; PRAGMA temp_store=MEMORY; PRAGMA journal_mode=DELETE; PRAGMA secure_delete=ON; PRAGMA auto_vacuum=FULL;
@@ -124,24 +124,32 @@ impl LocalStore {
         } else if version < 6 {
             connection.pragma_update(None, "user_version", 6)?;
         }
+        // Schema 7 was used independently for markers and system-message kinds.
+        // Detect both columns and commit their union with reading preferences atomically.
         let has_extra_content: bool = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_table_info('messages') WHERE name='extra_content')",
             [],
             |row| row.get(0),
         )?;
+        let has_message_kind: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('messages') WHERE name='message_kind')",
+            [],
+            |row| row.get(0),
+        )?;
+        let transaction = connection.transaction()?;
         if !has_extra_content {
-            connection.execute_batch("BEGIN; ALTER TABLE messages ADD COLUMN extra_content INTEGER NOT NULL DEFAULT 0 CHECK(typeof(extra_content)='integer' AND extra_content BETWEEN 0 AND 31); PRAGMA user_version=7; COMMIT;")?;
-        } else if version < 7 {
-            connection.pragma_update(None, "user_version", 7)?;
+            transaction.execute_batch("ALTER TABLE messages ADD COLUMN extra_content INTEGER NOT NULL DEFAULT 0 CHECK(typeof(extra_content)='integer' AND extra_content BETWEEN 0 AND 31);")?;
         }
-        connection.execute_batch("BEGIN;
-            CREATE TABLE IF NOT EXISTS reading_preferences(
+        if !has_message_kind {
+            transaction.execute_batch("ALTER TABLE messages ADD COLUMN message_kind INTEGER NOT NULL DEFAULT 0 CHECK(typeof(message_kind)='integer' AND message_kind BETWEEN 0 AND 255); UPDATE messages SET message_kind=255 WHERE unsupported<>0;")?;
+        }
+        transaction.execute_batch("CREATE TABLE IF NOT EXISTS reading_preferences(
                 singleton INTEGER PRIMARY KEY CHECK(singleton=1),
                 zoom_percent INTEGER NOT NULL CHECK(typeof(zoom_percent)='integer' AND zoom_percent BETWEEN 80 AND 150),
                 sidebar_width INTEGER NOT NULL CHECK(typeof(sidebar_width)='integer' AND sidebar_width BETWEEN 190 AND 360),
                 show_members INTEGER NOT NULL CHECK(typeof(show_members)='integer' AND show_members IN (0,1))
-            );
-            PRAGMA user_version=8; COMMIT;")?;
+            ); PRAGMA user_version=9;")?;
+        transaction.commit()?;
         Ok(Self(connection))
     }
     /// Application-wide settings survive account logout; missing override means defaults.
@@ -249,7 +257,7 @@ impl LocalStore {
                 return Err(StoreError::Capacity);
             }
             transaction.execute(
-                "INSERT INTO messages(account,channel,id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions,extra_content) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+                "INSERT INTO messages(account,channel,id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions,extra_content,message_kind) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
                 params![
                     account,
                     channel,
@@ -266,7 +274,8 @@ impl LocalStore {
                     message.embeds_suppressed,
                     attachments,
                     mentions,
-                    message.extra_content.bits()
+                    message.extra_content.bits(),
+                    message.kind
                 ],
             )?;
         }
@@ -295,7 +304,7 @@ impl LocalStore {
         Ok(())
     }
     pub fn load_channel(&self, account: Id, channel: Id) -> Result<Vec<Message>> {
-        let mut query = self.0.prepare("SELECT id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions,extra_content FROM messages WHERE account=?1 AND channel=?2 ORDER BY length(id),id LIMIT 500")?;
+        let mut query = self.0.prepare("SELECT id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions,extra_content,message_kind FROM messages WHERE account=?1 AND channel=?2 ORDER BY length(id),id LIMIT 500")?;
         let mut rows = query.query(params![account.to_string(), channel.to_string()])?;
         let mut messages = Vec::new();
         let mut bytes = 0;
@@ -383,6 +392,7 @@ impl LocalStore {
                 reply_to: row.get::<_, Option<String>>(5)?.map(parse).transpose()?,
                 unsupported: row.get(6)?,
                 extra_content,
+                kind: row.get(14)?,
                 nonce: None,
                 revision: 0,
                 embeds,
@@ -491,6 +501,153 @@ impl LocalStore {
 mod tests {
     use super::*;
     #[test]
+    fn divergent_schema_seven_and_eight_preserve_union_after_reopen() {
+        let root = std::env::temp_dir().join(format!(
+            "serein-synthetic-union-schema-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let preferences = ReadingPreferences {
+            zoom_percent: 125,
+            sidebar_width: 300,
+            show_members: false,
+        };
+        for (name, legacy, expected_kind, expected_markers, expected_preferences) in [
+            (
+                "system7",
+                "ALTER TABLE messages DROP COLUMN extra_content; DROP TABLE reading_preferences; PRAGMA user_version=7;",
+                7,
+                0,
+                ReadingPreferences::default(),
+            ),
+            (
+                "markers7",
+                "ALTER TABLE messages DROP COLUMN message_kind; DROP TABLE reading_preferences; PRAGMA user_version=7;",
+                255,
+                31,
+                ReadingPreferences::default(),
+            ),
+            (
+                "reading8",
+                "ALTER TABLE messages DROP COLUMN message_kind; PRAGMA user_version=8;",
+                255,
+                31,
+                preferences,
+            ),
+        ] {
+            let path = root.join(format!("{name}.sqlite3"));
+            let mut store = LocalStore::open(&path).unwrap();
+            store.save_draft(Id(1), Id(2), "preserved draft").unwrap();
+            store.save_appearance(Appearance::Dark).unwrap();
+            store.save_reading_preferences(preferences).unwrap();
+            store.0.execute("INSERT INTO messages(account,channel,id,author,name,content,edited,unsupported,message_kind,extra_content) VALUES('1','2','3','4','Synthetic','preserved body',0,1,7,31)", []).unwrap();
+            store.0.execute_batch(legacy).unwrap();
+            drop(store);
+
+            let mut store = LocalStore::open(&path).unwrap();
+            let version: u32 = store
+                .0
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .unwrap();
+            assert_eq!(version, 9);
+            let mut messages = store.load_channel(Id(1), Id(2)).unwrap();
+            assert_eq!(messages[0].kind, expected_kind);
+            assert_eq!(messages[0].extra_content.bits(), expected_markers);
+            assert_eq!(messages[0].content, "preserved body");
+            assert_eq!(store.reading_preferences().unwrap(), expected_preferences);
+            assert_eq!(store.appearance().unwrap(), Appearance::Dark);
+            assert_eq!(store.load_drafts(Id(1)).unwrap()[&Id(2)], "preserved draft");
+            messages[0].kind = 9;
+            messages[0].extra_content = model::ExtraContent::from_bits(31).unwrap();
+            store.save_channel(Id(1), Id(2), &messages).unwrap();
+            store
+                .save_reading_preferences(ReadingPreferences::default())
+                .unwrap();
+            drop(store);
+
+            let store = LocalStore::open(&path).unwrap();
+            let messages = store.load_channel(Id(1), Id(2)).unwrap();
+            assert_eq!(messages[0].kind, 9);
+            assert_eq!(messages[0].extra_content.bits(), 31);
+            assert_eq!(store.load_drafts(Id(1)).unwrap()[&Id(2)], "preserved draft");
+            assert_eq!(store.appearance().unwrap(), Appearance::Dark);
+            assert_eq!(
+                store.reading_preferences().unwrap(),
+                ReadingPreferences::default()
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn union_migration_failure_rolls_back_columns_and_schema_version() {
+        let root = std::env::temp_dir().join(format!(
+            "serein-synthetic-union-rollback-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("test.sqlite3");
+        let store = LocalStore::open(&path).unwrap();
+        store.0.execute_batch("ALTER TABLE messages DROP COLUMN extra_content; ALTER TABLE messages DROP COLUMN message_kind; PRAGMA user_version=7;").unwrap();
+        store.0.execute("INSERT INTO messages(account,channel,id,author,name,content,edited,unsupported) VALUES('1','2','3','4','Synthetic','preserved body',0,1)", []).unwrap();
+        store.0.execute_batch("CREATE TRIGGER reject_kind_migration BEFORE UPDATE ON messages BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END;").unwrap();
+        drop(store);
+        assert!(matches!(
+            LocalStore::open(&path),
+            Err(StoreError::Unavailable)
+        ));
+        let connection = Connection::open(&path).unwrap();
+        let version: u32 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 7);
+        let columns: u32 = connection.query_row("SELECT count(*) FROM pragma_table_info('messages') WHERE name IN ('extra_content','message_kind')", [], |row| row.get(0)).unwrap();
+        assert_eq!(columns, 0);
+        connection
+            .execute_batch("DROP TRIGGER reject_kind_migration;")
+            .unwrap();
+        let store = LocalStore::initialize(connection).unwrap();
+        let messages = store.load_channel(Id(1), Id(2)).unwrap();
+        assert_eq!(messages[0].content, "preserved body");
+        assert_eq!(messages[0].kind, 255);
+        assert_eq!(messages[0].extra_content.bits(), 0);
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn message_kind_migration_round_trip_and_bounds() {
+        let store = LocalStore::initialize(Connection::open_in_memory().unwrap()).unwrap();
+        store
+            .0
+            .execute_batch("ALTER TABLE messages DROP COLUMN message_kind; PRAGMA user_version=6;")
+            .unwrap();
+        store.0.execute("INSERT INTO messages(account,channel,id,author,name,content,edited,unsupported) VALUES('1','2','3','4','Synthetic','',0,1),('1','2','4','4','Synthetic','body',0,0)", []).unwrap();
+        let mut store = LocalStore::initialize(store.0).unwrap();
+        let mut messages = store.load_channel(Id(1), Id(2)).unwrap();
+        assert_eq!(messages[0].kind, 255);
+        assert_eq!(messages[1].kind, 0);
+        messages[0].kind = 7;
+        store.save_channel(Id(1), Id(2), &messages).unwrap();
+        let store = LocalStore::initialize(store.0).unwrap();
+        assert_eq!(store.load_channel(Id(1), Id(2)).unwrap()[0].kind, 7);
+        for value in ["-1", "256", "1.5", "'invalid'"] {
+            assert!(
+                store
+                    .0
+                    .execute(&format!("UPDATE messages SET message_kind={value}"), [])
+                    .is_err()
+            );
+        }
+        // Column detection also handles another feature using this schema version.
+        store
+            .0
+            .execute_batch("ALTER TABLE messages DROP COLUMN message_kind; PRAGMA user_version=7;")
+            .unwrap();
+        let store = LocalStore::initialize(store.0).unwrap();
+        assert_eq!(store.load_channel(Id(1), Id(2)).unwrap()[0].kind, 255);
+    }
+    #[test]
     fn schema_seven_reading_preferences_migrate_reopen_reset_and_survive_logout() {
         let root = std::env::temp_dir().join(format!(
             "serein-synthetic-reading-preferences-{}",
@@ -513,7 +670,7 @@ mod tests {
             .0
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 8);
+        assert_eq!(version, 9);
         assert_eq!(
             store.reading_preferences().unwrap(),
             ReadingPreferences::default()
@@ -746,7 +903,7 @@ mod tests {
             .0
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 8);
+        assert_eq!(version, 9);
         let messages: Vec<_> = (0..32_u8)
             .map(|bits| {
                 let mut message = legacy[0].clone();
@@ -934,7 +1091,7 @@ mod tests {
             .0
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 8);
+        assert_eq!(version, 9);
         for (json, error) in [
             ("broken JSON".to_owned(), StoreError::Incompatible),
             (
@@ -1033,6 +1190,7 @@ mod tests {
                 reply_to: None,
                 unsupported: false,
                 extra_content: model::ExtraContent::default(),
+                kind: 0,
                 embeds: vec![model::Embed {
                     title: Some("Cached synthetic embed".into()),
                     ..Default::default()

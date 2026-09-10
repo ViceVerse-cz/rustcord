@@ -166,6 +166,30 @@ fn changes_active_history(state: &State, event: &Event) -> bool {
     };
     state.selected == Some(*channel)
 }
+/// Synthetic People rows with presence; never a Discord member directory.
+fn demo_members(guild: Option<model::Id>, channel: model::Id, request: u64) -> model::MemberList {
+    model::MemberList {
+        guild,
+        channel,
+        request,
+        rows: vec![
+            Some(model::Member {
+                user: test_support::message(2, channel).author,
+                nick: None,
+                status: Some("idle".into()),
+                custom_status: None,
+            }),
+            Some(model::Member {
+                user: test_support::message(1, channel).author,
+                nick: None,
+                status: Some("online".into()),
+                custom_status: Some("🌙 semifluent in synthetic data".into()),
+            }),
+        ],
+        total: 2,
+        freshness: model::Freshness::Fresh,
+    }
+}
 impl Desktop {
     fn new(
         cc: &eframe::CreationContext<'_>,
@@ -182,7 +206,9 @@ impl Desktop {
         let mut store = (!demo).then(|| credentials::Store::start(cc.egui_ctx.clone()));
         let cache = (!demo).then(|| cache::Cache::start(cc.egui_ctx.clone()));
         let mut state = if demo {
-            if std::env::args().any(|arg| arg == "--demo-notifications") {
+            if std::env::args().any(|arg| arg == "--demo-system-messages") {
+                test_support::system_demo_state()
+            } else if std::env::args().any(|arg| arg == "--demo-notifications") {
                 test_support::notification_demo_state()
             } else if std::env::args().any(|arg| arg == "--demo-voice") {
                 test_support::voice_demo_state()
@@ -227,6 +253,15 @@ impl Desktop {
             demo && std::env::args().any(|arg| arg == "--demo-system-notifications");
         if messaging.notification_test_available {
             state.status = "Offline fixture · explicit system notification test";
+        }
+        if demo && std::env::args().any(|arg| arg == "--demo-profile") {
+            // Presence for the fixture card comes from the same synthetic People rows.
+            let _ = state.request_members();
+            if let Some(list) = &state.members {
+                state.members = Some(demo_members(list.guild, list.channel, list.request));
+            }
+            messaging.preview_profile(test_support::message(1, model::Id(20)).author);
+            state.status = "Offline fixture · synthetic profile card opened at startup";
         }
         Ok(Self {
             login: None,
@@ -817,25 +852,7 @@ impl Desktop {
                     let Some(channel) = channel else {
                         return;
                     };
-                    Event::Members(model::MemberList {
-                        guild,
-                        channel,
-                        request,
-                        rows: vec![
-                            Some(model::Member {
-                                user: test_support::message(2, channel).author,
-                                nick: None,
-                                status: None,
-                            }),
-                            Some(model::Member {
-                                user: test_support::message(1, channel).author,
-                                nick: None,
-                                status: None,
-                            }),
-                        ],
-                        total: 2,
-                        freshness: model::Freshness::Fresh,
-                    })
+                    Event::Members(demo_members(guild, channel, request))
                 }
                 Command::History { before, .. } => {
                     test_support::load_page(&mut self.state, before);
