@@ -995,6 +995,19 @@ impl Desktop {
             let ready = matches!(event.event, Event::Ready { .. });
             let resumed = matches!(event.event, Event::Resumed);
             let confirmed_channel = confirmed_recovery_channel(&self.state, &event.event);
+            let mut removed_threads: std::collections::BTreeSet<_> = if matches!(
+                &event.event,
+                Event::ThreadsSync { .. } | Event::ThreadRemoved { .. }
+            ) {
+                self.state
+                    .channels
+                    .iter()
+                    .filter(|channel| matches!(channel.kind, 10..=12))
+                    .map(|channel| channel.id)
+                    .collect()
+            } else {
+                Default::default()
+            };
             let invalidate = matches!(
                 event.event,
                 Event::Resync | Event::PermissionsChanged | Event::Unavailable(_)
@@ -1004,13 +1017,20 @@ impl Desktop {
                 if self.state.selected == Some(*channel) && self.state.request == *request && self.state.history_pending);
             let history_changed = changes_active_history(&self.state, &event.event);
             self.state.apply(event);
+            if !removed_threads.is_empty() {
+                for channel in &self.state.channels {
+                    removed_threads.remove(&channel.id);
+                }
+            }
             #[cfg(feature = "voice")]
             if let Some(error) = voice_failure
                 && let Some(command) = self.voice.fail(&mut self.state, error)
             {
                 self.command(command);
             }
-            if invalidate {
+            // ponytail: accepted thread removals clear account-wide history;
+            // add scoped disk deletion if thread churn makes refetch cost significant.
+            if invalidate || !removed_threads.is_empty() {
                 self.queue_cache(cache::Operation::ClearHistory);
             }
             persist_timeline |= history_changed;

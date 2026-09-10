@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 enum Row<'a> {
     Category(&'a Channel, usize),
-    Channel(&'a Channel),
+    Channel(&'a Channel, bool),
 }
 
 fn rows<'a>(
@@ -21,31 +21,61 @@ fn rows<'a>(
         .collect();
     categories.sort_unstable_by_key(|c| (c.position, c.id));
     let category_ids: BTreeSet<_> = categories.iter().map(|c| c.id).collect();
+    let parents: BTreeMap<_, _> = channels
+        .iter()
+        .filter(|c| guild.is_some() && c.guild == guild && matches!(c.kind, 0 | 5 | 15 | 16))
+        .map(|c| (c.id, c))
+        .collect();
     let mut groups: BTreeMap<Option<Id>, Vec<&Channel>> = BTreeMap::new();
+    let mut threads: BTreeMap<Id, Vec<&Channel>> = BTreeMap::new();
     for channel in channels.iter().filter(|c| c.guild == guild && c.kind != 4) {
-        let parent = channel.parent_id.filter(|id| category_ids.contains(id));
+        if matches!(channel.kind, 10..=12)
+            && let Some(parent) = channel.parent_id.and_then(|id| parents.get(&id))
+            && parent.parent_id != Some(channel.id)
+        {
+            threads.entry(parent.id).or_default().push(channel);
+            continue;
+        }
+        let parent = channel
+            .parent_id
+            .filter(|id| !matches!(channel.kind, 10..=12) && category_ids.contains(id));
         groups.entry(parent).or_default().push(channel);
     }
-    for group in groups.values_mut() {
+    for group in groups.values_mut().chain(threads.values_mut()) {
         if guild.is_some() {
             group.sort_unstable_by_key(|c| (c.position, c.id));
         }
     }
-    let mut rows: Vec<_> = groups
-        .remove(&None)
-        .unwrap_or_default()
-        .into_iter()
-        .map(Row::Channel)
-        .collect();
+    let append = |channel: &'a Channel, collapsed: bool, rows: &mut Vec<Row<'a>>| {
+        let children = threads.get(&channel.id);
+        if !collapsed
+            || Some(channel.id) == selected
+            || children.is_some_and(|children| children.iter().any(|c| Some(c.id) == selected))
+        {
+            rows.push(Row::Channel(channel, false));
+            rows.extend(
+                children
+                    .into_iter()
+                    .flatten()
+                    .filter(|c| !collapsed || Some(c.id) == selected)
+                    .map(|c| Row::Channel(c, true)),
+            );
+        }
+    };
+    let mut rows = Vec::with_capacity(channels.len());
+    for channel in groups.remove(&None).unwrap_or_default() {
+        append(channel, false, &mut rows);
+    }
     for category in categories {
         let children = groups.remove(&Some(category.id)).unwrap_or_default();
-        rows.push(Row::Category(category, children.len()));
-        rows.extend(
-            children
-                .into_iter()
-                .filter(|c| !collapsed.contains(&category.id) || Some(c.id) == selected)
-                .map(Row::Channel),
-        );
+        let count = children
+            .iter()
+            .map(|c| 1 + threads.get(&c.id).map_or(0, Vec::len))
+            .sum();
+        rows.push(Row::Category(category, count));
+        for channel in children {
+            append(channel, collapsed.contains(&category.id), &mut rows);
+        }
     }
     rows
 }
@@ -60,8 +90,8 @@ fn kind_label(kind: u8) -> &'static str {
         10..=12 => "Thread",
         13 => "Stage channel · not implemented",
         14 => "Directory · not implemented",
-        15 => "Forum · not implemented",
-        16 => "Media channel · not implemented",
+        15 => "Forum · loaded posts",
+        16 => "Media · loaded posts",
         _ => "Unknown channel type · not implemented",
     }
 }
@@ -140,16 +170,23 @@ impl MessagingUi {
                                 }
                             }
                         }
-                        Row::Channel(channel) => {
+                        Row::Channel(channel, nested) => {
                             let active = state.selected == Some(channel.id);
                             let unread = state.unread(channel.id) == Some(true);
                             let symbol = match channel.kind {
                                 1 | 3 => "@",
                                 2 | 13 => "♫",
                                 15 | 16 => "▤",
+                                10..=12 => "↳",
                                 _ => "#",
                             };
-                            let name = if channel.supports_text() {
+                            let name = if matches!(channel.kind, 15 | 16) {
+                                format!(
+                                    "{symbol}   {} · {}",
+                                    channel.name,
+                                    kind_label(channel.kind)
+                                )
+                            } else if channel.supports_text() {
                                 format!("{symbol}   {}", channel.name)
                             } else {
                                 format!("{symbol}   {} · unavailable", channel.name)
@@ -157,6 +194,9 @@ impl MessagingUi {
                             let response = ui
                                 .push_id(channel.id, |ui| {
                                     ui.horizontal(|ui| {
+                                        if nested {
+                                            ui.add_space(12.0);
+                                        }
                                         if channel.guild.is_none()
                                             && let Some(user) = channel.recipients.first()
                                             && self
@@ -186,6 +226,11 @@ impl MessagingUi {
                                 })
                                 .inner
                                 .on_hover_text(format!(
+                                    "{} · {}",
+                                    channel.name,
+                                    kind_label(channel.kind)
+                                ))
+                                .on_disabled_hover_text(format!(
                                     "{} · {}",
                                     channel.name,
                                     kind_label(channel.kind)
@@ -252,7 +297,7 @@ mod tests {
         let ids = |rows: Vec<Row<'_>>| {
             rows.into_iter()
                 .map(|r| match r {
-                    Row::Channel(c) | Row::Category(c, _) => c.id.0,
+                    Row::Channel(c, _) | Row::Category(c, _) => c.id.0,
                 })
                 .collect::<Vec<_>>()
         };
@@ -269,8 +314,45 @@ mod tests {
             )),
             [3, 2, 4, 8, 5, 9]
         );
+        let mut hierarchy = vec![
+            channel(4, 4, 0, None),
+            channel(7, 15, 0, Some(Id(4))),
+            channel(8, 11, 1, Some(Id(7))),
+            channel(9, 12, 0, Some(Id(7))),
+            channel(10, 0, 1, Some(Id(4))),
+            channel(11, 10, 0, Some(Id(10))),
+            channel(12, 16, 2, Some(Id(4))),
+            channel(13, 11, 0, Some(Id(12))),
+            channel(20, 11, 0, Some(Id(999))), // missing parent
+            channel(21, 11, 0, Some(Id(4))),   // category is not a thread parent
+            channel(22, 11, 0, Some(Id(23))),  // thread-parent cycle
+            channel(23, 12, 0, Some(Id(22))),
+            channel(24, 11, 0, Some(Id(24))), // self parent
+            channel(25, 11, 0, Some(Id(26))), // other guild
+            channel(26, 0, 0, None),
+            channel(27, 11, 0, Some(Id(28))), // parent/child source cycle
+            channel(28, 0, 0, Some(Id(27))),
+        ];
+        hierarchy.iter_mut().find(|c| c.id == Id(26)).unwrap().guild = Some(Id(101));
+        let expanded = rows(&hierarchy, Some(Id(100)), &BTreeSet::new(), None);
+        assert_eq!(expanded.len(), hierarchy.len() - 1);
+        assert_eq!(
+            ids(expanded),
+            [20, 21, 22, 23, 24, 25, 27, 28, 4, 7, 9, 8, 10, 11, 12, 13]
+        );
+        let collapsed = rows(
+            &hierarchy,
+            Some(Id(100)),
+            &BTreeSet::from([Id(4)]),
+            Some(Id(8)),
+        );
+        assert!(matches!(collapsed.last(), Some(Row::Channel(c, true)) if c.id == Id(8)));
+        assert_eq!(ids(collapsed), [20, 21, 22, 23, 24, 25, 27, 28, 4, 7, 8]);
+        assert!(!hierarchy[1].supports_text() && !hierarchy[6].supports_text());
+        assert!(hierarchy[2].supports_text());
+        assert_eq!(kind_label(16), "Media · loaded posts");
         assert!(!channels[1].supports_text());
-        assert_eq!(kind_label(15), "Forum · not implemented");
+        assert_eq!(kind_label(15), "Forum · loaded posts");
         let mut state = State {
             channels,
             demo: true,
@@ -310,5 +392,29 @@ mod tests {
         }
         assert!(view.collapsed_categories.contains(&Id(4)));
         assert!(state.selected.is_none());
+        // Forum containers never request history; their loaded posts remain keyboard-selectable.
+        state.channels = vec![channel(7, 15, 0, None), channel(8, 11, 0, Some(Id(7)))];
+        assert!(state.select(Id(7)).is_none());
+        let ctx = egui::Context::default();
+        let mut picked = None;
+        for key in [egui::Key::Tab, egui::Key::Enter] {
+            ctx.run_ui(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                    ..Default::default()
+                },
+                |ui| {
+                    picked = view.channel_list(ui, &state).or(picked);
+                },
+            )
+            .drop_without_applying_deltas();
+        }
+        assert_eq!(picked, Some(Id(8)));
     }
 }

@@ -4,6 +4,7 @@ pub mod profile;
 pub mod reactions;
 pub mod read_state;
 pub mod search;
+mod threads;
 pub mod voice;
 use model::*;
 use session_cache::Timeline;
@@ -86,6 +87,19 @@ pub enum Event {
     Voice(voice::Event),
     ChannelCreated(Channel),
     ChannelChanged(ChannelPatch),
+    ThreadChanged {
+        guild: Id,
+        patch: ChannelPatch,
+    },
+    ThreadRemoved {
+        guild: Id,
+        id: Id,
+    },
+    ThreadsSync {
+        guild: Id,
+        parents: Option<Vec<Id>>,
+        threads: Vec<Channel>,
+    },
     GuildChanged(GuildPatch),
     Members(MemberList),
     RecipientAdded {
@@ -520,6 +534,22 @@ impl State {
         if envelope.generation != self.generation {
             return;
         }
+        if let Event::ThreadChanged { guild, patch } = &envelope.event
+            && !self
+                .channels
+                .iter()
+                .any(|c| c.id == patch.id && c.guild == Some(*guild) && matches!(c.kind, 10..=12))
+        {
+            return;
+        }
+        if let Event::ThreadRemoved { guild, id } = &envelope.event
+            && !self
+                .channels
+                .iter()
+                .any(|c| c.id == *id && c.guild == Some(*guild) && matches!(c.kind, 10..=12))
+        {
+            return;
+        }
         self.revision += 1;
         if matches!(
             &envelope.event,
@@ -548,6 +578,11 @@ impl State {
                 Ok(())
             }
             Event::ReadState(event) => self.apply_read_state(event),
+            Event::ThreadsSync {
+                guild,
+                parents,
+                threads,
+            } => self.apply_threads_sync(guild, parents, threads),
             Event::Reactions(event) => self.apply_reactions(event),
             Event::Profile {
                 user,
@@ -575,6 +610,15 @@ impl State {
                 Ok(())
             }
             Event::ChannelCreated(channel) => {
+                if matches!(channel.kind, 10..=12)
+                    && (!self.guilds.iter().any(|g| Some(g.id) == channel.guild)
+                        || self.channels.iter().any(|old| {
+                            old.id == channel.id
+                                && (old.guild != channel.guild || !matches!(old.kind, 10..=12))
+                        }))
+                {
+                    return;
+                }
                 let old = self.channels.iter().position(|c| c.id == channel.id);
                 if channel.recipients.len() > 64
                     || (old.is_none() && self.channels.len() + self.guilds.len() >= MAX_NAV)
@@ -597,7 +641,7 @@ impl State {
                 }
                 Ok(())
             }
-            Event::ChannelChanged(patch) => {
+            Event::ChannelChanged(patch) | Event::ThreadChanged { patch, .. } => {
                 if let Some(channel) = self.channels.iter_mut().find(|c| c.id == patch.id) {
                     match patch.last_message {
                         Patch::Value(id) => channel.last_message = Some(id),
@@ -932,24 +976,15 @@ impl State {
                 self.status = "Session or permissions changed · reload active history";
                 Ok(())
             }
-            Event::Unavailable(channel) => {
-                self.read_state.forget(channel);
-                self.clear_profile();
-                self.channels.retain(|c| c.id != channel);
-                if self
-                    .voice
-                    .active
-                    .as_ref()
-                    .is_some_and(|c| c.channel == channel)
-                {
-                    self.disconnect_voice();
-                }
-                if self.selected == Some(channel) {
-                    self.invalidate_members();
-                    self.timeline.clear();
-                    self.freshness = Freshness::Unavailable;
-                    self.cancel_history();
-                }
+            Event::Unavailable(channel) | Event::ThreadRemoved { id: channel, .. } => {
+                let mut removed = BTreeSet::from([channel]);
+                removed.extend(
+                    self.channels
+                        .iter()
+                        .filter(|c| matches!(c.kind, 10..=12) && c.parent_id == Some(channel))
+                        .map(|c| c.id),
+                );
+                self.remove_channels(&removed);
                 self.status = "Channel unavailable or permission denied";
                 Ok(())
             }
@@ -970,6 +1005,32 @@ impl State {
             list.request = self.member_request;
             list.rows.clear();
             list.freshness = Freshness::Unavailable;
+        }
+    }
+    fn remove_channels(&mut self, removed: &BTreeSet<Id>) {
+        self.channels.retain(|c| !removed.contains(&c.id));
+        for id in removed {
+            self.read_state.forget(*id);
+        }
+        if !removed.is_empty() {
+            self.clear_profile();
+        }
+        if self
+            .voice
+            .active
+            .as_ref()
+            .is_some_and(|c| removed.contains(&c.channel))
+        {
+            self.disconnect_voice();
+        }
+        if self.selected.is_some_and(|id| removed.contains(&id)) {
+            self.clear_search();
+            self.search_target = None;
+            self.invalidate_members();
+            self.timeline.clear();
+            self.freshness = Freshness::Unavailable;
+            self.cancel_history();
+            self.status = "Conversation no longer available in navigation";
         }
     }
     fn confirm(&mut self, message: &Message) {
@@ -1036,10 +1097,21 @@ impl Event {
                     })
                     .sum(),
                 Self::ChannelCreated(channel) => channel.bytes(),
-                Self::ChannelChanged(patch) => match &patch.name {
-                    Patch::Value(name) => name.capacity(),
-                    _ => 0,
-                },
+                Self::ThreadsSync {
+                    parents, threads, ..
+                } => {
+                    parents
+                        .as_ref()
+                        .map_or(0, |p| p.capacity() * size_of::<Id>())
+                        + threads.capacity().saturating_sub(threads.len()) * size_of::<Channel>()
+                        + threads.iter().map(Channel::bytes).sum::<usize>()
+                }
+                Self::ChannelChanged(patch) | Self::ThreadChanged { patch, .. } => {
+                    match &patch.name {
+                        Patch::Value(name) => name.capacity(),
+                        _ => 0,
+                    }
+                }
                 Self::Ready {
                     user,
                     guilds,

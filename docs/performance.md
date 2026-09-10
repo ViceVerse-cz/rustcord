@@ -154,3 +154,24 @@ Release replay-bench: one warmup plus five direct executable samples per revisio
 Native automation remains paused after the owner's earlier physical Escape stops. Comparable native process-memory/CPU samples, actual Save dialog/transfer-load measurements, GPU/helpers, display scale/adapter and startup/frame p95 remain unmeasured. No screenshot or runtime performance improvement is claimed; native evidence remains a draft blocker.
 
 The existing one-dialog/transfer slot, 100 MiB original-file cap, at-most-32-KiB disk writes, expected-length checking, latest-value progress and 15/30/300-second connection/read/overall timeouts are unchanged. General files are streamed without decoding or deliberately retaining a complete file buffer. Transport/TLS/OS buffers are additional; this is a component policy, not a measured process-memory ceiling.
+
+## September 10: loaded thread navigation (Windows)
+
+Baseline 985bfc6ded2740a660abeeb496720b6fd0cb8489 versus this thread-navigation change. Baseline packages were copied separately before edits and verified against parent executable hashes. Both changed unsigned Windows packages passed. Host: Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical processors), approximately 31 GiB visible RAM; pinned Rust 1.98.1, existing release profile and text/voice feature split. No dependency/font/codec change. Full installed/ZIP totals reflect documentation staged by each package invocation before this final measurement/progress addendum; the voice package also includes the latest progress text. Text excludes its sibling voice directory, and both exclude PR evidence. ZIP: all respective package files, Python zipfile DEFLATE level 9. External WebView2 and drivers are excluded.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable, bytes | 42,150,400 | 42,330,624 | +180,224 (+0.428%) |
+| Voice executable, bytes | 45,463,552 | 45,643,264 | +179,712 (+0.395%) |
+| Text installed package, bytes | 42,411,458 | 42,598,237 | +186,779 (+0.440%) |
+| Voice installed package, bytes | 45,948,168 | 46,138,097 | +189,929 (+0.413%) |
+| Text ZIP, bytes | 24,495,907 | 24,571,118 | +75,211 (+0.307%) |
+| Voice ZIP, bytes | 25,848,999 | 25,924,133 | +75,134 (+0.291%) |
+| Reducer replay median, milliseconds | 26.5772 | 28.3909 | +1.8137 (+6.82%, noisy) |
+| Retained timeline estimated bytes | 220,992-221,477 | 220,992-221,477 | Unchanged, 500 records |
+
+Release replay-bench built per revision, one warmup plus five direct samples after compilation finished, 100,000 synthetic events each. Baseline: 28.8253, 26.1273, 29.2089, 26.4214, 26.5772 ms. After: 26.8821, 29.8107, 26.7173, 31.2080, 28.3909 ms. The overlapping spread makes the median increase inconclusive; it is reported rather than called an improvement. This existing message reducer workload does not measure thread-snapshot throughput, sidebar rendering, network, process RSS or voice. Dedicated thread reconciliation is covered behaviorally by bounded offline tests.
+
+Native automation remains paused after the owner's preceding physical Escape stops. Before/after process samples, idle CPU, peak/settled memory, actual display scale/adapter, GPU/helpers and startup/frame p95 are unavailable. The app uses wgpu; no native performance claim or screenshot is manufactured. Native evidence remains a draft blocker.
+
+Threads share the 4,000-entry navigation ceiling; sync metadata is capped at 2 MiB inside the 4 MiB wire cap. Reconciliation and sidebar grouping use temporary bounded ordered maps/sets without an additional persistent cache. Snapshot omission/removal clears existing account history conservatively; frequent thread churn may cause extra refetches. No background thread directory, polling loop, new database table or subscription expansion is included.
