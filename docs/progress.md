@@ -463,3 +463,33 @@ paths and the PR body were verified on origin. macOS, Windows, Linux and securit
 pending at handoff. Local checks passed; remote CI success and live audio compatibility
 are not claimed. The inherited strict audit failure and owner-operated live voice gate
 remain the draft blockers described above.
+
+
+## Server people subscription repair — September 10, 2026
+
+Baseline: clean `main` at `dc48391`, matching fetched `origin/main`; task branch
+`fix/server-people-list`, pinned Rust 1.98.1. The owner's already-open app showed
+an unavailable people pane despite a nonzero server total. Only its visible UI was
+inspected and its existing Reload people control retried; no credentials, messages,
+calls, microphone, captured account payloads or live screenshots were used in artifacts.
+
+The active member request now uses opcode 37 and enables the prerequisite guild
+subscription (`typing:true`). Closing or changing the pane clears channel ranges and
+that subscription. It still requests just 100 list positions and retains the existing
+128-KiB member bound; no role UI or full-directory fetch was added. Role colors,
+role headings and member role display are not implemented. See compatibility notes
+for the dated primary implementation evidence and remaining unofficial behavior.
+
+Validation: `cargo test --locked -p discord-gateway member_tests` passed both tests;
+`cargo xtask check` passed workspace tests, formatting, strict Clippy and policy checks.
+An independent read-only review found no blocker in the final request/cleanup change.
+Native screenshots: not applicable to this wire-request-only patch; native layout and
+synthetic people rendering are unchanged, and identical demo pictures would not show
+whether Discord accepts a subscription. The repaired build remains live-unverified.
+Package and reducer comparison results are recorded in `docs/performance.md`.
+
+Both text and optional voice release packages built and passed strict local signature
+verification. Executables each changed by -32 bytes; installed bundles by +2,963 bytes.
+Synthetic reducer median 26.474→27.128 ms, with the same retained timeline range;
+this workload does not exercise the changed subscription. No performance improvement
+is claimed. Delivery remains draft pending CI and repaired-build live verification.

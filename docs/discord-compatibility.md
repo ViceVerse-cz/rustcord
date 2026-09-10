@@ -13,7 +13,7 @@ Serein is unofficial and not endorsed by Discord. No normal-user live session ha
 | Server categories | [Channel resource](https://docs.discord.com/developers/resources/channel), existing session snapshot and channel events | Documented metadata; normal-user delivery unofficial | Ordered collapsible headings, orphan fallback, partial create/update/delete; offline and keyboard tests; [details](categories.md) |
 | Server icons | [Image reference](https://docs.discord.com/developers/reference#image-formatting), guild metadata and GUILD_UPDATE | Documented CDN path; nested READY properties unofficial | Cached static icons and hash updates, initials fallback, offline tests; [details](icons.md) |
 | Message embeds | [Message resource](https://docs.discord.com/developers/resources/message#embed-object) | Documented attributes; normal-user delivery/proxy conversion unverified | Native cards, partial embed-only updates, suppression/spoilers, cached static service-proxy previews; video opens externally, [limits](embeds.md) |
-| People / member pane | Normal session; [discord.py-self Gateway](https://github.com/dolfies/discord.py-self/blob/master/discord/gateway.py), [member-list identity](https://github.com/dolfies/discord.py-self/blob/master/discord/abc.py), [wire types](https://github.com/dolfies/discord.py-self/blob/master/discord/types/gateway.py) | Unofficial and unstable | On-demand opcode 14, first 100 list positions, typed incremental operations, identity/request filtering and 15-second timeout; DM recipients from READY. Missing metadata or unsupported replies show unavailable; live-unverified |
+| People / member pane | Normal session; [discord.py-self Gateway](https://github.com/dolfies/discord.py-self/blob/master/discord/gateway.py), [member-list identity](https://github.com/dolfies/discord.py-self/blob/master/discord/abc.py), [wire types](https://github.com/dolfies/discord.py-self/blob/master/discord/types/gateway.py) | Unofficial and unstable | On-demand opcode 37 with the required guild typing subscription, first 100 list positions, typed incremental operations, identity/request filtering and 15-second timeout; DM recipients from READY. Missing metadata or unsupported replies show unavailable; live-unverified |
 | Profile pictures | [Discord image formatting](https://docs.discord.com/developers/reference#image-formatting), [User resource](https://docs.discord.com/developers/resources/user#user-object) | Documented CDN paths and user metadata; normal-session acquisition unofficial | Static PNGs, credential-free requests, account-isolated disk cache, bounded decode/textures, fallback initials; offline transport/cache tests only |
 | User mentions | [Message formatting](https://docs.discord.com/developers/reference#message-formatting) | Documented syntax; normal-user notification behavior unverified | Local @ autocomplete, clickable names/profile cards, exact user allowlists, bounded SQLite metadata; [tests and limits](mentions.md) |
 | User profile cards | Normal session `/users/{id}/profile`; [public implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/http.py) | Unofficial route and payload; live-unverified | On-demand banner/avatar/bio/pronouns/badges/connections/mutual servers, cancellable requests and visible failures; [evidence](profiles.md) |
@@ -114,3 +114,22 @@ Guild voice entry uses the documented [Gateway voice state update and voice allo
 The optional media engine extends the existing DAVE/Opus path to bounded group membership and simultaneous remote audio mixing. Server mute/deafen gates local media. Empty rooms wait without opening audio devices; microphone capture requires an established encrypted group. Stage channels and group DMs remain visibly unsupported. Main Gateway disconnect, channel/session moves, permission invalidation or voice server migration stop the current media session and require deliberate rejoin. No automatic call or DM ringing is triggered by viewing a roster or joining a guild channel.
 
 The implementation is tested with synthetic protocol/crypto/UI data. The owner-controlled official-client two-way audio, multi-party join/leave, permission, device and network tests in [voice.md](voice.md) remain required before claiming working live interoperability.
+
+### Server people subscription repair (September 10, 2026)
+
+The member pane previously sent deprecated opcode 14 with `typing:false`. Current
+[Gateway implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/gateway.py)
+and [channel subscription prerequisites](https://github.com/dolfies/discord.py-self/blob/master/discord/state.py)
+show opcode 37 and a guild typing subscription before requesting channel member ranges.
+Serein now enables that subscription only for the active member pane and clears it with
+channel ranges when the pane closes or navigation changes. This receives typing events;
+it does not send typing notifications. Unhandled typing events are not retained.
+The request still covers only positions 0–99, with the existing 128-KiB retained member
+budget, request/list identity filtering and timeout. No full-directory fetch was added.
+
+A read-only observation of the owner's already-open app confirmed an unavailable pane
+with a nonzero server total. That is reproduction evidence, not successful validation of
+this repaired build. Tests use a synthetic local WebSocket; normal-user acceptance of the
+new request remains unverified. Role display is **not implemented**: only role permissions
+for list identity are read; member role IDs, group headings and role colors are discarded.
+Role administration is outside the product scope.

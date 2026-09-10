@@ -107,7 +107,9 @@ fn subscription_packet(guild: Id, channel: Option<Id>) -> Frame {
         || serde_json::json!({}),
         |channel| serde_json::json!({channel.to_string():[[0,99]]}),
     );
-    Frame::Text(serde_json::json!({"op":14,"d":{"guild_id":guild,"typing":false,"threads":false,"activities":false,"members":[],"channels":channels}}).to_string().into())
+    // Unofficial guild subscriptions require typing=true before channel ranges work.
+    // This receives events; it does not send a typing notification or request members in bulk.
+    Frame::Text(serde_json::json!({"op":37,"d":{"subscriptions":{guild.to_string():{"typing":channel.is_some(),"threads":false,"activities":false,"members":[],"channels":channels}}}}).to_string().into())
 }
 struct ActiveMembers {
     subscription: MemberSubscription,
@@ -911,11 +913,16 @@ mod member_tests {
                 while let Some(Ok(Frame::Text(text)))=socket.next().await {
                     let packet:serde_json::Value=serde_json::from_str(&text).unwrap();
                     if packet["op"]==1 {socket.send(Frame::Text(json!({"op":11,"d":null}).to_string().into())).await.unwrap();continue;}
-                    assert_eq!(packet["op"],14);assert_eq!(packet["d"]["guild_id"],"1");
+                    assert_eq!(packet["op"],37);
+                    assert_eq!(packet["d"]["subscriptions"].as_object().unwrap().len(),1);
+                    let subscription=&packet["d"]["subscriptions"]["1"];
+                    assert_eq!(subscription["threads"],false);
+                    assert_eq!(subscription["activities"],false);
+                    assert_eq!(subscription["members"],json!([]));
                     if !subscribed {
-                        assert_eq!(packet["d"]["channels"]["2"],json!([[0,99]]));subscribed=true;
+                        assert_eq!(subscription["typing"],true);assert_eq!(subscription["channels"],json!({"2":[[0,99]]}));subscribed=true;
                         socket.send(Frame::Text(json!({"op":0,"t":"GUILD_MEMBER_LIST_UPDATE","s":2,"d":{"guild_id":"1","id":"everyone","member_count":1,"ops":[{"op":"SYNC","range":[0,99],"items":[{"member":{"user":{"id":"3","username":"Visible","avatar":"0123456789abcdef0123456789abcdef"}}}]}]}}).to_string().into())).await.unwrap();
-                    } else {assert_eq!(packet["d"]["channels"],json!({}));break;}
+                    } else {assert_eq!(subscription["typing"],false);assert_eq!(subscription["channels"],json!({}));break;}
                 }
                 socket.close(Some(CloseFrame{code:CloseCode::Library(4004),reason:"synthetic stop".into()})).await.unwrap();
             };
