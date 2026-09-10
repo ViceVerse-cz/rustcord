@@ -1745,3 +1745,36 @@ second for 20 s after an 8 s launch and 4 s activation warmup, one run per build
 window frontmost and the fixture's one-second elapsed-time repaint active. They are not p95
 frame or startup latency, which remain unmeasured. The atlas texture is 655,360 decoded bytes.
 Replay, mixer and codec workloads are unchanged and were not rerun; no dependency changed.
+
+
+## Debian/Ubuntu packages - September 10, 2026
+
+Package implementation `2ec2cfd`, integrated with main `3307396` at `1dd12b3`.
+Ubuntu 26.04 x86_64 under WSL2 (kernel 6.6.87.2-microsoft-standard-WSL2), Rust 1.98.1,
+release thin LTO / one codegen unit / stripped debug info. Text has no default features;
+voice enables `voice`. These measurements precede this evidence append. No runtime source or
+application dependency changes were made; there was no Debian archive before this slice.
+
+| Metric | Text | Voice | Voice minus text |
+| --- | ---: | ---: | ---: |
+| Executable bytes | 61,102,936 | 64,821,592 | +3,718,656 |
+| Installed regular-file bytes | 61,772,329 | 65,713,975 | +3,941,646 |
+| Regular payload files | 52 | 98 | +46 |
+| `.deb` bytes (dpkg xz compression) | 28,056,260 | 29,256,868 | +1,200,608 |
+| Declared Installed-Size (KiB including per-file rounding) | 60,369 | 64,251 | +3,882 |
+
+The measured text package is 26.76 MiB compressed and 58.95 MiB declared installed, within
+SPEC13's initial 30/75 MiB distribution/installation targets for the application payload.
+System GTK/WebKit, graphics, portal, credential service and audio dependencies are declared
+separately; their installed size is not included or measured here. This is not an application
+RSS, CPU, frame-time, startup or live-call measurement. Existing cache/renderer budgets are unchanged.
+
+Each archive was extracted and compared byte-for-byte with its staged payload, including the
+executable; file modes, owner IDs, metadata, desktop syntax and host ELF library closure passed.
+Text SHA256: `97e1541e4c868f6b3328b5a0610fbf674a65f71254a8a8c00ac3d5797d25f066`.
+Voice SHA256: `95c44d46b100f86f776bda199b26f8a5d22753f66363c7e5ff4888e3f26c6473`.
+Fresh source/dependency download plus the first text release took 8m41s; after integration,
+release commands reported 3m14s text and 3m19s voice. These one-off shared-host build observations
+exclude package-tool timing and are not a before/after performance comparison. No desktop or
+audio device was opened. Minimum distro compatibility is limited by generated dependencies
+(in this host's artifacts, libc6 >=2.43); older systems and actual installation remain unverified.

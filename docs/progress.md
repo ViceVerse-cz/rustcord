@@ -1786,9 +1786,22 @@ changes; the final combined `cargo xtask check` passed again (353 tests, Clippy 
   Clippy, text-only compilation and policy checks. The Linux synthetic package regression passed
   both variant payloads, stale nested-file exclusion and invalid ELF/payload rejection. Independent
   review found no remaining blockers after the source-manifest fix.
-- Real Linux build/packaging validation is in progress on Ubuntu 26.04 x86_64 under WSL2, Rust 1.98.1.
+- Integrated main `3307396` (startup game-presence fix); Windows full checks passed again with
+  353 Rust tests. Both real Linux release variants and `.deb` package smoke passed on Ubuntu 26.04
+  x86_64 under WSL2, Rust 1.98.1. Text: 52 payload files/28,056,260 compressed bytes; voice:
+  98 files/29,256,868 bytes. Full installed/binary sizes and measurement limits are in performance.md.
   The locally provisioned compiler and build cache are isolated under the E: build directory.
   X11/Wayland rendering, Secret Service, portal dialogs, IME, accessibility and actual login/audio
   remain unverified; WSL compilation and archive inspection do not prove those desktop paths.
 - Previous PR #51's Linux fuzz, license and security jobs passed on GitHub; native jobs remained
   queued or running at this inspection. This is separate from the new packaging validation.
+
+- Packaging host emitted a dpkg-shlibdeps warning for the libc6 `/lib64` loader diversion.
+  Readlink and dpkg ownership checks resolve both paths to the installed libc6 loader;
+  generated Depends includes libc6 >=2.43 and both host library-closure checks passed. No
+  missing-library/dependency-metadata checks were suppressed. These builds target this host
+  distribution, not older Debian/Ubuntu versions. The `.deb` files remain unsigned.
+- No application source/dependency changes were made by this slice. Native install/launch,
+  Wayland/X11, desktop services, IME, accessibility and physical/live audio remain unverified.
+  Remaining implementation work includes bounded unknown-event compatibility diagnostics;
+  source-license assembly and the documented runtime/live evidence gates remain incomplete.
