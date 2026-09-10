@@ -2,8 +2,8 @@
 
 ## Current scope and gates
 
-Current slice: automated dependency license policy after notification PR #45,
-from main 192b40c. Full SPEC completion remains active; native automation and live-account
+Current slice: authorized single-message deletion after license checks PR #46,
+from main 899fca7. Full SPEC completion remains active; native automation and live-account
 validation remain owner-controlled. See the final dated entry for verification.
 
 ## Inline message spoilers (merged PR #36)
@@ -1592,3 +1592,28 @@ tests, `cargo xtask check`, and `cargo build --locked -p serein` passed against 
   separate gates; a passing declaration check does not complete them. Remaining implementation
   candidates include fuzzing, Linux distribution packaging, authorized guild message deletion,
   and bounded unknown-event diagnostics. Live/native evidence gates remain owner-controlled.
+
+
+## Authorized single-message deletion (September 10, 2026)
+
+- Baseline clean main `899fca77347553516186e8686133f29c6ef6a66f`; isolated branch
+  `fix/authorized-message-deletion`. SPEC9.2 now separates deletion permission from editing:
+  loaded guild messages from other authors admit the existing delete confirmation with effective
+  MANAGE_MESSAGES. Own messages remain deletable without SEND_MESSAGES; edits stay author-only.
+- The shared admission gate validates user, channel, message, connection and current VIEW access,
+  with an explicit guild boundary for deleting others. Existing role/overwrite/thread-parent,
+  timeout and administrator calculations apply. Known non-deletable/unknown kinds are denied;
+  automoderation notices always require MANAGE_MESSAGES. Confirmation rechecks the shared gate.
+- Reuses the single-message DELETE endpoint and reconciliation; no bulk action, new queue,
+  optimistic deletion, dependency, persistence or role-directory request. Synthetic HTTP checks
+  distinguish confirmed success, forbidden access and uncertain server failure without retries.
+- Focused checks passed 12 core deletion/reconciliation tests, one headless menu test and one
+  local HTTP test. `cargo xtask check` passed 340 offline Rust tests, doctests, formatting,
+  strict all-feature Clippy, text-only compilation and policy checks. Independent review found
+  no blocker. Both unsigned Windows release packages passed; each executable is 512 bytes
+  smaller. Paired replay medians 39.6040 to 39.5085 ms; retained estimates unchanged. Initial
+  host-load differences motivated the paired rerun; full samples/deltas are in docs/performance.md.
+  Native screenshots,
+  UI resource measurements and screen-reader checks remain unavailable while desktop automation
+  is owner-paused. No live account, deletion, microphone, speaker or call action was performed.
+  Official bot-facing message documentation supplies protocol evidence, not normal-user proof.
