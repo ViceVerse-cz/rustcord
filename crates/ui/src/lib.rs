@@ -31,6 +31,8 @@ pub struct MessagingUi {
     avatars: avatars::Avatars,
     profile: Option<model::User>,
     profile_link: Option<String>,
+    /// Where the open profile was requested from; the popout is placed beside it.
+    profile_anchor: Option<(Id, egui::Pos2)>,
     members_hidden: bool,
     members_narrow_open: bool,
     member_reload_requested: bool,
@@ -73,6 +75,11 @@ pub struct MessagingUi {
 }
 
 impl MessagingUi {
+    /// Fixture-only entry point: opens People and the profile card for `user` as if clicked.
+    pub fn preview_profile(&mut self, user: model::User) {
+        self.members_narrow_open = true;
+        self.profile = Some(user);
+    }
     pub fn downloads(&mut self) -> &mut DownloadUi {
         &mut self.timeline.download
     }
@@ -178,17 +185,18 @@ impl MessagingUi {
                                 {
                                     self.profile = Some(member.user.clone());
                                 }
-                                if let Some(status) = member.status.as_deref() {
+                                if let Some(custom) = member.custom_status.as_deref() {
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(custom).size(10.0).color(colors.muted),
+                                        )
+                                        .truncate(),
+                                    );
+                                } else if let Some(status) = member.status.as_deref() {
                                     ui.label(
-                                        RichText::new(match status {
-                                            "online" => "Online",
-                                            "idle" => "Away",
-                                            "dnd" => "Do not disturb",
-                                            "offline" => "Offline",
-                                            _ => "Presence unavailable",
-                                        })
-                                        .size(10.0)
-                                        .color(colors.muted),
+                                        RichText::new(profiles::presence_label(status))
+                                            .size(10.0)
+                                            .color(colors.muted),
                                     );
                                 }
                             });
@@ -1187,6 +1195,16 @@ impl MessagingUi {
                     commands.push(command);
                 }
             }
+            let anchor = match self.profile_anchor {
+                Some((id, pos)) if id == user.id => pos,
+                _ => {
+                    let pos = ctx
+                        .input(|i| i.pointer.interact_pos().or(i.pointer.latest_pos()))
+                        .unwrap_or_else(|| ctx.content_rect().center());
+                    self.profile_anchor = Some((user.id, pos));
+                    pos
+                }
+            };
             match profiles::show(
                 ui,
                 user,
@@ -1194,6 +1212,7 @@ impl MessagingUi {
                 state,
                 &mut self.avatars,
                 &mut self.profile_link,
+                anchor,
             ) {
                 Some(profiles::Action::Profile(user)) => {
                     self.profile = Some(user);
@@ -1203,6 +1222,7 @@ impl MessagingUi {
                 Some(profiles::Action::Close) => {
                     self.profile = None;
                     self.profile_link = None;
+                    self.profile_anchor = None;
                     commands.push(state.clear_profile());
                 }
                 Some(profiles::Action::Retry) => {
@@ -1213,6 +1233,7 @@ impl MessagingUi {
                 Some(profiles::Action::Message(channel)) => {
                     self.profile = None;
                     self.profile_link = None;
+                    self.profile_anchor = None;
                     commands.push(state.clear_profile());
                     if let Some(command) = state.select(channel) {
                         commands.push(command);
@@ -1220,6 +1241,8 @@ impl MessagingUi {
                 }
                 None => {}
             }
+        } else {
+            self.profile_anchor = None;
         }
         if let Some((channel, message)) = self.deleting {
             egui::Window::new("Delete message from Discord?")
@@ -1523,6 +1546,7 @@ mod composer_tests {
                             },
                             nick: None,
                             status: None,
+                            custom_status: None,
                         })
                     })
                     .collect(),

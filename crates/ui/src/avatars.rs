@@ -121,28 +121,31 @@ impl Avatars {
             None
         }
     }
-    pub fn show_banner(
+    /// Paints the profile banner (or its accent color) into `rect`; corners follow the card.
+    pub fn paint_banner(
         &mut self,
         ui: &mut egui::Ui,
         profile: &model::UserProfile,
-        size: egui::Vec2,
+        rect: egui::Rect,
+        corner: egui::CornerRadius,
         demo: bool,
-    ) -> egui::Response {
-        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
+    ) {
         let color = profile
             .accent_color
+            .or(profile.theme_colors.map(|c| c[0]))
             .map(|rgb| egui::Color32::from_rgb((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8))
             .unwrap_or(crate::design::palette(ui).accent.gamma_multiply(0.4));
-        ui.painter().rect_filled(rect, 8, color);
+        ui.painter().rect_filled(rect, corner, color);
         if ui.is_rect_visible(rect)
             && let Some(key) = profile.banner_key()
         {
             if demo && !self.textures.iter().any(|(stored, _)| stored == &key) {
                 let mut image = ColorImage::filled([128, 48], color);
+                let stripe = color.lerp_to_gamma(egui::Color32::WHITE, 0.16);
                 for y in 0..48 {
                     for x in 0..128 {
-                        if (x + y) % 48 < 9 {
-                            image.pixels[y * 128 + x] = color.gamma_multiply(0.65);
+                        if (x + y) % 48 < 12 {
+                            image.pixels[y * 128 + x] = stripe;
                         }
                     }
                 }
@@ -157,15 +160,70 @@ impl Avatars {
                 let uv = egui::Rect::from_center_size(egui::pos2(0.5, 0.5), uv_size);
                 egui::Image::new((entry.1.id(), rect.size()))
                     .uv(uv)
-                    .corner_radius(8)
+                    .corner_radius(corner)
                     .paint_at(ui, rect);
                 self.textures.push_back(entry);
             } else if !demo {
                 self.request(key);
             }
         }
+    }
+    /// Small square artwork (badge or server tag). Falls back to a neutral disc until loaded.
+    pub fn show_icon(
+        &mut self,
+        ui: &mut egui::Ui,
+        key: Option<String>,
+        size: f32,
+        demo: bool,
+        label: &str,
+    ) -> egui::Response {
+        let (rect, response) =
+            ui.allocate_exact_size(egui::Vec2::splat(size), egui::Sense::hover());
+        if ui.is_rect_visible(rect) {
+            let colors = crate::design::palette(ui);
+            if let Some(key) = key {
+                if demo && !self.textures.iter().any(|(stored, _)| stored == &key) {
+                    // Original synthetic emblem; never bundled third-party badge artwork.
+                    let seed = key
+                        .bytes()
+                        .fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32));
+                    let tint = egui::Color32::from_rgb(
+                        90 + (seed % 120) as u8,
+                        120 + ((seed >> 8) % 100) as u8,
+                        150 + ((seed >> 16) % 90) as u8,
+                    );
+                    let mut image = ColorImage::filled([32, 32], egui::Color32::TRANSPARENT);
+                    for y in 0..32_i32 {
+                        for x in 0..32_i32 {
+                            let d = (x - 16).pow(2) + (y - 16).pow(2);
+                            if d < 196 {
+                                image.pixels[(y * 32 + x) as usize] =
+                                    if d < 36 { egui::Color32::WHITE } else { tint };
+                            }
+                        }
+                    }
+                    self.attempts.insert(key.clone(), (Instant::now(), false));
+                    self.accept(ui.ctx(), key.clone(), Some(image));
+                }
+                if !self.paint(ui, &key, rect, (size * 0.25) as u8) {
+                    ui.painter()
+                        .circle_filled(rect.center(), size * 0.4, colors.raised);
+                    if !demo {
+                        self.request(key);
+                    }
+                }
+            } else {
+                ui.painter()
+                    .circle_filled(rect.center(), size * 0.4, colors.raised);
+                ui.painter().circle_stroke(
+                    rect.center(),
+                    size * 0.4,
+                    egui::Stroke::new(1.0, colors.border),
+                );
+            }
+        }
         response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Image, ui.is_enabled(), "Profile banner")
+            egui::WidgetInfo::labeled(egui::WidgetType::Image, ui.is_enabled(), label)
         });
         response
     }

@@ -98,7 +98,7 @@ pub enum Event {
         user: Id,
         guild: Option<Id>,
         request: u64,
-        result: Result<UserProfile, auth::Failure>,
+        result: Result<Box<UserProfile>, auth::Failure>,
     },
     Voice(voice::Event),
     ChannelCreated(Channel),
@@ -324,6 +324,7 @@ impl State {
                         user,
                         nick: None,
                         status: None,
+                        custom_status: None,
                     })
                 })
                 .collect()
@@ -1244,7 +1245,7 @@ impl Event {
                 Self::Reactions(reactions::Event::Read { result, .. }) => {
                     result.as_ref().map_or(0, |r| model::reaction_bytes(r))
                 }
-                Self::Profile { result, .. } => result.as_ref().map_or(0, UserProfile::bytes),
+                Self::Profile { result, .. } => result.as_ref().map_or(0, |p| p.bytes()),
                 Self::Voice(event) => event.bytes(),
                 Self::GuildEmojis { emojis, .. } => custom_emoji_bytes(emojis),
                 Self::GuildChanged(patch) => [&patch.name, &patch.icon]

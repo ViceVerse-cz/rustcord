@@ -46,7 +46,7 @@ impl State {
         user: Id,
         guild: Option<Id>,
         request: u64,
-        result: Result<UserProfile, Failure>,
+        result: Result<Box<UserProfile>, Failure>,
     ) {
         if let Err(failure) = &result
             && failure.ends_session()
@@ -69,7 +69,7 @@ impl State {
                     && data.guild.as_ref().is_none_or(|g| Some(g.guild) == guild)
                     && data.valid() =>
             {
-                view.data = Some(data);
+                view.data = Some(*data);
                 view.error = None;
             }
             Ok(_) => {

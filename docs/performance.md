@@ -567,3 +567,19 @@ One release reducer executable per revision, one warmup plus five direct measure
 macOS 27.0 arm64, Apple M1 Pro (8 CPU / 14 GPU cores), 16 GB RAM, wgpu/Metal, built-in 3024×1964 Retina display at unchanged system scale; default ~1087×768 captured window. Rust 1.98.1 locked release text-only/voice packages, baseline clean `2879fbc`; native runs explicitly `--demo`, default synthetic timeline followed by opening its image viewer. Separate baseline/final app copies. Full package totals count files, excluding the nested voice distribution from text; gzip tarballs include package files. Package measurements precede appending these measurements to docs.
 
 Ten OS RSS/CPU samples at one-second intervals after interaction settled (baseline at least 10 s; final resampled after at least 30 s). Initial final capture/packaging-period samples were 108,400–108,928 KiB and 1.7–41.1% CPU; the settled retry above is reported separately, not hidden. Different warmup/background capture/packaging activity and OS memory accounting prevent interpreting the RSS drop as an improvement. These are sampled process RSS, not allocation limits or physical footprint; startup/interaction peak, GPU allocations and p95 frame/startup latency are unmeasured. Baseline had no child processes; no voice call or audio measurement. No performance improvement claim.
+
+## Profile popout — September 10, 2026
+
+Same macOS arm64 host, Rust 1.98.1, release profile (thin LTO), lockfile unchanged. Baseline is `main` at `74709e2` built with `cargo build --release --locked -p serein` before editing; the after build is the same command on the task branch. Package outputs come from `cargo xtask package` / `package-voice` on the task branch only; no voice baseline was built for this task.
+
+| Metric / method | Baseline | After | Delta |
+| --- | --- | --- | --- |
+| Text executable, unsigned `cargo build --release` | 46,367,952 B | 46,408,896 B | +40,944 B (+0.09%) |
+| Text package executable, ad-hoc signed (`dist/Serein.app`) | not built | 46,139,168 B | — |
+| Voice package executable, ad-hoc signed (`dist/voice/Serein.app`) | not built | 48,958,768 B | — |
+| Full package directory (`du -sk`) text / voice | not built | 45,556 KiB / 48,652 KiB | — |
+| Idle `ps` RSS, release `--demo`, 10 s warmup, 5 samples at 2 s | 153,280–153,328 KiB | 155,072–155,216 KiB | ≈ +1.2% (noise-level) |
+| Idle `ps` RSS, release `--demo --demo-profile` (popout + People open) | n/a | 153,424 KiB (stable) | — |
+| Sampled CPU after warmup | 0.0% | 0.0–1.0% (one 7.1% first sample) | no sustained change |
+
+Method: wgpu/Metal renderer, 1120×792 logical window at 2× scale, no interaction after launch beyond activating the window, no network, no helper processes. RSS is whole-process resident memory of the single executable; GPU and driver allocations are not included. The two-sample difference is inside run-to-run noise and is not called a regression or improvement. Frame time and p95 latency were not instrumented. New retained data is bounded inside existing caps: profile ≤64 KiB (theme colors 8 B, tag ≤8 chars + 32-hex badge hash, ≤16 badge icon hashes), member custom status ≤128 chars inside the 128 KiB member budget; badge/tag artwork uses the existing 16 MiB / 64-texture allowance with 64-pixel requests.

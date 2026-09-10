@@ -661,6 +661,7 @@ mod tests {
             },
             nick: None,
             status: None,
+            custom_status: None,
         });
         state.apply_voice(Event::Snapshot {
             guild: None,

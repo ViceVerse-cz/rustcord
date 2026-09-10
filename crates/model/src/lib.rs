@@ -237,6 +237,8 @@ pub struct Member {
     pub user: User,
     pub nick: Option<String>,
     pub status: Option<String>,
+    /// Custom status text with any unicode emoji; bounded, never a rich activity.
+    pub custom_status: Option<String>,
 }
 impl Member {
     pub fn bytes(&self) -> usize {
@@ -244,6 +246,7 @@ impl Member {
             + self.user.heap_bytes()
             + self.nick.as_ref().map_or(0, String::capacity)
             + self.status.as_ref().map_or(0, String::capacity)
+            + self.custom_status.as_ref().map_or(0, String::capacity)
     }
 }
 #[derive(Clone)]
