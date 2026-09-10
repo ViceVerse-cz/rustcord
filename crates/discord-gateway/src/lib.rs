@@ -907,6 +907,9 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let endpoint = format!("ws://{}/", listener.local_addr().unwrap());
             let (client_finished, mut terminal_observed) = tokio::sync::oneshot::channel();
+            let (invalid_session_consumed, mut invalid_session_observed) =
+                tokio::sync::oneshot::channel();
+            let invalid_session_consumed = std::sync::Mutex::new(Some(invalid_session_consumed));
             let server = async {
                 for connection in 0..3 {
                     let (stream, _) = listener.accept().await.unwrap();
@@ -924,7 +927,12 @@ mod tests {
                         assert_eq!(handshake["d"]["session_id"], "synthetic-first-session");
                         send(&mut socket, json!({"op":0,"t":"RESUMED","s":42,"d":{}})).await;
                         acknowledge(&mut socket, 42).await;
+                        // Leave a heartbeat reply unread to exercise the TCP-reset race.
+                        send(&mut socket, json!({"op":1,"d":null})).await;
                         send(&mut socket, json!({"op":9,"d":false})).await;
+                        // Keep TCP alive until the client processes invalid-session;
+                        // dropping it now can discard that frame with the unread reply.
+                        (&mut invalid_session_observed).await.unwrap();
                     } else {
                         assert_eq!(handshake["op"], 2);
                         assert!(handshake["d"].get("session_id").is_none());
@@ -982,6 +990,14 @@ mod tests {
                     };
                     let mut events = events.lock().unwrap();
                     assert!(events.len() < 16);
+                    // Emission is synchronous: the first connection's Disconnected
+                    // precedes Resumed, so it cannot release the second socket.
+                    if label == "disconnected"
+                        && events.contains(&"resumed")
+                        && let Some(consumed) = invalid_session_consumed.lock().unwrap().take()
+                    {
+                        consumed.send(()).unwrap();
+                    }
                     events.push(label);
                     Ok(())
                 },
