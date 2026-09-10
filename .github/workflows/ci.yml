@@ -23,6 +23,7 @@ jobs:
         with:
           node-version: 22
       - run: node tests/login-handoff.cjs
+      - run: node tests/xtask-workspace.cjs
       - run: cargo replay
       - name: Linux package regression
         if: runner.os == 'Linux'

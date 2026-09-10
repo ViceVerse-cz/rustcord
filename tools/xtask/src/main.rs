@@ -362,33 +362,50 @@ fn package(voice: bool) -> Result<(), String> {
 	);
 	Ok(())
 }
+fn enter_workspace() -> Result<(), String> {
+	// Shared target caches can reuse an executable built in a different worktree.
+	// Resolve the caller's workspace at runtime instead of embedding a checkout path.
+	let output = Command::new("cargo")
+		.args(["locate-project", "--workspace", "--message-format", "plain"])
+		.output()
+		.map_err(|e| e.to_string())?;
+	if !output.status.success() {
+		return Err("Run xtask from inside the intended Cargo workspace".into());
+	}
+	let manifest = String::from_utf8(output.stdout).map_err(|e| e.to_string())?;
+	let manifest = std::path::Path::new(manifest.trim());
+	let root = manifest
+		.parent()
+		.ok_or("Workspace manifest has no parent")?;
+	std::env::set_current_dir(root).map_err(|e| e.to_string())
+}
 fn main() -> ExitCode {
-	let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-	std::env::set_current_dir(root).expect("workspace exists");
-	let result = match std::env::args().nth(1).as_deref().unwrap_or("check") {
-		"check" => run(&["fmt", "--all", "--", "--check"])
-			.and_then(|_| {
-				run(&[
-					"clippy",
-					"--workspace",
-					"--all-targets",
-					"--all-features",
-					"--locked",
-					"--",
-					"-D",
-					"warnings",
-				])
-			})
-			.and_then(|_| run(&["test", "--workspace", "--all-features", "--locked"]))
-			.and_then(|_| run(&["check", "-p", "serein", "--no-default-features", "--locked"]))
-			.and_then(|_| policy()),
-		"policy" => policy(),
-		"licenses" => licenses(),
-		"fuzz" => fuzz(),
-		"package" => package(false),
-		"package-voice" => package(true),
-		_ => Err("Use cargo xtask [check|policy|licenses|fuzz|package|package-voice]".into()),
-	};
+	let result = enter_workspace().and_then(|()| {
+		match std::env::args().nth(1).as_deref().unwrap_or("check") {
+			"check" => run(&["fmt", "--all", "--", "--check"])
+				.and_then(|_| {
+					run(&[
+						"clippy",
+						"--workspace",
+						"--all-targets",
+						"--all-features",
+						"--locked",
+						"--",
+						"-D",
+						"warnings",
+					])
+				})
+				.and_then(|_| run(&["test", "--workspace", "--all-features", "--locked"]))
+				.and_then(|_| run(&["check", "-p", "serein", "--no-default-features", "--locked"]))
+				.and_then(|_| policy()),
+			"policy" => policy(),
+			"licenses" => licenses(),
+			"fuzz" => fuzz(),
+			"package" => package(false),
+			"package-voice" => package(true),
+			_ => Err("Use cargo xtask [check|policy|licenses|fuzz|package|package-voice]".into()),
+		}
+	});
 	match result {
 		Ok(()) => ExitCode::SUCCESS,
 		Err(error) => {

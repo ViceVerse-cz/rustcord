@@ -447,3 +447,13 @@ unofficial; a public sample application returned HTTP 200 without credentials on
 Synthetic decoder, local HTTP, cache and egui tests cover the implementation, not normal-user
 artwork interoperability. The owner confirmed presence text after launching the prior build;
 new artwork has not been tested against the owner's live session.
+
+
+### Unknown Gateway variants (September 10, 2026)
+
+Unknown dispatches remain ignored without granting capabilities; unsupported opcodes retain the
+existing protocol-error behavior. Opt-in `SEREIN_GATEWAY_DIAGNOSTICS=1` now records bounded fixed
+categories for these cases and missing dispatch names. Received names and payloads never enter
+diagnostics. This changes observability, not the supported service contract. Offline local-socket
+checks cover continued message delivery and heartbeat cursor advancement; normal-user service
+behavior remains unverified. See storage-policy.md for exact per-run limits and stderr handling.
