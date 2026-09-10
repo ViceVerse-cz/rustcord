@@ -247,6 +247,8 @@ async fn run_inner(
 	let mut signal_count = 0u16;
 	let mut capture_pacer = crate::capture::CapturePacer::default();
 	let mut capture_at = Instant::now();
+	let mut capture_enabled = false;
+	let mut capture_reset = true;
 	let mut local_activity = 0;
 	let mut last_speakers = [0; 64];
 	let mut speakers_at = Instant::now();
@@ -275,8 +277,12 @@ async fn run_inner(
 				let control=*controls.borrow();
 				// Preserve ordinary callback batches. Only a real stall (four packet
 				// intervals) discards queued speech; mute/security gates always flush.
-				let stalled=now.duration_since(capture_at)>=Duration::from_millis(80);
-				capture_at=now;
+				// Ready can synchronously enqueue the first frame after a delayed tick.
+				let resumed_capture = enabled && (!capture_enabled || capture_reset);
+				let stalled = !resumed_capture && now.duration_since(capture_at) >= Duration::from_millis(80);
+				capture_at = now;
+				capture_enabled = enabled;
+				capture_reset = false;
 				let latest=capture_pacer.next(&capture,enabled && !control.muted && !control.deafened,stalled);
 				local_activity=if enabled && !control.muted && !control.deafened && !stalled {
 					crate::activity::hold(latest.as_ref().map_or(0.0, |frame| frame.iter().filter(|s| s.is_finite()).map(|s| s*s).sum()),local_activity)
@@ -336,7 +342,7 @@ async fn run_inner(
 					Some(Ok(message)) if !matches!(&message, Message::Close(Some(frame)) if u16::from(frame.code)==4015)=>message,
 					_=>{
 						if encryption.is_none() || resume_attempts>=2 {return Err("Voice socket failed; rejoin the call");}
-						resume_attempts+=1;resuming=true;ready_announced=false;waiting_announced=false;
+						resume_attempts+=1;resuming=true;ready_announced=false;waiting_announced=false;capture_reset=true;
 						emit(Status::Securing).map_err(|_|"Call interface closed")?;
 						deadline=Some(Instant::now()+Duration::from_secs(30));heartbeat_ms=None;awaiting_ack=None;
 						let config=WebSocketConfig::default().max_message_size(Some(MAX_SIGNAL)).max_frame_size(Some(MAX_SIGNAL)).write_buffer_size(0).max_write_buffer_size(MAX_SIGNAL*2);
@@ -392,21 +398,21 @@ async fn run_inner(
 								let ids=data["user_ids"].as_array().ok_or("Missing voice participants")?;
 								if ids.len()>crate::crypto::MAX_PARTICIPANTS {return Err("Voice channel exceeds the 64 participant limit");}
 								let ids=ids.iter().map(|v|v.as_str().and_then(|v|v.parse::<u64>().ok()).filter(|v|*v!=0).ok_or("Malformed voice participant")).collect::<Result<Vec<_>,_>>()?;
-								if dave.connect(&ids)? {deadline=Some(Instant::now()+Duration::from_secs(90));mixer.clear();}
+								if dave.connect(&ids)? {deadline=Some(Instant::now()+Duration::from_secs(90));capture_reset=true;mixer.clear();}
 							},
 							13=>{
 								let user=id(data,"user_id")?;mixer.remove(user);
-								if dave.disconnect(user)? {deadline=Some(Instant::now()+Duration::from_secs(30));mixer.clear();}
+								if dave.disconnect(user)? {deadline=Some(Instant::now()+Duration::from_secs(30));capture_reset=true;mixer.clear();}
 							},
 							21=>{
 								if number(data,"protocol_version")?!=1 {return Err("Discord requested a voice encryption downgrade; call stopped");}
-								dave.pending=Some(transition(data)?);
+								capture_reset=true;dave.pending=Some(transition(data)?);
 								if dave.pending==Some(0) {if dave.session.is_ready(){dave.execute(0)?;}else if credentials.guild.is_some(){dave.wait_for_peer()?;}else{dave.pending=None;dave.ready=false;}} else {json_send(&mut ws,json!({"op":23,"d":{"transition_id":dave.pending}})).await?;}
 							},
 							22=>{dave.execute(transition(data)?)?;},
 							24=>{
 								if number(data,"protocol_version")?!=1 {return Err("Unsupported DAVE protocol version; call stopped");}
-								if number(data,"epoch")?==1 {dave.reinitialize()?;deadline=Some(Instant::now()+Duration::from_secs(30));send(&mut ws,Message::Binary(dave.key_package()?.into())).await?;}
+								if number(data,"epoch")?==1 {capture_reset=true;dave.reinitialize()?;deadline=Some(Instant::now()+Duration::from_secs(30));send(&mut ws,Message::Binary(dave.key_package()?.into())).await?;}
 							},
 							9=>{if !resuming{return Err("Unexpected voice resumption");}resuming=false;},
 							12=>{
@@ -425,7 +431,7 @@ async fn run_inner(
 							25=>dave.session.set_external_sender(data).map_err(|_|"DAVE external sender validation failed")?,
 							27=>{if let Some(response)=dave.proposals(data)?{send(&mut ws,Message::Binary(response.into())).await?;}},
 							29|30=>{
-								deadline=Some(Instant::now()+Duration::from_secs(30));ready_announced=false;waiting_announced=false;mixer.clear();
+								deadline=Some(Instant::now()+Duration::from_secs(30));ready_announced=false;waiting_announced=false;capture_reset=true;mixer.clear();
 								emit(Status::Securing).map_err(|_|"Call interface closed")?;
 								match dave.group_changed(opcode,data){
 									Ok(id)=>{if id!=0 {json_send(&mut ws,json!({"op":23,"d":{"transition_id":id}})).await?;}},
@@ -864,6 +870,9 @@ mod tests {
 			ws.send(Message::Binary(welcome_frame.into()))
 				.await
 				.unwrap();
+			// Block this current-thread runtime before it can process Ready. This
+			// verifies that its newly queued capture is not discarded as a stale gap.
+			std::thread::sleep(Duration::from_millis(100));
 			ws.send(Message::Text(
 				json!({"op":5,"seq":3,"d":{"user_id":"2","ssrc":43,"speaking":1}})
 					.to_string()
