@@ -337,6 +337,17 @@ fn package(voice: bool) -> Result<(), String> {
         run_tool("codesign", &["--force", "--sign", "-", bundle])?;
         run_tool("codesign", &["--verify", "--strict", bundle])?;
     }
+    if cfg!(target_os = "linux") {
+        run_tool(
+            "python3",
+            &[
+                "packaging/linux/package.py",
+                root.to_str().ok_or("Invalid package path")?,
+                env!("CARGO_PKG_VERSION"),
+                if voice { "voice" } else { "text" },
+            ],
+        )?;
+    }
     println!(
         "{} package executable: {} ({} bytes)",
         if cfg!(target_os = "macos") {
