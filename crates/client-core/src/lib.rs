@@ -368,6 +368,7 @@ impl State {
                 .into_iter()
                 .map(|user| {
                     Some(Member {
+                        roles: vec![],
                         user,
                         nick: None,
                         status: None,
@@ -1040,6 +1041,11 @@ impl State {
                     return;
                 }
                 if list.rows.len() > 100
+                    || list
+                        .rows
+                        .iter()
+                        .flatten()
+                        .any(|member| member.roles.len() > model::permissions::MAX_MEMBER_ROLES)
                     || list.rows.iter().flatten().map(Member::bytes).sum::<usize>() > 128 * 1024
                 {
                     self.members.as_mut().unwrap().freshness = Freshness::Unavailable;

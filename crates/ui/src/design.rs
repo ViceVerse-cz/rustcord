@@ -421,23 +421,55 @@ pub fn presence_dot(ui: &egui::Ui, rect: egui::Rect, color: Color32, ring: Color
     ui.painter().circle_filled(center, radius, color);
 }
 
+/// Preserve role hue where readable, otherwise move toward the theme's text color.
+pub fn role_name_color(rgb: u32, background: Color32, fallback: Color32) -> Color32 {
+    let role = Color32::from_rgb((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8);
+    for step in 0..=16 {
+        let mix = |a: u8, b: u8| ((u32::from(a) * (16 - step) + u32::from(b) * step) / 16) as u8;
+        let color = Color32::from_rgb(
+            mix(role.r(), fallback.r()),
+            mix(role.g(), fallback.g()),
+            mix(role.b(), fallback.b()),
+        );
+        if contrast(color, background) >= 4.5 {
+            return color;
+        }
+    }
+    fallback
+}
+fn luminance(c: Color32) -> f32 {
+    let channel = |v: u8| {
+        let v = v as f32 / 255.0;
+        if v <= 0.03928 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(c.r()) + 0.7152 * channel(c.g()) + 0.0722 * channel(c.b())
+}
+fn contrast(a: Color32, b: Color32) -> f32 {
+    let (l1, l2) = (luminance(a) + 0.05, luminance(b) + 0.05);
+    l1.max(l2) / l1.min(l2)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn luminance(c: Color32) -> f32 {
-        let channel = |v: u8| {
-            let v = v as f32 / 255.0;
-            if v <= 0.03928 {
-                v / 12.92
-            } else {
-                ((v + 0.055) / 1.055).powf(2.4)
+    #[test]
+    fn role_colors_remain_readable_in_light_and_dark_palettes() {
+        for variant in Variant::ALL {
+            for dark in [false, true] {
+                let p = colors(dark, variant);
+                for rgb in [0, 0xffffff, 0xff0000, 0x00ff00, 0x0000ff, 0xe78284] {
+                    for background in [p.sidebar, p.hover] {
+                        assert!(
+                            contrast(role_name_color(rgb, background, p.text), background) >= 4.5
+                        );
+                    }
+                }
             }
-        };
-        0.2126 * channel(c.r()) + 0.7152 * channel(c.g()) + 0.0722 * channel(c.b())
-    }
-    fn contrast(a: Color32, b: Color32) -> f32 {
-        let (l1, l2) = (luminance(a) + 0.05, luminance(b) + 0.05);
-        l1.max(l2) / l1.min(l2)
+        }
     }
     #[test]
     fn opaque_presets_keep_readable_text_and_keys_round_trip() {

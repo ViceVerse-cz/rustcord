@@ -34,10 +34,26 @@ pub const MAX_ROLES: usize = 512;
 pub const MAX_MEMBER_ROLES: usize = 512;
 pub const MAX_OVERWRITES: usize = 1000;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Role {
     pub id: Id,
     pub bits: u128,
+    pub name: String,
+    pub color: u32,
+    pub position: i32,
+    pub hoist: bool,
+}
+impl Role {
+    /// Higher positions rank first; equal positions favor the older (lower) role ID.
+    /// Compare roles from the same guild, excluding its @everyone role.
+    pub fn cmp_hierarchy(&self, other: &Self) -> std::cmp::Ordering {
+        self.position
+            .cmp(&other.position)
+            .then_with(|| other.id.cmp(&self.id))
+    }
+    pub fn bytes(&self) -> usize {
+        size_of::<Self>() + self.name.capacity()
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Overwrite {
@@ -134,10 +150,10 @@ impl Member {
 impl Guild {
     pub fn bytes(&self) -> usize {
         size_of::<Self>()
-            + self
-                .roles
-                .as_ref()
-                .map_or(0, |roles| roles.capacity() * size_of::<Role>())
+            + self.roles.as_ref().map_or(0, |roles| {
+                roles.capacity() * size_of::<Role>()
+                    + roles.iter().map(|role| role.name.capacity()).sum::<usize>()
+            })
             + self
                 .member
                 .as_ref()
@@ -288,6 +304,10 @@ mod tests {
             owner: Some(Id(99)),
             roles: Some(vec![
                 Role {
+                    name: String::new(),
+                    color: 0,
+                    position: 0,
+                    hoist: false,
                     id: Id(1),
                     bits: VIEW_CHANNEL
                         | READ_MESSAGE_HISTORY
@@ -296,10 +316,18 @@ mod tests {
                         | (1 << 100),
                 },
                 Role {
+                    name: String::new(),
+                    color: 0,
+                    position: 0,
+                    hoist: false,
                     id: Id(2),
                     bits: CONNECT,
                 },
                 Role {
+                    name: String::new(),
+                    color: 0,
+                    position: 0,
+                    hoist: false,
                     id: Id(3),
                     bits: SPEAK | SEND_MESSAGES_IN_THREADS,
                 },
@@ -415,11 +443,28 @@ mod tests {
                 ..valid.clone()
             },
             Guild {
-                roles: Some(vec![Role { id: Id(1), bits: 0 }; 2]),
+                roles: Some(vec![
+                    Role {
+                        name: String::new(),
+                        color: 0,
+                        position: 0,
+                        hoist: false,
+                        id: Id(1),
+                        bits: 0
+                    };
+                    2
+                ]),
                 ..valid.clone()
             },
             Guild {
-                roles: Some(vec![Role { id: Id(2), bits: 0 }]),
+                roles: Some(vec![Role {
+                    name: String::new(),
+                    color: 0,
+                    position: 0,
+                    hoist: false,
+                    id: Id(2),
+                    bits: 0,
+                }]),
                 ..valid.clone()
             },
             Guild {
@@ -447,6 +492,10 @@ mod tests {
                 roles: Some(
                     (1..=MAX_ROLES + 1)
                         .map(|id| Role {
+                            name: String::new(),
+                            color: 0,
+                            position: 0,
+                            hoist: false,
                             id: Id(id as u64),
                             bits: 0,
                         })

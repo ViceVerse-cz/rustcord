@@ -64,10 +64,18 @@ fn snapshot() -> p::Snapshot {
             owner: Some(Id(999)),
             roles: Some(vec![
                 p::Role {
+                    name: String::new(),
+                    color: 0,
+                    position: 0,
+                    hoist: false,
                     id: Id(10),
                     bits: BITS,
                 },
                 p::Role {
+                    name: String::new(),
+                    color: 0,
+                    position: 0,
+                    hoist: false,
                     id: Id(11),
                     bits: 0,
                 },
@@ -253,6 +261,10 @@ fn send_only_access_accepts_new_live_messages_without_restoring_old_history() {
         PermissionEvent::Role {
             guild: Id(10),
             role: p::Role {
+                name: String::new(),
+                color: 0,
+                position: 0,
+                hoist: false,
                 id: Id(11),
                 bits: p::ATTACH_FILES,
             },
@@ -299,6 +311,10 @@ fn deleting_an_unassigned_role_prunes_its_overwrites_and_invalidates_cached_deci
         PermissionEvent::Role {
             guild: Id(10),
             role: p::Role {
+                name: String::new(),
+                color: 0,
+                position: 0,
+                hoist: false,
                 id: Id(10),
                 bits: BITS & !p::SEND_MESSAGES,
             },
@@ -367,6 +383,10 @@ fn malformed_snapshots_are_atomic_and_rejected_permission_events_fail_closed() {
     oversized.guilds[0].roles = Some(
         (1..=513)
             .map(|id| p::Role {
+                name: String::new(),
+                color: 0,
+                position: 0,
+                hoist: false,
                 id: Id(id),
                 bits: BITS,
             })
@@ -449,6 +469,7 @@ fn member_requests_survive_guild_hydration_and_follow_current_permissions() {
         request: first,
         total: 1,
         rows: vec![Some(model::Member {
+            roles: vec![],
             user: user(),
             nick: None,
             status: None,
@@ -530,4 +551,83 @@ fn member_requests_survive_guild_hydration_and_follow_current_permissions() {
             .member_list_id(&channel(30, 11, Some(Id(20))))
             .is_none()
     );
+}
+
+#[test]
+fn member_role_display_tracks_live_role_metadata_and_membership() {
+    let mut state = state();
+    let mut member = model::Member {
+        roles: vec![Id(13), Id(12), Id(11), Id(10)],
+        user: user(),
+        nick: None,
+        status: Some("online".into()),
+        custom_status: None,
+    };
+    let role = |id, position, color, hoist| p::Role {
+        id: Id(id),
+        bits: 0,
+        name: format!("Role {id}"),
+        position,
+        color,
+        hoist,
+    };
+    for role in [
+        role(11, 2, 0x112233, true),
+        role(12, 2, 0x445566, true),
+        role(13, 3, 0, false),
+    ] {
+        permission(
+            &mut state,
+            PermissionEvent::Role {
+                guild: Id(10),
+                role,
+            },
+        );
+    }
+    let resolved = |state: &State, member: &model::Member| {
+        let (group, color) = state.member_roles(Id(10), member);
+        (group.map(|role| role.id), color.map(|role| role.color))
+    };
+    assert_eq!(resolved(&state, &member), (Some(Id(11)), Some(0x112233)));
+    permission(
+        &mut state,
+        PermissionEvent::Role {
+            guild: Id(10),
+            role: role(12, 4, 0x778899, false),
+        },
+    );
+    assert_eq!(resolved(&state, &member), (Some(Id(11)), Some(0x778899)));
+    permission(
+        &mut state,
+        PermissionEvent::RoleRemoved {
+            guild: Id(10),
+            id: Id(11),
+        },
+    );
+    assert_eq!(resolved(&state, &member), (None, Some(0x778899)));
+    member.roles = vec![Id(13), Id(999)];
+    assert_eq!(resolved(&state, &member), (None, None));
+    assert!(state.member_roles(Id(99), &member).0.is_none());
+    // The default role never gives an individual a group or color, even if malformed.
+    let mut everyone = role(10, 999, 0xff_ffff, true);
+    everyone.bits = BITS;
+    permission(
+        &mut state,
+        PermissionEvent::Role {
+            guild: Id(10),
+            role: everyone,
+        },
+    );
+    member.roles = vec![Id(10)];
+    assert_eq!(resolved(&state, &member), (None, None));
+    let before = state.permissions.bytes();
+    let mut named = role(14, 0, 0, false);
+    named.name.reserve(512);
+    let event = PermissionEvent::Role {
+        guild: Id(10),
+        role: named,
+    };
+    assert!(event.bytes() >= size_of::<PermissionEvent>() + 512);
+    permission(&mut state, event);
+    assert!(state.permissions.bytes() >= before + 512);
 }

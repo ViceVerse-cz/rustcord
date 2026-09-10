@@ -357,7 +357,7 @@ distinguish top-level group summaries (ID plus count) from group items inside SY
 member update. It now reads only the group ID needed to recognize an index placeholder;
 counts are not fabricated. An exact synthetic ID-only-header regression loads the following
 member at the correct position. The owner-run redacted trace confirms that member replies
-were rejected by the decoder; post-repair live validation is pending.
+were rejected by the decoder; the owner subsequently confirmed the repaired list loads.
 
 GUILD_CREATE can emit a synchronous channel-navigation burst. The previous eight-item
 reliable queue could terminate the session before the UI drained it. Admission now shares
@@ -368,3 +368,21 @@ are synthetic; this does not promise every large account fits existing account b
 The owner confirmed the affected server member list loads after restarting the repaired
 diagnostic build on September 10, 2026. This does not establish general live compatibility
 or long-running capacity behavior.
+
+### Member role display
+
+The active server member pane groups loaded online members by their highest hoisted role,
+then shows ungrouped Online and Offline sections. Heading counts cover loaded members, not
+the entire server; the existing partial-list hint remains. Highest nonzero role color sets
+online names independently of the hoisted role. Offline names remain muted. Unknown roles
+fall back to ordinary names/groups. Role changes/removals reuse the live permission mirror,
+and member list SYNC/UPDATE supplies role membership. No directory fetch was added.
+
+Role name, position, hoist and primary color are documented fields in
+[Discord's role object](https://docs.discord.com/developers/topics/permissions#role-object).
+Modern `colors.primary_color` takes precedence over legacy `color`; role gradients are not
+rendered. Equal positions favor the lower role ID, consistent with
+[discord.py role comparison](https://github.com/Rapptz/discord.py/blob/master/discord/role.py).
+Names retain hue when readable; the theme adjusts insufficient contrast, including hover.
+Member list subscriptions remain unofficial. Synthetic role evidence does not establish
+live role behavior for every account.

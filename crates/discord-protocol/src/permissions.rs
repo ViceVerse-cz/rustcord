@@ -40,6 +40,15 @@ impl<'de, T: Deserialize<'de>, const N: usize> Deserialize<'de> for List<T, N> {
         d.deserialize_seq(Bounded::<T, N>(PhantomData))
     }
 }
+pub(crate) fn member_roles<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Id>, D::Error> {
+    let mut roles = List::<Id, { p::MAX_MEMBER_ROLES }>::deserialize(d)?.0;
+    roles.sort_unstable();
+    if roles.iter().any(|id| id.0 == 0) || roles.windows(2).any(|ids| ids[0] == ids[1]) {
+        return Err(serde::de::Error::custom("Invalid member roles"));
+    }
+    roles.shrink_to_fit();
+    Ok(roles)
+}
 #[derive(Deserialize)]
 struct Bits(#[serde(deserialize_with = "bits")] u128);
 fn bits<'de, D: Deserializer<'de>>(d: D) -> Result<u128, D::Error> {
@@ -55,13 +64,42 @@ fn bits<'de, D: Deserializer<'de>>(d: D) -> Result<u128, D::Error> {
 struct Role {
     id: Id,
     permissions: Bits,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    color: u32,
+    #[serde(default)]
+    colors: Option<RoleColors>,
+    #[serde(default)]
+    position: i32,
+    #[serde(default)]
+    hoist: bool,
+}
+#[derive(Deserialize)]
+struct RoleColors {
+    primary_color: u32,
 }
 impl Role {
     fn checked(self) -> Result<p::Role, DecodeError> {
         nonzero(self.id)?;
+        let color = self
+            .colors
+            .map_or(self.color, |colors| colors.primary_color);
+        if color > 0xff_ffff {
+            return Err(DecodeError);
+        }
         Ok(p::Role {
             id: self.id,
             bits: self.permissions.0,
+            name: self
+                .name
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(100)
+                .collect(),
+            color,
+            position: self.position,
+            hoist: self.hoist,
         })
     }
 }
@@ -479,6 +517,32 @@ pub fn channel(bytes: &[u8], user: Id) -> Result<Option<ChannelUpdate>, DecodeEr
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn role_display_metadata_accepts_modern_and_legacy_colors_with_bounded_names() {
+        let snapshot = ready(br#"{"guilds":[{"id":"1","roles":[{"id":"1","permissions":"1024"},{"id":"2","permissions":"0","name":"Moderators","color":1122867,"position":3,"hoist":true}]}]}"#, Id(9)).unwrap();
+        let role = &snapshot.guilds[0].roles.as_ref().unwrap()[1];
+        assert_eq!(
+            (role.name.as_str(), role.color, role.position, role.hoist),
+            ("Moderators", 0x112233, 3, true)
+        );
+        let payload = json!({"guild_id":"1","role":{"id":"2","permissions":"0","name":format!("\n{}", "é".repeat(120)),"color":1122867,"colors":{"primary_color":4478310,"secondary_color":null},"position":4,"hoist":false}});
+        let (_, updated) = super::role(&serde_json::to_vec(&payload).unwrap()).unwrap();
+        assert_eq!(updated.name.chars().count(), 100);
+        assert_eq!(
+            (updated.color, updated.position, updated.hoist),
+            (0x445566, 4, false)
+        );
+        assert!(updated.bytes() >= size_of::<p::Role>() + 200);
+        let (_, uncolored) = super::role(br#"{"guild_id":"1","role":{"id":"2","permissions":"0","color":1122867,"colors":{"primary_color":0}}}"#).unwrap();
+        assert_eq!(uncolored.color, 0);
+        assert!(
+            super::role(
+                br#"{"guild_id":"1","role":{"id":"2","permissions":"0","color":16777216}}"#
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn ready_self_metadata_is_aligned_scoped_and_keeps_future_role_overwrites() {

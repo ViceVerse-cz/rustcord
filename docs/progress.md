@@ -1345,3 +1345,31 @@ removed; shipped diagnostics remain fixed labels only. The owner restarted the r
 build and confirmed the server member list is working. Long-running live capacity behavior
 has not been independently measured. Final `cargo xtask check`, debug build, text package
 and voice package passed. Final measurements are in docs/performance.md.
+
+### Member roles and name colors — September 10, 2026
+
+Starting branch `feat/member-role-display` at `7221390`, based on repaired member-sync PR #38.
+The owner confirmed that repair loads the affected server list, then requested role headings
+and name colors from a visual reference. Reuse bounded role metadata and active member rows;
+group loaded online members by their highest hoisted role, with independent highest-colored
+role names. Offline and DM behavior remains present. Heading labels support accessibility,
+truncation and hover text; colors adapt to the current background for legibility.
+
+The synthetic preview adds two role definitions plus ungrouped online/offline members. Before
+evidence shows the original two-member roleless fixture; after evidence explicitly uses the
+extended offline fixture. No private reference image or account data is included in evidence.
+Focused model/protocol/core/Gateway and UI tests pass, covering current/legacy colors, role
+hierarchy, create/update/delete, member SYNC/UPDATE, caps, byte accounting, grouping and
+virtualization. Full checks, package measurements and native review recorded below on completion.
+
+Final validation: `cargo xtask check`, debug build, text package and voice package pass.
+All four checks on member-repair PR #38 passed, and that PR is ready for review. The role
+feature is a dependent PR based on `fix/server-member-sync`. Native before/after PNGs were
+inspected at 1120×760 / 2×, each under 0.5 MiB; light-mode rendering was also inspected.
+The CUA tool exposed only window controls for the new preview, and click/keyboard/resize
+actions produced no observed state change. Thus native profile/keyboard/narrow/scroll checks
+remain unverified; the role PR stays draft. Existing headless virtualization/grouping and
+contrast checks pass. Live role behavior remains owner-unverified. Release text/voice
+executables grew 40,720/40,592 bytes; reducer median 37.213→38.166 ms. Higher noisy native
+RSS samples are disclosed in docs/performance.md. The debug binary includes both the member
+loading repairs and role display. Only agent-owned offline preview processes were closed.

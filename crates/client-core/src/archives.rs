@@ -251,6 +251,10 @@ mod tests {
         let guild = state.permissions.guilds.get_mut(&Id(1)).unwrap();
         guild.owner = Some(Id(999));
         guild.roles = Some(vec![p::Role {
+            name: String::new(),
+            color: 0,
+            position: 0,
+            hoist: false,
             id: Id(1),
             bits: p::VIEW_CHANNEL | p::READ_MESSAGE_HISTORY,
         }]);
