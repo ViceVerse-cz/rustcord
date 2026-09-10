@@ -58,13 +58,19 @@ impl Pending {
         now: Instant,
         emit: &impl Fn(Event) -> Result<(), client_core::auth::Failure>,
     ) -> Result<(), client_core::auth::Failure> {
-        // Unofficial READY_SUPPLEMENTAL merged_presences.friends (discord.py-self/state.py).
+        // Identify sends no DEDUPE_USER_OBJECTS capability, so READY uses presences.
+        // Also accept merged_presences.friends from the unofficial supplemental format.
         // Decode only bounded wire data; no assets/secrets survive the presence decoder.
         let Ok(mut data) = discord_protocol::decode::<serde_json::Value>(bytes) else {
             return Ok(());
         };
+        let path = if data.pointer("/merged_presences/friends").is_some() {
+            "/merged_presences/friends"
+        } else {
+            "/presences"
+        };
         let Some(friends) = data
-            .pointer_mut("/merged_presences/friends")
+            .pointer_mut(path)
             .and_then(serde_json::Value::as_array_mut)
         else {
             return Ok(());
@@ -73,16 +79,20 @@ impl Pending {
             let Some(object) = friend.as_object_mut() else {
                 continue;
             };
-            let Some(user_id) = object.remove("user_id") else {
+            if !object.contains_key("user")
+                && let Some(user_id) = object.remove("user_id")
+            {
+                object.insert("user".into(), serde_json::json!({"id": user_id}));
+            }
+            let Some(id) = object.get("user").and_then(|u| u.get("id")) else {
                 continue;
             };
-            let Ok(id) = serde_json::from_value::<Id>(user_id.clone()) else {
+            let Ok(id) = serde_json::from_value::<Id>(id.clone()) else {
                 continue;
             };
             if !self.bootstrap_users.contains(&id) {
                 continue;
             }
-            object.insert("user".into(), serde_json::json!({"id": user_id}));
             if let Ok(bytes) = serde_json::to_vec(friend)
                 && let Ok(update) = discord_protocol::presence::decode(&bytes)
             {
@@ -103,6 +113,25 @@ impl Pending {
 mod tests {
     use super::*;
     use model::Patch;
+
+    #[test]
+    fn legacy_ready_restores_an_already_running_game() {
+        let mut pending = Pending::default();
+        pending.bootstrap_users.insert(Id(3));
+        pending.supplemental(br#"{"presences":[{"user":{"id":"3"},"status":"online","activities":[{"type":0,"name":"Genshin Impact"}]},{"user":{"id":"99"},"status":"online","activities":[{"type":0,"name":"Unknown recipient"}]}]}"#, Instant::now(), &|_| Ok(())).unwrap();
+        let Event::DirectPresence(updates) = pending
+            .take()
+            .expect("READY must restore existing activities")
+        else {
+            panic!()
+        };
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].user, Id(3));
+        let Patch::Value(activities) = &updates[0].activities else {
+            panic!()
+        };
+        assert_eq!(activities[0].summary(), "Playing Genshin Impact");
+    }
 
     #[test]
     fn direct_patches_coalesce_without_losing_absent_fields_and_stay_bounded() {

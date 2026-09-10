@@ -1713,6 +1713,38 @@ message metadata in the meantime. Native after evidence remains unavailable foll
 Escape. The owner approved merging with this known limitation and pending remote CI; no branch
 protection bypass or renewed Computer Use was requested.
 
+### Already-running game presence at startup
+
+Follow-up to the missing Genshin Impact report, baseline clean main `ebad184` on branch
+`fix/ready-game-presence`, Rust 1.98.1. Identify requests no capabilities, but the previous
+bootstrap only consumed merged presence records. Accept legacy `READY.presences` / `user.id`
+alongside merged friend records through the same bounded decoder and existing DM recipient filter.
+No subscription or rendering change. Guild-scoped presence remains scoped to its guild.
+
+The synthetic regression failed before the fix and passed afterward. A loopback Gateway test
+sends only legacy READY with an already-running Genshin Impact activity and verifies that the
+core exposes `Playing Genshin Impact` for the known DM recipient without any PRESENCE_UPDATE.
+The pre-existing coalescing, recipient filtering and bounded multi-batch tests also pass.
+Workspace check passed 352 tests; the subsequently added loopback test passed separately.
+No owner account session was used, so this establishes a startup parsing defect rather than
+confirming the exact cause of every missing live activity. Native capture remains paused by
+the owner's earlier Escape stop; the initial follow-up PR was delivered as draft without it.
+Both release packages and replay passed; each executable grows 512 bytes. Five-pair replay
+medians were 40.5364 -> 39.6790 ms (noise), with unchanged retained bounds. Final formatting
+and strict all-feature Gateway Clippy passed after adding the loopback regression. Package and
+replay measurements are in performance.md. Unrelated `target-relocation-remainder/` was preserved.
+
+The owner subsequently authorized merging PR #50. Integrated main `4325dd1`, retaining the
+voice UI/icon atlas changes and both sets of progress/performance notes. Only the appended
+documentation sections conflicted. The combined tree passed `cargo xtask check` (353 tests,
+strict Clippy and policy); owner-paused native evidence and unverified live behavior remain
+explicit limitations of the authorized merge.
+Both integrated release packages passed: text 51,126,272 bytes and voice 54,479,360 bytes.
+These include main's new voice UI and atlas; earlier paired presence measurements remain
+historical evidence of the isolated fix, not the combined UI change. Remote CI is pending.
+Main's subsequently landed fuzz tooling (`68526e8`) merged cleanly without application runtime
+changes; the final combined `cargo xtask check` passed again (353 tests, Clippy and policy).
+
 ## Discord-style voice UI and Phosphor icon atlas (September 10, 2026)
 
 - Baseline: main `c4ae54d`, clean tree; branch `t3code/improve-voice-chat-ui`.

@@ -880,6 +880,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn legacy_ready_game_reaches_known_dm_without_a_presence_update() {
+        timeout(Duration::from_secs(10), async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("ws://{}/", listener.local_addr().unwrap());
+            let (delivered, observed) = tokio::sync::oneshot::channel();
+            let delivered = std::sync::Mutex::new(Some(delivered));
+            let server = async {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut socket = accept_async(stream).await.unwrap();
+                send(&mut socket, json!({"op":10,"d":{"heartbeat_interval":1000}})).await;
+                let identify = packet(&mut socket).await;
+                assert_eq!(identify["op"], 2);
+                assert!(identify["d"].get("capabilities").is_none());
+                let mut initial = ready(1, "synthetic-legacy-presence");
+                initial["d"]["private_channels"] = json!([{"id":"2","type":1,"recipients":[{"id":"3","username":"Synthetic player"}]}]);
+                initial["d"]["presences"] = json!([{"user":{"id":"3"},"status":"online","activities":[{"type":0,"name":"Genshin Impact"}]}]);
+                send(&mut socket, initial).await;
+                // No PRESENCE_UPDATE is sent: an unchanged running game must appear at startup.
+                observed.await.unwrap();
+            };
+            let state = std::sync::Mutex::new(client_core::State::default());
+            let client = run_inner(
+                Arc::new(SessionSecret::from_owner_input("synthetic-owner-session".into()).unwrap()),
+                "wss://gateway.discord.gg/".into(),
+                watch::channel(None).1,
+                mpsc::channel(1).1,
+                |event| {
+                    let presence = matches!(event, Event::DirectPresence(_));
+                    let mut state = state.lock().unwrap();
+                    let generation = state.generation;
+                    state.apply(client_core::Envelope { generation, event });
+                    if presence {
+                        let activity = &state.presence_for(Id(3)).unwrap().activities[0];
+                        assert_eq!(activity.summary(), "Playing Genshin Impact");
+                        delivered.lock().unwrap().take().unwrap().send(()).unwrap();
+                        return Err(Failure::Expired); // Stop the synthetic connection after delivery.
+                    }
+                    Ok(())
+                },
+                Some(&endpoint),
+            );
+            let ((), result) = tokio::join!(server, client);
+            assert_eq!(result, Err(Failure::Expired));
+        }).await.expect("legacy READY presence was not delivered");
+    }
+
+    #[tokio::test]
     async fn local_typing_ignores_bad_ephemeral_payloads_and_keeps_delivering_messages() {
         timeout(Duration::from_secs(10), async {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
