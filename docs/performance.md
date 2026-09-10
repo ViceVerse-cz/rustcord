@@ -1234,9 +1234,11 @@ Baseline `85fde15` (`main`) versus branch `feat/discord-theme-shell`, same macOS
 
 | Metric / method | Baseline | After | Delta |
 | --- | --- | --- | --- |
-| Text executable, bytes | 46,429,696 | 47,260,928 | +831,232 (+1.79%) |
+| Text executable (unsigned `cargo build --release`), bytes | 46,429,696 | 47,260,928 | +831,232 (+1.79%) |
+| Text package executable (`cargo xtask package`, ad-hoc signed), bytes | 46,159,872 | 46,986,288 | +826,416 (+1.79%) |
+| Voice package executable (`cargo xtask package-voice`, ad-hoc signed), bytes | 48,979,328 | 49,805,744 | +826,416 (+1.69%) |
 | Native RSS median KiB (`--demo --demo-chat`, 10 samples) | 153,488 | 151,280 | -2,208 |
 | Native RSS sample peak KiB | 153,488 | 151,280 | -2,208 |
 | Native CPU median % | 0.0 | 0.0 | +0 |
 
-The size increase is the three embedded Inter faces (799,444 bytes of OFL font data) plus the new vector icon and theme code; no dependency changed (lockfile untouched). Native samples: fresh release process per revision, default 1120×760 viewport, dark system appearance, Default preset, 10-second warmup, ten `ps -p PID -o %cpu=,rss=` samples at one-second intervals. Every sample was identical within each run, so the RSS difference is a single-process comparison, not a distribution; it does not establish memory behaviour for gradient presets (which add one full-window mesh per frame), long sessions or live channels. Reducer replay was not rerun: no reducer, cache or protocol code changed. p95 frame/startup latency, GPU allocation and Windows/Linux were not measured.
+The size increase is the three embedded Inter faces (799,444 bytes of OFL font data) plus the new vector icon and theme code; no dependency changed (lockfile untouched). Both text and voice packages passed strict local ad-hoc signature verification; the baseline packages were built from an isolated `main` worktree with its own target directory. Native samples: fresh release process per revision, default 1120×760 viewport, dark system appearance, Default preset, 10-second warmup, ten `ps -p PID -o %cpu=,rss=` samples at one-second intervals. Every sample was identical within each run, so the RSS difference is a single-process comparison, not a distribution; it does not establish memory behaviour for gradient presets (which add one full-window mesh per frame), long sessions or live channels. Reducer replay was not rerun: no reducer, cache or protocol code changed. p95 frame/startup latency, GPU allocation and Windows/Linux were not measured.
