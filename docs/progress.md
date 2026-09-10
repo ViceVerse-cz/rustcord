@@ -2,6 +2,32 @@
 
 ## Current scope and gates
 
+Current work: incoming typing indicators (SPEC 8.3/9.2) from merged main dff0975,
+after reply-target PR #34. Only service-supplied events for the fresh, readable selected
+text conversation can appear. The fixed eight-user state expires after at most ten seconds;
+the native composer uses up to three already-retained names and a generic remainder.
+No profiles, members or outgoing typing actions are requested for this feature. Existing
+People subscriptions remain unchanged, so guild delivery may depend on that subscription.
+Off-channel signals are dropped before the desktop queue/repaint; repeated users and bursts
+are limited to eight queued typing events per two seconds in a separate eight-slot inbox,
+preserving every reliable-event queue slot. A full typing queue drops typing without
+turning it into a session failure. Malformed or oversized typing does not interrupt messages.
+
+`cargo xtask check` passed 281 offline Rust tests, doctests, formatting, strict all-feature
+Clippy, text-only compilation and policy checks. Regressions cover decoder limits, malformed
+typing followed by a message over a local Gateway socket, timestamp skew/expiry, fixed state,
+generation and permission gates, no timeline/resident invalidation, queue isolation and
+headless narrow/long-name/expiry/no-command rendering. Independent review found and resolved
+shared-queue starvation and the two-inbox drain-order race. Both unsigned Windows text/voice
+packages passed; executable growth is 26,624 / 22,016 bytes. Package and replay measurements
+are recorded in docs/performance.md; the replay comparison was noisy with no speed claim.
+The original seven dirty-source hashes were rechecked unchanged. Native automation remains owner-paused;
+no account actions, screenshots, native resource measurements or live typing tests were run.
+The complete SPEC goal remains open. Per the owner's standing instruction, locally checked
+feature PRs are merged to main before continuing; missing native/remote evidence is disclosed.
+
+## Reply-target navigation (merged PR #34)
+
 Current work: reply-target navigation (SPEC 9.2/9.3) from merged main 33181a0.
 Reply previews and the composer's View original action jump locally when the target is loaded;
 otherwise one bounded history request opens the earlier range. Targets remain same-channel and

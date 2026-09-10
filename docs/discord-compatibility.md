@@ -1,5 +1,18 @@
 # Discord compatibility — checked 2026-09-10
 
+Incoming typing (September 10): Discord's [Typing Start event](https://docs.discord.com/developers/events/gateway-events#typing-start)
+documents channel/user IDs and a Unix-seconds timestamp. The decoder accepts only these fields
+within 16 KiB and discards optional guild/member metadata; invalid signals are ignored. The
+desktop retains at most eight current-conversation users for at most ten seconds, rejects old
+timestamps and more than five seconds of future skew, and clears state on navigation, messages
+from that author, disconnect and access/session changes. Names come only from existing DM,
+People or timeline state; missing identities use a generic label. Signals never cause profile
+requests, outgoing typing, subscriptions, storage writes or timeline re-layout. A separate
+eight-slot lossy inbox preserves reliable-event capacity; duplicate/burst wakeups are bounded
+to eight per two seconds. The UI schedules only the next visible expiry, with no dot animation.
+Existing People typing subscriptions are unchanged; guild delivery may depend on that pane's
+subscription. Service availability and normal-account acceptance remain live-unverified.
+
 Unsupported ordinary-message content (September 10): the [Discord message resource](https://docs.discord.com/developers/resources/message)
 documents poll, sticker_items, deprecated stickers, components and IS_COMPONENTS_V2 (1 << 15).
 The decoder now preserves only independent presence markers for these sources through full
@@ -173,7 +186,8 @@ and [channel subscription prerequisites](https://github.com/dolfies/discord.py-s
 show opcode 37 and a guild typing subscription before requesting channel member ranges.
 Serein now enables that subscription only for the active member pane and clears it with
 channel ranges when the pane closes or navigation changes. This receives typing events;
-it does not send typing notifications. Unhandled typing events are not retained.
+it does not send typing notifications. Incoming typing for the selected conversation is
+handled as described below; other conversations' typing is discarded.
 The request still covers only positions 0–99, with the existing 128-KiB retained member
 budget, request/list identity filtering and timeout. No full-directory fetch was added.
 

@@ -19,6 +19,7 @@ mod reading;
 mod search;
 mod switcher;
 mod timeline;
+mod typing;
 mod voice;
 use client_core::{Command, MAX_CONTENT, MAX_DRAFT_BYTES, State};
 use egui::{RichText, TextEdit};
@@ -329,6 +330,7 @@ impl MessagingUi {
             ctx.request_repaint();
             return;
         }
+        typing::show(ui, state, channel, std::time::Instant::now());
         let colors = crate::design::palette(ui);
         let editing_key = self
             .editing

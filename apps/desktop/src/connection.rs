@@ -6,7 +6,11 @@ use discord_api::DiscordApi;
 use eframe::egui;
 use std::{
     collections::BTreeSet,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, Instant},
 };
 use tokio::{
     runtime::Handle,
@@ -18,7 +22,9 @@ pub struct Connection {
     pub commands: mpsc::Sender<Command>,
     pub uploads: mpsc::Sender<crate::uploads::UploadRequest>,
     pub events: mpsc::Receiver<Envelope>,
+    pub typing: mpsc::Receiver<Envelope>,
     pub terminal: watch::Receiver<Option<Failure>>,
+    typing_channel: Arc<AtomicU64>,
     task: JoinHandle<()>,
 }
 impl Drop for Connection {
@@ -33,6 +39,10 @@ impl Drop for AbortTask {
     }
 }
 impl Connection {
+    pub fn set_typing_channel(&self, channel: Option<model::Id>) {
+        self.typing_channel
+            .store(channel.map_or(0, |id| id.0), Ordering::Relaxed);
+    }
     pub fn start(
         runtime: &Handle,
         secret: Arc<SessionSecret>,
@@ -43,12 +53,19 @@ impl Connection {
         let (commands, mut receive) = mpsc::channel(COMMAND_SLOTS);
         let (uploads, mut upload_receive) = mpsc::channel::<crate::uploads::UploadRequest>(1);
         let (send, events) = mpsc::channel(EVENT_SLOTS);
+        let (typing_send, typing) = mpsc::channel(8);
         let (finished, terminal) = watch::channel(None);
         let wake = ctx.clone();
+        let typing_channel = Arc::new(AtomicU64::new(0));
+        let active_typing = typing_channel.clone();
+        let typing_gate = Mutex::new(TypingGate::default());
         let task=runtime.spawn(async move {
             let emit=move |event:Event| -> Result<(),Failure> {
-                if event.bytes()>MAX_EVENT_BYTES {return Err(Failure::Capacity);}
-                send.try_send(Envelope {generation,event}).map_err(|_|Failure::Capacity)?;ctx.request_repaint();Ok(())
+                if let Event::Typing(signal) = &event {
+                    let active = active_typing.load(Ordering::Relaxed);
+                    if !typing_gate.lock().is_ok_and(|mut gate| gate.accept(*signal, active, Instant::now())) { return Ok(()); }
+                }
+                emit_event(&send, &typing_send, Envelope {generation,event}, &ctx)
             };
             let result=async {
                 let mut api=DiscordApi::new(secret.clone())?;
@@ -233,9 +250,70 @@ impl Connection {
             commands,
             uploads,
             events,
+            typing,
             terminal,
+            typing_channel,
             task,
         }
+    }
+}
+
+fn emit_event(
+    reliable: &mpsc::Sender<Envelope>,
+    typing: &mpsc::Sender<Envelope>,
+    envelope: Envelope,
+    ctx: &egui::Context,
+) -> Result<(), Failure> {
+    if matches!(envelope.event, Event::Typing(_)) {
+        // Ephemeral signals have separate fixed slots and may be dropped under pressure.
+        if typing.try_send(envelope).is_ok() {
+            ctx.request_repaint();
+        }
+        return Ok(());
+    }
+    if envelope.event.bytes() > MAX_EVENT_BYTES {
+        return Err(Failure::Capacity);
+    }
+    reliable.try_send(envelope).map_err(|_| Failure::Capacity)?;
+    ctx.request_repaint();
+    Ok(())
+}
+
+/// At most eight typing wakeups per two seconds in the selected conversation.
+#[derive(Default)]
+struct TypingGate {
+    channel: u64,
+    users: [Option<(model::Id, Instant)>; 8],
+}
+impl TypingGate {
+    fn accept(&mut self, signal: client_core::typing::Signal, active: u64, now: Instant) -> bool {
+        if active == 0 || signal.channel.0 != active || signal.user.0 == 0 {
+            return false;
+        }
+        if self.channel != active {
+            self.channel = active;
+            self.users.fill(None);
+        }
+        for slot in &mut self.users {
+            if slot.is_some_and(|(_, time)| {
+                now.saturating_duration_since(time) >= Duration::from_secs(2)
+            }) {
+                *slot = None;
+            }
+        }
+        if self
+            .users
+            .iter()
+            .flatten()
+            .any(|(user, _)| *user == signal.user)
+        {
+            return false;
+        }
+        let Some(slot) = self.users.iter_mut().find(|slot| slot.is_none()) else {
+            return false;
+        };
+        *slot = Some((signal.user, now));
+        true
     }
 }
 
@@ -301,6 +379,94 @@ fn scope_history_failure(event: Event, channel: model::Id, request: u64) -> Even
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn typing_burst_cannot_consume_reliable_message_slots() {
+        let (send, mut events) = tokio::sync::mpsc::channel(client_core::EVENT_SLOTS);
+        let (typing_send, mut typing) = tokio::sync::mpsc::channel(8);
+        let ctx = eframe::egui::Context::default();
+        for user in 1..=100 {
+            super::emit_event(
+                &send,
+                &typing_send,
+                client_core::Envelope {
+                    generation: 1,
+                    event: client_core::Event::Typing(client_core::typing::Signal {
+                        channel: model::Id(10),
+                        user: model::Id(user),
+                        timestamp: 1,
+                    }),
+                },
+                &ctx,
+            )
+            .unwrap();
+        }
+        assert_eq!(typing.len(), 8);
+        assert!(events.is_empty());
+        super::emit_event(
+            &send,
+            &typing_send,
+            client_core::Envelope {
+                generation: 1,
+                event: client_core::Event::Delete {
+                    channel: model::Id(10),
+                    id: model::Id(20),
+                },
+            },
+            &ctx,
+        )
+        .unwrap();
+        assert!(matches!(
+            events.try_recv().unwrap().event,
+            client_core::Event::Delete { .. }
+        ));
+        for _ in 0..8 {
+            typing.try_recv().unwrap();
+        }
+    }
+    #[test]
+    fn typing_wakeups_are_selected_bounded_and_coalesced() {
+        use client_core::typing::Signal;
+        use model::Id;
+        use std::time::{Duration, Instant};
+        let mut gate = super::TypingGate::default();
+        let now = Instant::now();
+        let signal = Signal {
+            channel: Id(10),
+            user: Id(1),
+            timestamp: 1,
+        };
+        assert!(!gate.accept(signal, 0, now));
+        assert!(!gate.accept(signal, 11, now));
+        for user in 1..=8 {
+            let signal = Signal {
+                user: Id(user),
+                ..signal
+            };
+            assert!(gate.accept(signal, 10, now));
+            assert!(!gate.accept(signal, 10, now));
+        }
+        for user in 9..=1_000 {
+            assert!(!gate.accept(
+                Signal {
+                    user: Id(user),
+                    ..signal
+                },
+                10,
+                now
+            ));
+        }
+        assert!(!gate.accept(signal, 10, now + Duration::from_millis(1_999)));
+        assert!(gate.accept(signal, 10, now + Duration::from_secs(2)));
+        assert!(gate.accept(
+            Signal {
+                channel: Id(11),
+                ..signal
+            },
+            11,
+            now
+        ));
+        assert!(!gate.accept(signal, 11, now));
+    }
     use super::*;
     #[test]
     fn ringing_waits_for_transport_confirmation_and_rejects_old_requests() {
