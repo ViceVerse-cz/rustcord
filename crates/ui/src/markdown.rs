@@ -3,6 +3,7 @@ use egui::{FontId, Stroke, TextFormat, text::LayoutJob};
 use model::Id;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, TextMergeWithOffset};
 use std::collections::VecDeque;
+use unicode_segmentation::UnicodeSegmentation;
 
 const MAX_INPUT: usize = 8192;
 const MAX_EVENTS: usize = 512;
@@ -305,11 +306,11 @@ impl Formatted {
                         .iter()
                         .take_while(|(_, style)| style.link == target && style.mention.is_none())
                         .count();
-                    let job = Self::layout(&self.spans[start..start + count], ui);
+                    let spans = &self.spans[start..start + count];
                     if let Some(index) = target {
                         let url = &self.links[index];
-                        let label = job.text.clone();
-                        let response = ui.add(egui::Link::new(job)).on_hover_text(url);
+                        let label: String = spans.iter().map(|(text, _)| text.as_str()).collect();
+                        let response = Self::show_emoji(spans, ui, true).on_hover_text(url);
                         // Text selection in egui's Link overwrites its accessibility role.
                         response.widget_info(|| {
                             egui::WidgetInfo::labeled(
@@ -322,12 +323,59 @@ impl Formatted {
                             *opening = Some(url.clone());
                         }
                     } else {
-                        ui.add(egui::Label::new(job).wrap().selectable(true));
+                        Self::show_emoji(spans, ui, false);
                     }
                     start += count;
                 }
             },
         );
+    }
+    fn show_emoji(spans: &[(String, Style)], ui: &mut egui::Ui, link: bool) -> egui::Response {
+        let mut response: Option<egui::Response> = None;
+        let mut pending = Vec::new();
+        let size = egui::TextStyle::Body.resolve(ui.style()).size * 1.25;
+        let flush = |pending: &mut Vec<(String, Style)>, ui: &mut egui::Ui| {
+            let job = Self::layout(pending, ui);
+            pending.clear();
+            if link {
+                ui.add(egui::Link::new(job))
+            } else {
+                ui.add(egui::Label::new(job).wrap().selectable(true))
+            }
+        };
+        for (text, style) in spans {
+            let mut start = 0;
+            for (offset, cluster) in text.grapheme_indices(true) {
+                let image = (!style.code)
+                    .then(|| crate::emoji::image(ui.ctx(), cluster, size))
+                    .flatten();
+                let Some(image) = image else {
+                    continue;
+                };
+                if offset > start {
+                    pending.push((text[start..offset].to_owned(), *style));
+                }
+                if !pending.is_empty() {
+                    let next = flush(&mut pending, ui);
+                    response = Some(response.map_or(next.clone(), |r| r.union(next)));
+                }
+                let next = ui.add(image.sense(if link {
+                    egui::Sense::click()
+                } else {
+                    egui::Sense::hover()
+                }));
+                response = Some(response.map_or(next.clone(), |r| r.union(next)));
+                start = offset + cluster.len();
+            }
+            if start < text.len() {
+                pending.push((text[start..].to_owned(), *style));
+            }
+        }
+        if !pending.is_empty() || response.is_none() {
+            let next = flush(&mut pending, ui);
+            response = Some(response.map_or(next.clone(), |r| r.union(next)));
+        }
+        response.expect("text or emoji response")
     }
     fn push(&mut self, text: &str, style: Style) {
         if !text.is_empty() {
@@ -391,6 +439,33 @@ impl Formatted {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn emoji_render_as_whole_images_but_code_and_source_stay_literal() {
+        let ctx = egui::Context::default();
+        crate::emoji::install(&ctx).unwrap();
+        let source = "👩🏽‍💻 `😀` 🇨🇿";
+        let parsed = Formatted::parse(source);
+        assert!(
+            parsed
+                .spans
+                .iter()
+                .any(|(text, style)| style.code && text == "😀")
+        );
+        let output = ctx.run_ui(Default::default(), |ui| {
+            parsed.show(ui, &mut None);
+        });
+        let images = output
+            .shapes
+            .iter()
+            .filter(|shape| {
+                matches!(
+                    &shape.shape, egui::Shape::Rect(rect) if rect.brush.is_some()
+                )
+            })
+            .count();
+        output.drop_without_applying_deltas();
+        assert_eq!(images, 2, "one image per complete grapheme, none in code");
+    }
     #[test]
     fn user_mentions_preserve_literals_and_open_native_profiles() {
         let parsed = Formatted::parse(

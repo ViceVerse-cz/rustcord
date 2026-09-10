@@ -64,3 +64,17 @@ Read-state continuation (September 10): channel read cursors and latest-message 
 Search continuation (September 10): guild conversations use the guild search route with an exact channel filter; DMs use the channel route. Search content is percent-encoded, with timestamp-descending order and explicit max_id pagination. One replaceable task uses existing REST permits, deadlines and cooldowns. Indexing responses require another deliberate Search action after the service delay; no automatic polling, broad account search, advanced filters, NSFW override or search-result persistence is implemented. Service totals and partial-index status are displayed as supplied, not asserted complete. Opening a result fetches up to 50 history messages ending at that ID and positions the timeline there; unavailable results are reported. Existing reload returns to latest history. Search snapshots are cleared on relevant edits/deletes, navigation, disconnect, permission invalidation and logout. Original-client sources supply wire evidence only; no source-code blocks were copied and no authenticated service request was used as validation.
 
 Login compatibility correction (September 10): READY read_state accepts both the legacy array and the versioned entries/version/partial object, under the same 4000-entry bound. Serein's Identify does not request the versioned_read_states capability; rejecting the legacy shape previously rejected the entire login payload. The capability's effect is described in the original [discord.py-self capability definitions](https://github.com/dolfies/discord.py-self/blob/master/discord/flags.py), rechecked September 10. Partial snapshots leave omitted channels unknown. Identify capabilities remain unchanged. Static error labels distinguish account verification, Gateway discovery, READY decoding and connection setup without exposing payloads, credentials or remote error text. Synthetic regression and loopback evidence do not establish actual account login success.
+
+### Unicode emoji artwork (September 10, 2026)
+
+Formatted messages (including existing formatted embed/search surfaces), Unicode reaction
+counts and the reaction menu use bundled [Twemoji 17.0.3](https://github.com/jdecked/twemoji/releases/tag/v17.0.3)
+artwork from Twitter and contributors, under CC BY 4.0. This is a local rendering feature,
+not a new protocol endpoint or proof of matching Discord's current artwork revision.
+Grapheme matching supports flags, modifiers, keycaps and ZWJ sequences, including optional
+emoji presentation selectors. Code, explicit text-presentation and unknown sequences remain
+literal. Original message/reaction strings and outgoing requests are unchanged. Whole-message
+Copy preserves the original text; drag-selection of rendered text excludes inline image widgets.
+The editable composer continues to use native font text. Custom server emoji and animation
+are not supplied by Twemoji and retain their existing text fallback. Validation is synthetic;
+no live Discord session was used.

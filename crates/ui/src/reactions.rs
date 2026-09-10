@@ -16,7 +16,11 @@ pub fn show(
         };
         for reaction in reactions {
             let label=format!("{} {}",reaction.emoji.label(),reaction.count);
-            let response=ui.add_enabled(enabled && !writing && reaction.emoji.name.is_some(),egui::Button::new(label).small().selected(reaction.me));
+            let button = if reaction.emoji.id.is_none() {
+                crate::emoji::button(ui.ctx(), &reaction.emoji.label(), reaction.count.to_string())
+            } else { egui::Button::new(label.clone()) };
+            let response=ui.add_enabled(enabled && !writing && reaction.emoji.name.is_some(),button.small().selected(reaction.me));
+            response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, response.enabled(), reaction.me, &label));
             let verb=if reaction.me {"Remove your reaction"}else{"Add your reaction"};
             let response=response.on_hover_text(format!("{verb}: {}. Count includes super reactions; only normal reactions can be toggled here.",reaction.emoji.label()));
             if response.clicked() {action=Some(Some(reaction.emoji.clone()));}
@@ -24,7 +28,7 @@ pub fn show(
         ui.add_enabled_ui(enabled && !writing,|ui| {
             egui::containers::menu::MenuButton::new("+ Reaction").ui(ui,|ui| {
                 for (name,label) in [("👍","Like"),("❤️","Love"),("😂","Laugh"),("🎉","Celebrate"),("👀","Eyes"),("✅","Done"),("🙏","Thanks"),("😢","Sad")] {
-                    if ui.button(format!("{name} {label}")).clicked() {
+                    if ui.add(crate::emoji::button(ui.ctx(), name, label.into())).clicked() {
                         action=Some(Some(ReactionEmoji{id:None,name:Some(name.into())}));ui.close();
                     }
                 }
@@ -51,6 +55,7 @@ mod tests {
         }];
         for enabled in [true, false] {
             let ctx = egui::Context::default();
+            crate::emoji::install(&ctx).unwrap();
             let mut action = None;
             for key in [None, Some(egui::Key::Tab), Some(egui::Key::Enter)] {
                 let input = egui::RawInput {

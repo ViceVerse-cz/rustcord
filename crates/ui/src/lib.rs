@@ -5,6 +5,7 @@ mod avatars;
 mod categories;
 pub mod design;
 mod embeds;
+pub mod emoji;
 pub mod fonts;
 mod markdown;
 mod mentions;

@@ -296,3 +296,34 @@ range is unchanged. Ten launch-only offline idle samples gave settled text RSS
 GPU/helper memory and frame latency remain unmeasured; details and full package sizes are
 in the performance report. No release publication, real account messaging or microphone
 operation was performed.
+
+### September 10, 2026 — bundled Twemoji
+
+Implemented Twitter/contributor Twemoji 17.0.3 artwork for formatted message text,
+Unicode reaction counts and the existing eight-choice reaction menu. All 4,009 assets
+are bundled in one fixed atlas; no runtime CDN requests or new resolved Cargo packages.
+Complete grapheme matching handles skin tones, flags, keycaps and ZWJ combinations,
+normalizing emoji presentation selectors without partially matching unknown sequences.
+Code and explicit text-presentation stay literal. Message source, whole-message Copy,
+composer input and protocol payloads are unchanged. Custom server emoji/animation and
+color glyphs inside the editable composer remain outside this artwork change.
+Drag-selection excludes inline image widgets; use the existing message Copy action to
+copy complete original text. CC BY 4.0 attribution and full license ship in both packages.
+
+Baseline: clean `main` at `f708cb21fcefa741ce294afb49f1d34211a8160e`, fetched/up to date;
+task branch `feat/twemoji`. Native macOS offline baseline and changed builds used the same
+synthetic message, viewport and dark appearance. Inspected both light/dark, narrow layout,
+inline sequences, and adding a reaction in the offline fixture. Before/after evidence is
+in `docs/pr-evidence/twemoji`. No Discord messages, calls or microphone tests were performed.
+Focused tests cover complete sequence lookup, atlas/index bounds, code exclusion, real
+image rendering and keyboard reaction actions with the installed atlas. Full checks and
+both release packages are recorded in this task's performance/PR evidence. Windows/Linux,
+live compatibility, screen-reader output and frame/startup p95 remain unverified.
+
+Verification: `cargo test -p ui emoji` passed 2 focused tests; final `cargo xtask check`
+passed all 98 workspace tests, both strict Clippy configurations, format and policy checks.
+`cargo xtask package` and `cargo xtask package-voice` passed including strict ad-hoc
+codesign verification. The generator reproduced the atlas/index from a hash-verified
+upstream archive. Staged diff review passed except preserved upstream license whitespace.
+Text executable +6,170,256 bytes; compressed .app +6,075,785 bytes; median sampled RSS
++16,256 KiB. See `docs/performance.md` for full results and measurement limits.

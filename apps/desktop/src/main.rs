@@ -126,6 +126,7 @@ impl Desktop {
         demo: bool,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         ui::fonts::install(&cc.egui_ctx);
+        ui::emoji::install(&cc.egui_ctx)?;
         ui::design::apply(&cc.egui_ctx);
         cc.egui_ctx.set_theme(egui::ThemePreference::System);
         let runtime = tokio::runtime::Builder::new_multi_thread()

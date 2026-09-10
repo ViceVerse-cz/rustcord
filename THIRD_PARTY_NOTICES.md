@@ -19,3 +19,5 @@ Bundled fallback fonts are unmodified and licensed under SIL OFL 1.1: **Noto San
 The initial packaging command stages original licenses and this inventory notice. Complete per-artifact transitive license-text assembly and platform redistribution review remain a release-hardening gate; do not treat a development package as a completed legal/distribution review.
 
 Native Save As uses rfd 0.17.2 (MIT) and its pollster 0.4.0 dependency (MIT OR Apache-2.0). Their unmodified license texts are in `assets/licenses/files` and are staged in `licenses/files` in both package variants.
+
+Twemoji 17.0.3 graphics © Twitter, Inc. and other contributors are licensed under **CC BY 4.0**, separately from Serein code. Source: https://github.com/jdecked/twemoji/tree/v17.0.3. The bundled images are resized and packed into an atlas; see [assets/twemoji/README.md](assets/twemoji/README.md) for provenance and modifications. The full license is `assets/twemoji/LICENSE-GRAPHICS`, staged in both packages as `licenses/Twemoji-CC-BY-4.0.txt`. No Twemoji JavaScript is bundled.

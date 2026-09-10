@@ -95,3 +95,47 @@ wgpu is configured; actual backend, display scale, viewport, GPU/OS-helper memor
 scroll peaks and p95 frame/startup times could not be verified. No native visual or performance
 acceptance is claimed from the launch-only memory samples. Raw local measurements and the
 measurement script are in ignored `target/chat-measurements.json` and `target/measure-chat.py`.
+
+### September 10, 2026 — Twemoji artwork
+
+Baseline `f708cb21fcefa741ce294afb49f1d34211a8160e`; changed branch `feat/twemoji`.
+Apple M1 Pro / MacBookPro18,3, 16 GiB RAM, macOS 27.0 build 26A428, arm64,
+Rust 1.98.1, locked release builds. Both text and voice packages passed local
+ad-hoc signature verification; neither is notarized.
+
+| Metric (bytes) | Baseline | Twemoji | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable | 38,622,688 | 44,792,944 | +6,170,256 (+15.98%) |
+| Text installed | 38,860,167 | 45,053,460 | +6,193,293 (+15.94%) |
+| Text compressed | 23,250,661 | 29,326,446 | +6,075,785 (+26.13%) |
+| Voice executable | 41,464,160 | 47,634,496 | +6,170,336 (+14.88%) |
+| Voice installed | 41,932,600 | 48,125,973 | +6,193,373 (+14.77%) |
+| Voice compressed | 24,564,378 | 30,641,440 | +6,077,062 (+24.74%) |
+
+Installed = sum of every file in the complete .app, including docs, licenses
+and required voice source; excludes filesystem allocation overhead. Compressed =
+Python tarfile gzip level 9 of that complete app. These package snapshots precede
+this final measurement report. The PNG alone adds 6,002,931 executable bytes; the
+fixed 2,048×2,016 RGBA atlas has 15.75 MiB pixel payload. CPU conversion, upload
+copies and GPU driver overhead are additional; no new resolved Cargo package.
+
+| Process sample | Baseline | Twemoji | Delta |
+| --- | ---: | ---: | ---: |
+| Median RSS (KiB) | 108,784 | 125,040 | +16,256 (+14.94%) |
+| Peak sampled RSS (KiB) | 108,784 | 125,168 | +16,384 (+15.06%) |
+
+Process samples: text-only native `--demo`, unchanged fixture plus the same local
+Unicode message shown in the screenshots, default 1120×760 requested logical size
+(1088×768 exported capture), dark theme; wgpu configured (Metal expected on macOS,
+backend/display scale not instrumented). At least ten seconds after interaction,
+ten `ps -p PID -o rss=,%cpu=` samples one second apart. RSS is resident process
+memory, not GPU memory or total system cost; sampled peak is not startup peak.
+The baseline's smoothed `ps %cpu` was 0.0%, after 0.8–2.3% (median 1.55%); different
+process ages and recent startup/input make those CPU values unsuitable for an idle
+regression conclusion. No precise interval CPU, startup/frame p95, GPU/driver/helper
+memory or long-duration soak claim. Another offline preview remained open during
+the final sample; only the measured PID is included. No login webview/audio helpers
+were started. Synthetic results do not establish logged-in performance targets.
+Raw measurements and the sampling/package-size script are in ignored
+`target/twemoji-*-samples.json`, `target/twemoji-sizes.json`, and
+`target/measure-twemoji.py`.
