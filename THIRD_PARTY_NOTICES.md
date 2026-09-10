@@ -1,5 +1,16 @@
 # Third-party notices
 
+Inline MP3/WAV attachment playback uses **Symphonia 0.6.1** and its core, metadata,
+MP3, PCM and RIFF components (MPL-2.0), plus existing **CPAL 0.18.2** (Apache-2.0)
+for output in both default and voice builds. Additional resolved dependencies are
+extended 0.1.0 (MIT), lazy_static 1.5.0 (MIT OR Apache-2.0), and regex-lite 0.1.9
+(MIT OR Apache-2.0). Optional metadata features, recording, Vorbis and FLAC are disabled.
+The unmodified corresponding Symphonia source archives, MPL text, direct component
+licenses and provenance are in `assets/licenses/audio`, shipped as `licenses/audio`
+in both packages. Recipients can extract the supplied `.crate` archives with `tar`;
+source remains under its original MPL-2.0 terms, separately from Serein source.
+Playback never opens a microphone; default builds still exclude Discord voice transport.
+
 The egui main experiment pins the egui/eframe ecosystem to upstream commit
 `65e7db3c06d779c60ac56647bdd3011ed8ba1cbd` (version 0.36.2, MIT OR Apache-2.0).
 It adds unicode-properties 0.1.4 (MIT/Apache-2.0) and updates glifo to 0.3.0 and

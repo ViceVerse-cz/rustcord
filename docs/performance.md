@@ -1904,6 +1904,23 @@ and does not represent live account memory or a long-session cache bound.
 | Peak sampled RSS (MiB) | 160.89 | 161.98 | +1.09 |
 | Median idle CPU (%) | 0.00 | 0.00 | +0.00 |
 
+
+### Inline audio delivery baseline (September 11, 2026)
+
+Baseline `fd20dc9`, Rust 1.98.1, Windows 11, Ryzen 7 7800X3D, 32 GiB RAM, release
+text and voice packages were built with `cargo xtask package` / `package-voice`.
+Sizes in bytes (ZIP Deflate level 9; text excludes nested voice):
+
+| Variant | Executable | Installed files | ZIP |
+| --- | ---: | ---: | ---: |
+| Baseline text | 51,146,752 | 51,843,054 | 31,772,865 |
+| Baseline voice | 54,500,864 | 55,405,357 | 33,149,124 |
+
+The user stopped native automation and then requested pulling main and pushing.
+Final release sizes, comparable native CPU/memory samples and playback latency were
+not measured; no performance improvement is claimed. The encoded/decoded ceilings
+are component limits, not whole-process RAM measurements.
+
 ## September 11, 2026 - message-history scroll stability
 
 Baseline `fd20dc90c5bf25bce1cfc313944661f973f3c9e1`; after: `d6909bd`

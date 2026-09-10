@@ -147,7 +147,7 @@ impl Drop for Downloads {
 	}
 }
 
-fn original_url(attachment: &Attachment) -> Option<url::Url> {
+pub(crate) fn original_url(attachment: &Attachment) -> Option<url::Url> {
 	if !model::valid_attachments(std::slice::from_ref(attachment))
 		|| attachment.size == 0
 		|| attachment.size > MAX_BYTES

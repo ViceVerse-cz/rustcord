@@ -2,6 +2,7 @@
 use crate::{avatars::Avatars, markdown::external_url};
 use model::{Attachment, Id, Message};
 
+#[allow(clippy::too_many_arguments)]
 pub fn show(
 	ui: &mut egui::Ui,
 	message: &Message,
@@ -9,6 +10,7 @@ pub fn show(
 	viewing: &mut Option<(Id, Id)>,
 	opening: &mut Option<String>,
 	download: &mut DownloadUi,
+	audio: &mut crate::audio::AudioUi,
 	demo: bool,
 ) {
 	for group in message
@@ -52,13 +54,18 @@ pub fn show(
 		} else {
 			for attachment in group {
 				ui.push_id(("attachment", attachment.id), |ui| {
-					ui.add(
-						egui::Label::new(egui::RichText::new(&attachment.filename).small()).wrap(),
-					);
-					ui.small(format!(
-						"{} bytes · inline preview unavailable",
-						attachment.size
-					));
+					if attachment.is_audio() {
+						audio.show(ui, message, attachment);
+					} else {
+						ui.add(
+							egui::Label::new(egui::RichText::new(&attachment.filename).small())
+								.wrap(),
+						);
+						ui.small(format!(
+							"{} bytes · inline preview unavailable",
+							attachment.size
+						));
+					}
 					ui.horizontal_wrapped(|ui| {
 						download_button(ui, attachment, download, demo);
 						open_original(ui, attachment, opening);
@@ -179,7 +186,10 @@ pub fn estimated_height(attachments: &[Attachment], width: f32) -> f32 {
 				let (columns, size) = image_layout(group.len(), width);
 				group.len().div_ceil(columns) as f32 * (size.y + 6.0)
 			} else {
-				group.len() as f32 * 70.0
+				group
+					.iter()
+					.map(|attachment| if attachment.is_audio() { 138.0 } else { 70.0 })
+					.sum()
 			}
 		})
 		.sum()
@@ -237,6 +247,7 @@ mod tests {
 							&mut viewing,
 							&mut opening,
 							&mut download,
+							&mut crate::audio::AudioUi::default(),
 							true,
 						);
 					},
@@ -385,6 +396,7 @@ mod tests {
 				&mut viewing,
 				&mut opening,
 				&mut download,
+				&mut crate::audio::AudioUi::default(),
 				false,
 			)
 		});
@@ -399,6 +411,7 @@ mod tests {
 					&mut viewing,
 					&mut opening,
 					&mut download,
+					&mut crate::audio::AudioUi::default(),
 					false,
 				)
 			});

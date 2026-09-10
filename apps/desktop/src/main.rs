@@ -1,4 +1,5 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+mod audio;
 mod avatars;
 mod cache;
 mod connection;
@@ -53,6 +54,7 @@ struct Desktop {
 	state: State,
 	messaging: ui::MessagingUi,
 	downloads: downloads::Downloads,
+	audio: audio::Audio,
 	notifications: platform::notifications::Notifications,
 	uploads: uploads::Uploads,
 	download_close_pending: bool,
@@ -270,7 +272,9 @@ impl Desktop {
 		let mut store = (!demo).then(|| credentials::Store::start(cc.egui_ctx.clone()));
 		let cache = (!demo).then(|| cache::Cache::start(cc.egui_ctx.clone()));
 		let mut state = if demo {
-			if std::env::args().any(|arg| arg == "--demo-system-messages") {
+			if std::env::args().any(|arg| arg == "--demo-audio") {
+				test_support::audio_demo_state()
+			} else if std::env::args().any(|arg| arg == "--demo-system-messages") {
 				test_support::system_demo_state()
 			} else if std::env::args().any(|arg| arg == "--demo-notifications") {
 				test_support::notification_demo_state()
@@ -373,6 +377,7 @@ impl Desktop {
 			state,
 			messaging,
 			downloads: downloads::Downloads::default(),
+			audio: audio::Audio::default(),
 			notifications: {
 				let wake = cc.egui_ctx.clone();
 				platform::notifications::Notifications::new(move || wake.request_repaint())
@@ -460,6 +465,7 @@ impl Desktop {
 			store.cancel_load();
 		}
 		self.downloads.cancel();
+		self.audio.stop();
 		#[cfg(feature = "voice")]
 		self.voice.stop();
 		let was_demo = self.state.demo;
@@ -1695,6 +1701,26 @@ impl eframe::App for Desktop {
 			);
 		}
 		self.poll(ctx);
+		if self.state.user.is_none()
+			|| (!self.state.demo && self.state.auth != AuthState::Authenticated)
+			|| ctx
+				.input(|i| i.viewport().visible() == Some(false) || i.viewport().close_requested())
+		{
+			self.audio.stop();
+			self.messaging.audio().stop();
+		}
+		let audio = self.audio.poll();
+		let player = self.messaging.audio();
+		player.position = audio.position.as_secs_f64();
+		player.duration = audio.duration.as_secs_f64();
+		player.state = match audio.state {
+			audio::State::Idle => ui::AudioState::Idle,
+			audio::State::Loading => ui::AudioState::Loading,
+			audio::State::Playing => ui::AudioState::Playing,
+			audio::State::Paused => ui::AudioState::Paused,
+			audio::State::Ended => ui::AudioState::Ended,
+			audio::State::Failed(error) => ui::AudioState::Failed(error),
+		};
 		if self.state.auth != AuthState::Authenticated && !self.state.demo {
 			self.notifications.clear();
 			self.messaging.notifications_enabled = false;
@@ -1770,6 +1796,7 @@ impl eframe::App for Desktop {
 		if self.state.user.is_none() {
 			self.downloads.cancel();
 		}
+
 		let download_status = match self.downloads.poll() {
 			downloads::Status::Idle => String::new(),
 			downloads::Status::Choosing => "Choose where to save the attachment…".into(),
@@ -1830,6 +1857,35 @@ impl eframe::App for Desktop {
 			self.messaging.storage_status = self.cache_status;
 			self.messaging.notification_status = self.notifications.status().label();
 			let commands = self.messaging.show(ui, &mut self.state);
+			let player = self.messaging.audio();
+			if !player.seen
+				|| player.active.is_none()
+				|| (!self.state.demo && self.state.auth != AuthState::Authenticated)
+			{
+				self.audio.stop();
+				player.stop();
+			}
+			if let Some(command) = player.command.take() {
+				match command {
+					ui::AudioCommand::Play(attachment) => {
+						self.audio.volume(player.volume);
+						if let Err(error) = self.audio.start(
+							attachment,
+							self.runtime.handle(),
+							&ctx,
+							self.fixture_only || self.state.demo,
+						) {
+							player.state = ui::AudioState::Failed(error);
+						}
+					}
+					ui::AudioCommand::Pause(paused) => self.audio.pause(paused),
+					ui::AudioCommand::Seek(seconds) => {
+						self.audio.seek(Duration::from_secs_f64(seconds))
+					}
+					ui::AudioCommand::Volume(volume) => self.audio.volume(volume),
+					ui::AudioCommand::Stop => self.audio.stop(),
+				}
+			}
 			self.notifications.set_enabled(
 				self.messaging.notifications_enabled
 					&& (!self.fixture_only || self.messaging.notification_test_available),

@@ -1944,6 +1944,37 @@ moon. This validates native label rendering on this Mac, not every emoji sequenc
 or live Discord behavior. Temporary preview copies used distinct bundle IDs to
 keep automation separate from the owner's running app.
 
+
+### Inline audio attachments ? September 11, 2026
+
+Implemented MP3/WAV message cards with deliberate playback, pause/resume, seek,
+elapsed/total time, volume, loading/cancel/retry and existing download/open actions.
+One bounded credential-free worker decodes outside rendering/audio callbacks;
+obsolete generations are muted. Default builds gain file output, not voice calling
+or microphone initialization. Added `--demo --demo-audio` and an original tiny MP3
+fixture. Generic unsupported-file fallback remains for other formats.
+
+Worktree: `feat/inline-audio-player`, baseline `fd20dc9`. Original main checkout and
+its untracked target-relocation remainder are preserved. Fetch and fast-forward
+merge of origin/main reported already up to date. Before native screenshot captured;
+final native automation was stopped twice with Escape. Owner then requested pulling
+main and pushing, so no more native automation or release measurement was attempted.
+Native output, complete before/after screenshots, final release sizes and live Discord
+validation remain outstanding. This is a reviewable draft, not a verified live client.
+
+Focused verification: `cargo test --locked -p serein audio::tests -- --nocapture`
+passed 3/3, including real MP3/WAV decoding, malformed/oversized input, callback
+controls and cancellation of a stalled credential-free local HTTP transfer.
+
+Final direct checks: `cargo fmt --all`, strict workspace/all-target/all-feature Clippy,
+and `cargo test --locked -p ui -p model -p serein` passed (10 model + 29 desktop +
+92 UI = 131 tests). UI tests include keyboard play/pause/seek/volume and narrow-card
+bounds with timeline spacing. `cargo xtask check` was attempted twice: first encountered
+stale shared-target artifacts from another worktree; retry could not replace the
+shared running xtask.exe (Windows access denied). Direct Clippy and tests above
+then passed. Full workspace test/policy completion and Linux packaging test remain
+unverified; CI will run them. No checks were disabled.
+
 ## September 11, 2026 - message-history scroll stability
 
 Baseline `fd20dc90c5bf25bce1cfc313944661f973f3c9e1`, branch `fix/scroll-jitter`,
@@ -2019,5 +2050,12 @@ encode creation time. Ordering is a local interpretation of available metadata;
 synthetic tests do not prove exact official-client ordering or live interoperability.
 
 September 11 owner-requested merge: integrated main 487069f (including scrolling/DM order); retained diagnostics and runtime xtask workspace resolution through formatting conflicts. Full `cargo xtask check` passed 361 tests, strict Clippy, text-only compilation and policy; `node tests/xtask-workspace.cjs` passed. Existing-head cross-platform CI was green. No native/live interaction performed.
+
+September 11 owner-requested audio merge: integrated main 0c41a11, preserving gateway
+diagnostics, scroll stability and DM ordering. Full `cargo xtask check` passed 366
+tests, strict Clippy, formatting, text-only compilation and policy. A stale shared
+model artifact required a package-scoped generated-cache clean before the successful
+rerun. Native playback/screenshots and final release measurements remain unverified;
+the owner paused native automation and explicitly requested merging their PRs.
 
 September 11 owner-requested PR47 integration: preserved current main fast-local policy and all runtime changes. Four TOML files, settings JSON, three Claude frontmatters and both skills validated; no hooks or permission bypasses added. Runtime unchanged by this PR; no new native run needed.

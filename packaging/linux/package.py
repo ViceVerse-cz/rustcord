@@ -113,7 +113,7 @@ def package(root, application_version, variant):
                      "Twemoji-CC-BY-4.0.txt", "Unicode-LICENSE.txt", "Phosphor-Icons-MIT.txt",
                      ]:
             copy(root / "licenses" / name, doc / "licenses" / name)
-        for name in ["files", "notifications", "login", *(["voice"] if variant == "voice" else [])]:
+        for name in ["files", "notifications", "login", "audio", *(["voice"] if variant == "voice" else [])]:
             copy(root / "licenses" / name, doc / "licenses" / name, Path("assets/licenses") / name)
         if variant == "voice":
             copy(root / "source/hpke-rs", doc / "source/hpke-rs", Path("vendor/hpke-rs"))

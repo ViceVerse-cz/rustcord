@@ -1,5 +1,7 @@
 //! Native egui views; emits commands without owning transports or session credentials.
 mod archives;
+mod audio;
+pub use audio::{AudioCommand, AudioState, AudioUi};
 mod attachments;
 pub use attachments::DownloadUi;
 mod avatars;
@@ -114,6 +116,9 @@ impl MessagingUi {
 	}
 	pub fn downloads(&mut self) -> &mut DownloadUi {
 		&mut self.timeline.download
+	}
+	pub fn audio(&mut self) -> &mut AudioUi {
+		&mut self.timeline.audio
 	}
 	pub fn clear_avatars(&mut self) {
 		self.avatars = avatars::Avatars::default();
@@ -1561,6 +1566,7 @@ impl MessagingUi {
 		}
 	}
 	pub fn show(&mut self, ui: &mut egui::Ui, state: &mut State) -> Vec<Command> {
+		self.timeline.audio.seen = false;
 		let mut commands = Vec::new();
 		let ctx = ui.ctx().clone();
 		// Foreground confirmation handles Escape before background search/archive shortcuts.
