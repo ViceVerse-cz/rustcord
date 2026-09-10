@@ -505,3 +505,41 @@ Both unsigned Windows packages passed. Same Windows 11 Home 10.0.26200, Ryzen 7 
 | Retained timeline estimate | 220,992-221,477 bytes | Same | 500 records |
 
 One release reducer executable per revision, one warmup plus five direct measured runs, 100,000 synthetic events each. Baseline samples: [27.4948, 27.5046, 26.2998, 28.5269, 29.6689] ms. Integrated: [26.4394, 27.3291, 27.4944, 26.3761, 26.5682] ms. This short reducer benchmark is not native frame time, process RSS, network or audio performance; no user-visible speed claim is made. Existing per-feature native evidence is retained from its original PRs. New combined native inspection/process samples remain unverified while this session's desktop automation is paused.
+
+
+## Channel visibility - September 10, 2026 (Windows)
+
+Baseline main 92e82e7b72c716340a20c2643069c482933acd4e has the identical source tree to
+tested integration a2af8d8; its verified text/voice package executables were copied into a
+separate baseline before porting the visibility patch. Original dirty checkout work was
+preserved. Baseline hashes: text BA52F1BD1E5E3DC6042FFBA7A670E73201095AFED6A33320013109DA267CDC1A;
+voice A3668B41A112FEB9DFDF505A7D6A0C36F9C6BE9BAA4070CFD9B0BAC826626EAE.
+Same Windows 11 Home 10.0.26200, Ryzen 7 7800X3D / 16 logical CPUs, approximately 31 GiB
+RAM, pinned Rust 1.98.1, release profile and E: target/temp paths. Both variants are unsigned.
+
+| Metric | Main baseline | Channel visibility fix | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable, bytes | 49,067,008 | 49,092,608 | +25,600 (+0.052%) |
+| Text installed package, bytes | 49,431,699 | 49,466,993 | +35,294 (+0.071%) |
+| Text ZIP, bytes | 30,843,886 | 30,860,898 | +17,012 (+0.055%) |
+| Voice executable, bytes | 52,400,128 | 52,425,728 | +25,600 (+0.049%) |
+| Voice installed package, bytes | 52,988,377 | 53,023,671 | +35,294 (+0.067%) |
+| Voice ZIP, bytes | 32,209,427 | 32,225,829 | +16,402 (+0.051%) |
+| Reducer median, ms | 26.2823 | 26.5260 | +0.2437 (+0.93%) |
+| Retained timeline estimate | 220,992-221,477 bytes | Same | 500 records |
+
+One release replay executable per revision, one direct warmup and five direct measured
+runs of 100,000 synthetic events. Baseline samples: [26.2234, 26.2756, 26.8052, 26.2823, 28.1089] ms; after: [26.526, 26.5737, 26.175, 29.9168, 26.3162] ms.
+This small median change is noisy and not evidence of a user-visible improvement or regression.
+The replay exercises the reducer, not the complete Gateway obfuscation or native UI flow;
+focused offline tests cover those state transitions. No RSS, idle CPU, frame/startup latency,
+DPI/adapter capture, network, microphone or live audio measurements were taken while native
+automation remains paused under the owner's stop.
+
+Sizes include each complete package, excluding the sibling voice directory for text, PR
+evidence, external WebView2 and audio drivers. Python ZIP DEFLATE level 9 was used consistently.
+Baseline packages precede the integration evidence addendum; after packages include this task's
+behavior docs but precede this final performance/progress addendum. Installed/ZIP deltas include
+those documentation differences. No dependencies or license contents changed.
+Final executable hashes: text FE540FEEC0781FC54D1CB3C950D53A512A96B770AF26F72D27BC49092F02BBB5;
+voice 264B6EBEAF5FECBC08A33385B4F9A2073F318E3EE03D8E845D3E0A4E7191A80B.

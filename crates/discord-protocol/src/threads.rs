@@ -48,6 +48,7 @@ pub struct Sync {
     pub guild: Id,
     pub parents: Option<Vec<Id>>,
     pub threads: Vec<Channel>,
+    pub removed: Vec<Id>,
 }
 #[derive(Deserialize)]
 pub struct ThreadUpdate {
@@ -89,7 +90,12 @@ impl ThreadListSync {
             .as_ref()
             .map_or(0, |ids| ids.capacity() * size_of::<Id>());
         let mut threads = Vec::with_capacity(self.threads.len());
-        for thread in self.threads {
+        let mut removed = Vec::new();
+        for mut thread in self.threads {
+            let hidden = thread.is_obfuscated();
+            // Hidden entries still count toward identity, scope, and byte validation.
+            // Omitting them only after validation lets this snapshot revoke old rows.
+            thread.flags &= !(1 << 17);
             let thread = into_thread(thread, self.guild_id)?;
             if !ids.insert(thread.id)
                 || parents.as_ref().is_some_and(|parents| {
@@ -102,18 +108,24 @@ impl ThreadListSync {
             if bytes > MAX_BYTES {
                 return Err(DecodeError);
             }
-            threads.push(thread);
+            if hidden {
+                removed.push(thread.id);
+            } else {
+                threads.push(thread);
+            }
         }
         Ok(Sync {
             guild: self.guild_id,
             parents: self.channel_ids,
             threads,
+            removed,
         })
     }
 }
 
 pub fn into_thread(mut thread: ChannelDto, guild: Id) -> Result<Channel, DecodeError> {
-    if !matches!(thread.kind, 10..=12)
+    if thread.is_obfuscated()
+        || !matches!(thread.kind, 10..=12)
         || thread.parent_id.is_none()
         || thread.parent_id == Some(thread.id)
         || thread.guild_id.is_some_and(|id| id != guild)
@@ -137,6 +149,23 @@ mod tests {
     use crate::{Ready, decode};
     #[test]
     fn snapshots_preserve_scope_and_reject_cross_guild_duplicates_and_limits() {
+        let hidden = br#"{"id":"3","parent_id":"2","type":11,"flags":131072}"#;
+        assert!(into_thread(decode(hidden).unwrap(), Id(1)).is_err());
+        let hidden = decode::<ThreadListSync>(br#"{"guild_id":"1","channel_ids":["2"],"threads":[{"id":"3","parent_id":"2","type":11,"flags":131072}]}"#).unwrap().into_model().unwrap();
+        assert_eq!(hidden.parents, Some(vec![Id(2)]));
+        assert_eq!(hidden.removed, vec![Id(3)]);
+        assert!(
+            hidden.threads.is_empty(),
+            "An authoritative empty scope revokes a previously loaded hidden thread"
+        );
+        for invalid in [
+            br#"{"guild_id":"1","threads":[{"id":"3","parent_id":"2","type":11,"flags":131072},{"id":"3","parent_id":"2","type":11}]}"#.as_slice(),
+            br#"{"guild_id":"1","channel_ids":["9"],"threads":[{"id":"3","parent_id":"2","type":11,"flags":131072}]}"#.as_slice(),
+            br#"{"guild_id":"1","threads":[{"id":"3","guild_id":"9","parent_id":"2","type":11,"flags":131072}]}"#.as_slice(),
+        ] {
+            assert!(decode::<ThreadListSync>(invalid).unwrap().into_model().is_err(),
+                "Hidden rows cannot bypass duplicate or parent/guild scope validation");
+        }
         let all = decode::<ThreadListSync>(br#"{"guild_id":"1","threads":[{"id":"3","parent_id":"2","type":11,"name":"Synthetic"}]}"#).unwrap().into_model().unwrap();
         assert_eq!(all.guild, Id(1));
         assert!(all.parents.is_none());

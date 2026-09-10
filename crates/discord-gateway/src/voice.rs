@@ -100,6 +100,9 @@ impl Calls {
             let Some(channel) = state.channel_id else {
                 continue;
             };
+            if self.allowed.get(&channel) != Some(&Some(guild.id)) {
+                continue;
+            }
             let participant = participant(&state);
             let member = state
                 .member
@@ -199,6 +202,9 @@ impl Calls {
             } => {
                 if self.active != Some((channel, request)) {
                     return Ok(None);
+                }
+                if self.allowed.get(&channel) != Some(&self.active_guild) {
+                    return Err(Failure::Forbidden);
                 }
                 (Some(channel), self.active_guild, mute || deaf, deaf)
             }
@@ -328,6 +334,7 @@ impl Calls {
                     return Ok(());
                 };
                 if server.guild_id != self.active_guild
+                    || self.allowed.get(&channel) != Some(&self.active_guild)
                     || (self.active_guild.is_none() && server.channel_id != Some(channel))
                 {
                     return Ok(());
@@ -361,6 +368,74 @@ fn participant(state: &VoiceStateDto) -> Participant {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+    #[test]
+    fn revoked_voice_denies_mute_and_server_secrets_but_allows_departure() {
+        let mut calls = Calls::default();
+        calls.allowed.insert(Id(20), Some(Id(10)));
+        calls
+            .packet(Command::Join {
+                channel: Id(20),
+                request: 1,
+                ring: false,
+            })
+            .unwrap();
+        calls.allowed.remove(&Id(20));
+        assert!(matches!(
+            calls.packet(Command::SetMute {
+                channel: Id(20),
+                request: 1,
+                mute: false,
+                deaf: false
+            }),
+            Err(Failure::Forbidden)
+        ));
+        let events = Mutex::new(Vec::new());
+        let emit = |event| {
+            events.lock().unwrap().push(event);
+            Ok(())
+        };
+        calls.dispatch("VOICE_SERVER_UPDATE", br#"{"guild_id":"10","token":"synthetic-revoked-secret","endpoint":"voice.discord.media:443"}"#, Some(Id(1)), &emit).unwrap();
+        assert!(events.lock().unwrap().is_empty());
+        assert!(
+            calls
+                .packet(Command::Leave {
+                    channel: Id(20),
+                    request: 1
+                })
+                .unwrap()
+                .is_some()
+        );
+        calls
+            .dispatch(
+                "VOICE_STATE_UPDATE",
+                br#"{"guild_id":"10","channel_id":null,"user_id":"1"}"#,
+                Some(Id(1)),
+                &emit,
+            )
+            .unwrap();
+        assert!(calls.active.is_none());
+        assert!(calls.departing.is_none());
+        calls.allowed.insert(Id(20), Some(Id(10)));
+        calls
+            .packet(Command::Join {
+                channel: Id(20),
+                request: 2,
+                ring: false,
+            })
+            .unwrap();
+        calls.allowed.remove(&Id(20));
+        calls.dispatch("VOICE_STATE_UPDATE", br#"{"guild_id":"10","channel_id":"20","user_id":"1","session_id":"synthetic-revoked-session"}"#, Some(Id(1)), &emit).unwrap();
+        assert!(calls.active.is_none());
+        assert!(matches!(
+            events.lock().unwrap().last(),
+            Some(Event::Voice(voice::Event::State {
+                channel: None,
+                session: None,
+                request: Some(2),
+                ..
+            }))
+        ));
+    }
     #[test]
     fn guild_join_roster_and_departure_are_scoped_and_bounded() {
         let mut calls = Calls::default();

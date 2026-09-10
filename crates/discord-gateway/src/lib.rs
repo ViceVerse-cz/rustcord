@@ -1,4 +1,5 @@
 //! Bounded, uncompressed JSON Gateway. Normal-user Identify remains live-unverified.
+mod channel_events;
 mod thread_events;
 mod voice;
 use client_core::{
@@ -257,6 +258,7 @@ async fn run_inner(
     let mut owner_id = None;
     let mut attempt = 0;
     let mut calls = voice::Calls::default();
+    let mut known_guilds = std::collections::BTreeSet::new();
     let mut voice_open = true;
     while attempt < 6 {
         if attempt > 0 {
@@ -418,6 +420,7 @@ async fn run_inner(
                                         state.url = Some(validated_url(&ready.resume_gateway_url).map_err(|f|f.protocol_at("Gateway login: resume address rejected"))?);
                                         state.session = Some(Zeroizing::new(std::mem::take(&mut ready.session_id)));
                                         calls.remember_users(std::mem::take(&mut ready.users))?;
+                                        known_guilds=channel_events::ready_calls(&ready,&mut calls)?;
                                         let mut participants = Vec::new();
                                         let mut roster_bytes = 0;
                                         for guild in &mut ready.guilds {
@@ -486,13 +489,22 @@ async fn run_inner(
                                     "MESSAGE_DELETE_BULK" => { let d: BulkDeleted = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?; if d.ids.len() > 100 { return Err(Failure::Capacity); } emit(Event::DeleteBulk { channel:d.channel_id, ids: d.ids })?; }
                                     "AUTH_SESSION_CHANGE" => return Err(Failure::Expired),
                                     "CHANNEL_DELETE" => { let c: ChannelDto = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?; calls.allowed.remove(&c.id); emit(Event::Unavailable(c.id))?; }
-                                    "CHANNEL_CREATE" => { let c=decode::<ChannelDto>(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?.into_model(); if ((c.guild.is_none() && c.kind==1 && c.recipients.len()==1) || (c.guild.is_some() && c.kind==2)) && calls.allowed.len()<MAX_NAV {calls.allowed.insert(c.id,c.guild);} emit(Event::ChannelCreated(c))?; }
+                                    "CHANNEL_CREATE" => {
+                                        let event=channel_events::create(packet.d.get().as_bytes())?;
+                                        match &event {
+                                            Event::ChannelCreated(c) => channel_events::admit_call(c,&known_guilds,&mut calls),
+                                            Event::Unavailable(id) => {calls.allowed.remove(id);}
+                                            _=>{}
+                                        }
+                                        emit(event)?;
+                                    }
                                     "CHANNEL_UPDATE" => {
-                                        let patch:ChannelPatchDto=decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
-                                        if let model::Patch::Value(kind) = patch.kind && kind != 2 && kind != 1 { calls.allowed.remove(&patch.id); }
-                                        let permissions=!matches!(patch.permission_overwrites,model::Patch::Absent) || !matches!(patch.flags,model::Patch::Absent);
-                                        emit(Event::ChannelChanged(patch.into_model()))?;
-                                        if permissions {emit(Event::PermissionsChanged)?;}
+                                        let update=channel_events::update(packet.d.get().as_bytes())?;
+                                        if let Some(channel)=update.restored {channel_events::admit_call(&channel,&known_guilds,&mut calls);emit(Event::ChannelRestored(channel))?;}
+                                        if let Event::Unavailable(id)=&update.event {calls.allowed.remove(id);}
+                                        if let Event::ChannelChanged(patch)=&update.event && let model::Patch::Value(kind)=patch.kind && kind != 2 && kind != 1 {calls.allowed.remove(&patch.id);}
+                                        emit(update.event)?;
+                                        if update.permissions {emit(Event::PermissionsChanged)?;}
                                     }
                                     "THREAD_CREATE" | "THREAD_UPDATE" | "THREAD_DELETE" | "THREAD_LIST_SYNC" | "THREAD_MEMBERS_UPDATE" => {
                                         if let Some(event) = thread_events::decode_event(packet.t.as_deref().unwrap_or(""), packet.d.get().as_bytes(), owner_id)? { emit(event)?; }
@@ -504,11 +516,16 @@ async fn run_inner(
                                     "GUILD_CREATE" => {
                                         let mut guild: GuildDto = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?;
                                         if guild.channels.len() + calls.allowed.len() > MAX_NAV { return Err(Failure::Capacity); }
+                                        let hidden:std::collections::BTreeSet<_>=guild.channels.iter().filter(|c|c.is_obfuscated()).map(|c|c.id).collect();
                                         for mut channel in std::mem::take(&mut guild.channels) {
                                             channel.guild_id = Some(guild.id);
-                                            let channel = channel.into_model();
-                                            if channel.kind == 2 { calls.allowed.insert(channel.id, channel.guild); }
-                                            emit(Event::ChannelCreated(channel))?;
+                                            let event=if matches!(channel.kind,10..=12) && channel.parent_id.is_some_and(|id|hidden.contains(&id)) {Event::Unavailable(channel.id)} else {channel_events::created(channel)};
+                                            match &event {
+                                                Event::ChannelCreated(channel)=>channel_events::admit_call(channel,&known_guilds,&mut calls),
+                                                Event::Unavailable(id)=>{calls.allowed.remove(id);}
+                                                _=>{}
+                                            }
+                                            emit(event)?;
                                         }
                                         emit(calls.snapshot(&mut guild, false)?)?;
                                         if let Some(emojis) = guild.emojis { emit(Event::GuildEmojis { guild: guild.id, emojis: emojis.0 })?; }

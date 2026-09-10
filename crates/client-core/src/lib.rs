@@ -100,6 +100,7 @@ pub enum Event {
     },
     Voice(voice::Event),
     ChannelCreated(Channel),
+    ChannelRestored(Channel),
     ChannelChanged(ChannelPatch),
     ThreadChanged {
         guild: Id,
@@ -113,6 +114,7 @@ pub enum Event {
         guild: Id,
         parents: Option<Vec<Id>>,
         threads: Vec<Channel>,
+        removed: Vec<Id>,
     },
     GuildChanged(GuildPatch),
     GuildEmojis {
@@ -363,6 +365,21 @@ impl State {
         }
     }
     pub fn history(&mut self, before: Option<Id>) -> Command {
+        let Some(channel) = self.selected.filter(|id| {
+            self.channels
+                .iter()
+                .any(|channel| channel.id == *id && channel.supports_text())
+        }) else {
+            self.selected = None;
+            self.search_target = None;
+            self.reply = None;
+            self.invalidate_members();
+            self.timeline.clear();
+            self.cancel_history();
+            self.freshness = Freshness::Unavailable;
+            self.status = "Conversation no longer available in navigation";
+            return self.clear_search();
+        };
         if self.search.as_ref().is_some_and(|s| s.loading)
             || self.archives.as_ref().is_some_and(|s| s.loading)
         {
@@ -378,7 +395,7 @@ impl State {
         self.freshness = Freshness::Loading;
         self.timeline.begin_page(before.is_some());
         Command::History {
-            channel: self.selected.expect("selected channel"),
+            channel,
             before,
             request: self.request,
         }
@@ -573,6 +590,16 @@ impl State {
         if envelope.generation != self.generation {
             return;
         }
+        if let Event::ChannelRestored(channel) = &envelope.event
+            && (channel.id.0 == 0
+                || !matches!(channel.kind, 0 | 2 | 4 | 5 | 13..=16)
+                || !channel.guild.is_some_and(|guild| {
+                    guild.0 != 0 && self.guilds.iter().any(|known| known.id == guild)
+                })
+                || self.channels.iter().any(|known| known.id == channel.id))
+        {
+            return;
+        }
         let archive_mutation = match &envelope.event {
             Event::ThreadRemoved { guild, id } => Some((*guild, *id)),
             Event::ThreadChanged { guild, patch } => Some((*guild, patch.id)),
@@ -646,7 +673,8 @@ impl State {
                 guild,
                 parents,
                 threads,
-            } => self.apply_threads_sync(guild, parents, threads),
+                removed,
+            } => self.apply_threads_sync(guild, parents, threads, removed),
             Event::Reactions(event) => self.apply_reactions(event),
             Event::Profile {
                 user,
@@ -693,7 +721,7 @@ impl State {
                 }
                 Ok(())
             }
-            Event::ChannelCreated(channel) => {
+            Event::ChannelCreated(channel) | Event::ChannelRestored(channel) => {
                 if self.archived_thread == Some(channel.id)
                     && self.channels.iter().any(|old| {
                         old.id == channel.id
@@ -890,6 +918,37 @@ impl State {
                     self.status = "Account navigation exceeds safe capacity";
                     return;
                 }
+                let current: BTreeMap<_, _> = channels
+                    .iter()
+                    .map(|channel| (channel.id, channel))
+                    .collect();
+                let mut removed: BTreeSet<_> = self
+                    .channels
+                    .iter()
+                    .filter(|old| {
+                        current.get(&old.id).is_none_or(|channel| {
+                            (old.supports_text() && !channel.supports_text())
+                                || (old.kind == 2 && channel.kind != 2)
+                        })
+                    })
+                    .map(|channel| channel.id)
+                    .collect();
+                let unavailable = self.selected.is_some_and(|id| {
+                    current
+                        .get(&id)
+                        .is_none_or(|channel| !channel.supports_text() && channel.kind != 2)
+                });
+                if unavailable && let Some(selected) = self.selected {
+                    removed.insert(selected);
+                }
+                self.remove_channels(&removed);
+                self.cancel_history();
+                if unavailable {
+                    self.selected = None;
+                    self.freshness = Freshness::Unavailable;
+                } else {
+                    self.freshness = Freshness::Stale;
+                }
                 self.voice.roster.clear();
                 self.members = None;
                 self.clear_profile();
@@ -900,7 +959,11 @@ impl State {
                 self.archived_thread = None;
                 self.auth = auth::AuthState::Authenticated;
                 self.gateway_connected = true;
-                self.status = "Connected · unofficial session";
+                self.status = if unavailable {
+                    "Conversation no longer available in navigation"
+                } else {
+                    "Connected · unofficial session"
+                };
                 Ok(())
             }
             Event::History {
@@ -912,6 +975,10 @@ impl State {
                 if self.selected != Some(channel)
                     || request != self.request
                     || !self.history_pending
+                    || !self
+                        .channels
+                        .iter()
+                        .any(|loaded| loaded.id == channel && loaded.supports_text())
                 {
                     return;
                 }
@@ -1166,6 +1233,7 @@ impl State {
         if self.selected.is_some_and(|id| removed.contains(&id)) {
             self.clear_search();
             self.search_target = None;
+            self.reply = None;
             self.invalidate_members();
             self.timeline.clear();
             self.freshness = Freshness::Unavailable;
@@ -1240,13 +1308,17 @@ impl Event {
                         _ => 0,
                     })
                     .sum(),
-                Self::ChannelCreated(channel) => channel.bytes(),
+                Self::ChannelCreated(channel) | Self::ChannelRestored(channel) => channel.bytes(),
                 Self::ThreadsSync {
-                    parents, threads, ..
+                    parents,
+                    threads,
+                    removed,
+                    ..
                 } => {
-                    parents
-                        .as_ref()
-                        .map_or(0, |p| p.capacity() * size_of::<Id>())
+                    removed.capacity() * size_of::<Id>()
+                        + parents
+                            .as_ref()
+                            .map_or(0, |p| p.capacity() * size_of::<Id>())
                         + threads.capacity().saturating_sub(threads.len()) * size_of::<Channel>()
                         + threads.iter().map(Channel::bytes).sum::<usize>()
                 }
@@ -1433,6 +1505,17 @@ mod tests {
         }];
         let mut state = State {
             selected: Some(channel),
+            channels: vec![Channel {
+                id: channel,
+                guild: None,
+                parent_id: None,
+                kind: 1,
+                name: "Synthetic reaction conversation".into(),
+                position: 0,
+                recipients: vec![],
+                last_message: None,
+                member_list_id: None,
+            }],
             gateway_connected: true,
             auth: auth::AuthState::Authenticated,
             freshness: Freshness::Fresh,
@@ -1983,6 +2066,346 @@ mod tests {
         );
         assert_eq!(state.members.as_ref().unwrap().rows.len(), 1);
     }
+    #[test]
+    fn channel_restoration_requires_known_guild_and_preserves_existing_patch_state() {
+        let channel = Channel {
+            id: Id(1),
+            guild: Some(Id(10)),
+            parent_id: None,
+            kind: 0,
+            name: "Original".into(),
+            position: 7,
+            recipients: vec![],
+            last_message: Some(Id(80)),
+            member_list_id: Some("known-list".into()),
+        };
+        let mut state = State {
+            channels: vec![channel.clone()],
+            guilds: vec![Guild {
+                id: Id(10),
+                name: "Synthetic".into(),
+                icon: None,
+                emojis: None,
+            }],
+            selected: Some(Id(1)),
+            auth: auth::AuthState::Authenticated,
+            gateway_connected: true,
+            freshness: Freshness::Fresh,
+            ..State::default()
+        };
+        let candidate = Channel {
+            name: "Restored".into(),
+            position: 0,
+            last_message: None,
+            member_list_id: None,
+            ..channel.clone()
+        };
+        apply(&mut state, Event::ChannelRestored(candidate.clone()));
+        assert!(
+            state.channels[0] == channel,
+            "A candidate cannot replace a known channel's absent fields"
+        );
+        apply(
+            &mut state,
+            Event::ChannelChanged(ChannelPatch {
+                id: Id(1),
+                name: Patch::Value("Renamed".into()),
+                last_message: Patch::Absent,
+                parent_id: Patch::Absent,
+                position: Patch::Absent,
+                kind: Patch::Absent,
+            }),
+        );
+        assert_eq!(state.channels[0].name, "Renamed");
+        assert_eq!(state.channels[0].last_message, Some(Id(80)));
+        assert_eq!(
+            state.channels[0].member_list_id.as_deref(),
+            Some("known-list")
+        );
+        state.drafts.insert(Id(1), "Preserved draft".into());
+        state.history(None);
+        let old_request = state.request;
+        apply(&mut state, Event::Unavailable(Id(1)));
+        for invalid in [
+            Channel {
+                guild: None,
+                ..candidate.clone()
+            },
+            Channel {
+                guild: Some(Id(99)),
+                ..candidate.clone()
+            },
+            Channel {
+                guild: Some(Id(0)),
+                ..candidate.clone()
+            },
+            Channel {
+                id: Id(0),
+                ..candidate.clone()
+            },
+            Channel {
+                kind: 1,
+                ..candidate.clone()
+            },
+            Channel {
+                kind: 10,
+                ..candidate.clone()
+            },
+            Channel {
+                kind: 11,
+                ..candidate.clone()
+            },
+            Channel {
+                kind: 12,
+                ..candidate.clone()
+            },
+            Channel {
+                kind: 255,
+                ..candidate.clone()
+            },
+        ] {
+            apply(&mut state, Event::ChannelRestored(invalid));
+            assert!(state.channels.is_empty());
+        }
+        apply(&mut state, Event::ChannelRestored(candidate.clone()));
+        assert!(state.channels[0] == candidate);
+        assert_eq!(state.freshness, Freshness::Unavailable);
+        assert!(!state.history_pending);
+        apply(
+            &mut state,
+            Event::History {
+                channel: Id(1),
+                request: old_request,
+                older: false,
+                messages: vec![message(99)],
+            },
+        );
+        assert!(state.timeline.is_empty());
+        assert_eq!(state.drafts[&Id(1)], "Preserved draft");
+        assert!(matches!(state.select(Id(1)), Some(Command::History { .. })));
+        let request = state.request;
+        apply(
+            &mut state,
+            Event::History {
+                channel: Id(1),
+                request,
+                older: false,
+                messages: vec![message(100)],
+            },
+        );
+        assert_eq!(state.freshness, Freshness::Fresh);
+        assert!(state.timeline.get(Id(100)).is_some());
+    }
+
+    #[test]
+    fn voice_navigation_survives_ready_but_revocation_ends_the_call_before_restoration() {
+        let channel = Channel {
+            id: Id(1),
+            guild: Some(Id(10)),
+            parent_id: None,
+            kind: 2,
+            name: "Synthetic voice".into(),
+            position: 0,
+            recipients: vec![],
+            last_message: None,
+            member_list_id: None,
+        };
+        let guild = Guild {
+            id: Id(10),
+            name: "Synthetic".into(),
+            icon: None,
+            emojis: None,
+        };
+        let user = message(1).author;
+        let mut state = State {
+            user: Some(user.clone()),
+            channels: vec![channel.clone()],
+            guilds: vec![guild.clone()],
+            selected: Some(Id(1)),
+            auth: auth::AuthState::Authenticated,
+            gateway_connected: true,
+            ..State::default()
+        };
+        assert!(state.start_call(Id(1), false).is_some());
+        apply(
+            &mut state,
+            Event::Ready {
+                user,
+                guilds: vec![guild],
+                channels: vec![channel.clone()],
+            },
+        );
+        assert_eq!(
+            state.selected,
+            Some(Id(1)),
+            "A visible guild voice selection survives READY"
+        );
+        assert!(!state.history_pending);
+        state.voice.roster.push(voice::RosterEntry {
+            guild: Id(10),
+            channel: Id(1),
+            member: None,
+            participant: voice::Participant {
+                user: Id(2),
+                muted: false,
+                deafened: false,
+                server_muted: false,
+                server_deafened: false,
+            },
+        });
+        apply(&mut state, Event::Unavailable(Id(1)));
+        assert!(state.voice.active.is_none());
+        assert!(state.voice.roster.is_empty());
+        assert!(!state.can_call(Id(1)));
+        assert!(matches!(state.history(None), Command::CancelSearch));
+        apply(&mut state, Event::ChannelRestored(channel));
+        assert!(
+            state.voice.active.is_none(),
+            "Restoring metadata never rejoins a call"
+        );
+        assert!(state.can_call(Id(1)));
+        assert!(
+            state.select(Id(1)).is_none(),
+            "Voice navigation does not request text history"
+        );
+        assert_eq!(state.selected, Some(Id(1)));
+        assert!(!state.history_pending);
+        assert!(state.start_call(Id(1), false).is_some());
+    }
+
+    #[test]
+    fn ready_replacement_and_removed_reload_cannot_restore_unavailable_history() {
+        let channel = |kind| Channel {
+            id: Id(1),
+            guild: None,
+            parent_id: None,
+            kind,
+            name: "Synthetic".into(),
+            position: 0,
+            recipients: vec![],
+            last_message: None,
+            member_list_id: None,
+        };
+        let user = || User {
+            id: Id(2),
+            name: "Synthetic".into(),
+            avatar: None,
+            discriminator: 0,
+        };
+        for replacement in [None, Some(channel(4))] {
+            let mut state = State {
+                user: Some(user()),
+                channels: vec![channel(1)],
+                selected: Some(Id(1)),
+                auth: auth::AuthState::Authenticated,
+                gateway_connected: true,
+                freshness: Freshness::Fresh,
+                ..State::default()
+            };
+            state.timeline.insert(message(80), true, false).unwrap();
+            state.drafts.insert(Id(1), "Preserve this draft".into());
+            state.reply = Some(Id(80));
+            assert!(matches!(state.history(None), Command::History { .. }));
+            let request = state.request;
+            apply(
+                &mut state,
+                Event::Ready {
+                    user: user(),
+                    guilds: vec![],
+                    channels: replacement.into_iter().collect(),
+                },
+            );
+            assert!(state.selected.is_none());
+            assert!(state.timeline.is_empty());
+            assert!(state.reply.is_none());
+            assert_eq!(state.freshness, Freshness::Unavailable);
+            assert!(!state.history_pending);
+            assert_ne!(state.request, request);
+            assert_eq!(state.drafts[&Id(1)], "Preserve this draft");
+            assert!(
+                matches!(state.history(None), Command::CancelSearch),
+                "Reload cannot schedule HTTP or a cache load for an unavailable channel"
+            );
+            apply(
+                &mut state,
+                Event::History {
+                    channel: Id(1),
+                    request,
+                    older: false,
+                    messages: vec![message(99)],
+                },
+            );
+            apply(&mut state, Event::Message(message(100)));
+            assert!(state.timeline.is_empty());
+            assert!(!state.history_pending);
+            assert_eq!(state.freshness, Freshness::Unavailable);
+        }
+
+        let mut state = State {
+            user: Some(user()),
+            channels: vec![channel(1)],
+            selected: Some(Id(1)),
+            auth: auth::AuthState::Authenticated,
+            gateway_connected: true,
+            freshness: Freshness::Fresh,
+            ..State::default()
+        };
+        state.timeline.insert(message(80), true, false).unwrap();
+        state.history(None);
+        let old_request = state.request;
+        apply(
+            &mut state,
+            Event::Ready {
+                user: user(),
+                guilds: vec![],
+                channels: vec![channel(1)],
+            },
+        );
+        assert_eq!(state.selected, Some(Id(1)));
+        assert_eq!(state.freshness, Freshness::Stale);
+        assert!(!state.history_pending);
+        assert_ne!(state.request, old_request);
+        apply(
+            &mut state,
+            Event::History {
+                channel: Id(1),
+                request: old_request,
+                older: false,
+                messages: vec![message(99)],
+            },
+        );
+        assert!(state.timeline.get(Id(99)).is_none());
+        assert_eq!(state.freshness, Freshness::Stale);
+        let Command::History { request, .. } = state.history(None) else {
+            panic!()
+        };
+        apply(
+            &mut state,
+            Event::History {
+                channel: Id(1),
+                request,
+                older: false,
+                messages: vec![message(100)],
+            },
+        );
+        assert_eq!(state.freshness, Freshness::Fresh);
+        assert!(state.timeline.get(Id(100)).is_some());
+        apply(&mut state, Event::Unavailable(Id(1)));
+        assert_eq!(
+            state.selected,
+            Some(Id(1)),
+            "The existing unavailable state may retain its old selection"
+        );
+        assert!(matches!(state.history(None), Command::CancelSearch));
+        assert!(!state.history_pending);
+        assert!(state.timeline.is_empty());
+        assert_eq!(state.freshness, Freshness::Unavailable);
+        assert!(matches!(
+            State::default().history(None),
+            Command::CancelSearch
+        ));
+    }
+
     #[test]
     fn history_is_scoped_bounded_and_cannot_restore_freshness_after_disconnect() {
         let mut state = State::default();

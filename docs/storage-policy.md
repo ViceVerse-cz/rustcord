@@ -71,3 +71,13 @@ image-cache policy. Synthetic IDs 9001/9002 only get local generated images in `
 The standard picker palette has 3,953 fixed named entries and renders only viewport rows;
 search input is capped at 64 characters. Picker insertion honors character and total draft
 capacity limits and never sends a message on selection.
+
+
+Channel obfuscation and accepted READY removals invalidate inaccessible history using the existing
+account-wide ClearHistory operation; readable-to-unsupported channel changes count as removal.
+This deliberately trades a broader history refetch for no new per-channel deletion API. Cache
+hydration requires the current request, a pending empty loading view, a loaded text channel and
+matching message channel IDs. Late disk/HTTP responses cannot refill a revoked view. Drafts remain
+available for recovery. This does not erase explicit downloaded files or promise deletion of
+already requested image pixels, OS artifacts or remote attachment staging data. No schema,
+persistent visibility list, new worker queue or credential storage is introduced.

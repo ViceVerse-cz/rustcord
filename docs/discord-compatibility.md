@@ -160,3 +160,29 @@ this repaired build. Tests use a synthetic local WebSocket; normal-user acceptan
 new request remains unverified. Role display is **not implemented**: only role permissions
 for list identity are read; member role IDs, group headings and role colors are discarded.
 Role administration is outside the product scope.
+
+
+## Channel visibility and history revocation - September 10, 2026
+
+The documented [CHANNEL_OBFUSCATED flag](https://docs.discord.com/developers/resources/channel#obfuscated-channels)
+(bit 17 / 131072), described in the [obfuscation change log](https://docs.discord.com/developers/change-log#channel-obfuscation-for-users-and-bots),
+is authoritative for this path. Placeholder names are not permission evidence. READY omits flagged
+channels and threads under flagged parents; an independently visible child of an obfuscated category
+remains visible. CHANNEL_CREATE/UPDATE and guild channel snapshots revoke flagged IDs through the
+existing removal path. Thread create/update/archive admission follows the same flag boundary.
+Raw navigation item and duplicate-ID limits apply before filtering. Thread sync carries explicit
+hidden-ID removals in the same bounded event, including a currently browsed archived thread;
+ordinary absence from an active-thread snapshot still preserves that archived view.
+
+An unflagged guild CHANNEL_UPDATE with a valid ID, type and name can restore missing navigation
+only for an already loaded guild. Optional flags, position and parent fields need not be present.
+Existing channels still receive absent/null-aware patches; restoration does not replace their
+omitted fields, rejoin voice or accept an old history result. Incomplete updates wait for a full
+update or READY. No guild identity is guessed from an obfuscated payload.
+
+Accepted READY replaces the readable navigation set and cancels prior history requests. Reload
+requires a currently loaded text channel, as do HTTP results and disk-cache hydration. Revocation
+clears the active view and ends affected voice state; restoration requires deliberate selection or
+join. Voice allowances and guild roster snapshots exclude obfuscated channels.
+This closes explicit visibility and stale-response paths, not the full role/overwrite permission
+mirror. Service permission failures remain authoritative; normal-user live behavior is unverified.

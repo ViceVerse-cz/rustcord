@@ -601,3 +601,55 @@ The owner explicitly requested "merge everything to main". PR #15 (People subscr
 Conflict resolution retains both the stack's reaction repair, uploads/downloads, channel references, pinned pages and thread/archive navigation, and main's grouped timeline, hover controls, bundled/server emoji and encrypted guild voice. Thread/archive budgets now include Guild::bytes so the new emoji catalogs remain inside navigation byte limits. A protocol emoji test was updated for navigation's Result return; no assertion was removed. Both documentation histories, licenses and existing native evidence were retained. Independent integration review found no concrete remaining blocker.
 
 The integrated tree passed cargo xtask check (139 offline Rust tests, doctests, formatting, strict Clippy, text-only and runtime policy), node tests/login-handoff.cjs, cargo xtask package and cargo xtask package-voice. Unsigned Windows executable sizes are 49,067,008 text and 52,400,128 voice bytes. Full package sizes and five-run reducer comparison are recorded in performance.md. New native interaction/live account/audio verification remains unperformed; these checks are synthetic. Prior security CI still reports six inherited vulnerabilities and five denied warnings; no audit policy or repository protection was changed. The merge is explicitly owner-authorized despite those known evidence gaps, not a claim of full-spec completion or clean security status.
+
+
+## Channel visibility and stale-history admission - September 10, 2026
+
+Baseline: main 92e82e7b72c716340a20c2643069c482933acd4e after the owner-requested PR
+integration. Work is isolated on fix/channel-visibility; the original dirty
+fix/channel-access-revocation checkout is preserved. Its permission patch was ported and
+adapted to the integrated guild voice, emoji, cache, threads and archive implementations.
+Pinned toolchain: Rust 1.98.1, Windows text-only default plus optional voice builds.
+
+Explicit CHANNEL_OBFUSCATED updates now remove inaccessible navigation instead of leaving
+placeholder channels selectable. READY filters hidden channels/direct child threads without
+inferring permission inheritance for visible category children. Valid full unflagged updates
+can restore missing channels in a known guild, while ordinary partial updates preserve omitted
+fields. Accepted READY cancels old history requests. Shared reload and HTTP/cache admission
+require current text navigation, so revoked messages cannot return through a late response.
+Selected replies and views clear while recovery drafts remain. Existing account-wide disk
+history clearing also covers navigation removals and readable-to-unsupported transitions.
+
+Guild voice admission, snapshots, mute commands and negotiation secrets honor visibility
+revocation. Removal stops affected core calls and rosters; existing desktop polling stops media
+and requests leave. Restoration never autojoins. READY-known guild identities stay bounded and
+survive temporary guild unavailability so returning guild voice can be deliberately rejoined.
+No new dependency, database schema, credential fallback or full permission mirror was added.
+
+Native evidence remains unavailable because the owner's earlier physical Escape stops paused
+native desktop automation; it was not resumed for this task. No Discord messages, live account
+validation, microphone or audio capture occurred. Synthetic assertions cover state transitions,
+not service compatibility. Manual owner reproduction: select a text channel, start history
+loading, revoke visibility from the controlled account context, verify the view clears and
+Reload cannot restore it, then restore access and deliberately reopen. Repeat with a thread
+sync and an active guild voice channel; restoration must not silently rejoin.
+
+Full role/overwrite permission mirroring and the remaining SPEC backlog are still unfinished.
+The delivery remains draft while native evidence, remote checks and inherited security audit
+findings remain unresolved. Local validation and package/replay evidence are recorded below.
+
+Final local validation: cargo xtask check passed 148 offline Rust tests, doctests, all-feature
+strict Clippy, formatting, text-only build and runtime policy. cargo xtask package and
+cargo xtask package-voice both produced unsigned Windows packages. cargo replay plus one
+warmup and five direct runs retained 500 records / 220,992-221,477 estimated timeline bytes.
+Each executable grew by 25,600 bytes; reducer median 26.2823 to 26.5260 ms. See performance.md
+for installed/ZIP sizes and comparison limitations. No authentication code changed, so the
+previously passing login-handoff test was not redundantly rerun for this slice.
+
+Independent review found and resolved temporary-guild voice readmission and explicit hidden
+thread-sync handling. The latter now validates a whole scoped snapshot and carries all removed
+IDs in one bounded event, including the browsed archived transient; a regression covers 12 IDs,
+more than the eight-event queue capacity. Final independent review found no remaining concrete
+blocker. The original seven dirty-source hashes were verified unchanged. The inherited strict
+security audit reports six vulnerabilities and five denied warnings; no dependency/audit policy
+was changed. New remote CI status is pending at draft delivery, not claimed successful.

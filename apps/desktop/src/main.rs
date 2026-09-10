@@ -70,6 +70,29 @@ struct Desktop {
     #[cfg(feature = "developer-session")]
     token_input: Zeroizing<String>,
 }
+fn hydrate_cached_history(
+    state: &mut State,
+    channel: model::Id,
+    request: u64,
+    messages: Vec<model::Message>,
+) {
+    if state.selected == Some(channel)
+        && state.request == request
+        && state.history_pending
+        && state.freshness == model::Freshness::Loading
+        && state.timeline.is_empty()
+        && state
+            .channels
+            .iter()
+            .any(|c| c.id == channel && c.supports_text())
+        && messages.iter().all(|message| message.channel == channel)
+        && state.timeline.seed_cache(messages).is_ok()
+    {
+        state.revision += 1;
+        state.status = "Showing cached history · waiting for Discord revalidation";
+    }
+}
+
 fn recovery_draft(state: &State, channel: model::Id) -> String {
     state
         .drafts
@@ -994,16 +1017,7 @@ impl Desktop {
                     request,
                     messages,
                 } => {
-                    if self.state.selected == Some(channel)
-                        && self.state.request == request
-                        && self.state.freshness == model::Freshness::Loading
-                        && self.state.timeline.is_empty()
-                    {
-                        let _ = self.state.timeline.seed_cache(messages);
-                        self.state.revision += 1;
-                        self.state.status =
-                            "Showing cached history · waiting for Discord revalidation";
-                    }
+                    hydrate_cached_history(&mut self.state, channel, request, messages);
                 }
                 cache::Outcome::Saved => {
                     if !self.cache_error {
@@ -1077,14 +1091,14 @@ impl Desktop {
             let ready = matches!(event.event, Event::Ready { .. });
             let resumed = matches!(event.event, Event::Resumed);
             let confirmed_channel = confirmed_recovery_channel(&self.state, &event.event);
-            let mut removed_threads: std::collections::BTreeSet<_> = if matches!(
+            let mut removed_channels: std::collections::BTreeSet<_> = if matches!(
                 &event.event,
-                Event::ThreadsSync { .. } | Event::ThreadRemoved { .. }
+                Event::Ready { .. } | Event::ThreadsSync { .. } | Event::ThreadRemoved { .. }
             ) {
                 self.state
                     .channels
                     .iter()
-                    .filter(|channel| matches!(channel.kind, 10..=12))
+                    .filter(|channel| channel.supports_text())
                     .map(|channel| channel.id)
                     .collect()
             } else {
@@ -1099,9 +1113,9 @@ impl Desktop {
                 if self.state.selected == Some(*channel) && self.state.request == *request && self.state.history_pending);
             let history_changed = changes_active_history(&self.state, &event.event);
             self.state.apply(event);
-            if !removed_threads.is_empty() {
-                for channel in &self.state.channels {
-                    removed_threads.remove(&channel.id);
+            if !removed_channels.is_empty() {
+                for channel in self.state.channels.iter().filter(|c| c.supports_text()) {
+                    removed_channels.remove(&channel.id);
                 }
             }
             #[cfg(feature = "voice")]
@@ -1110,9 +1124,9 @@ impl Desktop {
             {
                 self.command(command);
             }
-            // ponytail: accepted thread removals clear account-wide history;
-            // add scoped disk deletion if thread churn makes refetch cost significant.
-            if invalidate || !removed_threads.is_empty() {
+            // ponytail: accepted navigation removals clear account-wide history;
+            // add scoped disk deletion if channel churn makes refetch cost significant.
+            if invalidate || !removed_channels.is_empty() {
                 self.queue_cache(cache::Operation::ClearHistory);
             }
             persist_timeline |= history_changed;
@@ -1442,6 +1456,89 @@ impl eframe::App for Desktop {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cached_history_requires_current_readable_navigation_and_pending_request() {
+        let mut state = test_support::demo_state();
+        let channel = state.selected.unwrap();
+        state.timeline.clear();
+        state.history(None);
+        let request = state.request;
+        hydrate_cached_history(
+            &mut state,
+            channel,
+            request,
+            vec![test_support::message(1000, channel)],
+        );
+        assert_eq!(state.timeline.len(), 1);
+        assert_eq!(state.freshness, model::Freshness::Loading);
+        state.timeline.clear();
+        for invalid in [
+            vec![test_support::message(1001, model::Id(999))],
+            vec![test_support::message(1002, channel)],
+        ] {
+            hydrate_cached_history(&mut state, channel, request.wrapping_sub(1), invalid);
+            assert!(state.timeline.is_empty());
+        }
+        hydrate_cached_history(
+            &mut state,
+            channel,
+            request,
+            vec![test_support::message(1001, model::Id(999))],
+        );
+        assert!(state.timeline.is_empty());
+        state.history_pending = false;
+        hydrate_cached_history(
+            &mut state,
+            channel,
+            request,
+            vec![test_support::message(1000, channel)],
+        );
+        assert!(state.timeline.is_empty());
+        state.history_pending = true;
+        let mut channels = state.channels.clone();
+        channels.retain(|c| c.id != channel);
+        state.apply(Envelope {
+            generation: state.generation,
+            event: Event::Ready {
+                user: state.user.clone().unwrap(),
+                guilds: state.guilds.clone(),
+                channels,
+            },
+        });
+        hydrate_cached_history(
+            &mut state,
+            channel,
+            request,
+            vec![test_support::message(1000, channel)],
+        );
+        assert!(state.timeline.is_empty());
+        // Even an inconsistent queued-cache admission state cannot bypass current navigation.
+        state.selected = Some(channel);
+        state.request = request;
+        state.freshness = model::Freshness::Loading;
+        state.history_pending = true;
+        hydrate_cached_history(
+            &mut state,
+            channel,
+            request,
+            vec![test_support::message(1000, channel)],
+        );
+        assert!(state.timeline.is_empty());
+        let mut restored = test_support::demo_state()
+            .channels
+            .into_iter()
+            .find(|c| c.id == channel)
+            .unwrap();
+        restored.kind = 2;
+        state.channels.push(restored);
+        hydrate_cached_history(
+            &mut state,
+            channel,
+            request,
+            vec![test_support::message(1000, channel)],
+        );
+        assert!(state.timeline.is_empty());
+    }
     #[test]
     fn correlated_confirmation_preserves_other_pending_text_and_ignores_unrelated_events() {
         let mut state = test_support::demo_state();
