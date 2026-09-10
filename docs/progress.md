@@ -1878,3 +1878,36 @@ reported limitations without changing repository protection or enabling account 
   security, licenses and fuzz CI passed; Windows was pending. Final integrated-head checks are
   reported separately. Native desktop, storage tracing and owner-controlled live text/voice
   evidence gates remain incomplete.
+
+## September 10, 2026 — egui main and native emoji experiment
+
+Starting from clean `main` at `3307396005f72f2e2b26946204b27991881d4ad1`
+(same as fetched origin/main), branch `chore/egui-main-test` pins egui and eframe
+and their ecosystem to upstream main `65e7db3c06d779c60ac56647bdd3011ed8ba1cbd`.
+The exact revision came from upstream `git ls-remote`, not a cached version page.
+`Id::new` calls were migrated to `Id::unique`; panel state reset now uses the
+parent-scoped ID required upstream. The existing sidebar test caught the latter
+regression and now passes. The font coverage test uses `FontData::bytes()`.
+
+The owner's follow-up reported striped placeholders for Unicode emoji. Enabling
+eframe `system_fonts` also enables epaint color font decoding and OS font fallback
+for normal labels/editors, including channel names. Bundled text fonts and existing
+Twemoji rendering remain. No system emoji font is copied into the distribution.
+
+Validation: `cargo xtask check` passed with native fallback enabled: strict Clippy,
+353 tests passed, one existing opt-in voice test ignored, text-only check and policy
+checks passed. `cargo deny --locked --all-features check licenses advisories` passed
+with cargo-deny 0.20.2. Existing vendored Wry deprecation/unsafe warnings remain;
+no egui ID deprecation is suppressed. macOS 27.0, Apple M1 Pro, 16 GiB, Rust 1.98.1.
+Windows/Linux native rendering and live Discord interoperability remain unverified.
+
+Both final release package commands passed. Text executable: 47,910,256 bytes
+(+205,968); voice executable: 50,730,160 bytes (+189,584). Complete installed/ZIP
+comparisons and measurement limits are in docs/performance.md. Native screenshots
+in `docs/pr-evidence/egui-main` use the unchanged synthetic `--demo --demo-profile`
+fixture at 1120×760 points / 2× scale: before is the intermediate main-pin build
+without system fonts, after is the final text build with system fonts. The same
+profile status visibly changes from the striped missing-glyph marker to a yellow
+moon. This validates native label rendering on this Mac, not every emoji sequence
+or live Discord behavior. Temporary preview copies used distinct bundle IDs to
+keep automation separate from the owner's running app.

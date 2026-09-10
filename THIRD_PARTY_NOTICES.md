@@ -1,5 +1,14 @@
 # Third-party notices
 
+The egui main experiment pins the egui/eframe ecosystem to upstream commit
+`65e7db3c06d779c60ac56647bdd3011ed8ba1cbd` (version 0.36.2, MIT OR Apache-2.0).
+It adds unicode-properties 0.1.4 (MIT/Apache-2.0) and updates glifo to 0.3.0 and
+vello_common/vello_cpu to 0.2.0 (Apache-2.0 OR MIT). Epaint bundled fonts and
+their separate license obligations are unchanged. Native font fallback uses
+egui_system_fonts/fontique and platform font discovery; see docs/dependency-versions.md
+for the exact added dependency versions and declared licenses. OS emoji fonts
+remain installed system resources and are not bundled or redistributed.
+
 Linux login uses gtk4 0.11.4, webkit6 0.6.1, javascriptcore6 0.6.0, glib 0.22.9 and soup3
 0.9.0 Rust bindings (MIT). Windows/macOS retain Wry 0.57.0 (MIT OR Apache-2.0) via a documented
 manifest/build patch excluding obsolete Linux dependencies; backend sources are unchanged.

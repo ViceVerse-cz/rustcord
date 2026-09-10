@@ -172,7 +172,7 @@ pub fn install(ctx: &egui::Context) {
 }
 
 fn texture(ctx: &egui::Context) -> TextureHandle {
-    let id = egui::Id::new(TEXTURE_KEY);
+    let id = egui::Id::unique(TEXTURE_KEY);
     if let Some(texture) = ctx.data(|data| data.get_temp::<TextureHandle>(id)) {
         return texture;
     }

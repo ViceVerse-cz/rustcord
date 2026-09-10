@@ -292,3 +292,11 @@ Application-icon metadata responses are capped at 64 KiB and discarded after val
 application ID and icon hash; only the decoded-valid PNG enters the disk cache. Application icons
 cached by application ID can remain stale until normal cache expiry or clear-cache. Proxy keys
 use the existing SHA-256 disk filenames. No new cache, schema or dependency is introduced.
+### Native font fallback (egui main experiment)
+
+Eframe `system_fonts` enumerates installed fonts on a background thread and uses
+read-only memory-mapped OS font files for missing glyphs, including native color
+emoji. No font download or font-file copy is added. Upstream fallback can wait
+for enumeration on its first missing glyph; its font/cache memory is framework
+overhead, separate from Serein message/image budgets. OS font availability and
+emoji coverage vary by platform. Bundled text faces and Twemoji remain in use.

@@ -143,7 +143,7 @@ impl Picker {
         let mut open = true;
         let mut selected = None;
         egui::Window::new("Emoji picker")
-            .id(egui::Id::new("emoji-picker"))
+            .id(egui::Id::unique("emoji-picker"))
             .open(&mut open)
             .collapsible(false)
             .default_width(360.0)

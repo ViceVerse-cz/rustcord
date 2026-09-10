@@ -1,5 +1,27 @@
 # Resolved dependencies
 
+September 10 egui main experiment: `egui` and `eframe` are pinned to upstream
+`65e7db3c06d779c60ac56647bdd3011ed8ba1cbd`, the `main` tip returned by
+`git ls-remote https://github.com/emilk/egui.git refs/heads/main` during this task.
+All ten locked egui ecosystem crates use that Git revision (still version 0.36.2).
+The required transitive changes are glifo 0.2.0 → 0.3.0, vello_common/vello_cpu
+0.1.0 → 0.2.0, and new unicode-properties 0.1.4; each declares MIT/Apache-2.0.
+Rust 1.98.1 is retained. Eframe now enables `system_fonts`, including epaint
+`color_fonts`, to resolve native Unicode emoji in ordinary labels and editors.
+Other existing feature flags are retained. The four bundled font files
+are byte-identical to registry epaint_default_fonts 0.36.2; its combined font
+license and exact-version exception remain applicable. This is an experimental
+source pin, not a released egui upgrade. UI IDs use the equivalent `Id::unique`
+constructor, and the font coverage test reads `FontData::bytes()` for the new
+shared font representation. Sidebar state reset uses the parent-scoped panel ID
+required by this revision, preserving saved widths across viewport constraints.
+Native fallback adds egui_system_fonts 0.36.2, fontique 0.11.1, parlance 0.1.0,
+poll-promise 0.3.0, sys-locale 0.3.2 and unicode-script 0.5.8 (MIT OR Apache-2.0);
+macOS adds objc2-core-text 0.3.2 (Zlib OR Apache-2.0 OR MIT). Linux resolution
+also adds roxmltree 0.20.0 (MIT OR Apache-2.0) and
+yeslogic-fontconfig-sys 6.0.1 (MIT), using the system fontconfig library.
+
+
 September 10 Linux migration: current Cargo.lock has 726 packages. GTK4 0.11.4, WebKit6 0.6.1,
 JavaScriptCore6 0.6.0, GLib 0.22.9 and Soup3 0.9.0 replace the earlier GTK3/WebKit2GTK family.
 Wry 0.57.0 is a Windows/macOS-only local patch. Earlier inventory/addenda below are historical.

@@ -80,7 +80,8 @@ mod tests {
                 .iter()
                 .map(|name| {
                     let data = &definitions.font_data[name];
-                    skrifa::FontRef::from_index(&data.font, data.index).expect("valid bundled font")
+                    skrifa::FontRef::from_index(data.bytes(), data.index)
+                        .expect("valid bundled font")
                 })
                 .collect();
             for c in "Hello, 日本語かなカナ 中文汉字繁體 한국어 العربية مَرْحَبًا é e\u{301}".chars()
