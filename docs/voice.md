@@ -97,3 +97,20 @@ Denied SPEAK now opens playback without selecting or initializing a microphone. 
 SPEAK prepares input under the current encryption and mute/PTT gates; mute/PTT alone does not
 reopen devices. Lost VIEW_CHANNEL drops the stored roster and hides participant rows, including
 when no call is active; late updates cannot repopulate an inaccessible channel.
+
+
+## Diagnosing a call that never opens audio
+
+Call progress distinguishes requesting allocation, connecting to the voice server, checking the
+UDP network path, securing audio, and opening audio devices. Negotiation errors identify the
+missing server Hello/Ready, transport key, DAVE group or transition execution. These are bounded,
+static status messages; no identifiers, tokens, audio or raw signaling are logged.
+
+Audio-device opening has a 20-second deadline after encrypted readiness, including device changes.
+If a system device API stalls, local audio is disabled and departure is requested. The existing
+worker must retire before another call can open devices; a driver that never returns can require
+restarting Serein. The watchdog cannot forcibly cancel an operating-system driver call.
+
+The outgoing DAVE key-package encoding was corrected to match reference implementations; see
+[the adapter's source comparison](../crates/discord-voice/README.md#key-package-interoperability-correction).
+Actual two-way audio still requires the owner-operated test above.

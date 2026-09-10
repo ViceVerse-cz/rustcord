@@ -1333,3 +1333,34 @@ speaker; loss concealment follows the last packet duration (up to 120 ms), at mo
 missing packets, streamed through the existing buffer. Physical call RSS/CPU, p95 latency,
 device teardown and native screenshots remain unmeasured because the owner's native/live gate
 is still closed. No audio devices or live accounts were accessed.
+
+
+## Voice key-package framing and startup diagnostics - September 10, 2026
+
+| Metric / method | Main b72b3b1 | Negotiation fix | Delta |
+| --- | ---: | ---: | ---: |
+| text executable, bytes | 50,791,936 | 50,791,936 | +0 (+0.000%) |
+| text installed, bytes | 51,371,937 | 51,377,982 | +6,045 (+0.012%) |
+| text zip, bytes | 31,742,889 | 31,744,858 | +1,969 (+0.006%) |
+| voice executable, bytes | 54,142,464 | 54,146,560 | +4,096 (+0.008%) |
+| voice installed, bytes | 54,945,238 | 54,955,379 | +10,141 (+0.018%) |
+| voice zip, bytes | 33,122,262 | 33,124,934 | +2,672 (+0.008%) |
+| 100,000-event replay median, ms | 36.6734 | 36.1368 | -0.5366 (-1.46%; noise) |
+| Retained 500-message timeline, estimated bytes | 228,992..229,477 | 228,992..229,477 | 0 |
+
+Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical CPUs), approximately 31 GiB RAM,
+Rust 1.98.1, release thin LTO/one codegen unit. Both unsigned Windows packages passed; no
+dependency or lockfile changed, and existing policy/notices collection passed. Baseline
+executables were reused and SHA256-verified from the previous voice-completion worktree,
+whose implementation is the merged b72b3b1 source. Text uses no default features; voice
+explicitly enables voice. Installed sums and DEFLATE 9 ZIPs exclude PR screenshots; text
+excludes nested voice. Each package contains its build-time documentation snapshot, before
+its final measurement addendum; installed deltas include documentation updates.
+
+Replay uses one warmup and five direct executable runs per revision. Baseline measured samples
+36.6734,36.2471,37.0721,36.2804,36.8797ms; new 37.9821,35.9626,36.8517,36.1368,35.8853ms.
+These shared-host synthetic reducer timings are not a speedup claim or measurements of native
+startup/frame latency, call CPU/RSS, network negotiation latency or physical audio quality.
+Mixer/codec/queue implementations are unchanged, so their workload was not rerun. Startup
+adds only bounded stage notices and a 20-second device-opening deadline. Native automation
+remains owner-paused; no screenshots, microphone/speaker access or live call test was run.

@@ -27,6 +27,25 @@ fn permission_mutes_microphone(
             && !(push_to_talk && ptt_active))
 }
 
+const DEVICE_OPEN_TIMEOUT: Duration = Duration::from_secs(20);
+
+fn device_wait(
+    deadline: &mut Option<Instant>,
+    pending: bool,
+    now: Instant,
+) -> Result<Option<Duration>, &'static str> {
+    if !pending {
+        *deadline = None;
+        return Ok(None);
+    }
+    deadline
+        .get_or_insert(now + DEVICE_OPEN_TIMEOUT)
+        .checked_duration_since(now)
+        .filter(|remaining| !remaining.is_zero())
+        .map(Some)
+        .ok_or("Audio device opening timed out; check device selection and system microphone permission")
+}
+
 struct Pending {
     generation: u64,
     channel: Id,
@@ -42,7 +61,7 @@ struct Pending {
 enum Notice {
     TransportReady,
     WaitingForPeer,
-    Securing,
+    Progress(Phase),
     MediaReady(String),
     DeviceReady,
     RemoteAudio,
@@ -59,6 +78,7 @@ struct Live {
     events: mpsc::Receiver<Notice>,
     task: JoinHandle<()>,
     devices: Devices,
+    device_deadline: Option<Instant>,
 }
 #[derive(Default)]
 pub struct Voice {
@@ -359,6 +379,7 @@ impl Voice {
             if devices != live.devices {
                 live.audio.set_devices(devices.clone());
                 live.devices = devices;
+                live.device_deadline = None;
             }
             for _ in 0..8 {
                 let Ok(event) = live.events.try_recv() else {
@@ -377,19 +398,21 @@ impl Voice {
                     Notice::WaitingForPeer => {
                         ui.voice_privacy_code = None;
                         live.audio.set_ready(false);
+                        live.device_deadline = None;
                         state.apply_voice(voice::Event::Progress {
                             channel: live.channel,
                             request: live.request,
                             phase: Phase::Waiting,
                         });
                     }
-                    Notice::Securing => {
+                    Notice::Progress(phase) => {
                         ui.voice_privacy_code = None;
                         live.audio.set_ready(false);
+                        live.device_deadline = None;
                         state.apply_voice(voice::Event::Progress {
                             channel: live.channel,
                             request: live.request,
-                            phase: Phase::Securing,
+                            phase,
                         });
                     }
                     Notice::MediaReady(code) => {
@@ -404,7 +427,28 @@ impl Voice {
                     }
                 }
             }
-            if failure.is_none() && live.audio.is_ready() {
+            let devices_ready = live.audio.is_ready();
+            if failure.is_none() {
+                let pending = live
+                    .audio
+                    .gate
+                    .ready
+                    .load(std::sync::atomic::Ordering::Acquire)
+                    && !devices_ready;
+                match device_wait(&mut live.device_deadline, pending, Instant::now()) {
+                    Ok(Some(remaining)) => {
+                        state.apply_voice(voice::Event::Progress {
+                            channel: live.channel,
+                            request: live.request,
+                            phase: Phase::OpeningAudio,
+                        });
+                        ctx.request_repaint_after(remaining);
+                    }
+                    Ok(None) => {}
+                    Err(error) => failure = Some(error),
+                }
+            }
+            if failure.is_none() && devices_ready {
                 state.apply_voice(voice::Event::Progress {
                     channel: live.channel,
                     request: live.request,
@@ -487,7 +531,9 @@ impl Voice {
                 move |event| {
                     let notice = match event {
                         Status::TransportReady => Notice::TransportReady,
-                        Status::Securing => Notice::Securing,
+                        Status::Connecting => Notice::Progress(Phase::ConnectingTransport),
+                        Status::Discovering => Notice::Progress(Phase::Discovering),
+                        Status::Securing => Notice::Progress(Phase::Securing),
                         Status::WaitingForPeer => Notice::WaitingForPeer,
                         Status::Ready { privacy_code } => {
                             if privacy_code.len() > 256 {
@@ -519,6 +565,7 @@ impl Voice {
             events,
             task,
             devices,
+            device_deadline: None,
         });
         Ok(())
     }
@@ -532,6 +579,30 @@ impl Drop for Voice {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn audio_opening_has_a_deadline_that_clears_on_readiness_or_security_pause() {
+        let now = Instant::now();
+        let mut deadline = None;
+        assert_eq!(device_wait(&mut deadline, false, now), Ok(None));
+        assert_eq!(
+            device_wait(&mut deadline, true, now),
+            Ok(Some(DEVICE_OPEN_TIMEOUT))
+        );
+        assert_eq!(
+            device_wait(&mut deadline, true, now + Duration::from_secs(19)),
+            Ok(Some(Duration::from_secs(1)))
+        );
+        assert!(device_wait(&mut deadline, true, now + DEVICE_OPEN_TIMEOUT).is_err());
+        assert_eq!(
+            device_wait(&mut deadline, false, now + DEVICE_OPEN_TIMEOUT),
+            Ok(None)
+        );
+        assert!(deadline.is_none());
+        assert_eq!(
+            device_wait(&mut deadline, true, now + DEVICE_OPEN_TIMEOUT),
+            Ok(Some(DEVICE_OPEN_TIMEOUT))
+        );
+    }
     #[test]
     fn microphone_requires_speak_and_focused_push_to_talk_without_vad() {
         use model::permissions as p;

@@ -23,6 +23,28 @@ use tokio_tungstenite::{
 use zeroize::Zeroizing;
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
+fn negotiation_timeout(
+    hello: bool,
+    transport: bool,
+    key: bool,
+    dave: &Dave,
+    resuming: bool,
+) -> &'static str {
+    if resuming {
+        "Discord voice resume acknowledgement timed out; rejoin the call"
+    } else if !hello {
+        "Discord voice Hello timed out; rejoin the call"
+    } else if !transport {
+        "Discord voice Ready timed out; rejoin the call"
+    } else if !key {
+        "Discord voice protocol selection timed out; no transport key was received"
+    } else if dave.session.is_ready() && dave.pending.is_some() {
+        "Discord DAVE transition execution timed out; no audio was enabled"
+    } else {
+        "Discord DAVE group negotiation timed out; no accepted commit or welcome was received"
+    }
+}
+
 fn endpoint(raw: &str) -> Result<String, &'static str> {
     if raw.len() > 256
         || raw.contains('/')
@@ -127,6 +149,7 @@ async fn run_inner(
     url: String,
     local_test: bool,
 ) -> Result<(), &'static str> {
+    emit(Status::Connecting).map_err(|_| "Call interface closed")?;
     let config = WebSocketConfig::default()
         .max_message_size(Some(MAX_SIGNAL))
         .max_frame_size(Some(MAX_SIGNAL))
@@ -181,13 +204,12 @@ async fn run_inner(
     tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut signal_window = Instant::now();
     let mut signal_count = 0u16;
-    emit(Status::Securing).map_err(|_| "Call interface closed")?;
     loop {
         tokio::select! {
             changed=controls.changed()=>{ if changed.is_err(){return Ok(());} },
             _=tick.tick()=>{
                 let now=Instant::now();
-                if deadline.is_some_and(|d|now>=d) {return Err("DAVE call negotiation timed out; no audio was enabled");}
+                if deadline.is_some_and(|d|now>=d) {return Err(negotiation_timeout(heartbeat_ms.is_some(),udp.is_some(),encryption.is_some(),&dave,resuming));}
                 if discovering && now>=discovery_deadline {return Err("Discord voice UDP discovery timed out; check the network firewall");}
                 if let Some(interval)=heartbeat_ms && now>=heartbeat_at {
                     if awaiting_ack.is_some() {return Err("Discord voice heartbeat was not acknowledged; rejoin the call");}
@@ -288,6 +310,7 @@ async fn run_inner(
                                 socket.connect(SocketAddr::new(address,port)).await.map_err(|_|"Could not connect voice UDP socket")?;
                                 let mut probe=[0;74];probe[..4].copy_from_slice(&[0,1,0,70]);probe[4..8].copy_from_slice(&ssrc.to_be_bytes());socket.send(&probe).await.map_err(|_|"Voice UDP discovery failed")?;
                                 udp=Some(socket);discovering=true;discovery_deadline=Instant::now()+Duration::from_secs(8);
+                                emit(Status::Discovering).map_err(|_|"Call interface closed")?;
                             },
                             4=>{
                                 if encryption.is_some() || udp.is_none() || discovering {return Err("Unexpected voice session description");}
@@ -298,6 +321,7 @@ async fn run_inner(
                                 encryption=Some(Encryption::new(&key));
                                 send(&mut ws,Message::Binary(dave.key_package()?.into())).await?;
                                 emit(Status::TransportReady).map_err(|_|"Call interface closed")?;
+                                emit(Status::Securing).map_err(|_|"Call interface closed")?;
                             },
                             5=>{
                                 let user=id(data,"user_id")?;
@@ -369,6 +393,43 @@ async fn run_inner(
 mod tests {
     use super::*;
     use opus2::Decoder;
+    #[test]
+    fn negotiation_timeout_distinguishes_missing_group_from_unexecuted_transition() {
+        let server = crate::test_mls::Delivery::new();
+        let mut alice = Dave::new(1, Some(2), 3).unwrap();
+        let mut bob = Dave::new(2, Some(1), 3).unwrap();
+        alice.session.set_external_sender(&server.external).unwrap();
+        bob.session.set_external_sender(&server.external).unwrap();
+        assert_eq!(
+            negotiation_timeout(false, false, false, &alice, false),
+            "Discord voice Hello timed out; rejoin the call"
+        );
+        assert_eq!(
+            negotiation_timeout(true, false, false, &alice, false),
+            "Discord voice Ready timed out; rejoin the call"
+        );
+        assert_eq!(
+            negotiation_timeout(true, true, false, &alice, false),
+            "Discord voice protocol selection timed out; no transport key was received"
+        );
+        assert_eq!(
+            negotiation_timeout(true, true, true, &alice, false),
+            "Discord DAVE group negotiation timed out; no accepted commit or welcome was received"
+        );
+        let (_, welcome) = server.add(&mut bob, &alice.key_package().unwrap());
+        alice
+            .group_changed(30, &[&[0, 7], welcome.as_slice()].concat())
+            .unwrap();
+        assert!(!alice.ready);
+        assert_eq!(
+            negotiation_timeout(true, true, true, &alice, false),
+            "Discord DAVE transition execution timed out; no audio was enabled"
+        );
+        assert_eq!(
+            negotiation_timeout(false, true, true, &alice, true),
+            "Discord voice resume acknowledgement timed out; rejoin the call"
+        );
+    }
     #[test]
     fn validated_endpoints_discovery_and_real_opus() {
         assert!(endpoint("voice-1.discord.media:443").is_ok());
@@ -676,6 +737,19 @@ mod tests {
             true,
         ));
         timeout(Duration::from_secs(10), async {
+            assert!(matches!(
+                status_rx.recv().await.unwrap(),
+                Status::Connecting
+            ));
+            assert!(matches!(
+                status_rx.recv().await.unwrap(),
+                Status::Discovering
+            ));
+            assert!(matches!(
+                status_rx.recv().await.unwrap(),
+                Status::TransportReady
+            ));
+            assert!(matches!(status_rx.recv().await.unwrap(), Status::Securing));
             let mut ready = 0;
             let mut heard = false;
             let mut waiting = false;
@@ -684,7 +758,10 @@ mod tests {
                     Status::Ready { .. } => ready += 1,
                     Status::RemoteAudio => heard = true,
                     Status::WaitingForPeer => waiting = true,
-                    Status::Securing | Status::TransportReady => {}
+                    Status::Connecting
+                    | Status::Discovering
+                    | Status::Securing
+                    | Status::TransportReady => {}
                 }
                 if ready == 2 && heard {
                     assert_eq!(waiting, guild);

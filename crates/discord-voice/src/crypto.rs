@@ -214,8 +214,9 @@ impl Dave {
             .map_err(|_| "DAVE reset failed")
     }
     pub fn key_package(&mut self) -> Result<Vec<u8>, &'static str> {
-        // Davey returns a TLS KeyPackage, while opcode 26 requires MLSMessage(version, wire format, body).
-        let mut out = vec![26, 0, 1, 0, 5];
+        // Match libdave and discord.py-self: opcode followed by the raw TLS KeyPackage.
+        // The whitepaper's MLSMessage wrapper differs from these reference send paths.
+        let mut out = vec![26];
         out.extend(
             self.session
                 .create_key_package()
@@ -379,6 +380,7 @@ impl Drop for Dave {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openmls::prelude::{OpenMlsProvider, ProtocolVersion};
     #[test]
     fn proposals_before_local_group_are_ignored_without_weakening_later_validation() {
         let server = crate::test_mls::Delivery::new();
@@ -452,7 +454,14 @@ mod tests {
         let mut dave = Dave::new(1, Some(2), 3).unwrap();
         assert!(!dave.ready);
         assert!(dave.execute(0).is_err());
-        assert_eq!(&dave.key_package().unwrap()[..5], &[26, 0, 1, 0, 5]);
+        let package = dave.key_package().unwrap();
+        assert_eq!(&package[..5], &[26, 0, 1, 0, 2]);
+        let package =
+            openmls::prelude::KeyPackageIn::tls_deserialize_exact_bytes(&package[1..]).unwrap();
+        let provider = openmls_rust_crypto::OpenMlsRustCrypto::default();
+        package
+            .validate(provider.crypto(), ProtocolVersion::Mls10)
+            .unwrap();
         assert!(dave.group_changed(30, &[0, 0, 0]).is_err());
         assert!(!dave.ready);
     }
