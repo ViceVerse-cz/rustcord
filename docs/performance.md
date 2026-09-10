@@ -1806,3 +1806,33 @@ release commands reported 3m14s text and 3m19s voice. These one-off shared-host 
 exclude package-tool timing and are not a before/after performance comparison. No desktop or
 audio device was opened. Minimum distro compatibility is limited by generated dependencies
 (in this host's artifacts, libc6 >=2.43); older systems and actual installation remain unverified.
+
+
+## Bounded Gateway diagnostics - September 10, 2026
+
+Baseline main `34c4a8f`, compared with diagnostics implementation `238c91d` integrated at
+`8b8b64c`. Windows x86_64, pinned Rust 1.98.1, existing release profile, no default features
+for text and `voice` for voice. Baseline and changed packages were built in separate worktrees;
+the changed build used a private target after shared-cache validation results were discarded.
+Both release package commands passed. Files include documentation at build time, before this
+measurement append; text excludes nested voice output and both exclude PR evidence.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable bytes | 51,143,680 | 51,143,680 | 0 |
+| Text installed bytes | 51,827,424 | 51,831,323 | +3,899 (+0.008%) |
+| Text ZIP bytes | 31,918,267 | 31,919,983 | +1,716 (+0.005%) |
+| Voice executable bytes | 54,496,768 | 54,498,304 | +1,536 (+0.003%) |
+| Voice installed bytes | 55,403,285 | 55,408,720 | +5,435 (+0.010%) |
+| Voice ZIP bytes | 33,295,880 | 33,297,513 | +1,633 (+0.005%) |
+| Reducer replay median ms | 41.1287 | 40.1348 | -0.9939 (-2.42%; noise) |
+| Retained estimated timeline bytes / records | 236,992..237,477 / 500 | Same | 0 |
+
+Python ZIP DEFLATE9; 52 text files and 98 voice files. Direct executable replay after builds
+finished: one warmup each and five alternating baseline/after runs of 100,000 events.
+Baseline ms: 42.4092, 39.7967, 40.5609, 41.3075, 41.1287; after ms: 40.1348, 39.6071,
+40.8045, 39.1472, 41.7168. The workload does not exercise stderr output or establish a
+speedup, RSS, frame latency, startup or live compatibility. Output-sink latency is unmeasured.
+Diagnostics remain default-off; each enabled scope retains only static metadata and counters,
+with 64 attempted records/8 KiB across reconnects plus one desktop terminal line under 256 bytes.
+Native automation remains owner-paused; no account, microphone or speaker was accessed.

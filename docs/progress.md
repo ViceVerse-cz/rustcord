@@ -1865,5 +1865,16 @@ reported limitations without changing repository protection or enabling account 
   workspace. `cargo locate-project --workspace` now resolves it at runtime. The new Node
   regression failed on the old binary and passed after the fix, from a nested synthetic workspace.
   CI runs that regression. Shared Cargo output also reused an old test binary; those initial
-  full-suite results are discarded. The final suite and release variants are being rebuilt in
-  a private per-worktree Cargo target directory; CONTRIBUTING documents this requirement.
+  full-suite results are discarded. The private-target full suite passed 353 tests, including the new test names, plus Clippy,
+  formatting, policy and the workspace regression. CONTRIBUTING documents separate worktree
+  target directories. Main `34c4a8f` (activity artwork) is integrated with both sets of
+  documentation preserved. The combined private-target check passed 358 Rust tests, doctests,
+  formatting, strict all-feature Clippy, text-only compilation and policy; the cached-workspace
+  regression passed again. Both Windows release packages and replay passed from the private
+  target. Text executable size is unchanged; voice adds 1,536 bytes. Paired reducer medians
+  were 41.1287 ms before and 40.1348 ms after, with identical retained byte/row bounds; this
+  small variation is noise, not a speed claim. See performance.md for package measurements.
+- No visible UI change, so screenshots are not applicable. On the initial PR head, macOS, Linux,
+  security, licenses and fuzz CI passed; Windows was pending. Final integrated-head checks are
+  reported separately. Native desktop, storage tracing and owner-controlled live text/voice
+  evidence gates remain incomplete.
