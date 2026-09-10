@@ -37,3 +37,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.98.1
       - run: cargo install cargo-audit --version 0.22.2 --locked --no-default-features
       - run: cargo audit --deny warnings
+  licenses:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-deny --version 0.20.2 --locked
+      - run: cargo fetch --locked
+      - run: cargo xtask licenses
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node tests/license-policy.cjs

@@ -1495,3 +1495,11 @@ desktop automation remains owner-paused. No live account or audio actions occurr
 Mention roles are capped at 100 positive unique IDs and 800 retained allocation bytes per message.
 Notification delivery retains at most 32 items/16 KiB including reserved queue slots and role
 allocations; observed badge records remain 4,096/128 KiB. No dependency or migration was added.
+
+
+## Automated dependency license policy - September 10, 2026
+
+No application runtime or build-dependency change; Cargo.lock is unchanged. The pinned external
+cargo-deny tool runs only during development/CI. Release packages and replay were not rebuilt
+for this tooling-only slice. CI installation/check cost is separate from client runtime cost;
+no startup, memory or package-size improvement is claimed.
