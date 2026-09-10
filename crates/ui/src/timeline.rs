@@ -89,6 +89,7 @@ fn grouped(previous: Option<&Message>, message: &Message, boundary: Option<Id>) 
     previous.is_some_and(|previous| {
         previous.author == message.author
             && message.reply_to.is_none()
+            && !message.edited
             && !message.unsupported
             && !previous.unsupported
             && boundary != Some(message.id)
@@ -112,9 +113,12 @@ fn divider(ui: &mut egui::Ui, label: String, unread: bool) {
     ui.add_space(12.0);
     ui.horizontal(|ui| {
         let font = egui::TextStyle::Small.resolve(ui.style());
-        let text = ui.painter().layout_no_wrap(label, font, color);
-        let (rect, _) =
+        let text = ui.painter().layout_no_wrap(label.clone(), font, color);
+        let (rect, response) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), egui::Sense::hover());
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), &label)
+        });
         let gap = (rect.width() - text.size().x - 24.0).max(0.0) / 2.0;
         for (a, b) in [
             (rect.left(), rect.left() + gap),
@@ -579,6 +583,9 @@ mod tests {
         let mut next = text_message((60_000 << 22) | 1);
         assert_eq!(timestamp(first.id).date().to_string(), "2015-01-01");
         assert!(grouped(Some(&first), &next, None));
+        next.edited = true;
+        assert!(!grouped(Some(&first), &next, None));
+        next.edited = false;
         assert!(!grouped(Some(&first), &next, Some(next.id)));
         assert_ne!(
             row_key(&next, Some(&first), None),
