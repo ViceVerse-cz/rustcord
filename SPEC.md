@@ -319,7 +319,7 @@ Saving requires an explicit destination. Validate filenames and prevent path tra
 
 ## 11. Voice must interoperate with Discord
 
-**Owner scope revision (September 10, 2026): implement voice calling now, initially for existing one-to-one DMs only.** Starting/answering, microphone capture, speaker playback, mute/deafen, hangup and required DAVE encryption are in scope. Guild channels, group calls, video and screen sharing are excluded from this implementation slice. Keep an explicitly selectable text-only build and measure the additional voice package cost. The live two-way audio gate remains mandatory for claims of interoperability.
+**Owner scope revision (September 10, 2026): implement voice calling in existing one-to-one DMs and guild voice channels.** Starting/answering DMs, joining/leaving server voice channels, participant rosters, microphone capture, mixed speaker playback, mute/deafen and required DAVE group encryption are in scope. Group DMs, Stage channels, video and screen sharing remain excluded from this implementation slice. Keep an explicitly selectable text-only build and measure the additional voice package cost. The live two-way audio gate remains mandatory for claims of interoperability.
 
 Voice is a later, separately verified release milestone, not a reason to create another service. Do not use a self-hosted LiveKit room, custom SFU, custom signaling backend, or an unrelated WebRTC demo as evidence of Discord voice support. The client must communicate with users already in actual Discord calls.
 

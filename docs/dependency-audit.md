@@ -122,3 +122,8 @@ Further remediation needs a released or reviewed coordinated OpenMLS/Davey depen
 ## Mentions, profiles and native save follow-up
 
 The September 10 follow-up reran `target/audit-tool/bin/cargo-audit audit --json` after adding rfd 0.17.2 and pollster 0.4.0. It still reports six vulnerability-class findings and five warnings (four unmaintained, one unsound); none is attributed to the two added packages. The strict audit remains failing; the existing findings above are not waived. Output: `target/mentions-profiles-audit.json`.
+
+
+## Guild voice implementation check — September 10, 2026
+
+Re-ran `target/audit-tool/bin/cargo-audit audit --deny warnings --json` for the guild voice branch: exit 1, six vulnerability advisories and five warnings (four unmaintained, one unsound), matching the previously documented blocked audit. This task adds no dependencies and does not change Cargo.lock or the vendored code. Existing dependency/source notices remain in both packages; the new mixer and group handling are original repository code. This is not a clean security audit or release approval.

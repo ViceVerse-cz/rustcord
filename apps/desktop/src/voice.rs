@@ -1,4 +1,4 @@
-//! Desktop ownership for one explicitly authorized DM media session.
+//! Desktop ownership for one explicitly authorized voice session.
 use client_core::{
     Command, Event, State,
     voice::{self, Phase, Secret},
@@ -22,13 +22,15 @@ struct Pending {
     request: u64,
     ring: bool,
     user: Id,
-    peer: Id,
+    peer: Option<Id>,
+    guild: Option<Id>,
     session: Option<Secret>,
     server: Option<(Secret, String)>,
     started: Instant,
 }
 enum Notice {
     TransportReady,
+    WaitingForPeer,
     Securing,
     MediaReady(String),
     DeviceReady,
@@ -82,23 +84,30 @@ impl Voice {
         }
         let call = state.voice.active.as_ref().ok_or("No call was requested")?;
         if !state.can_call(call.channel) {
-            return Err("Only an existing one-to-one DM can be called");
+            return Err("Select an existing DM or server voice channel");
         }
         let user = state.user.as_ref().ok_or("Sign in before calling")?.id;
-        let peer = state
+        let channel = state
             .channels
             .iter()
             .find(|c| c.id == call.channel)
-            .and_then(|c| c.recipients.first())
-            .ok_or("The DM recipient is unavailable")?
-            .id;
+            .ok_or("The voice channel is unavailable")?;
+        let peer = channel
+            .guild
+            .is_none()
+            .then(|| channel.recipients.first().map(|u| u.id))
+            .flatten();
+        if channel.guild.is_none() && peer.is_none() {
+            return Err("The DM recipient is unavailable");
+        }
         self.pending = Some(Pending {
             generation: state.generation,
             channel: call.channel,
             request: call.request,
             user,
             peer,
-            ring,
+            guild: channel.guild,
+            ring: ring && channel.guild.is_none(),
             session: None,
             server: None,
             started: Instant::now(),
@@ -257,22 +266,29 @@ impl Voice {
         if expected.is_none() {
             ui.voice_privacy_code = None;
         }
-        if self
+        let current = self
             .live
             .as_ref()
-            .is_some_and(|c| Some((c.generation, c.channel, c.request)) != expected)
-            || self
-                .pending
-                .as_ref()
-                .is_some_and(|c| Some((c.generation, c.channel, c.request)) != expected)
-        {
+            .map(|c| (c.generation, c.channel, c.request))
+            .or_else(|| {
+                self.pending
+                    .as_ref()
+                    .map(|c| (c.generation, c.channel, c.request))
+            });
+        if current.is_some() && current != expected {
             self.stop();
+            // Permission/removal failures must leave the service too; never target a new account.
+            return current
+                .filter(|(generation, _, _)| *generation == state.generation)
+                .map(|(_, channel, request)| {
+                    Command::Voice(voice::Command::Leave { channel, request })
+                });
         }
         if let Some(pending) = &self.pending {
             if pending.started.elapsed() >= Duration::from_secs(30) {
                 return self.fail(
                     state,
-                    "Discord did not provide DM voice connection details in time",
+                    "Discord did not provide voice connection details; check Connect permission and channel capacity",
                 );
             }
             ctx.request_repaint_after(
@@ -293,17 +309,17 @@ impl Voice {
         let mut command = None;
         if let Some(live) = &mut self.live {
             let call = state.voice.active.as_ref().expect("matching active call");
-            let muted =
-                call.muted || call.deafened || (ui.voice_push_to_talk && !ui.voice_ptt_active);
-            live.audio.set_controls(muted, call.deafened);
+            let deafened = call.deafened || call.server_deafened;
+            let muted = call.muted
+                || call.server_muted
+                || deafened
+                || (ui.voice_push_to_talk && !ui.voice_ptt_active);
+            live.audio.set_controls(muted, deafened);
             live.controls.send_if_modified(|control| {
-                if control.muted == muted && control.deafened == call.deafened {
+                if control.muted == muted && control.deafened == deafened {
                     false
                 } else {
-                    *control = Controls {
-                        muted,
-                        deafened: call.deafened,
-                    };
+                    *control = Controls { muted, deafened };
                     true
                 }
             });
@@ -328,6 +344,15 @@ impl Voice {
                                 request: live.request,
                             }));
                         }
+                    }
+                    Notice::WaitingForPeer => {
+                        ui.voice_privacy_code = None;
+                        live.audio.set_ready(false);
+                        state.apply_voice(voice::Event::Progress {
+                            channel: live.channel,
+                            request: live.request,
+                            phase: Phase::Waiting,
+                        });
                     }
                     Notice::Securing => {
                         ui.voice_privacy_code = None;
@@ -418,6 +443,7 @@ impl Voice {
             request: pending.request,
             user: pending.user,
             peer: pending.peer,
+            guild: pending.guild,
             session,
             token,
             endpoint,
@@ -435,6 +461,7 @@ impl Voice {
                     let notice = match event {
                         Status::TransportReady => Notice::TransportReady,
                         Status::Securing => Notice::Securing,
+                        Status::WaitingForPeer => Notice::WaitingForPeer,
                         Status::Ready { privacy_code } => {
                             if privacy_code.len() > 256 {
                                 return Err(());
@@ -479,6 +506,59 @@ impl Drop for Voice {
 mod tests {
     use super::*;
     #[test]
+    fn guild_negotiation_has_no_dm_peer_or_ringing_and_opens_no_devices() {
+        let mut state = test_support::demo_state();
+        state.demo = false;
+        let command = state.start_call(Id(25), true).unwrap();
+        assert!(matches!(
+            command,
+            Command::Voice(voice::Command::Join { ring: false, .. })
+        ));
+        let mut manager = Voice::default();
+        manager.begin(&state, true).unwrap();
+        let pending = manager.pending.as_ref().unwrap();
+        assert_eq!(pending.guild, Some(Id(10)));
+        assert_eq!(pending.peer, None);
+        assert!(!pending.ring);
+        assert!(manager.live.is_none());
+        state.leave_call();
+        manager.stop();
+        assert!(manager.pending.is_none());
+    }
+    #[test]
+    fn invalidation_leaves_service_but_never_sends_old_account_commands() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let mut state = test_support::demo_state();
+        state.demo = false;
+        state.start_call(Id(25), false).unwrap();
+        let mut manager = Voice::default();
+        manager.begin(&state, false).unwrap();
+        state.disconnect_voice();
+        let mut ui = ui::MessagingUi::default();
+        let context = egui::Context::default();
+        assert!(matches!(
+            manager.poll(&runtime, &mut state, &mut ui, &context),
+            Some(Command::Voice(voice::Command::Leave {
+                channel: Id(25),
+                ..
+            }))
+        ));
+        assert!(manager.pending.is_none());
+        state.leave_call();
+        state.start_call(Id(25), false).unwrap();
+        manager.begin(&state, false).unwrap();
+        state.generation += 1;
+        assert!(
+            manager
+                .poll(&runtime, &mut state, &mut ui, &context)
+                .is_none()
+        );
+        assert!(manager.pending.is_none());
+    }
+    #[test]
     fn negotiation_requires_matching_request_owner_and_session_without_opening_devices() {
         let mut state = test_support::demo_state();
         state.demo = false;
@@ -505,6 +585,10 @@ mod tests {
         let session = |user, id: &str| {
             Event::Voice(voice::Event::State {
                 request: Some(request),
+                guild: None,
+                member: None,
+                server_muted: false,
+                server_deafened: false,
                 channel: Some(Id(22)),
                 user: Id(user),
                 session: Some(Secret::new(id.into()).unwrap()),

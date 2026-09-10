@@ -622,8 +622,13 @@ impl MessagingUi {
                     commands.push(command);
                 }
             });
+        let selected_voice = state
+            .channels
+            .iter()
+            .any(|c| Some(c.id) == state.selected && c.kind == 2);
         let wide_members = ui.available_width() >= 720.0;
-        let show_members = state.selected.is_some()
+        let show_members = !selected_voice
+            && state.selected.is_some()
             && if wide_members {
                 !self.members_hidden
             } else {
@@ -681,15 +686,23 @@ impl MessagingUi {
                             let channel = state
                                 .selected
                                 .and_then(|id| state.channels.iter().find(|c| c.id == id));
-                            ui.label(
-                                RichText::new(if channel.is_some_and(|c| c.guild.is_some()) {
-                                    "#"
-                                } else {
-                                    "@"
-                                })
-                                .size(23.0)
-                                .color(colors.muted),
-                            );
+                            if selected_voice {
+                                let (rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(23.0, 23.0),
+                                    egui::Sense::hover(),
+                                );
+                                voice::speaker(ui, rect, colors.muted);
+                            } else {
+                                ui.label(
+                                    RichText::new(if channel.is_some_and(|c| c.guild.is_some()) {
+                                        "#"
+                                    } else {
+                                        "@"
+                                    })
+                                    .size(23.0)
+                                    .color(colors.muted),
+                                );
+                            }
                             ui.allocate_ui_with_layout(
                                 egui::vec2(
                                     (ui.available_width()
@@ -724,7 +737,7 @@ impl MessagingUi {
                                 |ui| {
                                     if ui
                                         .add_enabled(
-                                            state.selected.is_some(),
+                                            state.selected.is_some() && !selected_voice,
                                             egui::Button::selectable(show_members, "People"),
                                         )
                                         .on_hover_text("Show conversation members")
@@ -789,6 +802,10 @@ impl MessagingUi {
                     });
                     return;
                 };
+                if selected_voice {
+                    self.voice_channel(ui, state, channel, &mut commands);
+                    return;
+                }
                 egui::Panel::bottom("composer")
                     .frame(
                         egui::Frame::new()

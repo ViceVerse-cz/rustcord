@@ -1,7 +1,8 @@
-//! One-to-one Discord DM media. No bot manager, relay, recording, or key persistence.
+//! Discord DM and guild voice media. No bot manager, relay, recording, or key persistence.
 pub mod audio;
 mod crypto;
 mod jitter;
+mod mixer;
 mod transport;
 pub use transport::run;
 
@@ -14,6 +15,7 @@ pub struct Controls {
 pub enum Status {
     TransportReady,
     Securing,
+    WaitingForPeer,
     Ready { privacy_code: String },
     RemoteAudio,
 }

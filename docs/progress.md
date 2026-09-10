@@ -408,3 +408,58 @@ Delivery: [PR #11](https://github.com/ViceVerse-cz/rustcord/pull/11), draft whil
 Windows, Linux and security CI checks are pending. Implementation/evidence commit
 `7cb25ba`; commit-pinned screenshot paths verified on origin. Local checks and both
 release packages passed; remote CI is not yet a success claim.
+
+
+## September 10, 2026 — server voice channels
+
+Implemented `feat/guild-voice` from clean `main` at `619071c`, after fetching origin/main
+with Rust 1.98.1. Existing server voice channels are selectable and show bounded gateway
+participant rosters with avatars/names, separate mute/deafen indicators, a connected
+channel timer, explicit Join/Leave and existing audio/PTT controls. Browsing never starts
+a call. Group media extends the existing optional engine: guild-scoped signaling and
+Identify/Resume, DAVE membership transitions, empty-room waiting with devices off, up to
+64 participants, independent SSRC decoders/jitter buffers, mixed playback, server mute/
+deafen enforcement, and teardown on permission/removal/session changes. DMs keep their
+existing peer restriction/ringing. No dependencies, backend, voice-key storage or recordings.
+
+Verification: `cargo xtask check` passed formatting, strict workspace Clippy, **111 tests**
+(plus one deliberately ignored performance workload), text-only compilation and policy
+checks. Focused checks cover guild signaling/correlation/departure, initial/supplemental/
+passive roster hydration, bounds and permission invalidation, 3-party MLS join/remove and
+unauthorized/duplicate identity rejection, real local WebSocket/UDP encrypted mixed audio,
+voice resumption, empty-room silence, and native-device-free teardown. The ignored release
+mix benchmark was run separately and passed. Both `cargo xtask package` and
+`cargo xtask package-voice` built and verified local ad-hoc signatures.
+
+Native macOS evidence: `docs/pr-evidence/guild-voice/before.png` and `after.png` use the
+unchanged standard offline fixture and show the disabled voice row becoming selectable.
+`roster.png` and `roster-light.png` use the disclosed additional `--demo --demo-voice`
+fixture; all identities, status flags and elapsed time are synthetic. Inspected dark/light
+rosters, long-name truncation, separate status icons, empty-room navigation, return to text
+and call-bar retention while browsing another room. Native resize/drag automation did not
+alter the window/sidebar size; 190-point narrow rows, keyboard join and bounded viewport
+rendering passed offline egui tests. Screen readers and Windows/Linux native behavior were
+not exercised. No Discord call, microphone or speaker test was performed.
+
+Measured voice executable +184,896 bytes (+0.39%), voice ZIP +72,507 bytes (+0.24%);
+settled demo RSS +4,672 KiB with the comparison limitations in `docs/performance.md`.
+Both sampled idle CPU medians were 0%. New 63-remote-speaker synthetic mixing measured
+1.002 ms per 20 ms tick; this excludes encryption/network/hardware and is not live latency.
+Reducer median changed 26.700→27.443 ms (small noisy slowdown).
+
+`cargo-audit audit --deny warnings` was re-run and still exits 1 with the same six
+vulnerabilities and five warnings documented in `docs/dependency-audit.md`; this task
+changes neither dependencies nor Cargo.lock. Draft delivery is required for that inherited
+audit failure and the unperformed owner-controlled official-client two-way/multi-party
+voice gate. Current normal-user roster/signaling behavior remains unofficial/live-unverified;
+Stage/group DMs/video/screensharing, acoustic echo cancellation, automatic region/move
+rejoin and global push-to-talk are not implemented. Live validation procedure is in
+`docs/voice.md`; implementation, fixtures and a connected label do not pass milestone 4.
+
+
+Delivery: [PR #14](https://github.com/ViceVerse-cz/rustcord/pull/14), draft. Implementation
+and inspected native evidence are committed at `0a07e38`; all four commit-pinned screenshot
+paths and the PR body were verified on origin. macOS, Windows, Linux and security CI are
+pending at handoff. Local checks passed; remote CI success and live audio compatibility
+are not claimed. The inherited strict audit failure and owner-operated live voice gate
+remain the draft blockers described above.

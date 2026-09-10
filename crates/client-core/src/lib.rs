@@ -239,7 +239,7 @@ impl State {
         if !self
             .channels
             .iter()
-            .any(|c| c.id == channel && c.supports_text())
+            .any(|c| c.id == channel && (c.supports_text() || c.kind == 2))
         {
             self.status = "This channel kind is unsupported";
             return None;
@@ -253,6 +253,11 @@ impl State {
         self.older_exhausted = false;
         self.reply = None;
         self.revision += 1;
+        if self.channels.iter().any(|c| c.id == channel && c.kind == 2) {
+            self.cancel_history();
+            self.freshness = Freshness::Fresh;
+            return None;
+        }
         Some(self.history(None))
     }
     pub fn request_members(&mut self) -> Option<Command> {
@@ -607,7 +612,10 @@ impl State {
                     if let Patch::Value(kind) = patch.kind {
                         channel.kind = kind;
                     }
-                    if self.selected == Some(channel.id) && !channel.supports_text() {
+                    if self.selected == Some(channel.id)
+                        && !channel.supports_text()
+                        && channel.kind != 2
+                    {
                         self.selected = None;
                         self.invalidate_members();
                         self.timeline.clear();
@@ -643,6 +651,7 @@ impl State {
             }
             Event::RecipientRemoved { channel, user } => {
                 if self.user.as_ref().is_some_and(|u| u.id == user) {
+                    self.end_voice_channel(channel);
                     self.read_state.forget(channel);
                     self.channels.retain(|c| c.id != channel);
                     if self.selected == Some(channel) {
@@ -713,6 +722,7 @@ impl State {
                     self.status = "Account navigation exceeds safe capacity";
                     return;
                 }
+                self.voice.roster.clear();
                 self.members = None;
                 self.clear_profile();
                 self.read_state.reset();
@@ -894,7 +904,9 @@ impl State {
             Event::Disconnected => {
                 self.read_state.cancel();
                 self.clear_profile();
+                let roster = std::mem::take(&mut self.voice.roster);
                 self.disconnect_voice();
+                self.voice.roster = roster; // RESUMED replays changes, not the entire unchanged roster.
                 self.invalidate_members();
                 self.gateway_connected = false;
                 self.cancel_history();
@@ -922,6 +934,7 @@ impl State {
                 Ok(())
             }
             Event::Unavailable(channel) => {
+                self.end_voice_channel(channel);
                 self.read_state.forget(channel);
                 self.clear_profile();
                 self.channels.retain(|c| c.id != channel);

@@ -228,3 +228,65 @@ other distribution variants and pre-existing archives. Snapshots precede this me
 report; packaging source and runtime assets are unchanged. Raw samples, sizes and archives
 remain under ignored `target/message-hover-*`. Text grows by 16,208 executable bytes;
 voice changes by −208 bytes. No new dependencies or cache/queue budgets.
+
+
+## September 10, 2026 — guild voice
+
+Baseline: clean `main` / `619071c`, fetched origin/main, Rust 1.98.1. Changed branch:
+`feat/guild-voice`. Both revisions use macOS 27.0 (26A428), Apple M1 Pro (8 cores),
+16 GiB RAM, arm64 locked release thin-LTO builds. Both text (`--no-default-features`)
+and optional `voice` packages were built and locally ad-hoc signature verified.
+
+| Metric / method | Baseline | After | Delta |
+| --- | --- | --- | --- |
+| Text executable, bytes | 45,033,392 | 45,176,320 | +142,928 (+0.32%) |
+| Text package, bytes | 45,314,977 | 45,462,380 | +147,403 (+0.33%) |
+| Text zip, bytes | 29,471,417 | 29,529,234 | +57,817 (+0.20%) |
+| Voice executable, bytes | 47,875,472 | 48,060,368 | +184,896 (+0.39%) |
+| Voice package, bytes | 48,388,018 | 48,577,389 | +189,371 (+0.39%) |
+| Voice zip, bytes | 30,848,320 | 30,920,827 | +72,507 (+0.24%) |
+| Reducer median, ms | 26.700 | 27.443 | +0.743 (+2.78%) |
+| Idle CPU, % | 0 | 0 | +0 percentage points |
+| Settled RSS, KiB | 100,448 | 105,120 | +4,672 (+4.65%) |
+| Sampled peak RSS, KiB | 100,448 | 105,280 | +4,832 (+4.81%) |
+
+Package = logical sum of every file in the installed .app, including bundled notices,
+docs and modified HPKE source for voice; excludes filesystem allocation overhead.
+ZIP = `ditto -c -k --sequesterRsrc --keepParent` of that same .app. Package snapshots
+precede this measurement report and the final progress/PR notes. No dependency or
+lockfile change. These are development artifacts, not notarized releases.
+
+Reducer: build once per revision (`cargo replay`), invoke each executable directly,
+one warmup plus five runs of 100,000 synthetic events. Retained timeline range stays
+220,992–221,477 estimated bytes / 500 records. Baseline median 26.700 ms vs 27.443 ms
+is a small noisy slowdown, not an improvement claim or a voice-workload measurement.
+
+Native process: voice-enabled `--demo`, WGPU, 2× scale, approximately 1088×768 captured
+viewport, dark theme, standard fixture. Navigate from getting-started to long-form,
+leave People pane visible, wait 60 seconds after interaction, then 30 `ps -p PID -o
+%cpu=,rss=` samples at one-second intervals. Both native processes sampled on the same
+host; baseline foreground and changed window background during the quiet interval.
+The changed process also visited the empty voice page before returning to text, so
+its additional retained UI work is included. RSS is resident process memory, not
+physical footprint or GPU allocation. Earlier transient samples were discarded before
+this controlled interval. No helper child processes were launched by the demo; shared
+OS/WindowServer allocations are not attributed. Foreground placement and shared-machine
+noise limit interpretation; the 4,672 KiB settled RSS increase is not a precise live-call
+cost. Startup, p95 frames, GPU memory, hardware audio and live voice RSS remain unmeasured.
+
+New component workload: `cargo test --locked -p discord-voice --release
+synthetic_mix_workload -- --ignored --nocapture` passed. Five measured 1,000-tick runs
+after one warmup, with real Opus decoding and independent jitter state, gave medians:
+
+| Remote speakers | Total for 1,000 ticks | Mean time per 20 ms tick within median run |
+| --- | --- | --- |
+| 1 | 16.027 ms | 16.03 µs |
+| 8 | 125.254 ms | 125.25 µs |
+| 63 | 1,002.216 ms | 1,002.22 µs |
+
+The baseline rejects multi-party voice, so there is no working baseline group mixer
+comparison. This synthetic computation excludes encryption, sockets, devices, callback
+scheduling and real-time latency. The 64-total-person limit retains at most 63 decoder
+states, 63 × 10,200 encoded jitter bytes and 63 × 23,040 decoded PCM bytes, plus codec,
+MLS and native allocations. Eight-frame device queues remain bounded. See the adapter
+README for packet, transition and timeout limits. No acoustic echo cancellation was added.
