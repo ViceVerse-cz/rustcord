@@ -30,7 +30,8 @@ impl MessagingUi {
         let elapsed = call.and_then(elapsed_label);
         let response = ui
             .push_id(channel.id, |ui| {
-                ui.add(
+                ui.add_enabled(
+                    state.can_view(channel.id),
                     egui::Button::selectable(
                         selected,
                         RichText::new(format!("     {}", channel.name)).color(color),
@@ -61,7 +62,7 @@ impl MessagingUi {
         response.widget_info(|| {
             egui::WidgetInfo::selected(
                 egui::WidgetType::SelectableLabel,
-                true,
+                response.enabled(),
                 selected,
                 format!(
                     "{} voice channel{}",
@@ -265,9 +266,7 @@ impl MessagingUi {
         } else if state.voice.active.is_some() {
             Some("Leave your current call before starting another.")
         } else if !state.can_call(channel) {
-            Some(
-                "This channel is unavailable for voice. Choose a server voice channel or one-to-one DM.",
-            )
+            Some("Joining this channel is unavailable with current permission information.")
         } else {
             None
         }
@@ -297,10 +296,11 @@ impl MessagingUi {
                     "Call"
                 }),
             )
-            .on_hover_text(
-                unavailable
-                    .unwrap_or("Join audio. Your microphone starts after the call is secured."),
-            );
+            .on_hover_text(unavailable.unwrap_or(if state.can_speak(channel) {
+                "Join audio. Your microphone starts after the call is secured."
+            } else {
+                "Join to listen. Speaking is unavailable in this channel."
+            }));
         if response.clicked()
             && let Some(command) = state.start_call(channel, !guild && !incoming)
         {
@@ -331,6 +331,7 @@ impl MessagingUi {
             device_combo(ui, "voice-input", &self.voice_inputs, &mut self.voice_input);
             ui.label("Speakers");
             device_combo(ui, "voice-output", &self.voice_outputs, &mut self.voice_output);
+            gain_controls(ui, &mut self.voice_gain);
             if ui.button("Refresh audio devices").clicked() {
                 self.voice_refresh_devices = true;
             }
@@ -340,7 +341,7 @@ impl MessagingUi {
             ui.separator();
             ui.checkbox(&mut self.voice_push_to_talk, "Push to talk");
             ui.label(RichText::new("Hold V while this window is focused and you are not typing. Mute and deafen always take priority.").small());
-            ui.label(RichText::new("Device choices apply to this session. Microphone capture begins only after you join a secured call.").small());
+            ui.label(RichText::new("Device choices and levels apply to this session. Microphone capture begins only after you join a secured call.").small());
         });
     }
 
@@ -363,8 +364,9 @@ impl MessagingUi {
             .show(ui, |ui| {
                 if let Some(call) = &state.voice.active {
                     let channel = call.channel;
+                    let can_speak = state.can_speak(channel);
                     let phase = call.phase;
-                    let mut muted = call.muted;
+                    let mut muted = call.muted || !can_speak;
                     let mut deafened = call.deafened;
                     let error = call.error;
                     let server_muted = call.server_muted;
@@ -457,7 +459,7 @@ impl MessagingUi {
                             self.voice_available && !state.demo && phase != Phase::Failed;
                         let mute_changed = ui
                             .add_enabled(
-                                controls,
+                                controls && can_speak,
                                 egui::Checkbox::new(&mut muted, "Mute microphone"),
                             )
                             .changed();
@@ -485,6 +487,15 @@ impl MessagingUi {
                             commands.push(command);
                         }
                     });
+                    if !can_speak && !state.demo {
+                        ui.weak("Speaking is unavailable in this channel. You can still listen.");
+                    } else if !state.demo
+                        && state.permission(channel, model::permissions::USE_VAD) != Some(true)
+                    {
+                        ui.weak(
+                            "Push-to-talk is required to speak here. Enable it in Voice settings.",
+                        );
+                    }
                 }
                 if let Some(channel) = state.voice.incoming {
                     if state.voice.active.is_some() {
@@ -528,6 +539,30 @@ impl MessagingUi {
                 }
             });
     }
+}
+
+fn gain_controls(ui: &mut egui::Ui, gain: &mut crate::VoiceGain) -> [egui::Response; 2] {
+    let label = ui.label("Microphone gain");
+    let input = ui
+        .add(
+            egui::Slider::new(&mut gain.input_percent, 0..=200)
+                .suffix("%")
+                .step_by(1.0),
+        )
+        .labelled_by(label.id);
+    let label = ui.label("Speaker volume");
+    let output = ui
+        .add(
+            egui::Slider::new(&mut gain.output_percent, 0..=200)
+                .suffix("%")
+                .step_by(1.0),
+        )
+        .labelled_by(label.id);
+    ui.label(RichText::new("100% keeps the original level. Boosting above 100% can clip.").small());
+    if ui.small_button("Reset levels").clicked() {
+        *gain = crate::VoiceGain::default();
+    }
+    [input, output]
 }
 
 fn elapsed_label(call: &client_core::voice::Call) -> Option<String> {
@@ -648,23 +683,62 @@ mod tests {
     use super::*;
 
     #[test]
-    fn guild_voice_requires_explicit_keyboard_join_and_demo_never_emits_media() {
-        let mut state = State {
-            auth: AuthState::Authenticated,
-            gateway_connected: true,
-            channels: vec![model::Channel {
-                id: Id(25),
-                guild: Some(Id(10)),
-                parent_id: None,
-                position: 0,
-                name: "Synthetic room".into(),
-                kind: 2,
-                recipients: vec![],
-                member_list_id: None,
-                last_message: None,
-            }],
+    fn gain_sliders_accept_keyboard_input_and_reset_with_the_session() {
+        let mut messaging = MessagingUi::default();
+        assert_eq!(messaging.voice_gain.input_percent, 100);
+        assert_eq!(messaging.voice_gain.output_percent, 100);
+        let ctx = egui::Context::default();
+        let raw = || egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(240.0, 260.0),
+            )),
             ..Default::default()
         };
+        ctx.run_ui(raw(), |ui| {
+            gain_controls(ui, &mut messaging.voice_gain)[0].request_focus();
+        })
+        .drop_without_applying_deltas();
+        let mut input = raw();
+        input.events.push(egui::Event::Key {
+            key: egui::Key::ArrowRight,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        ctx.run_ui(input, |ui| {
+            let controls = gain_controls(ui, &mut messaging.voice_gain);
+            assert!(
+                controls
+                    .iter()
+                    .all(|r| r.rect.right() <= ui.max_rect().right() + 1.0)
+            );
+        })
+        .drop_without_applying_deltas();
+        assert_eq!(messaging.voice_gain.input_percent, 101);
+        assert_eq!(messaging.voice_gain.output_percent, 100);
+        assert!(
+            !messaging.voice_refresh_devices,
+            "Gain does not enumerate devices"
+        );
+        messaging.voice_gain.input_percent = u16::MAX;
+        messaging.voice_gain.output_percent = 0;
+        ctx.run_ui(raw(), |ui| {
+            gain_controls(ui, &mut messaging.voice_gain);
+        })
+        .drop_without_applying_deltas();
+        assert_eq!(messaging.voice_gain.input_percent, 200);
+        assert_eq!(messaging.voice_gain.output_percent, 0);
+        messaging.clear();
+        assert_eq!(messaging.voice_gain.input_percent, 100);
+        assert_eq!(messaging.voice_gain.output_percent, 100);
+    }
+
+    #[test]
+    fn guild_voice_requires_explicit_keyboard_join_and_demo_never_emits_media() {
+        let mut state = test_support::demo_state();
+        state.demo = false;
         assert!(
             state.select(Id(25)).is_none(),
             "Voice selection must not fetch history"

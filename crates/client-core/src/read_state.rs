@@ -59,6 +59,7 @@ impl ReadState {
 impl State {
     pub fn read_marker(&self, channel: Id) -> Option<Option<Id>> {
         if !self.gateway_connected
+            || !self.can_view(channel)
             || !self
                 .channels
                 .iter()
@@ -76,9 +77,10 @@ impl State {
     pub fn unread(&self, channel: Id) -> Option<bool> {
         self.channel_unread(self.channels.iter().find(|c| c.id == channel)?)
     }
-    /// Navigation rows already hold their admitted channel; avoid scanning all navigation again.
+    /// Shared unread visibility for sidebar rows and notification badges.
     pub fn channel_unread(&self, channel: &model::Channel) -> Option<bool> {
         if !self.gateway_connected
+            || !self.can_view(channel.id)
             || !channel.supports_text()
             || !(self.read_state.known || self.read_state.entries.contains_key(&channel.id))
         {
@@ -102,9 +104,11 @@ impl State {
                 .get(message)
                 .is_some_and(|m| Some(m.channel) == self.selected)
             && self.selected.is_some_and(|channel| {
-                self.read_marker(channel)
-                    .flatten()
-                    .is_none_or(|read| message > read)
+                self.can_view(channel)
+                    && self
+                        .read_marker(channel)
+                        .flatten()
+                        .is_none_or(|read| message > read)
             })
     }
     pub fn prepare_mark_read(&mut self, message: Id) -> Option<crate::Command> {
@@ -244,6 +248,10 @@ impl State {
                     return Ok(());
                 }
                 self.read_state.pending = None;
+                if !self.can_view(channel) {
+                    self.read_state.status = None;
+                    return Ok(());
+                }
                 match result {
                     Ok(()) => {
                         // A newer service ACK (including manual mark-unread) wins over this HTTP completion.

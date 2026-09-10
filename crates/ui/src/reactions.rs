@@ -7,6 +7,7 @@ pub fn show(
     writing: bool,
     refreshing: bool,
     media: (&mut crate::avatars::Avatars, bool),
+    can_react: impl Fn(&ReactionEmoji, bool) -> bool,
 ) -> Option<Option<ReactionEmoji>> {
     if reactions.is_some_and(<[Reaction]>::is_empty) && !writing {
         return None;
@@ -25,7 +26,7 @@ pub fn show(
             } else if let Some(image) = reaction.emoji.id.and_then(|id| media.0.custom_image(ui.ctx(), id, 18.0, media.1)) {
                 egui::Button::image_and_text(image.alt_text(reaction.emoji.label()), reaction.count.to_string()).image_tint_follows_text_color(false)
             } else { egui::Button::new(label.clone()) };
-            let response=ui.add_enabled(enabled && !writing && reaction.emoji.name.is_some(),button.small().selected(reaction.me));
+            let response=ui.add_enabled(!writing && reaction.emoji.name.is_some() && can_react(&reaction.emoji, !reaction.me),button.small().selected(reaction.me));
             response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, response.enabled(), reaction.me, &label));
             let verb=if reaction.me {"Remove your reaction"}else{"Add your reaction"};
             let response=response.on_hover_text(format!("{verb}: {}. Count includes super reactions; only normal reactions can be toggled here.",reaction.emoji.label()));
@@ -40,6 +41,7 @@ pub fn add_button(
     ui: &mut egui::Ui,
     enabled: bool,
     writing: bool,
+    can_react: impl Fn(&ReactionEmoji) -> bool,
 ) -> Option<Option<ReactionEmoji>> {
     let mut action = None;
     ui.add_enabled_ui(enabled && !writing, |ui| {
@@ -59,14 +61,18 @@ pub fn add_button(
                 ("🙏", "Thanks"),
                 ("😢", "Sad"),
             ] {
+                let emoji = ReactionEmoji {
+                    id: None,
+                    name: Some(name.into()),
+                };
                 if ui
-                    .add(crate::emoji::button(ui.ctx(), name, label.into()))
+                    .add_enabled(
+                        can_react(&emoji),
+                        crate::emoji::button(ui.ctx(), name, label.into()),
+                    )
                     .clicked()
                 {
-                    action = Some(Some(ReactionEmoji {
-                        id: None,
-                        name: Some(name.into()),
-                    }));
+                    action = Some(Some(emoji));
                     ui.close();
                 }
             }
@@ -95,6 +101,7 @@ mod tests {
                     false,
                     false,
                     (&mut crate::avatars::Avatars::default(), true),
+                    |_, _| true,
                 ),
                 None
             );
@@ -114,7 +121,7 @@ mod tests {
             me: true,
             me_burst: false,
         }];
-        for enabled in [true, false] {
+        for (enabled, toggle) in [(true, true), (false, true), (true, false), (false, false)] {
             let ctx = egui::Context::default();
             crate::emoji::install(&ctx).unwrap();
             let mut action = None;
@@ -145,12 +152,16 @@ mod tests {
                         false,
                         false,
                         (&mut crate::avatars::Avatars::default(), true),
+                        |_, add| {
+                            assert!(!add, "The owned reaction is removed");
+                            toggle
+                        },
                     );
                 });
                 assert!(output.platform_output.commands.is_empty());
                 output.textures_delta.clear();
             }
-            assert_eq!(action, enabled.then(|| Some(values[0].emoji.clone())));
+            assert_eq!(action, toggle.then(|| Some(values[0].emoji.clone())));
         }
     }
 }

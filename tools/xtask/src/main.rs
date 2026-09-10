@@ -195,6 +195,10 @@ fn package(voice: bool) -> Result<(), String> {
         std::path::Path::new("assets/licenses/notifications"),
         &resources.join("licenses/notifications"),
     )?;
+    copy_directory(
+        std::path::Path::new("assets/licenses/login"),
+        &resources.join("licenses/login"),
+    )?;
     if voice {
         copy_directory(
             std::path::Path::new("assets/licenses/voice"),

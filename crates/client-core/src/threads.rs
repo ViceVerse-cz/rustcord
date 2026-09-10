@@ -9,11 +9,14 @@ impl State {
         guild: Id,
         parents: Option<Vec<Id>>,
         mut threads: Vec<Channel>,
+        removed: Vec<Id>,
     ) -> Result<(), &'static str> {
         if !self.guilds.iter().any(|g| g.id == guild) {
             return Ok(());
         }
-        if threads.len() > MAX_NAV || parents.as_ref().is_some_and(|p| p.len() > MAX_NAV) {
+        if threads.len() + removed.len() > MAX_NAV
+            || parents.as_ref().is_some_and(|p| p.len() > MAX_NAV)
+        {
             return Err("Thread snapshot exceeds safe capacity");
         }
         let parent_count = parents.as_ref().map_or(0, Vec::len);
@@ -22,17 +25,30 @@ impl State {
             return Err("Thread snapshot has duplicate parents");
         }
         let incoming: BTreeSet<_> = threads.iter().map(|c| c.id).collect();
+        let removed_count = removed.len();
+        let explicit: BTreeSet<_> = removed.into_iter().collect();
+        if explicit.len() != removed_count
+            || explicit.iter().any(|id| id.0 == 0 || incoming.contains(id))
+        {
+            return Err("Thread snapshot has invalid explicit removals");
+        }
         let transient = self.archived_thread;
         let in_scope = |c: &Channel| {
             c.guild == Some(guild)
                 && matches!(c.kind, 10..=12)
-                && (Some(c.id) != transient || incoming.contains(&c.id))
+                && (Some(c.id) != transient || incoming.contains(&c.id) || explicit.contains(&c.id))
                 && parents
                     .as_ref()
                     .is_none_or(|p| c.parent_id.is_some_and(|id| p.contains(&id)))
         };
         let mut ids = BTreeSet::new();
         let previous: BTreeMap<_, _> = self.channels.iter().map(|c| (c.id, c)).collect();
+        if explicit
+            .iter()
+            .any(|id| previous.get(id).is_some_and(|old| !in_scope(old)))
+        {
+            return Err("Thread removal has invalid channel scope");
+        }
         if threads.iter().any(|c| {
             !in_scope(c)
                 || c.parent_id.is_none()
@@ -105,6 +121,12 @@ mod tests {
             member_list_id: None,
         };
         let mut state = State {
+            user: Some(User {
+                id: Id(9),
+                name: "Synthetic member".into(),
+                avatar: None,
+                discriminator: 0,
+            }),
             guilds: vec![
                 Guild {
                     emojis: None,
@@ -133,12 +155,46 @@ mod tests {
             freshness: Freshness::Fresh,
             ..State::default()
         };
+        state
+            .permissions
+            .replace(model::permissions::Snapshot {
+                guilds: state
+                    .guilds
+                    .iter()
+                    .map(|guild| model::permissions::Guild {
+                        id: guild.id,
+                        owner: Some(Id(999)),
+                        roles: Some(vec![model::permissions::Role {
+                            id: guild.id,
+                            bits: model::permissions::VIEW_CHANNEL
+                                | model::permissions::READ_MESSAGE_HISTORY
+                                | model::permissions::SEND_MESSAGES_IN_THREADS,
+                        }]),
+                        member: Some(model::permissions::Member {
+                            roles: vec![],
+                            timeout_until: None,
+                        }),
+                    })
+                    .collect(),
+                channels: state
+                    .channels
+                    .iter()
+                    .filter(|channel| !matches!(channel.kind, 10..=12))
+                    .map(|channel| model::permissions::Channel {
+                        id: channel.id,
+                        guild: channel.guild.unwrap(),
+                        overwrites: Some(vec![]),
+                    })
+                    .collect(),
+            })
+            .unwrap();
         state.drafts.insert(Id(100), "unsent thread draft".into());
         state.drafts.insert(Id(10), "unsent parent draft".into());
         let original = state.channels.clone();
         state.apply(Envelope {
             generation: state.generation,
             event: Event::ThreadsSync {
+                removed: vec![],
                 guild: Id(1),
                 parents: Some(vec![]),
                 threads: vec![],
@@ -151,6 +207,7 @@ mod tests {
         state.apply(Envelope {
             generation: state.generation,
             event: Event::ThreadsSync {
+                removed: vec![],
                 guild: Id(999),
                 parents: None,
                 threads: vec![],
@@ -187,6 +244,7 @@ mod tests {
             reply_to: None,
             kind: 0,
             unsupported: false,
+            extra_content: Default::default(),
             embeds: vec![],
             embeds_suppressed: false,
             attachments: vec![],
@@ -202,6 +260,7 @@ mod tests {
         state.apply(Envelope {
             generation: state.generation,
             event: Event::ThreadsSync {
+                removed: vec![],
                 guild: Id(1),
                 parents: Some(vec![Id(10)]),
                 threads: vec![channel(102, 1, Some(10), 11)],
@@ -230,6 +289,7 @@ mod tests {
         state.apply(Envelope {
             generation: state.generation,
             event: Event::ThreadsSync {
+                removed: vec![],
                 guild: Id(1),
                 parents: None,
                 threads: vec![],
@@ -335,6 +395,7 @@ mod tests {
             state.apply(Envelope {
                 generation: state.generation,
                 event: Event::ThreadsSync {
+                    removed: vec![],
                     guild: Id(1),
                     parents,
                     threads,
@@ -350,6 +411,46 @@ mod tests {
             );
             assert_eq!(state.selected, Some(Id(100)));
             assert_eq!(state.freshness, Freshness::Stale);
+        }
+        for (guild, parents, threads, removed) in [
+            (Id(1), None, vec![], vec![Id(100), Id(100)]),
+            (
+                Id(1),
+                None,
+                vec![channel(100, 1, Some(10), 11)],
+                vec![Id(100)],
+            ),
+            (Id(1), Some(vec![Id(11)]), vec![], vec![Id(100)]),
+            (Id(2), None, vec![], vec![Id(100)]),
+            (Id(1), None, vec![], vec![Id(10)]),
+            (Id(1), None, vec![], vec![Id(0)]),
+            (Id(1), None, vec![], vec![Id(100); MAX_NAV + 1]),
+        ] {
+            let mut state = State {
+                guilds: [1, 2]
+                    .into_iter()
+                    .map(|id| Guild {
+                        id: Id(id),
+                        name: "Synthetic".into(),
+                        icon: None,
+                        emojis: None,
+                    })
+                    .collect(),
+                channels: original.clone(),
+                archived_thread: Some(Id(100)),
+                selected: Some(Id(100)),
+                ..State::default()
+            };
+            assert!(
+                state
+                    .apply_threads_sync(guild, parents, threads, removed)
+                    .is_err()
+            );
+            assert!(
+                state.channels == original,
+                "Explicit removals are validated before any navigation mutation"
+            );
+            assert_eq!(state.archived_thread, Some(Id(100)));
         }
     }
 }

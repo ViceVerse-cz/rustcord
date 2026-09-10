@@ -1,5 +1,279 @@
 # Initial performance evidence
 
+## Saved reading and layout preferences - September 10, 2026
+
+Baseline dfe9e3f8a657665009ac89bfadb5e1be7cb3f064 (PR #31) unsigned Windows text/voice
+executables were copied and hash-verified before edits; their installed/ZIP size reports
+were retained. Same Windows 11 Home 10.0.26200 / Ryzen 7 7800X3D (16 logical CPUs) /
+about 31 GiB RAM / Rust 1.98.1 / release thin LTO, one codegen unit, wgpu.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| text executable bytes | 49,840,128 | 49,855,488 | +15,360 (+0.031%) |
+| text installed bytes | 50,349,976 | 50,370,977 | +21,001 (+0.042%) |
+| text ZIP bytes | 31,194,530 | 31,205,377 | +10,847 (+0.035%) |
+| voice executable bytes | 53,196,800 | 53,213,184 | +16,384 (+0.031%) |
+| voice installed bytes | 53,929,436 | 53,951,446 | +22,010 (+0.041%) |
+| voice ZIP bytes | 32,570,631 | 32,576,903 | +6,272 (+0.019%) |
+
+Both unsigned Windows packages passed. One size measurement each; ZIP DEFLATE level 9;
+text excludes the voice folder. File counts remain 50/96; no dependencies or notices added.
+Installed totals describe staged docs before this measurement addendum; no PR evidence is bundled.
+
+SHA256 of measured executables:
+
+- text: 4BC461415BC3814CD206194BBAC3D5C40E60DB7B0D64540FAF74C861A2FD3D72
+- voice: 357F7BED34136B24174BC91EB0DCE675DC975C4225BB734E5F96461AF1DAED57
+
+Settings add one fixed-size model record, one latest pending snapshot, and at most one
+queued write on the existing 16-command / 16-result worker. The 300 ms debounce runs only
+while a user change is pending; a failed/full queue stops retrying until another edit or
+explicit Retry saving. No new worker, dependency, service request or periodic idle repaint.
+SQLite schema 8 adds one scalar singleton within the existing 64 MiB database ceiling.
+
+This changes settings persistence and native layout, not the message reducer workload.
+No reducer speed claim is made. Native before/after screenshots, CPU/RSS/GPU use, frame
+timing and scale-change latency remain unmeasured because desktop automation is owner-paused.
+Headless geometry/control/anchor tests are synthetic and cannot establish native accessibility
+or runtime performance. No native resource-performance improvement is claimed.
+
+## Recently visited conversation windows - September 10, 2026
+
+Baseline b4c66ac0c8f226bdfdc22d904fbde8a239975dcb (PR #29) packages were copied and hash-verified.
+The baseline reducer executable and navigation harness were built and copied before core edits.
+Same Windows 11 Home 10.0.26200 / Ryzen 7 7800X3D (16 logical CPUs) / about 31 GiB RAM /
+Rust 1.98.1, release thin LTO, one codegen unit, wgpu.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| text executable bytes | 49,824,256 | 49,840,128 | +15,872 (+0.032%) |
+| text installed bytes | 50,326,094 | 50,349,976 | +23,882 (+0.047%) |
+| text ZIP bytes | 31,186,721 | 31,194,530 | +7,809 (+0.025%) |
+| voice executable bytes | 53,180,416 | 53,196,800 | +16,384 (+0.031%) |
+| voice installed bytes | 53,905,027 | 53,929,436 | +24,409 (+0.045%) |
+| voice ZIP bytes | 32,560,106 | 32,570,631 | +10,525 (+0.032%) |
+
+Both unsigned Windows packages passed. One measurement each; ZIP DEFLATE level 9; text
+excludes the voice folder. File counts remain 50/96, with no dependency or notices changes.
+Installed totals describe staged docs before this measurement addendum; no PR evidence is bundled.
+
+SHA256 of measured executables:
+
+- text: AAAEC68E80A62E89A98129A3BB342BBE2B75B6D2DEDD94B58A212809D2222145
+- voice: 0F5403607ADF30286D37783FCAFF6D02BD2D65D4B634C1D7CB196D385735D8C6
+
+One warmup and five measured direct executable runs per workload/revision:
+
+| Metric | Baseline | Resident windows | Delta |
+| --- | ---: | ---: | ---: |
+| Immediate previews / 10,000 selections | 0 | 10,000 | +10,000 |
+| Revalidation requests / 10,000 selections | 10,000 | 10,000 | 0 |
+| Core select median, microseconds (five-run median) | 1.3 | 0.2 | -1.1 |
+| Core select p95, microseconds (five-run median) | 1.7 | 0.2 | -1.5 |
+| Ordinary 100,000-event replay median, ms | 37.7021 | 38.4952 | +0.7931 (+2.10%) |
+| Ordinary replay retained live payload bytes / 500 rows | 220,992..221,477 | 220,992..221,477 | 0 |
+
+Navigation: `cargo replay -- --navigation`; three synthetic 50-message DMs, three initial loads,
+then 10,000 selections and handcrafted authoritative history responses. Only State::select is
+timed; fixtures/responses and rendering/I/O are excluded. Baseline medians: 1.3, 1.2, 1.3, 1.3,
+1.3 microseconds; p95: 1.7, 1.6, 1.8, 1.7, 1.6. Changed medians and p95 were 0.2 in all runs.
+These tiny measurements are quantized and sensitive to timer overhead; this does not establish
+native channel-switch p95. Every changed run retained two dormant windows / 150 total rows /
+199,654 estimated allocation bytes. The accounting footer was added after the baseline capture;
+the timed workload is unchanged. Baseline had no dormant windows.
+
+Ordinary replay baseline samples: 38.6347, 36.0714, 35.9521, 37.7021, 38.2936 ms; changed:
+38.4947, 39.0375, 39.4187, 38.2191, 38.4952 ms. The median is slower, with overlapping ranges;
+no ordinary-message speed improvement is claimed. This is not RSS or live compatibility evidence.
+
+Component bounds: at most two dormant windows, with active+dormant rows capped at 1,475 and
+estimated allocations at 16 MiB minus 66 KiB; reserve 25 rows and 66 KiB for search/pins.
+The estimate now includes row/container storage, pending patch capacity and reconciliation sets,
+with a B-tree slack allowance. Individual timelines retain their 500-row / 4 MiB payload limit.
+No additional worker, network request, schema or runtime dependency. Native screenshots,
+CPU/RSS, GPU allocations and frame/startup/channel-switch measurements remain owner-paused.
+
+## Deleted message state - September 10, 2026
+
+Baseline e0f18d0d2c2d783ad85ec8793f62288aca259d31 (PR #28) packages and replay executable
+were separately copied and hash-verified before edits. Same Windows 11 Home 10.0.26200 /
+Ryzen 7 7800X3D (16 logical CPUs) / about 31 GiB RAM / Rust 1.98.1, release thin LTO,
+one codegen unit, wgpu.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| text executable bytes | 49,810,944 | 49,824,256 | +13,312 (+0.027%) |
+| text installed bytes | 50,304,421 | 50,326,094 | +21,673 (+0.043%) |
+| text ZIP bytes | 31,173,706 | 31,186,721 | +13,015 (+0.042%) |
+| voice executable bytes | 53,163,520 | 53,180,416 | +16,896 (+0.032%) |
+| voice installed bytes | 53,879,770 | 53,905,027 | +25,257 (+0.047%) |
+| voice ZIP bytes | 32,543,824 | 32,560,106 | +16,282 (+0.050%) |
+
+Both unsigned Windows packages passed. One size measurement each; ZIP DEFLATE level 9;
+text excludes the voice folder. File counts remain 50/96; no dependency or notices changes.
+Installed totals describe staged docs before this measurement addendum; no PR evidence is bundled.
+
+SHA256 of measured executables:
+
+- text: 57AF34D6F35E3576E2D0C3E3F9560265ED3991863BB2D1356CE5FF7225F6804C
+- voice: 6608248BC069ADD7CE9520411C9AF7C1DC832FC5139DC166F6641CECE7D38A56
+
+The synthetic 100,000-event reducer replay used one warmup and five measured direct executable
+runs per revision. Baseline: 36.4297, 37.0517, 38.0769, 36.5077, 36.9497 ms; changed:
+36.0073, 37.0905, 39.5844, 40.1928, 36.6144 ms. Median 36.9497 -> 37.0905 ms,
++0.1408 ms (+0.38%); ranges overlap. Both retain 500 live records and
+220,992..221,477 estimated live payload bytes. No speed or acceptance-latency claim is made.
+This workload has ordinary message events, not deletion I/O, process RSS or UI frame timing.
+
+Deleted reading rows retain an ID and an empty Option<Message> slot, without message payloads.
+Eviction charges live heap plus the Option slots against the existing 500-row / 4 MiB estimate;
+the live-only bytes API still returns zero for an all-deleted window. These component bounds
+exclude tree allocator overhead and are not whole-process RAM measurements. Tests exercise
+deleted rows at both eviction edges, payload release, late arrivals and the 1,024-deletion guard.
+SQLite deletion uses one transaction for at most 100 IDs. The existing worker keeps its
+16-command / 16-result queues, with at most 16 additional pending cleanup account IDs.
+No new worker, dependency, schema or persistent journal is added.
+
+Native screenshots, CPU/RSS and frame timing remain unmeasured while desktop automation is
+owner-paused. No account, browser or microphone was used.
+
+## Unsupported-content markers - September 10, 2026
+
+Baseline 8c6976edc85cc0d5b5e86b636cfd331b4063c747 (PR #27) packages were copied and
+hash-verified before edits. Same Windows 11 Home 10.0.26200 / Ryzen 7 7800X3D (16 logical CPUs) /
+about 31 GiB RAM / Rust 1.98.1, release thin LTO, one codegen unit, wgpu.
+Both unsigned Windows packages passed. One size measurement each; ZIP DEFLATE level 9;
+text excludes the voice folder.
+
+| Metric | Baseline | Markers | Delta |
+| --- | ---: | ---: | ---: |
+| text executable bytes | 49,798,144 | 49,810,944 | +12,800 (+0.026%) |
+| text installed bytes | 50,286,162 | 50,304,421 | +18,259 (+0.036%) |
+| text ZIP bytes | 31,169,312 | 31,173,706 | +4,394 (+0.014%) |
+| voice executable bytes | 53,150,720 | 53,163,520 | +12,800 (+0.024%) |
+| voice installed bytes | 53,861,511 | 53,879,770 | +18,259 (+0.034%) |
+| voice ZIP bytes | 32,541,063 | 32,543,824 | +2,761 (+0.008%) |
+| replay median ms / 100,000 events | 37.0330 | 38.3804 | +1.3474 (+3.64%) |
+| replay retained estimated bytes | 220,992..221,477 | 220,992..221,477 | 0 |
+
+Replay: one warmup and five measured direct executable runs per revision, 500 retained records.
+Baseline samples: 35.7539, 37.0330, 37.1835, 36.2793, 38.5828 ms. Changed samples:
+37.4959, 38.3804, 36.7489, 39.1534, 38.6181 ms. The measured median is slower, with overlapping
+ranges and a small sample; no speed improvement or acceptance-latency claim is made.
+This existing workload measures ordinary synthetic reducer events, not poll payload decoding,
+SQLite migration, process RSS or UI latency.
+
+RAM retains five booleans; SQLite stores one integer (0..31). Presence-only parsing discards
+payloads, capped at 100 array objects / 64 direct fields per object within the 4 MiB wire limit.
+Pending patch accounting now includes the fixed MessagePatch struct as well as retained payloads.
+No new worker, network request, runtime dependency or notices. Package file counts remain 50/96;
+installed totals include staged docs before this measurement addendum, with no PR evidence files.
+Native screenshots, CPU/RSS, frame timing and live behavior remain unmeasured while desktop
+automation is owner-paused. No browser/account/microphone action was used.
+
+SHA256 of measured executables:
+- text: B6B6E6BCA86F29F6ECBE1B5C5AF0FA9EFD4F9ED2C480C23E02EDCB0E7C70D5DA
+- voice: 06E843CBAA0ECCB099D405153CB293EC5B09CB75B4936BC2A0AC2FCB555E02DD
+
+## Unsupported-content fallback - Windows packages, September 10, 2026
+
+Baseline 36ab5e729571d7e42650b02ec3feefb9418652c3 (PR #26) packages were separately
+copied and hash-verified before edits. The changed branch also integrates the later Gateway
+fixture-only CI fix. Same Windows 11 Home 10.0.26200 / Ryzen 7 7800X3D (16 logical CPUs) /
+about 31 GiB RAM / Rust 1.98.1, release thin LTO, one codegen unit, wgpu.
+Both unsigned package commands passed. One size measurement per variant, ZIP DEFLATE level 9;
+text excludes the voice subdirectory.
+
+| Metric | Baseline | Fallback | Delta |
+| --- | ---: | ---: | ---: |
+| text executable bytes | 49,776,640 | 49,798,144 | +21,504 (+0.043%) |
+| text installed bytes | 50,255,386 | 50,286,162 | +30,776 (+0.061%) |
+| text ZIP bytes | 31,159,877 | 31,169,312 | +9,435 (+0.030%) |
+| voice executable bytes | 53,128,704 | 53,150,720 | +22,016 (+0.041%) |
+| voice installed bytes | 53,833,119 | 53,861,511 | +28,392 (+0.053%) |
+| voice ZIP bytes | 32,536,920 | 32,541,063 | +4,143 (+0.013%) |
+
+File counts remain 50/96; no dependency or notice change. Installed totals describe actual
+staged docs before this measurement addendum. Packages contain no PR evidence. Generated
+routes are bounded by three u64 IDs; the existing single pending external-link slot retains
+the 2,048-byte URL limit. Only visible rows create fallback controls. No new worker, queue,
+network request or persistent cache is added. No reducer/cache algorithm changed, so replay
+was not rerun. Native CPU/RSS, frame timing, browser-helper footprint and destination resolution
+remain unmeasured because desktop automation is paused. No runtime improvement is claimed.
+
+SHA256 of measured executables:
+- text: 6D1B66CA08D75A3910633388B43B3B9B41EFCEF54DE5AA44BC7CC4C2B84E3A9C
+- voice: 1A1FD426CED5D23386B6B8417A47940A8998D04364122542ECCF82D99B64A97E
+
+## Session voice gain - Windows package comparison, September 10, 2026
+
+Baseline 3f9aa0edcd35f82eb83d5576a63d453fc384725c (PR #24) packages were copied and
+hash-verified before edits. The changed branch also integrates the subsequent Linux-only
+GTK v4_10 feature/docs fix. Same Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical
+CPUs), about 31 GiB RAM, Rust 1.98.1, release thin LTO, one codegen unit and wgpu.
+Both unsigned package commands passed. One size measurement per variant; ZIP DEFLATE
+level 9; text excludes the voice subdirectory.
+
+| Metric | Baseline | Gain controls | Delta |
+| --- | ---: | ---: | ---: |
+| text executable bytes | 49,657,344 | 49,776,640 | +119,296 (+0.240%) |
+| text installed bytes | 50,127,753 | 50,255,386 | +127,633 (+0.255%) |
+| text ZIP bytes | 31,117,348 | 31,159,877 | +42,529 (+0.137%) |
+| voice executable bytes | 53,016,064 | 53,128,704 | +112,640 (+0.212%) |
+| voice installed bytes | 53,714,247 | 53,833,119 | +118,872 (+0.221%) |
+| voice ZIP bytes | 32,493,543 | 32,536,920 | +43,377 (+0.133%) |
+
+Packages retain 50/96 files and unchanged dependency notices. Installed totals describe the
+actual staged docs before this measurement addendum; neither package includes PR evidence.
+Shared UI includes the new sliders in both variants; the default build still excludes the
+voice transport. No runtime speed or memory improvement is claimed.
+
+Gain adds two bounded u16 atomics and one snapshot per audio callback, with finite/clipped
+PCM multiplication and no new callback allocation, lock, queue or device restart. Existing
+capture buffering/resampler latency remains. Device-free tests exercise the actual callback
+helpers; no reducer/cache change warrants a replay rerun. Native screenshots, CPU/RSS, frame
+timing, callback latency and physical audio remain unmeasured because native desktop automation
+is paused after owner Escape stops. No account or microphone was used.
+
+SHA256 of measured executables:
+- text: 77FFE0271B1EAFFC7C9431DEB85D8EBE162D89377638C2259779E6E49EF12476
+- voice: 91E61133C2D7FCF0F0BDDFBC2A379102A28F790C3F4FDEA1D293079E8E5830B2
+
+## Linux login migration - Windows package comparison, September 10, 2026
+
+Baseline 512b5e73fa4abac4a8bbe2233ceb74f56b74cdf8 (PR #23) was copied and hash-verified before
+edits. Same Windows 11 Home 10.0.26200 / Ryzen 7 7800X3D / about 31 GiB RAM / Rust 1.98.1,
+release thin LTO, one codegen unit, wgpu. Both unsigned Windows package commands passed.
+One size measurement per variant; ZIP DEFLATE level 9; text excludes the voice subdirectory.
+
+| Metric | Baseline | Migration | Delta |
+| --- | ---: | ---: | ---: |
+| text executable bytes | 49,658,368 | 49,657,344 | -1,024 (-0.002%) |
+| text installed bytes | 50,105,951 | 50,127,753 | +21,802 (+0.044%) |
+| text ZIP bytes | 31,106,640 | 31,117,348 | +10,708 (+0.034%) |
+| voice executable bytes | 53,016,064 | 53,016,064 | 0 |
+| voice installed bytes | 53,687,168 | 53,714,247 | +27,079 (+0.050%) |
+| voice ZIP bytes | 32,480,689 | 32,493,543 | +12,854 (+0.040%) |
+
+File counts rise from 42/88 to 50/96 because eight login notice files are now included.
+Notice bytes were verified in both packages. Totals describe actual staged docs before this
+measurement addendum; neither package contains PR screenshots. Small executable differences
+are not a runtime speed or memory improvement claim. Windows/macOS Wry backend sources remain
+unchanged. No reducer/cache/audio algorithm changed, so reducer replay was not rerun.
+
+Linux uses one ephemeral WebKit6 session, one bounded token slot, one in-flight main-frame query
+and coalesced boolean wake state. Queries are at least 100 ms apart; the event pump checks a
+2-ms deadline between at most 16 callbacks. A single native callback may exceed that budget.
+Linux executable/system-library footprint, web helper CPU/RSS, startup, input latency, storage
+writes and teardown remain unmeasured. Native desktop automation is paused; no window was run.
+The existing WSL lacks GTK4/WebKit6 development libraries; Linux CI compilation is separate.
+
+SHA256 of measured executables:
+- text: 214CB9A68E1C58DC8CAFFF7B21C07D01EF150E92434F95036516CA7865483A63
+- voice: 99A34EC7A3F647B119106E22E35DE9E2FD1847631E6E8C16AFC4ADE4536ECA72
+
+Historical measurements follow.
+
 Measured 2026-09-09 on an Apple M1 Pro (8 CPU cores), 16 GiB RAM, macOS 27.0 beta build 26A5425a, arm64, Rust 1.98.1. These are initial samples, not a completed acceptance benchmark.
 
 | Workload / metric | Actual result | Limits |
@@ -551,6 +825,252 @@ Both unsigned Windows packages passed. Same Windows 11 Home 10.0.26200, Ryzen 7 
 One release reducer executable per revision, one warmup plus five direct measured runs, 100,000 synthetic events each. Baseline samples: [27.4948, 27.5046, 26.2998, 28.5269, 29.6689] ms. Integrated: [26.4394, 27.3291, 27.4944, 26.3761, 26.5682] ms. This short reducer benchmark is not native frame time, process RSS, network or audio performance; no user-visible speed claim is made. Existing per-feature native evidence is retained from its original PRs. New combined native inspection/process samples remain unverified while this session's desktop automation is paused.
 
 
+## Channel visibility - September 10, 2026 (Windows)
+
+Baseline main 92e82e7b72c716340a20c2643069c482933acd4e has the identical source tree to
+tested integration a2af8d8; its verified text/voice package executables were copied into a
+separate baseline before porting the visibility patch. Original dirty checkout work was
+preserved. Baseline hashes: text BA52F1BD1E5E3DC6042FFBA7A670E73201095AFED6A33320013109DA267CDC1A;
+voice A3668B41A112FEB9DFDF505A7D6A0C36F9C6BE9BAA4070CFD9B0BAC826626EAE.
+Same Windows 11 Home 10.0.26200, Ryzen 7 7800X3D / 16 logical CPUs, approximately 31 GiB
+RAM, pinned Rust 1.98.1, release profile and E: target/temp paths. Both variants are unsigned.
+
+| Metric | Main baseline | Channel visibility fix | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable, bytes | 49,067,008 | 49,092,608 | +25,600 (+0.052%) |
+| Text installed package, bytes | 49,431,699 | 49,466,993 | +35,294 (+0.071%) |
+| Text ZIP, bytes | 30,843,886 | 30,860,898 | +17,012 (+0.055%) |
+| Voice executable, bytes | 52,400,128 | 52,425,728 | +25,600 (+0.049%) |
+| Voice installed package, bytes | 52,988,377 | 53,023,671 | +35,294 (+0.067%) |
+| Voice ZIP, bytes | 32,209,427 | 32,225,829 | +16,402 (+0.051%) |
+| Reducer median, ms | 26.2823 | 26.5260 | +0.2437 (+0.93%) |
+| Retained timeline estimate | 220,992-221,477 bytes | Same | 500 records |
+
+One release replay executable per revision, one direct warmup and five direct measured
+runs of 100,000 synthetic events. Baseline samples: [26.2234, 26.2756, 26.8052, 26.2823, 28.1089] ms; after: [26.526, 26.5737, 26.175, 29.9168, 26.3162] ms.
+This small median change is noisy and not evidence of a user-visible improvement or regression.
+The replay exercises the reducer, not the complete Gateway obfuscation or native UI flow;
+focused offline tests cover those state transitions. No RSS, idle CPU, frame/startup latency,
+DPI/adapter capture, network, microphone or live audio measurements were taken while native
+automation remains paused under the owner's stop.
+
+Sizes include each complete package, excluding the sibling voice directory for text, PR
+evidence, external WebView2 and audio drivers. Python ZIP DEFLATE level 9 was used consistently.
+Baseline packages precede the integration evidence addendum; after packages include this task's
+behavior docs but precede this final performance/progress addendum. Installed/ZIP deltas include
+those documentation differences. No dependencies or license contents changed.
+Final executable hashes: text FE540FEEC0781FC54D1CB3C950D53A512A96B770AF26F72D27BC49092F02BBB5;
+voice 264B6EBEAF5FECBC08A33385B4F9A2073F318E3EE03D8E845D3E0A4E7191A80B.
+
+
+## Permission-aware actions - September 10, 2026
+
+Baseline is verified channel-visibility PR #17 revision
+6fb81da12942b03e0a51599803d74ea37cbd3503. Its package outputs and replay executable were
+copied into this task's separate baseline directory before permission implementation;
+no existing unrelated debug build was used. After is feat/permission-aware-actions.
+Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical CPUs), about 31 GiB RAM,
+Rust 1.98.1 release, wgpu. Text is --no-default-features; voice adds --features voice.
+Both unsigned Windows packages were built by cargo xtask package/package-voice.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| text executable bytes | 49,092,608 | 49,304,064 | +211,456 (+0.431%) |
+| text installed bytes | 49,466,993 | 49,690,144 | +223,151 (+0.451%) |
+| text zip bytes | 30,860,898 | 30,948,093 | +87,195 (+0.283%) |
+| voice executable bytes | 52,425,728 | 52,637,184 | +211,456 (+0.403%) |
+| voice installed bytes | 53,023,671 | 53,247,734 | +224,063 (+0.423%) |
+| voice zip bytes | 32,225,829 | 32,314,397 | +88,568 (+0.275%) |
+| 100,000-event replay median ms | 27.9407 | 29.2795 | +1.3388 (+4.79%) |
+
+Installed totals enumerate package files (32 text, 78 voice), excluding the text package's
+voice sibling. ZIP is Python zipfile DEFLATE level 9. Both packages retain dependency notices
+and exclude PR screenshots. Baseline packaged docs predate #17's final measurement addendum;
+changed packaged docs predate this final measurement addendum. Installed/ZIP deltas therefore
+include their actual documentation snapshots and are not executable-only code growth.
+
+cargo replay builds once; each revision receives one direct warmup and five measured direct
+replay-bench runs. Baseline samples (ms): 29.9405, 26.4015, 27.9407, 29.2019, 27.8303.
+After samples (ms): 29.0536, 29.2975, 29.189, 29.2795, 30.2557.
+Both retain exactly 500 records and 220,992-221,477 estimated timeline bytes. This measures
+synthetic reducer/message admission, not role-update storms, native latency, RSS or Discord
+compatibility. The new fixture explicitly supplies permission metadata. The small increase
+is reported as overhead, not an improvement; run-to-run noise is visible in the samples.
+
+Native process memory, idle CPU, startup/frame timing, display scale and GPU adapter were
+not measured: owner Escape stops paused native automation. No physical UI/audio/account test
+was attempted. Permission metadata plus reserved bounded decision storage has a 2 MiB
+estimated budget; an update's temporary cloned candidate is additional peak allocation.
+No external runtime dependency or codec was added. UI tests now depend on existing test-support.
+
+Executable SHA256: text 991592D31AB2C330F55F97B81755ACF8DA761ACE31B7D3E32B5D4205ADA49109;
+voice BCFA2FB8440261A0DA12B2995C18CAA4A44AA48EFB01C5AABFFD62844801D9A5.
+
+
+## Rich editor / notification integration - September 10, 2026
+
+Actual starting revision is 67bff236e6186a306023c156f8027712049681ba (permission PR #19).
+Its text/voice executable SHA256 values were checked against the preceding recorded builds,
+then only the distribution files were copied into a separate integration baseline directory.
+After integrates main 2879fbc7de8fb7de30664fb64666f6d93482b827 (PR #18) plus permission-aware
+notifications/inline edits and the Windows notification compile fix. This comparison includes
+the newly integrated rich editor and notification dependencies; it does not isolate the cost
+of those fixes or compare against a separately measured #18 build.
+
+Same Windows 11 Home 10.0.26200 / Ryzen 7 7800X3D / 16 logical CPUs / about 31 GiB RAM /
+Rust 1.98.1 release/wgpu host. Text uses no-default-features; voice adds voice. Both packaging
+commands passed and produced unsigned Windows binaries. ZIP uses Python DEFLATE level 9.
+
+| Metric / method | Before integration (67bff23) | Integrated | Delta |
+| --- | ---: | ---: | ---: |
+| text executable bytes | 49,304,064 | 49,610,752 | +306,688 (+0.622%) |
+| text installed bytes | 49,690,144 | 50,033,083 | +342,939 (+0.690%) |
+| text zip bytes | 30,948,093 | 31,080,883 | +132,790 (+0.429%) |
+| voice executable bytes | 52,637,184 | 52,943,872 | +306,688 (+0.583%) |
+| voice installed bytes | 53,247,734 | 53,589,761 | +342,027 (+0.642%) |
+| voice zip bytes | 32,314,397 | 32,444,614 | +130,217 (+0.403%) |
+| Reducer median ms / 100,000 events | 29.2795 | 37.5618 | +8.2823 (+28.29%) |
+
+Installed file counts are now 42 text and 88 voice (32/78 before): notification license texts,
+a documentation page and the explicitly operated shortcut-registration script are included.
+The script is packaged but was not run. Text excludes the voice sibling; both exclude PR
+screenshots. Totals describe actual packaged documentation snapshots before this final
+measurement addendum. No package was launched or claimed signed.
+
+Reducer workload: one direct warmup plus five measured runs per revision; prior baseline
+samples were recorded at the start of this continuation. Before ms: 29.0536, 29.2975, 29.189, 29.2795, 30.2557.
+After ms: 37.5618, 36.5306, 37.2953, 38.116, 37.8277.
+Both retain 500 records / 220,992-221,477 estimated timeline bytes. The measured increase
+includes new notification observation/count work; no speed improvement is claimed. This is
+synthetic reducer timing, not process RSS, role-update storms or UI frame latency. Native
+RSS/idle CPU, display/GPU parameters and physical notifications remain unmeasured because
+owner Escape stops paused native automation. Imported #18 macOS evidence is not evidence for
+this integrated Windows executable.
+
+Integrated executable SHA256:
+- text: 0020AF6225691A06B5C45E47B4F85F7061FFBD046C92B779EFB5F8D1EE15B4E4
+- voice: EAD41DAC6D98F404881987517E83FCC8E3CADBD9BCFC9514985EAD3D853DF145
+
+
+## Loaded People presence - September 10, 2026
+
+Baseline f20042a73ca101c377a4c96734aa9f0d833d6fa4 is the integrated permission/editor/notification
+PR #19. Its preceding measured executable SHA256 values were verified before copying separate
+text and voice distribution baselines. This branch is stacked on #19; main's later image
+aspect-ratio PR #20 is outside this comparison. Same Windows 11 Home 10.0.26200 / Ryzen 7
+7800X3D / 16 logical CPUs / about 31 GiB RAM / Rust 1.98.1 release/wgpu host. Both unsigned
+Windows packaging commands passed; text uses no-default-features, voice adds voice.
+ZIP uses Python DEFLATE level 9; text excludes the voice sibling and both exclude PR evidence.
+
+| Metric / method | Baseline f20042a | Presence | Delta |
+| --- | ---: | ---: | ---: |
+| text executable bytes | 49,610,752 | 49,624,576 | +13,824 (+0.028%) |
+| text installed bytes | 50,033,083 | 50,055,923 | +22,840 (+0.046%) |
+| text zip bytes | 31,080,883 | 31,088,897 | +8,014 (+0.026%) |
+| voice executable bytes | 52,943,872 | 52,957,184 | +13,312 (+0.025%) |
+| voice installed bytes | 53,589,761 | 53,612,089 | +22,328 (+0.042%) |
+| voice zip bytes | 32,444,614 | 32,455,653 | +11,039 (+0.034%) |
+| Reducer median ms / 100,000 events | 37.5618 | 37.4956 | -0.0662 (-0.176%) |
+
+Installed file counts remain 42 text / 88 voice. Totals include the actual packaged documentation
+snapshots before this measurement addendum. Executable hashes below identify the measured builds;
+no package was launched, signed or published. No new external dependency or media codec was added.
+
+Reducer workload: one direct release warmup plus five measured runs per revision, using the
+existing cargo replay executable. Baseline samples: 37.5618, 36.5306, 37.2953, 38.116, 37.8277 ms.
+Presence samples: 37.4956, 38.6994, 36.2119, 36.4057, 37.8734 ms. Both retain 500 records and
+220,992-221,477 estimated timeline bytes. The 0.0662-ms median difference is noise, not a speed
+improvement. This message-reducer workload checks for unrelated timeline regression; it does
+not measure presence-event throughput, process RSS or UI frame latency. Synthetic Gateway tests
+separately verify 1,000 incoming users retain at most 100 pending loaded users and an 8-KiB event,
+with no deadline extension. Those assertions are component bounds, not measured load performance.
+
+Native screenshots, display/GPU parameters, idle CPU and process RSS remain unmeasured because
+native automation is paused after owner Escape stops. Presence-only events leave timeline revision
+unchanged, but no native repaint-rate or physical account delivery claim is made.
+
+Measured executable SHA256:
+- text: BB8FA32318B2FC16CBBA41FD46124C499363DDF8EEFA70BF7DB24D0C11DF8AE0
+- voice: E403D2AFA448FDC8B78327FACFC3B87F4AEE99D26AC53A25FC10951B658E6AC9
+
+
+## Keyboard conversation switcher - September 10, 2026
+
+Baseline f8baa2df1f705b771b5a2cd99a10bb13b4d8a4c3 is draft presence PR #21. Its recorded
+text/voice executable hashes were verified before separate package baselines were copied.
+This comparison excludes main's independent image-aspect-ratio PR #20. Same Windows 11 Home
+10.0.26200 / Ryzen 7 7800X3D / 16 logical CPUs / about 31 GiB RAM / Rust 1.98.1 release/wgpu
+host. Both unsigned Windows packaging commands passed; text uses no-default-features and
+voice adds voice. ZIP uses Python DEFLATE level 9, excluding the voice sibling from text.
+
+| Metric / method | Baseline f8baa2d | Switcher | Delta |
+| --- | ---: | ---: | ---: |
+| text executable bytes | 49,624,576 | 49,658,368 | +33,792 (+0.068%) |
+| text installed bytes | 50,055,923 | 50,098,393 | +42,470 (+0.085%) |
+| text zip bytes | 31,088,897 | 31,104,011 | +15,114 (+0.049%) |
+| voice executable bytes | 52,957,184 | 52,990,464 | +33,280 (+0.063%) |
+| voice installed bytes | 53,612,089 | 53,654,047 | +41,958 (+0.078%) |
+| voice zip bytes | 32,455,653 | 32,466,873 | +11,220 (+0.035%) |
+
+Installed file counts remain 42 text / 88 voice. Neither package includes PR screenshots.
+Totals describe actual packaged documentation before this measurement addendum, not a
+subsequently reconstructed archive. No package was launched, signed or published. No runtime
+crate, core reducer, protocol, worker, storage schema or codec was added.
+
+The picker limits its query to 128 characters / 512 bytes and results to 20 bounded labels.
+It normalizes one eligible channel's bounded metadata at a time and retains no background
+index. Matching and candidate allocations occur only while open. Headless checks assert query
+length/capacity after an oversized Unicode paste and verify bounded results. These are component
+bounds, not measured picker latency or RSS. The existing message-reducer replay does not exercise
+this UI feature, so it was not rerun as a substitute for picker measurements.
+
+Native screenshots, input/display/GPU parameters, process RSS/idle CPU and interactive latency
+remain unmeasured because desktop automation is paused after owner Escape stops. Focus cleanup
+requests repaint only while this modal's closing layer remains; no continuously active timer
+or search worker was added. No improvement in native latency or memory is claimed.
+
+Measured executable SHA256:
+- text: F127A6ACB7F1857A39C174BBF348603DAF623A3BE4D3BEB74FC4424103D6EF39
+- voice: 8BDE5C39E0E383BA323BEB7E9021D51D640684861D2F4104F8A84B567732B8E3
+
+
+## Native dependency hardening - September 10, 2026
+
+Baseline e4ef4a852415e5061735f9183ca65dd202406ecd (PR #22), separately copied and hash-verified
+before edits. Same Windows 11 Home 10.0.26200 host, Ryzen 7 7800X3D (16 logical CPUs), about
+31 GiB RAM, Rust 1.98.1, release thin LTO / one codegen unit / wgpu; text default and optional
+voice packages built separately. No native process was launched. One package measurement per
+variant; ZIP uses Python zipfile DEFLATE level 9, excluding the voice subdirectory from text.
+Both unsigned cargo xtask package and package-voice commands passed.
+
+| Metric / method | Baseline e4ef4a8 | Dependency patch | Delta |
+| --- | ---: | ---: | ---: |
+| text executable bytes | 49,658,368 | 49,658,368 | +0 (+0.000%) |
+| text installed bytes | 50,098,393 | 50,105,951 | +7,558 (+0.015%) |
+| text zip bytes | 31,104,011 | 31,106,640 | +2,629 (+0.008%) |
+| voice executable bytes | 52,990,464 | 53,016,064 | +25,600 (+0.048%) |
+| voice installed bytes | 53,654,047 | 53,687,168 | +33,121 (+0.062%) |
+| voice zip bytes | 32,466,873 | 32,480,689 | +13,816 (+0.043%) |
+
+Text/voice installed file counts remain 42/88. Text executable size is unchanged; the voice
+executable grows 25,600 bytes (0.048%). Removing unused lockfile paths is not an executable-size
+or runtime-speed optimization claim. Installed/ZIP totals include the actual staged docs and
+modified HPKE source before this measurement addendum. Packages contain no PR screenshots.
+Packaged HPKE source and the existing Davey MIT notice were byte-checked against the workspace.
+Davey Rust source is unchanged; its manifest loses browser timer features, and the HPKE fork
+loses its unused libcrux provider declaration. DAVE/MLS, SHAKE vectors and encrypted local Opus
+transport pass in the 190-test workspace suite. No reducer, cache, UI or audio algorithm changes
+were made, so the unrelated reducer workload was not rerun. Native CPU/RSS and real voice
+latency remain unmeasured under the owner's paused desktop/live gate.
+
+Cargo.lock package count falls from 775 to 738; strict cargo-audit 0.22.2 falls from six
+vulnerability-class findings/five denied warnings to zero/two. It still fails on Linux GLib
+unsoundness and proc-macro-error maintenance; no suppression or release approval is implied.
+
+Measured executable SHA256:
+- text: 16F944D856C896C9D5EC2A388E6434E20BEC5F972302B5884B56922FE770826F
+- voice: 161A9A1ADD3F4A90A5B7448E4B46633ED4A7515CF993C0EA0BDC5F95F55ED8F2
+
 ## Image aspect ratios — September 10, 2026
 
 | Metric / method | Baseline | After | Delta |
@@ -609,3 +1129,33 @@ Native samples use the same existing `--demo --demo-chat` fixture, default viewp
 Replay: `cargo replay`, then one warmup and five direct `replay-bench` runs per revision. Baseline measured runs: 29.622583, 29.331958, 29.198583, 29.183917, 29.527458 ms. After: 29.256916, 29.038542, 28.407292, 28.603875, 28.687209 ms. Both retain 500 records / 220,992–221,477 estimated bytes. These timings overlap; no speed improvement is claimed. Replay measures the existing 100,000 ordinary synthetic reducer events, not system-message rendering or SQLite migration. A stale cross-worktree Cargo artifact initially failed the changed replay compile; rebuilding the model resolved it before these measured runs.
 
 The screenshot pair uses an identical new eight-event synthetic fixture (`--demo --demo-system-messages`) and scroll-to-top at the same viewport/appearance. Baseline screenshot was rebuilt at `6053299` with only the fixture and demo selector backported; it still discards kinds and renders the old placeholder. Package size and CPU/RSS baseline use the unmodified baseline. Dark native rendering/scrolling inspected; light/narrow rendering checked with headless egui at 280px, wide/dark at 900px. Native light-theme selection did not visibly change via automation, so native light/keyboard, display scale, p95 startup/frame latency, GPU allocation and other platforms remain unverified. No live Discord compatibility claim.
+
+## Integration of PRs #17 through #32 with main (2026-09-10)
+
+Baseline is published PR #32 at 57927c7, not a separately built main. Its text/voice
+executables and package reports were copied and hash-verified before integration.
+After includes main 85fde15 (image aspect ratio, profile popout/cache, system messages)
+plus schema-union and permission/profile/presence integration repairs. Both release
+package commands passed; text uses no default features, voice explicitly enables voice.
+
+| Metric | Published PR #32 baseline | Integrated main + stack | Delta |
+| --- | ---: | ---: | ---: |
+| text executable, bytes | 49,855,488 | 49,938,944 | +83,456 (+0.17%) |
+| text installed, bytes | 50,370,977 | 50,478,583 | +107,606 (+0.21%) |
+| text zip, bytes | 31,205,377 | 31,244,819 | +39,442 (+0.13%) |
+| voice executable, bytes | 53,213,184 | 53,297,152 | +83,968 (+0.16%) |
+| voice installed, bytes | 53,951,446 | 54,059,969 | +108,523 (+0.20%) |
+| voice zip, bytes | 32,576,903 | 32,615,326 | +38,423 (+0.12%) |
+| Replay median, ms | 38.5417 | 38.4845 | -0.0572 (-0.15%; noise) |
+| Retained 500-message timeline, estimated bytes | 220,992..221,477 | 228,992..229,477 | +8,000 |
+
+Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical CPUs), approximately 31 GiB RAM,
+Rust 1.98.1, release thin LTO/one codegen unit and wgpu. Reducer: one warmup plus five
+direct executable runs, 100,000 synthetic events each. Before: 36.6465, 39.2736, 37.5642,
+38.5417, 38.7553 ms; after: 42.3323, 36.6533, 36.7709, 38.4845, 38.8944 ms. The small
+timing difference is noise; the new message-kind field accounts for the retained-size
+increase. This workload measures neither process RSS nor native frame or startup latency.
+Native automation remains owner-paused, so those metrics and new screenshots are unmeasured.
+ZIPs use Python DEFLATE level 9; text excludes nested voice, both exclude PR screenshots.
+Installed packages contain the documentation snapshot staged during packaging, before
+this final measurement addendum. No live Discord, microphone or account test was run.

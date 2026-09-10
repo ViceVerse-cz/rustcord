@@ -1,8 +1,76 @@
 # Local storage policy and audit
 
+The September 10 PR integration uses schema 9 to combine system-message `message_kind`,
+unsupported-content `extra_content` and the reading/layout singleton. Both independent
+schema-7 layouts and schema 8 are migrated by detecting the actual message columns. Existing
+rows, drafts and settings are retained; older binaries with a lower schema ceiling cannot
+reopen the upgraded cache. No unpublished reply-navigation metadata is included.
+
+Reading/layout settings use one application-wide schema 8 SQLite singleton: integer display
+scale 80..150 percent, sidebar width 190..360 logical points, and wide-layout People visibility.
+Missing row means 100 percent / 236 points / visible. Reset removes just this override in an
+atomic statement; neither theme nor account drafts/history are reset. Logout retains these
+non-account settings. Startup reads them on the existing worker; delayed results never override
+an explicit user choice. No account identifiers or message content enter this record.
+
+Interactive changes coalesce for 300 ms into at most one queued write and one fixed-size latest
+value. A full or failed worker reports an unsaved change without an automatic retry loop;
+Retry saving is deliberate. Closing with pending/failed writes prompts before discarding.
+In-app preview edits are not saved; a write already requested outside preview still completes.
+The standalone --demo does not start the SQLite worker. Category collapse, native-notification
+opt-in, narrow People overlays, audio preferences and outer window geometry remain session-local.
+
+Recently visited conversations now keep at most two dormant RAM timelines in the current
+account session, moved rather than cloned. Only readable Fresh ordinary text windows are parked;
+search-target ranges and transient archived threads are excluded. Promotion rechecks identity
+and read permission, shows a Loading preview, and always requests a fresh recent service page.
+This is a preview cache, not saved historical scroll position. It avoids a SQLite read on a hit.
+Unknown/deleted-only row handling retains the same guards as the active window.
+
+Active plus dormant timelines share 1,475 rows and 16 MiB minus 66 KiB of estimated allocations,
+reserving 25 rows and 66 KiB for the single search/pins page and query/view metadata. Estimation
+includes retained payloads, pending patches, mutation/deletion sets, container storage and a
+B-tree slack allowance; it is not an allocator or RSS measurement. Each individual timeline keeps
+its existing 500-row / 4 MiB payload limit. Oldest whole dormant windows are evicted when needed,
+without touching drafts or pending sends. Incoming mutations evict the affected dormant channel;
+permission/identity changes prune it, and session replacement/resync/logout removes all dormant
+history. Clear cached history removes dormant RAM and disk history while preserving the active
+displayed conversation. No new disk data, database schema, worker or service request is added.
+
+Loaded messages deleted by the service leave only their ID as a session-local reading row.
+Author, body, attachment and embed metadata are dropped from the timeline and its formatted /
+revealed-content views. An untouched open editor closes; text the user modified remains an
+unsent edit with Copy/Cancel and no Save. Old editor undo snapshots are cleared immediately,
+including when the user is viewing a different channel. Unknown deletion IDs never create visible rows.
+Live and deleted rows share the 500-row / 4 MiB estimated storage ceiling; deletion guards
+retain the existing 1,024-ID bound. Placeholders are not written to SQLite.
+
+Gateway deletion removes matching account/channel/message rows in a bounded SQLite transaction,
+including inactive and loading conversations. Cache history operations carry a session epoch;
+deletion invalidates older queued snapshots and returned pages. If deletion cannot be queued,
+history reuse pauses until account-scoped cleanup finishes. Cleanup retains at most 16 pending
+account IDs in addition to the existing 16-command / 16-result worker queues, preserving drafts
+and unrelated accounts. Storage failure or cleanup-scope overflow disables history caching for
+the rest of the session and reports that content may remain on disk. This cannot guarantee
+removal after filesystem failure or forced termination; no forensic-erasure claim is made.
+No schema change or persistent deletion journal is introduced.
+
+Schema 7 adds one integer extra_content column (0..31) for presence of polls, sticker_items,
+legacy stickers, component arrays and the Components V2 flag. RAM uses five booleans; partial
+updates preserve each source independently. Poll answers, sticker data, component payloads and
+their URLs are not retained. Existing cached rows default to no known markers until normal
+service revalidation because older builds discarded that metadata. Account isolation, existing
+database/cache limits and logout deletion remain unchanged; unsupported content is not rendered
+or executed from SQLite. Invalid stored marker bits reject the cached page.
+
+Microphone gain and speaker volume are session-only bounded integer percentages (0..=200),
+initially 100. They are not written to SQLite or system mixer settings. Two callback atomics
+hold the active levels; device changes and calls in the same session retain them. Logout or
+resetting the preview clears them with the existing UI state. No audio or new queue is retained.
+
 Loaded thread navigation shares the 4,000-entry account navigation and 4 MiB normalized navigation budgets. Incoming thread syncs additionally cap combined parent/thread entries at 4,000 and normalized snapshot metadata at 2 MiB; wire JSON remains capped at 4 MiB. Removed-member arrays are capped at 4,000 and are discarded after checking the owner. Navigation/member lists are session-only; selected thread messages/drafts reuse existing account history/draft storage. Actual accepted thread removals enqueue the existing account-wide history clear, preserving drafts; ignored, empty-scope and rename-only events do not clear disk history. This coarse invalidation trades refetch cost for simpler deletion, without new tables or workers.
 
-The owner explicitly withdrew the no-storage policy on 2026-09-09. Local files, SQLite, saved drafts, settings and caches are permitted. The implementation persists **history with embeds, attachments and mentioned users; avatar/server-icon/banner/preview images; drafts; appearance; and the login token**. Window geometry remains session-local.
+The owner explicitly withdrew the no-storage policy on 2026-09-09. Local files, SQLite, saved drafts, settings and caches are permitted. The implementation persists **history with embeds, attachments and mentioned users; avatar/server-icon/banner/preview images; drafts; appearance; reading/layout preferences; and the login token**. Outer window geometry remains session-local.
 
 | Data | Location / bound | Removal |
 |---|---|---|
@@ -15,16 +83,17 @@ The owner explicitly withdrew the no-storage policy on 2026-09-09. Local files, 
 | Selected upload source | One session-only path (4096 encoded bytes), filename (256 UTF-8 bytes) and size/modified metadata; file at most 20,000,000 bytes, read in 64 KiB chunks | Removal, send completion/failure, cancellation or session teardown; source is never copied to a recovery/cache file or deleted |
 | Drafts | 64 globally, at most 2 MiB content; each draft at most 8192 UTF-8 bytes | Clear draft, confirmed send, or account logout |
 | Appearance | One application-wide SQLite row: Light or Dark; absent means System | Select System to remove the override; retained across account logout |
+| Reading/layout | One application-wide SQLite row with three bounded scalar fields | Reset reading and layout removes only this override; retained across account logout |
 | SQLite working files | DELETE journal mode, in-memory temporary tables, 2 MiB page cache; transaction journal may temporarily add disk usage | SQLite transaction completion; normal SQLite crash recovery |
 | Voice credentials, DAVE identities/keys and PCM/Opus audio | Session memory only; one call, bounded media queues; no recording or audio cache | Hangup, failure, logout and application teardown; no forensic-erasure claim |
 | Audio devices and push-to-talk preferences | Session memory only | Application exit / UI reset; not saved in SQLite |
-| Authentication page | Wry incognito/nonpersistent mode requested, destroyed on token handoff/cancel/timeout | Platform engine teardown; OS artifacts not promised erased |
+| Authentication page | Wry incognito on Windows/macOS; ephemeral WebKit6 NetworkSession on Linux, destroyed on token handoff/cancel/timeout | Platform engine teardown; OS artifacts not promised erased |
 
 Typical database directories: macOS `~/Library/Application Support/serein`, Windows `%LOCALAPPDATA%/serein`, Linux `$XDG_DATA_HOME/serein` or `~/.local/share/serein`. The Unix directory is private (0700). Database contents are **not encrypted by Serein**. OS token protection does not encrypt history, backups or drafts.
 
 The app writes no background log, analytics, crash upload, saved password, MFA ticket, or plaintext credential file. A separate credential-free CDN downloader loads visible avatars, server icons, profile banners and validated service-proxied message images. Build outputs, this documentation, synthetic test databases and package files are development artifacts.
 
-SQLite work is serialized on a worker. Normal startup opens the database to load appearance before authentication; `--demo` does not open the database, credential store or network. Schema version 6 preserves author metadata, embeds/suppression and attachments while adding mentioned-user metadata; older history and drafts remain readable. Embed and attachment JSON are each capped at 256 KiB per message; mentioned users are capped at 100 entries and 128 KiB JSON. All three contribute to eviction accounting. Signed original/preview URLs and mention names/avatar hashes may be retained in unencrypted cached message metadata. Draft save status is visible; a full queue or disk failure is reported and must not be described as saved. An interrupted send may leave a saved draft for content Discord already accepted: recovered text never automatically sends. Normal close waits for queued store work if necessary; logout orders one transactional account deletion after earlier writes. Deletion is not a forensic erasure guarantee.
+SQLite work is serialized on a worker. Normal startup opens the database to load appearance and reading/layout preferences before authentication; `--demo` does not open the database, credential store or network. Schema version 8 adds the bounded reading/layout singleton while preserving author metadata, embeds/suppression, attachments, mentioned users and unsupported-content presence bits; older history and drafts remain readable. Embed and attachment JSON are each capped at 256 KiB per message; mentioned users are capped at 100 entries and 128 KiB JSON. All three contribute to eviction accounting. Signed original/preview URLs and mention names/avatar hashes may be retained in unencrypted cached message metadata. Draft save status is visible; a full queue or disk failure is reported and must not be described as saved. An interrupted send may leave a saved draft for content Discord already accepted: recovered text never automatically sends. Normal close waits for queued store work if necessary; logout orders one transactional account deletion after earlier writes. Deletion is not a forensic erasure guarantee.
 
 Saved recovery text prefers the current nonempty draft, otherwise the most recent unresolved send in that channel. Only a matching own-author/channel/nonce confirmation updates this recovery record. This is one recovery draft per channel, not a durable multi-message outbox; additional unresolved sends remain in RAM and the close prompt warns before discarding them. Incoming hidden-channel events do not rewrite the active cache; accepted active-view changes are coalesced into at most one snapshot per event-drain pass.
 
@@ -73,6 +142,33 @@ search input is capped at 64 characters. Picker insertion honors character and t
 capacity limits and never sends a message on selection.
 
 
+Channel obfuscation and accepted READY removals invalidate inaccessible history using the existing
+account-wide ClearHistory operation; readable-to-unsupported channel changes count as removal.
+This deliberately trades a broader history refetch for no new per-channel deletion API. Cache
+hydration requires the current request, a pending empty loading view, a loaded text channel and
+matching message channel IDs. Late disk/HTTP responses cannot refill a revoked view. Drafts remain
+available for recovery. This does not erase explicit downloaded files or promise deletion of
+already requested image pixels, OS artifacts or remote attachment staging data. No schema,
+persistent visibility list, new worker queue or credential storage is introduced.
+
+The permission mirror is session-only and never enters SQLite, credentials or diagnostics.
+It retains at most 4,000 guild/channel records, 16,384 guild roles and 32,768 overwrites;
+per guild/member role lists stop at 512, per-channel wire overwrites at 1,000. Other members'
+overwrite entries are validated then discarded; all role overwrite entries remain so later
+self-role changes can be calculated. A 2 MiB estimated allocation budget includes reserved
+space for at most 4,000 cached decisions. Updates clone the bounded metadata for atomic
+validation; that temporary copy is additional peak memory. These estimates are not process
+RSS. Decisions expire at timeout boundaries, are recomputed after clock rollback and are
+cleared on metadata updates. Logout/READY replace the session mirror.
+
+Current VIEW and READ_MESSAGE_HISTORY are required for HTTP/cache admission and history
+persistence. Read-access loss, including thread parent/type changes, queues the existing
+account-wide ClearHistory operation. Sending-only permission changes do not erase cached
+history. VIEW-only live messages stay in the bounded RAM timeline without being persisted.
+Existing recovery drafts and explicitly downloaded files keep their documented lifecycle.
+No schema change or external runtime dependency is added; UI tests reuse the existing
+workspace test-support crate through a dev-dependency.
+
 Notification/read activity and notification preferences remain bounded session RAM only;
 no SQLite schema or saved-notification preference is introduced. The OS receives generic
 fixed text only after session opt-in and may keep its own notification/permission history.
@@ -80,6 +176,25 @@ Logout invalidates queued work and requests dismissal; this does not erase OS re
 See [notification limits and platform behavior](notifications.md). Composer artwork uses
 the existing Twemoji atlas and custom-image cache; saved drafts keep their original wire
 text, with no extra rendered-token storage.
+
+
+Loaded People presence is session-only within the existing 100-row / 128-KiB member mirror.
+The Gateway additionally holds at most 100 pending IDs and normalized optional status strings
+(each at most seven bytes), plus bounded BTreeMap node overhead. An emitted compact batch is
+limited to 100 entries / 8 KiB including allocated vector/string capacity and uses the existing
+bounded event queue. Wire decoding keeps the existing 4-MiB cap and drops unrelated fields.
+Presence growth is checked against the member budget before mutation. Full snapshots and
+subscription/session invalidation clear pending status batches. No presence, activity or client
+device history is saved to SQLite, logs or diagnostics; status-only changes do not persist chat
+history or invalidate timeline layout. These are component bounds, not process RSS measurements.
+
+
+The conversation switcher retains only its open-state flags, focused control ID and a query of
+at most 128 characters / 512 UTF-8 bytes. Each open frame builds at most 20 labels from bounded
+channel/guild names; each field is limited to 128 characters. Matching normalizes one eligible
+channel's bounded names and at most 64 known DM recipient names at a time, then drops them.
+It reuses the existing navigation limits and permission cache, with no persistent query history,
+search index, directory fetch or new worker/queue. Closing clears the query; logout resets the UI.
 
 ## September 10: message type retention
 

@@ -49,9 +49,9 @@ From the RFC:
 This crate does not implement the cryptographic primitives itself.
 Instead it expects an implementation of the [HpkeCrypto] trait.
 
-Two backends are provided in this repository
+This Serein vendor patch retains only the RustCrypto backend declaration; see
+[SEREIN-PATCH.md](SEREIN-PATCH.md). Upstream also offers a libcrux backend.
 
-- [libcrux backend]: a formally verified crypto backend but with limited ciphersuite support for now
 - [RustCrypto backend]: a backend using well established crypto implementations
 
 [github-actions-badge]: https://img.shields.io/github/actions/workflow/status/franziskuskiefer/hpke-rs/rust.yml?label=build%20%26%20tests&logo=github&style=for-the-badge&branch=main

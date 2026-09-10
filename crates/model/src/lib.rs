@@ -1,5 +1,8 @@
 //! UI-neutral session entities. No filesystem or network dependencies.
 pub mod archives;
+pub mod permissions;
+mod reading_preferences;
+pub use reading_preferences::ReadingPreferences;
 mod profile;
 mod system_messages;
 pub use profile::*;
@@ -7,6 +10,8 @@ mod attachments;
 pub use attachments::*;
 mod embeds;
 pub use embeds::*;
+mod extra_content;
+pub use extra_content::{ExtraContent, ExtraContentPatch};
 mod mentions;
 pub use mentions::*;
 mod reactions;
@@ -170,6 +175,7 @@ pub struct Message {
     /// Discord message type; 255 denotes an unknown legacy cached type.
     pub kind: u8,
     pub unsupported: bool,
+    pub extra_content: ExtraContent,
     pub embeds: Vec<Embed>,
     pub embeds_suppressed: bool,
     pub attachments: Vec<Attachment>,
@@ -222,6 +228,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Patch<T> {
 }
 #[derive(Clone)]
 pub struct MessagePatch {
+    pub extra_content: ExtraContentPatch,
     pub reactions: Patch<Vec<Reaction>>,
     pub id: Id,
     pub channel: Id,

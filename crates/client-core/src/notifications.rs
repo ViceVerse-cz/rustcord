@@ -31,8 +31,11 @@ impl Activity {
         self.notifications.clear();
     }
     pub(crate) fn forget(&mut self, channel: Id) {
-        self.counts.remove(&channel);
         self.high_water.remove(&channel);
+        self.revoke(channel);
+    }
+    fn revoke(&mut self, channel: Id) {
+        self.counts.remove(&channel);
         self.observed_counts.remove(&channel);
         self.observed.retain(|(c, ..)| *c != channel);
         self.notifications.retain(|n| n.channel != channel);
@@ -136,10 +139,37 @@ impl State {
     /// Service badge count plus bounded activity observed since that count. A lower bound
     /// when history or settings are incomplete; this is not an exact total unread count.
     pub fn unread_count(&self, channel: Id) -> u32 {
-        self.read_state.activity.count(channel, false)
+        if self.can_view(channel) {
+            self.read_state.activity.count(channel, false)
+        } else {
+            0
+        }
     }
     pub fn mention_count(&self, channel: Id) -> u32 {
-        self.read_state.activity.count(channel, true)
+        if self.can_view(channel) {
+            self.read_state.activity.count(channel, true)
+        } else {
+            0
+        }
+    }
+    pub(crate) fn reconcile_notifications(&mut self) {
+        let activity = &self.read_state.activity;
+        let revoked: BTreeSet<_> = activity
+            .counts
+            .keys()
+            .chain(activity.observed_counts.keys())
+            .copied()
+            .chain(
+                activity
+                    .notifications
+                    .iter()
+                    .map(|notification| notification.channel),
+            )
+            .filter(|channel| !self.can_view(*channel))
+            .collect();
+        for channel in revoked {
+            self.read_state.activity.revoke(channel);
+        }
     }
     pub fn take_notification(&mut self) -> Option<Notification> {
         while let Some(notification) = self.read_state.activity.notifications.pop_front() {
@@ -157,7 +187,10 @@ impl State {
         self.notification_allowed_for(channel, true)
     }
     fn notification_allowed_for(&self, channel: Id, mention: bool) -> bool {
-        if !self.gateway_connected || self.notification_preferences.dnd != Some(false) {
+        if !self.gateway_connected
+            || !self.can_view(channel)
+            || self.notification_preferences.dnd != Some(false)
+        {
             return false;
         }
         let Some(channel) = self
@@ -251,6 +284,9 @@ impl State {
             return;
         }
         activity.high_water.insert(message.channel, message.id);
+        if !self.can_view(message.channel) {
+            return;
+        }
         let Some(owner) = self.user.as_ref() else {
             return;
         };
@@ -321,6 +357,176 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn view_revocation_clears_alerts_and_badges_without_replaying_hidden_activity() {
+        use model::{Channel, Guild, Patch, User, permissions as p};
+        let owner = User {
+            id: Id(2),
+            name: "Synthetic".into(),
+            avatar: None,
+            discriminator: 0,
+        };
+        let mut state = State {
+            user: Some(owner.clone()),
+            gateway_connected: true,
+            auth: crate::auth::AuthState::Authenticated,
+            guilds: vec![Guild {
+                id: Id(1),
+                name: "Synthetic".into(),
+                icon: None,
+                emojis: None,
+            }],
+            channels: [20, 21]
+                .into_iter()
+                .map(|id| Channel {
+                    id: Id(id),
+                    guild: Some(Id(1)),
+                    kind: 0,
+                    name: "Synthetic".into(),
+                    parent_id: None,
+                    last_message: Some(Id(95)),
+                    position: 0,
+                    recipients: vec![],
+                    member_list_id: None,
+                })
+                .collect(),
+            ..State::default()
+        };
+        state
+            .permissions
+            .replace(p::Snapshot {
+                guilds: vec![p::Guild {
+                    id: Id(1),
+                    owner: Some(Id(999)),
+                    roles: Some(vec![p::Role {
+                        id: Id(1),
+                        bits: p::VIEW_CHANNEL,
+                    }]),
+                    member: Some(p::Member {
+                        roles: vec![],
+                        timeout_until: None,
+                    }),
+                }],
+                channels: [20, 21]
+                    .into_iter()
+                    .map(|id| p::Channel {
+                        id: Id(id),
+                        guild: Id(1),
+                        overwrites: Some(vec![]),
+                    })
+                    .collect(),
+            })
+            .unwrap();
+        state
+            .apply_read_state(crate::read_state::Event::Snapshot {
+                entries: Some(vec![(Id(20), Some(Id(90)), 0), (Id(21), Some(Id(90)), 0)]),
+                version: Some(1),
+                partial: false,
+            })
+            .unwrap();
+        state
+            .apply_notification_preferences(Event::Settings {
+                entries: vec![Setting {
+                    guild: Some(Id(1)),
+                    muted: Some(false),
+                    level: Some(0),
+                    channels: vec![],
+                }],
+                replace: true,
+            })
+            .unwrap();
+        state
+            .apply_notification_preferences(Event::Presence(Some(false)))
+            .unwrap();
+        let message = |id, channel| Message {
+            kind: 0,
+            id: Id(id),
+            channel: Id(channel),
+            author: User {
+                id: Id(3),
+                ..owner.clone()
+            },
+            content: "Synthetic".into(),
+            mentions: vec![owner.clone()],
+            reactions: Some(vec![]),
+            edited: false,
+            edited_at: None,
+            revision: 0,
+            nonce: None,
+            reply_to: None,
+            unsupported: false,
+            extra_content: Default::default(),
+            embeds: vec![],
+            embeds_suppressed: false,
+            attachments: vec![],
+        };
+        let access = |view| crate::permissions::Event::Channel {
+            channel: Id(20),
+            guild: Some(Id(1)),
+            overwrites: Patch::Value(vec![p::Overwrite {
+                id: Id(1),
+                kind: 0,
+                allow: 0,
+                deny: if view { 0 } else { p::VIEW_CHANNEL },
+            }]),
+        };
+        state.observe_notification(&message(100, 20));
+        state.observe_notification(&message(101, 21));
+        assert!(!state.can_read_history(Id(20)));
+        assert_eq!(
+            state.unread_count(Id(20)),
+            1,
+            "Live activity requires VIEW, not history access"
+        );
+        assert_eq!(state.mention_count(Id(20)), 1);
+        assert_eq!(state.unread(Id(20)), Some(true));
+        assert_eq!(state.channel_unread(&state.channels[0]), Some(true));
+        state.apply(crate::Envelope {
+            generation: state.generation,
+            event: crate::Event::Permissions(access(false)),
+        });
+        assert_eq!(state.unread_count(Id(20)), 0);
+        assert_eq!(state.mention_count(Id(20)), 0);
+        assert_eq!(state.unread(Id(20)), None);
+        assert_eq!(state.channel_unread(&state.channels[0]), None);
+        assert_eq!(state.unread_count(Id(21)), 1);
+        assert_eq!(
+            state.read_state.activity.notifications.len(),
+            1,
+            "Revocation removes queued alerts before permission can return"
+        );
+        state.observe_notification(&message(102, 20));
+        state.apply(crate::Envelope {
+            generation: state.generation,
+            event: crate::Event::Permissions(access(true)),
+        });
+        assert_eq!(state.take_notification().unwrap().channel, Id(21));
+        state.observe_notification(&message(100, 20));
+        state.observe_notification(&message(102, 20));
+        assert_eq!(state.unread_count(Id(20)), 0);
+        assert!(state.take_notification().is_none());
+        state.observe_notification(&message(103, 20));
+        assert_eq!(state.mention_count(Id(20)), 1);
+        state.permissions.update(access(false)).unwrap();
+        assert!(
+            state.take_notification().is_none(),
+            "Delivery independently checks current VIEW access"
+        );
+        state.permissions.update(access(true)).unwrap();
+        state
+            .apply_read_state(crate::read_state::Event::Ack {
+                channel: Id(20),
+                message: Some(Id(103)),
+                manual: false,
+                mention_count: Some(0),
+                version: None,
+            })
+            .unwrap();
+        state.observe_notification(&message(103, 20));
+        assert_eq!(state.mention_count(Id(20)), 0);
+        assert!(state.take_notification().is_none());
+    }
 
     #[test]
     fn unknown_deletes_and_empty_recounts_never_admit_channel_state() {

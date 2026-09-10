@@ -49,6 +49,7 @@ pub fn message(id: u64, channel: Id) -> Message {
         reply_to: None,
         kind: 0,
         unsupported: false,
+        extra_content: Default::default(),
         embeds: demo_embeds(id),
         attachments: if id == 500 {
             vec![
@@ -126,6 +127,7 @@ pub fn demo_state() -> State {
     state.apply(Envelope {
         generation: state.generation,
         event: Event::Ready {
+            permissions: model::permissions::Snapshot::default(),
             user: User {
                 avatar: None,
                 discriminator: 0,
@@ -258,6 +260,10 @@ pub fn demo_state() -> State {
             ],
         },
     });
+    state
+        .permissions
+        .replace(permission_snapshot(&state))
+        .unwrap();
     state.select(Id(20));
     load_page(&mut state, None);
     state.apply(Envelope {
@@ -435,6 +441,47 @@ pub fn chat_demo_state() -> State {
     state.revision += 1;
     state
 }
+/// Explicit synthetic permissions, separate from the production unknown-metadata path.
+pub fn permission_snapshot(state: &State) -> model::permissions::Snapshot {
+    use model::permissions as p;
+    let bits = p::VIEW_CHANNEL
+        | p::READ_MESSAGE_HISTORY
+        | p::SEND_MESSAGES
+        | p::SEND_MESSAGES_IN_THREADS
+        | p::ATTACH_FILES
+        | p::ADD_REACTIONS
+        | p::CONNECT
+        | p::SPEAK
+        | p::USE_VAD
+        | p::MANAGE_THREADS;
+    p::Snapshot {
+        guilds: state
+            .guilds
+            .iter()
+            .map(|guild| p::Guild {
+                id: guild.id,
+                owner: Some(Id(u64::MAX)),
+                roles: Some(vec![p::Role { id: guild.id, bits }]),
+                member: Some(p::Member {
+                    roles: vec![],
+                    timeout_until: None,
+                }),
+            })
+            .collect(),
+        channels: state
+            .channels
+            .iter()
+            .filter_map(|channel| {
+                channel.guild.map(|guild| p::Channel {
+                    id: channel.id,
+                    guild,
+                    overwrites: Some(vec![]),
+                })
+            })
+            .collect(),
+    }
+}
+
 /// Synthetic system events; never live Discord history.
 pub fn system_demo_state() -> State {
     let mut state = chat_demo_state();

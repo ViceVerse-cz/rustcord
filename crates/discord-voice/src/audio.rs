@@ -4,7 +4,7 @@ use crate::Frame;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU16, Ordering},
     mpsc,
 };
 use std::time::Duration;
@@ -46,13 +46,27 @@ pub fn devices() -> Result<DeviceList, &'static str> {
     }
     Ok(list)
 }
-#[derive(Default)]
 pub struct Gate {
     pub ready: AtomicBool,
     pub muted: AtomicBool,
     pub deafened: AtomicBool,
     stopped: AtomicBool,
     failed: AtomicBool,
+    input_gain: AtomicU16,
+    output_gain: AtomicU16,
+}
+impl Default for Gate {
+    fn default() -> Self {
+        Self {
+            ready: AtomicBool::new(false),
+            muted: AtomicBool::new(false),
+            deafened: AtomicBool::new(false),
+            stopped: AtomicBool::new(false),
+            failed: AtomicBool::new(false),
+            input_gain: AtomicU16::new(100),
+            output_gain: AtomicU16::new(100),
+        }
+    }
 }
 impl Gate {
     fn capture(&self) -> bool {
@@ -172,6 +186,15 @@ impl Audio {
     pub fn set_controls(&self, muted: bool, deafened: bool) {
         self.gate.muted.store(muted || deafened, Ordering::Release);
         self.gate.deafened.store(deafened, Ordering::Release);
+    }
+    /// Adjusts software gain without reopening devices. Defaults to 100%; clamps to 0..=200%.
+    pub fn set_gain(&self, input_percent: u16, output_percent: u16) {
+        self.gate
+            .input_gain
+            .store(input_percent.min(200), Ordering::Relaxed);
+        self.gate
+            .output_gain
+            .store(output_percent.min(200), Ordering::Relaxed);
     }
 }
 impl Drop for Audio {
@@ -323,19 +346,7 @@ where
         .build_input_stream(
             *config,
             move |data: &[T], _| {
-                if !gate.capture() {
-                    capture.reset();
-                    return;
-                }
-                for frame in data.chunks_exact(channels) {
-                    let sample =
-                        frame.iter().map(|v| v.to_sample::<f32>()).sum::<f32>() / channels as f32;
-                    capture.sample(if sample.is_finite() {
-                        sample.clamp(-1.0, 1.0)
-                    } else {
-                        0.0
-                    });
-                }
+                capture.process(data, channels, &gate);
             },
             move |_| {
                 failure.failed.store(true, Ordering::Release);
@@ -359,14 +370,7 @@ where
         .build_output_stream(
             *config,
             move |data: &mut [T], _| {
-                if !gate.playback() {
-                    output.reset();
-                    data.fill(T::from_sample(0.0));
-                    return;
-                }
-                for frame in data.chunks_mut(channels) {
-                    frame.fill(T::from_sample(output.sample()));
-                }
+                output.render(data, channels, &gate);
             },
             move |_| {
                 failure.failed.store(true, Ordering::Release);
@@ -374,6 +378,13 @@ where
             None,
         )
         .map_err(|_| "Could not open speaker device")
+}
+fn amplify(sample: f32, gain: f32) -> f32 {
+    if sample.is_finite() {
+        (sample * gain).clamp(-1.0, 1.0)
+    } else {
+        0.0
+    }
 }
 // ponytail: linear conversion is a fallback for devices lacking 48 kHz; use a band-limited resampler if aliasing is measured to matter.
 struct Capture {
@@ -385,6 +396,20 @@ struct Capture {
     output: rtrb::Producer<Frame>,
 }
 impl Capture {
+    fn process<T: cpal::SizedSample>(&mut self, data: &[T], channels: usize, gate: &Gate)
+    where
+        f32: cpal::FromSample<T>,
+    {
+        if !gate.capture() {
+            self.reset();
+            return;
+        }
+        let gain = f32::from(gate.input_gain.load(Ordering::Relaxed)) / 100.0;
+        for frame in data.chunks_exact(channels) {
+            let sample = frame.iter().map(|v| v.to_sample::<f32>()).sum::<f32>() / channels as f32;
+            self.sample(amplify(sample, gain));
+        }
+    }
     fn new(rate: u32, output: rtrb::Producer<Frame>) -> Self {
         Self {
             previous: None,
@@ -427,6 +452,22 @@ struct Playback {
     step: f64,
 }
 impl Playback {
+    fn render<T: cpal::SizedSample + cpal::FromSample<f32>>(
+        &mut self,
+        data: &mut [T],
+        channels: usize,
+        gate: &Gate,
+    ) {
+        if !gate.playback() {
+            self.reset();
+            data.fill(T::from_sample(0.0));
+            return;
+        }
+        let gain = f32::from(gate.output_gain.load(Ordering::Relaxed)) / 100.0;
+        for frame in data.chunks_mut(channels) {
+            frame.fill(T::from_sample(amplify(self.sample(), gain)));
+        }
+    }
     fn new(rate: u32, input: rtrb::Consumer<Frame>) -> Self {
         Self {
             input,
@@ -477,6 +518,113 @@ impl Playback {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn audio_without_devices() -> Audio {
+        let (settings, _) = tokio::sync::watch::channel(Devices::default());
+        Audio {
+            gate: Arc::new(Gate::default()),
+            settings,
+            thread: std::thread::current(),
+            done: None,
+        }
+    }
+
+    #[test]
+    fn callback_gain_defaults_clamps_and_sanitizes_without_devices() {
+        let audio = audio_without_devices();
+        assert_eq!(audio.gate.input_gain.load(Ordering::Relaxed), 100);
+        assert_eq!(audio.gate.output_gain.load(Ordering::Relaxed), 100);
+        audio.set_ready(true);
+        for (percent, expected) in [(0, 0.0), (100, 0.75), (200, 1.0), (u16::MAX, 1.0)] {
+            audio.set_gain(percent, percent);
+            for sample in [0.75_f32, -0.75] {
+                let expected = expected * sample.signum();
+                let (send, mut receive) = rtrb::RingBuffer::new(8);
+                let mut capture = Capture::new(48_000, send);
+                capture.process(&[sample; 961], 1, &audio.gate);
+                assert!(receive.pop().unwrap().iter().all(|s| *s == expected));
+                let (mut send, receive) = rtrb::RingBuffer::new(8);
+                send.push([sample; 960]).unwrap();
+                let mut playback = Playback::new(48_000, receive);
+                let mut rendered = [0.0_f32; 1920];
+                playback.render(&mut rendered, 2, &audio.gate);
+                assert_eq!(&rendered[..2], &[0.0, 0.0]);
+                assert!(rendered[2..].iter().all(|s| *s == expected));
+            }
+        }
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let (send, mut receive) = rtrb::RingBuffer::new(8);
+            let mut capture = Capture::new(48_000, send);
+            capture.process(&[invalid; 961], 1, &audio.gate);
+            assert_eq!(receive.pop().unwrap(), [0.0; 960]);
+            let (mut send, receive) = rtrb::RingBuffer::new(8);
+            send.push([invalid; 960]).unwrap();
+            let mut playback = Playback::new(48_000, receive);
+            let mut rendered = [1.0_f32; 960];
+            playback.render(&mut rendered, 1, &audio.gate);
+            assert_eq!(rendered, [0.0; 960]);
+        }
+    }
+
+    #[test]
+    fn runtime_gain_updates_preserve_gates_and_discard_buffered_audio() {
+        let audio = audio_without_devices();
+        let (capture_send, mut captured) = rtrb::RingBuffer::new(8);
+        let mut capture = Capture::new(48_000, capture_send);
+        let (mut playback_send, playback_receive) = rtrb::RingBuffer::new(8);
+        let mut playback = Playback::new(48_000, playback_receive);
+        let mut rendered = [1.0_f32; 2];
+        playback_send.push([0.25; 960]).unwrap();
+        capture.process(&[0.25; 961], 1, &audio.gate);
+        playback.render(&mut rendered, 1, &audio.gate);
+        assert!(captured.pop().is_err());
+        assert_eq!(rendered, [0.0; 2]);
+        audio.set_ready(true);
+        playback.render(&mut rendered, 1, &audio.gate);
+        assert_eq!(rendered, [0.0; 2]);
+
+        // The same callback state observes new controls; no stream needs recreation.
+        playback.reset();
+        playback_send.push([0.25; 960]).unwrap();
+        playback.render(&mut rendered, 1, &audio.gate);
+        assert_eq!(rendered, [0.0, 0.25]);
+        audio.set_gain(200, 0);
+        capture.process(&[0.25; 961], 1, &audio.gate);
+        assert_eq!(captured.pop().unwrap(), [0.5; 960]);
+        playback.render(&mut rendered, 1, &audio.gate);
+        assert_eq!(rendered, [0.0; 2]);
+        audio.set_gain(0, 200);
+        capture.process(&[0.25; 960], 1, &audio.gate);
+        let frame = captured.pop().unwrap();
+        assert_eq!(frame[0], 0.5); // One already captured resampler endpoint.
+        assert!(frame[1..].iter().all(|s| *s == 0.0));
+        playback.render(&mut rendered, 1, &audio.gate);
+        assert_eq!(rendered, [0.5; 2]);
+
+        audio.set_controls(true, false);
+        capture.process(&[0.75; 961], 1, &audio.gate);
+        assert!(captured.pop().is_err());
+        playback.render(&mut rendered, 1, &audio.gate);
+        assert_eq!(rendered, [0.5; 2]);
+        audio.set_controls(false, true);
+        playback_send.push([0.75; 960]).unwrap();
+        capture.process(&[0.75; 961], 1, &audio.gate);
+        playback.render(&mut rendered, 1, &audio.gate);
+        assert!(captured.pop().is_err());
+        assert_eq!(rendered, [0.0; 2]);
+        audio.set_controls(false, false);
+        audio.set_gain(100, 100);
+        capture.process(&[0.25; 961], 1, &audio.gate);
+        assert_eq!(captured.pop().unwrap(), [0.25; 960]);
+        playback.render(&mut rendered, 1, &audio.gate);
+        assert_eq!(rendered, [0.0; 2]);
+        audio.gate.stopped.store(true, Ordering::Release);
+        capture.process(&[0.75; 961], 1, &audio.gate);
+        playback_send.push([0.75; 960]).unwrap();
+        playback.render(&mut rendered, 1, &audio.gate);
+        assert!(captured.pop().is_err());
+        assert_eq!(rendered, [0.0; 2]);
+    }
+
     #[test]
     fn resampling_buffers_and_capture_gate_are_bounded_without_devices() {
         let gate = Gate::default();

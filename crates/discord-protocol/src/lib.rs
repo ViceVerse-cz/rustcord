@@ -2,8 +2,11 @@
 pub mod archives;
 mod attachments;
 mod embeds;
+mod extra_content;
 pub mod notifications;
+pub mod permissions;
 pub mod pins;
+pub mod presence;
 pub mod profile;
 mod reactions;
 pub mod read_state;
@@ -73,6 +76,8 @@ impl UserDto {
 #[derive(Deserialize)]
 pub struct ChannelDto {
     #[serde(default)]
+    pub flags: u64,
+    #[serde(default)]
     pub last_message_id: Option<Id>,
     pub id: Id,
     #[serde(default)]
@@ -91,6 +96,10 @@ pub struct ChannelDto {
     pub permission_overwrites: Option<Vec<Overwrite>>,
 }
 impl ChannelDto {
+    pub fn is_obfuscated(&self) -> bool {
+        self.flags & (1 << 17) != 0
+    }
+
     pub fn into_model(self) -> Channel {
         let recipients: Vec<_> = self
             .recipients
@@ -136,6 +145,10 @@ pub struct ChannelPatchDto {
     pub flags: Patch<u64>,
 }
 impl ChannelPatchDto {
+    pub fn is_obfuscated(&self) -> bool {
+        matches!(self.flags, Patch::Value(flags) if flags & (1 << 17) != 0)
+    }
+
     pub fn into_model(self) -> model::ChannelPatch {
         model::ChannelPatch {
             last_message: self.last_message_id,
@@ -150,6 +163,44 @@ impl ChannelPatchDto {
 #[cfg(test)]
 mod channel_tests {
     use super::*;
+    #[test]
+    fn ready_omits_obfuscated_channels_and_their_threads_without_inventing_child_permissions() {
+        let mut ready: Ready = decode(br#"{
+            "user":{"id":"9","username":"Synthetic"},"session_id":"synthetic",
+            "resume_gateway_url":"wss://gateway.discord.gg", "private_channels":[{"id":"8","type":1}],
+            "guilds":[{"id":"1","name":"Synthetic","channels":[
+                {"id":"2","type":0,"flags":131072,"name":"not-a-placeholder"},
+                {"id":"7","type":4,"flags":131072,"name":"hidden category"},
+                {"id":"5","type":0,"parent_id":"7","name":"___hidden___"}
+            ],"threads":[
+                {"id":"3","type":11,"parent_id":"2","name":"Hidden parent's thread"},
+                {"id":"4","type":11,"parent_id":"5","name":"Visible thread"},
+                {"id":"6","type":11,"parent_id":"5","flags":131072}
+            ]}]}"#).unwrap();
+        let (guilds, channels) = ready.navigation().unwrap();
+        assert_eq!(guilds.len(), 1);
+        assert_eq!(
+            channels.iter().map(|c| c.id).collect::<Vec<_>>(),
+            vec![Id(8), Id(5), Id(4)]
+        );
+        assert_eq!(
+            channels[1].name, "___hidden___",
+            "Names never imply visibility"
+        );
+        let flags = decode::<ChannelDto>(br#"{"id":"3","type":0,"flags":16}"#).unwrap();
+        assert!(!flags.is_obfuscated());
+        for payload in [
+            serde_json::json!({"user":{"id":"9","username":"Synthetic"},"session_id":"s","resume_gateway_url":"wss://gateway.discord.gg","guilds":[{"id":"1","channels":[{"id":"2","type":0,"flags":131072},{"id":"2","type":0}]}]}),
+            serde_json::json!({"user":{"id":"9","username":"Synthetic"},"session_id":"s","resume_gateway_url":"wss://gateway.discord.gg","guilds":[{"id":"1","channels":(2..4002).map(|id| serde_json::json!({"id":id.to_string(),"type":0,"flags":131072})).collect::<Vec<_>>()}]}),
+        ] {
+            let mut ready: Ready = decode(&serde_json::to_vec(&payload).unwrap()).unwrap();
+            assert!(
+                ready.navigation().is_err(),
+                "Filtering must not bypass duplicate or item limits"
+            );
+        }
+    }
+
     #[test]
     fn category_metadata_and_partial_channel_updates() {
         let channel = decode::<ChannelDto>(
@@ -246,8 +297,33 @@ pub struct Ready {
 }
 impl Ready {
     pub fn navigation(&mut self) -> Result<(Vec<Guild>, Vec<Channel>), DecodeError> {
+        let incoming = self.private_channels.len()
+            + self.guilds.len()
+            + self
+                .guilds
+                .iter()
+                .map(|g| g.channels.len() + g.threads.len())
+                .sum::<usize>();
+        if incoming > threads::MAX_ITEMS {
+            return Err(DecodeError);
+        }
+        let mut ids = std::collections::BTreeSet::new();
+        if self
+            .private_channels
+            .iter()
+            .chain(
+                self.guilds
+                    .iter()
+                    .flat_map(|g| g.channels.iter().chain(&g.threads)),
+            )
+            .any(|c| !ids.insert(c.id))
+        {
+            return Err(DecodeError);
+        }
+        drop(ids);
         let mut channels: Vec<_> = std::mem::take(&mut self.private_channels)
             .into_iter()
+            .filter(|c| !c.is_obfuscated())
             .map(ChannelDto::into_model)
             .collect();
         let guilds = std::mem::take(&mut self.guilds)
@@ -272,18 +348,38 @@ impl Ready {
                     .iter()
                     .find(|r| r.id == g.id)
                     .and_then(|r| r.permissions.parse::<u64>().ok());
-                channels.extend(g.channels.into_iter().map(|mut c| {
-                    c.guild_id = Some(g.id);
-                    let list_id = everyone.and_then(|permissions| {
-                        c.permission_overwrites
-                            .as_ref()
-                            .and_then(|o| member_list_id(permissions, o))
-                    });
-                    let mut channel = c.into_model();
-                    channel.member_list_id = list_id;
-                    channel
-                }));
+                let hidden: std::collections::BTreeSet<_> = g
+                    .channels
+                    .iter()
+                    .filter(|c| c.is_obfuscated())
+                    .map(|c| c.id)
+                    .collect();
+                channels.extend(
+                    g.channels
+                        .into_iter()
+                        .filter(|c| {
+                            !c.is_obfuscated()
+                                && !(matches!(c.kind, 10..=12)
+                                    && c.parent_id.is_some_and(|id| hidden.contains(&id)))
+                        })
+                        .map(|mut c| {
+                            c.guild_id = Some(g.id);
+                            let list_id = everyone.and_then(|permissions| {
+                                c.permission_overwrites
+                                    .as_ref()
+                                    .and_then(|o| member_list_id(permissions, o))
+                            });
+                            let mut channel = c.into_model();
+                            channel.member_list_id = list_id;
+                            channel
+                        }),
+                );
                 for thread in g.threads {
+                    if thread.is_obfuscated()
+                        || thread.parent_id.is_some_and(|id| hidden.contains(&id))
+                    {
+                        continue;
+                    }
                     channels.push(threads::into_thread(thread, g.id)?);
                 }
                 Ok(Guild {
@@ -294,13 +390,9 @@ impl Ready {
                 })
             })
             .collect::<Result<Vec<_>, DecodeError>>()?;
-        let unique: std::collections::BTreeSet<_> = channels.iter().map(|c| c.id).collect();
         let bytes = channels.iter().map(Channel::bytes).sum::<usize>()
             + guilds.iter().map(Guild::bytes).sum::<usize>();
-        if channels.len() + guilds.len() > threads::MAX_ITEMS
-            || bytes > MAX_WIRE
-            || unique.len() != channels.len()
-        {
+        if channels.len() + guilds.len() > threads::MAX_ITEMS || bytes > MAX_WIRE {
             return Err(DecodeError);
         }
         Ok((guilds, channels))
@@ -310,6 +402,14 @@ impl Ready {
 pub struct MentionList(#[serde(deserialize_with = "model::deserialize_mentions")] pub Vec<UserDto>);
 #[derive(Deserialize)]
 pub struct MessageDto {
+    #[serde(default)]
+    pub poll: Option<extra_content::Object>,
+    #[serde(default)]
+    pub sticker_items: Option<extra_content::Array>,
+    #[serde(default)]
+    pub stickers: Option<extra_content::Array>,
+    #[serde(default)]
+    pub components: Option<extra_content::Array>,
     #[serde(default)]
     pub reactions: reactions::ReactionList,
     pub id: Id,
@@ -347,6 +447,13 @@ pub struct Reference {
 impl MessageDto {
     pub fn into_model(self) -> Message {
         Message {
+            extra_content: model::ExtraContent {
+                poll: self.poll.is_some(),
+                sticker_items: self.sticker_items.is_some_and(|a| a.0),
+                stickers: self.stickers.is_some_and(|a| a.0),
+                components: self.components.is_some_and(|a| a.0),
+                components_v2: self.flags & (1 << 15) != 0,
+            },
             reactions: Some(self.reactions.0),
             id: self.id,
             channel: self.channel_id,
@@ -377,6 +484,14 @@ impl MessageDto {
 #[derive(Deserialize)]
 pub struct PatchDto {
     #[serde(default)]
+    pub poll: Patch<extra_content::Object>,
+    #[serde(default)]
+    pub sticker_items: Patch<extra_content::Array>,
+    #[serde(default)]
+    pub stickers: Patch<extra_content::Array>,
+    #[serde(default)]
+    pub components: Patch<extra_content::Array>,
+    #[serde(default)]
     pub reactions: Patch<reactions::ReactionList>,
     pub id: Id,
     pub channel_id: Id,
@@ -396,6 +511,17 @@ pub struct PatchDto {
 impl PatchDto {
     pub fn into_model(self) -> MessagePatch {
         MessagePatch {
+            extra_content: model::ExtraContentPatch {
+                poll: extra_content::object_patch(self.poll),
+                sticker_items: extra_content::array_patch(self.sticker_items),
+                stickers: extra_content::array_patch(self.stickers),
+                components: extra_content::array_patch(self.components),
+                components_v2: match &self.flags {
+                    Patch::Absent => Patch::Absent,
+                    Patch::Null => Patch::Null,
+                    Patch::Value(flags) => Patch::Value(flags & (1 << 15) != 0),
+                },
+            },
             reactions: match self.reactions {
                 Patch::Absent => Patch::Absent,
                 Patch::Null => Patch::Null,

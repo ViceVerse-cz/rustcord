@@ -24,6 +24,9 @@ impl State {
     pub fn can_archive(&self, parent: Id, kind: Kind) -> bool {
         self.auth == AuthState::Authenticated
             && self.gateway_connected
+            && self.can_read_history(parent)
+            && (kind != Kind::Private
+                || self.permission(parent, model::permissions::MANAGE_THREADS) == Some(true))
             && self.channels.iter().any(|c| {
                 c.id == parent
                     && c.guild
@@ -205,11 +208,17 @@ mod tests {
         }
     }
     fn state() -> State {
-        State {
+        let mut state = State {
             auth: AuthState::Authenticated,
             gateway_connected: true,
             freshness: Freshness::Fresh,
             selected: Some(Id(10)),
+            user: Some(model::User {
+                id: Id(2),
+                name: "Synthetic".into(),
+                avatar: None,
+                discriminator: 0,
+            }),
             guilds: vec![Guild {
                 emojis: None,
                 id: Id(1),
@@ -218,7 +227,9 @@ mod tests {
             }],
             channels: vec![channel(10, None, 0), channel(20, None, 15)],
             ..State::default()
-        }
+        };
+        crate::tests::grant_permissions(&mut state);
+        state
     }
     fn page(id: u64, next: Option<Cursor>) -> Page {
         Page {
@@ -231,6 +242,118 @@ mod tests {
             generation: state.generation,
             event,
         });
+    }
+
+    #[test]
+    fn archive_and_search_reads_require_current_permissions() {
+        use model::permissions as p;
+        let mut state = state();
+        let guild = state.permissions.guilds.get_mut(&Id(1)).unwrap();
+        guild.owner = Some(Id(999));
+        guild.roles = Some(vec![p::Role {
+            id: Id(1),
+            bits: p::VIEW_CHANNEL | p::READ_MESSAGE_HISTORY,
+        }]);
+        guild.member = Some(p::Member {
+            roles: vec![],
+            timeout_until: None,
+        });
+        state.permissions.clear_cache();
+        assert!(state.can_archive(Id(10), Kind::Public));
+        assert!(state.can_archive(Id(10), Kind::JoinedPrivate));
+        assert!(!state.can_archive(Id(10), Kind::Private));
+        assert!(
+            state
+                .request_archives(Id(10), Kind::Private, None)
+                .is_none()
+        );
+        state
+            .permissions
+            .guilds
+            .get_mut(&Id(1))
+            .unwrap()
+            .roles
+            .as_mut()
+            .unwrap()[0]
+            .bits |= p::MANAGE_THREADS;
+        state.permissions.clear_cache();
+        state.request_archives(Id(10), Kind::Private, None).unwrap();
+        let request = state.search_request;
+        state
+            .permissions
+            .guilds
+            .get_mut(&Id(1))
+            .unwrap()
+            .roles
+            .as_mut()
+            .unwrap()[0]
+            .bits &= !p::MANAGE_THREADS;
+        state.permissions.clear_cache();
+        state.apply_archives(
+            Id(10),
+            request,
+            Ok(Page {
+                threads: vec![channel(99, Some(Id(10)), 12)],
+                next: None,
+            }),
+        );
+        assert!(state.archives.as_ref().unwrap().page.is_none());
+
+        state.request_archives(Id(10), Kind::Public, None).unwrap();
+        let request = state.search_request;
+        state
+            .permissions
+            .guilds
+            .get_mut(&Id(1))
+            .unwrap()
+            .roles
+            .as_mut()
+            .unwrap()[0]
+            .bits = p::VIEW_CHANNEL | p::SEND_MESSAGES;
+        state.permissions.clear_cache();
+        state.apply_archives(Id(10), request, Ok(page(99, None)));
+        assert!(state.archives.as_ref().unwrap().page.is_none());
+        assert!(state.request_pins().is_none());
+        assert!(state.request_search("query".into(), None).is_none());
+        assert!(
+            state.can_send(Id(10)),
+            "Sending live messages does not require history access"
+        );
+
+        state
+            .permissions
+            .guilds
+            .get_mut(&Id(1))
+            .unwrap()
+            .roles
+            .as_mut()
+            .unwrap()[0]
+            .bits |= p::READ_MESSAGE_HISTORY;
+        state.permissions.clear_cache();
+        state.request_pins().unwrap();
+        let request = state.search_request;
+        state
+            .permissions
+            .guilds
+            .get_mut(&Id(1))
+            .unwrap()
+            .roles
+            .as_mut()
+            .unwrap()[0]
+            .bits &= !p::VIEW_CHANNEL;
+        state.permissions.clear_cache();
+        state.apply_search(
+            Id(10),
+            request,
+            Ok(crate::search::Outcome::Pins(model::SearchPage {
+                hits: vec![],
+                total: 0,
+                partial: false,
+                pin_cursor: None,
+            })),
+        );
+        assert!(state.search.as_ref().unwrap().page.is_none());
+        assert!(!state.can_send(Id(10)));
     }
 
     #[test]
@@ -381,6 +504,7 @@ mod tests {
         apply(&mut state, Event::PermissionsChanged);
         state.apply_archives(Id(10), request, Ok(page(100, None)));
         assert!(state.archives.is_none());
+        crate::tests::grant_permissions(&mut state);
         state.request_archives(Id(10), Kind::Public, None).unwrap();
         let request = state.search_request;
         apply(&mut state, Event::Unavailable(Id(10)));
@@ -418,6 +542,7 @@ mod tests {
         apply(
             &mut state,
             Event::ThreadsSync {
+                removed: vec![],
                 guild: Id(1),
                 parents: None,
                 threads: vec![],
@@ -442,6 +567,7 @@ mod tests {
                 &mut state,
                 if adopt_with_snapshot {
                     Event::ThreadsSync {
+                        removed: vec![],
                         guild: Id(1),
                         parents: None,
                         threads: vec![channel(100, Some(Id(10)), 11)],

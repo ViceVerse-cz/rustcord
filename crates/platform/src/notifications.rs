@@ -5,6 +5,13 @@ use std::sync::{
     mpsc::{self, Receiver, SyncSender},
 };
 
+// notify-rust 4.18 does not export its Windows handle. Dismissal uses our app ID;
+// only a success marker is needed there, without retaining callback receivers.
+#[cfg(target_os = "windows")]
+type NotificationHandle = ();
+#[cfg(not(target_os = "windows"))]
+use notify_rust::NotificationHandle;
+
 // Eight fixed-size commands (128 bytes at most); overflow drops an alert, never message state.
 const QUEUE_ITEMS: usize = 8;
 
@@ -282,15 +289,21 @@ fn authorize() -> Status {
     }
 }
 
-fn show() -> Result<notify_rust::NotificationHandle, ()> {
+fn show() -> Result<NotificationHandle, ()> {
     #[cfg(target_os = "macos")]
     {
         // The blocking wrapper mistakes a busy AppKit run loop for a stopped one.
         // Await the OS completion on this worker; never block the native UI thread.
         futures_lite::future::block_on(notification().show_async()).map_err(|_| ())
     }
-    #[cfg(not(target_os = "macos"))]
-    notification().show().map_err(|_| ())
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        notification().show().map_err(|_| ())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        notification().show().map(|_| ()).map_err(|_| ())
+    }
 }
 
 fn notification() -> notify_rust::Notification {
@@ -305,17 +318,16 @@ fn notification() -> notify_rust::Notification {
     notification
 }
 
-fn close(outstanding: &mut Option<notify_rust::NotificationHandle>) {
+fn close(outstanding: &mut Option<NotificationHandle>) {
+    #[cfg(not(target_os = "windows"))]
     if let Some(handle) = outstanding.take() {
-        #[cfg(not(target_os = "windows"))]
         handle.close();
-        #[cfg(target_os = "windows")]
-        {
-            use windows::{UI::Notifications::ToastNotificationManager, core::HSTRING};
-            drop(handle);
-            let _ = ToastNotificationManager::History()
-                .and_then(|history| history.ClearWithId(&HSTRING::from("org.serein.desktop")));
-        }
+    }
+    #[cfg(target_os = "windows")]
+    if outstanding.take().is_some() {
+        use windows::{UI::Notifications::ToastNotificationManager, core::HSTRING};
+        let _ = ToastNotificationManager::History()
+            .and_then(|history| history.ClearWithId(&HSTRING::from("org.serein.desktop")));
     }
 }
 

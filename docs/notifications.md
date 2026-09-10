@@ -65,3 +65,17 @@ because the notification window was no longer accessible to automation.
 The adapter awaits the macOS async show API on its worker because the library's
 blocking wrapper can mistake a busy AppKit run loop for an inactive one. Clicking
 an OS alert does not yet navigate to a particular conversation; use the DM rail.
+
+
+Permission integration: unread dots/counts, observed activity and queued/delivered alerts
+require current VIEW_CHANNEL. READ_MESSAGE_HISTORY is not needed for new live activity.
+Revocation removes visible counts and pending alerts while retaining message high-water
+deduplication, so restoring access does not replay old alerts. Navigation/permission changes
+invalidate outstanding OS work and request app-specific dismissal. This does not erase OS
+history. Shared inline edit Save/Enter likewise rechecks current permissions and keeps unsent
+text when access is lost.
+
+The integrated Windows adapter was compiled against notify-rust 4.18: its Windows handle is
+not publicly exported, so the worker retains a success marker and drops the unused response
+receiver; dismissal still uses Serein's own registered app ID. Windows builds and synthetic
+queue checks are evidence of compilation/state handling, not observed native toast delivery.
