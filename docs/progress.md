@@ -2,9 +2,9 @@
 
 ## Current scope and gates
 
-Current slice: bounded offline fuzzing after authorized deletion PR #49,
-from main dc49d64, integrated with main 4325dd1. Full SPEC completion remains active; native automation and live-account
-validation remain owner-controlled. See the bounded fuzzing entry for verification.
+Current slice: Debian/Ubuntu distribution packaging from main 68526e8. Full SPEC completion
+remains active; native automation and live-account validation remain owner-controlled.
+See the Linux packaging entry for verification.
 
 ## Inline message spoilers (merged PR #36)
 
@@ -1736,3 +1736,27 @@ protection bypass or renewed Computer Use was requested.
   in docs/performance.md. Native `--demo-call`/`--demo-voice` captures (dark and light) inspected;
   evidence in docs/pr-evidence/voice-call-ui. No live call, microphone or account action occurred;
   Windows/Linux rendering and real call behaviour with the new controls remain unverified.
+
+
+## Debian/Ubuntu distribution packaging (September 10, 2026)
+
+- Baseline main `68526e822461ff8134c3b14e786b17f4bf5920ce`; isolated branch
+  `feat/linux-distribution-package`. The original checkout's ongoing work remains untouched.
+- SPEC14.5 packaging now stages an unsigned native `.deb` for each text/voice variant through
+  the existing package commands. Runtime shared-library dependencies come from dpkg-shlibdeps;
+  desktop libraries loaded dynamically and session services are declared separately. The
+  desktop entry installs with the binary, documentation, asset notices and relevant voice source.
+- Packaging uses an explicit input list and a fresh private temporary directory. Root ownership,
+  executable/data modes, metadata, extracted file contents, desktop syntax and linked-library
+  availability are checked before the archive is copied to dist. No maintainer scripts, autostart,
+  account-data changes, root installation or application launch occur in this smoke test.
+- Windows `cargo xtask check` passed 351 Rust tests, doctests, formatting, strict all-feature
+  Clippy, text-only compilation and policy checks. The Linux synthetic package regression passed
+  both variant payloads, stale nested-file exclusion and invalid ELF/payload rejection. Independent
+  review found no remaining blockers after the source-manifest fix.
+- Real Linux build/packaging validation is in progress on Ubuntu 26.04 x86_64 under WSL2, Rust 1.98.1.
+  The locally provisioned compiler and build cache are isolated under the E: build directory.
+  X11/Wayland rendering, Secret Service, portal dialogs, IME, accessibility and actual login/audio
+  remain unverified; WSL compilation and archive inspection do not prove those desktop paths.
+- Previous PR #51's Linux fuzz, license and security jobs passed on GitHub; native jobs remained
+  queued or running at this inspection. This is separate from the new packaging validation.

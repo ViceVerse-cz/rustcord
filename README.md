@@ -9,7 +9,7 @@ cargo run --locked --features voice # optional DM and server voice audio
 cargo xtask check
 node tests/login-handoff.cjs       # development-only JS bridge test
 cargo replay
-cargo xtask package                # text-only package; macOS uses ad-hoc signing
+cargo xtask package                # text-only package; Linux .deb, macOS ad-hoc bundle
 cargo xtask package-voice          # separate voice build under dist/voice
 ```
 
