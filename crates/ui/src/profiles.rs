@@ -431,30 +431,47 @@ pub fn show(
                                         if !activities.is_empty() {
                                             heading(ui, &theme, "ACTIVITY");
                                             for activity in activities {
-                                                ui.add(
-                                                    egui::Label::new(
-                                                        RichText::new(activity.summary())
-                                                            .strong()
-                                                            .size(14.0),
-                                                    )
-                                                    .wrap(),
-                                                );
-                                                for text in [
-                                                    activity.details.as_deref(),
-                                                    activity.state.as_deref(),
-                                                ]
-                                                .into_iter()
-                                                .flatten()
-                                                {
-                                                    ui.add(
-                                                        egui::Label::new(
-                                                            RichText::new(text)
-                                                                .size(13.0)
-                                                                .color(theme.muted),
-                                                        )
-                                                        .wrap(),
-                                                    );
-                                                }
+                                                ui.horizontal_top(|ui| {
+                                                    if let Some(image) = &activity.image {
+                                                        avatars.show_icon(
+                                                            ui,
+                                                            Some(image.key()),
+                                                            64.0,
+                                                            state.demo,
+                                                            &format!(
+                                                                "{} activity artwork",
+                                                                activity.name
+                                                            ),
+                                                        );
+                                                    }
+                                                    ui.vertical(|ui| {
+                                                        ui.set_width(ui.available_width());
+                                                        ui.add(
+                                                            egui::Label::new(
+                                                                RichText::new(activity.summary())
+                                                                    .strong()
+                                                                    .size(14.0),
+                                                            )
+                                                            .wrap(),
+                                                        );
+                                                        for text in [
+                                                            activity.details.as_deref(),
+                                                            activity.state.as_deref(),
+                                                        ]
+                                                        .into_iter()
+                                                        .flatten()
+                                                        {
+                                                            ui.add(
+                                                                egui::Label::new(
+                                                                    RichText::new(text)
+                                                                        .size(13.0)
+                                                                        .color(theme.muted),
+                                                                )
+                                                                .wrap(),
+                                                            );
+                                                        }
+                                                    });
+                                                });
                                                 ui.add_space(8.0);
                                             }
                                         }

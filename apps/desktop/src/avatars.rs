@@ -18,6 +18,7 @@ use tokio::sync::{mpsc as async_mpsc, watch};
 
 const MAX_ENCODED: usize = 2 * 1024 * 1024;
 const MAX_AVATAR_ENCODED: usize = 512 * 1024;
+const MAX_APPLICATION_METADATA: usize = 64 * 1024;
 const MAX_DISK: u64 = 1024 * 1024 * 1024;
 const MAX_FILES: usize = 4096;
 const RETENTION: Duration = Duration::from_secs(90 * 24 * 60 * 60);
@@ -121,6 +122,18 @@ fn clear_directory(root: Option<&Path>) -> Result<(), &'static str> {
 
 // Build, rather than accept, URLs. Even malformed service metadata cannot choose a host/path.
 fn cdn_url(key: &str) -> Option<String> {
+    if let Some(id) = key.strip_prefix("app-icon-") {
+        let id: Id = id.parse().ok()?;
+        return Some(format!("https://discord.com/api/v10/applications/{id}/rpc"));
+    }
+    if let Some(value) = key.strip_prefix("activity-") {
+        let (application, asset) = value.split_once('-')?;
+        let application: Id = application.parse().ok()?;
+        let asset: Id = asset.parse().ok()?;
+        return Some(format!(
+            "https://cdn.discordapp.com/app-assets/{application}/{asset}.png?size=128"
+        ));
+    }
     if let Some(id) = key.strip_prefix("emoji-") {
         let id: Id = id.parse().ok()?;
         return Some(format!(
@@ -251,6 +264,18 @@ fn embed_url(source: &str) -> Option<String> {
     Some(url.into())
 }
 
+fn application_icon_url(key: &str, bytes: &[u8]) -> Option<String> {
+    if bytes.len() > MAX_APPLICATION_METADATA {
+        return None;
+    }
+    let application: Id = key.strip_prefix("app-icon-")?.parse().ok()?;
+    let metadata: discord_protocol::presence::ApplicationIcon =
+        discord_protocol::decode(bytes).ok()?;
+    let icon = metadata.icon?;
+    (metadata.id == application && icon.len() == 32 && icon.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then(|| format!("https://cdn.discordapp.com/app-icons/{application}/{icon}.png?size=128"))
+}
+
 fn disk_key(key: &str) -> Option<String> {
     cdn_url(key)?;
     if key.starts_with("embed:") {
@@ -307,7 +332,13 @@ async fn run(
             let downloaded = tokio::select! {
                 biased;
                 _ = cancelled.changed() => break,
-                bytes = download(client, &url, &mut cooldown) => bytes,
+                bytes = async {
+                    let url = if key.starts_with("app-icon-") {
+                        let metadata = download(client, &url, &mut cooldown, MAX_APPLICATION_METADATA).await?;
+                        application_icon_url(&key, &metadata)?
+                    } else { url };
+                    download(client, &url, &mut cooldown, MAX_ENCODED).await
+                } => bytes,
             };
             if let Some(bytes) = downloaded {
                 image = decode(&bytes, embed);
@@ -334,7 +365,15 @@ async fn run(
     }
 }
 
-async fn download(client: &reqwest::Client, url: &str, cooldown: &mut Instant) -> Option<Vec<u8>> {
+async fn download(
+    client: &reqwest::Client,
+    url: &str,
+    cooldown: &mut Instant,
+    limit: usize,
+) -> Option<Vec<u8>> {
+    if Instant::now() < *cooldown {
+        return None;
+    }
     let mut response = client.get(url).send().await.ok()?;
     if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
         let seconds = response
@@ -353,18 +392,14 @@ async fn download(client: &reqwest::Client, url: &str, cooldown: &mut Instant) -
     if !response.status().is_success()
         || response
             .content_length()
-            .is_some_and(|length| length > MAX_ENCODED as u64)
+            .is_some_and(|length| length > limit as u64)
     {
         return None;
     }
-    let mut bytes = Vec::with_capacity(
-        response
-            .content_length()
-            .unwrap_or(4096)
-            .min(MAX_ENCODED as u64) as usize,
-    );
+    let mut bytes =
+        Vec::with_capacity(response.content_length().unwrap_or(4096).min(limit as u64) as usize);
     while let Some(chunk) = response.chunk().await.ok()? {
-        if bytes.len().checked_add(chunk.len())? > MAX_ENCODED {
+        if bytes.len().checked_add(chunk.len())? > limit {
             return None;
         }
         bytes.extend_from_slice(&chunk);
@@ -543,6 +578,57 @@ impl Disk {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn activity_artwork_urls_and_application_metadata_are_scoped() {
+        assert_eq!(
+            super::cdn_url("activity-7-8").as_deref(),
+            Some("https://cdn.discordapp.com/app-assets/7/8.png?size=128")
+        );
+        assert_eq!(
+            super::cdn_url("app-icon-7").as_deref(),
+            Some("https://discord.com/api/v10/applications/7/rpc")
+        );
+        for key in [
+            "activity-0-8",
+            "activity-7-0",
+            "activity-7-../8",
+            "activity-7-8?size=8192",
+            "activity-7-https://example.com",
+            "app-icon-0",
+            "app-icon-7/rpc",
+            "app-icon-7?token=secret",
+        ] {
+            assert!(super::cdn_url(key).is_none());
+        }
+        assert_eq!(
+            super::application_icon_url(
+                "app-icon-7",
+                br#"{"id":"7","icon":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"Ignored"}"#
+            )
+            .as_deref(),
+            Some(
+                "https://cdn.discordapp.com/app-icons/7/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png?size=128"
+            )
+        );
+        for bytes in [
+            br#"{"id":"8","icon":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#.as_slice(),
+            br#"{"id":"7","icon":null}"#,
+            br#"{"id":"7"}"#,
+            br#"{"id":"7","icon":"../../private"}"#,
+            br#"{"id":"7","icon":"https://example.com/icon.png"}"#,
+            br#"{"id":"7","icon":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/"}"#,
+        ] {
+            assert!(super::application_icon_url("app-icon-7", bytes).is_none());
+        }
+        assert!(
+            super::application_icon_url(
+                "app-icon-7",
+                &vec![b' '; super::MAX_APPLICATION_METADATA + 1]
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
     fn custom_emoji_urls_are_static_and_confined_to_discord_cdn() {
         assert_eq!(
             super::cdn_url("emoji-9001").as_deref(),
@@ -658,6 +744,7 @@ mod tests {
         let mut disk = Disk::open(account_a.clone()).unwrap();
         disk.write("default-0", &bytes).unwrap();
         disk.write(embed_key, &bytes).unwrap();
+        disk.write("app-icon-7", &bytes).unwrap();
         assert!(fs::read_dir(&account_a).unwrap().all(|entry| {
             !entry
                 .unwrap()
@@ -669,6 +756,7 @@ mod tests {
         let mut disk = Disk::open(account_a.clone()).unwrap();
         assert_eq!(disk.read("default-0").unwrap().unwrap(), bytes);
         assert_eq!(disk.read(embed_key).unwrap().unwrap(), bytes);
+        assert_eq!(disk.read("app-icon-7").unwrap().unwrap(), bytes);
         assert!(
             Disk::open(account_b.clone())
                 .unwrap()
@@ -694,6 +782,7 @@ mod tests {
         disk.prune(0, 0).unwrap();
         assert!(disk.read("default-0").unwrap().is_none());
         fs::remove_file(account_a.join(format!("{}.png", disk_key(embed_key).unwrap()))).unwrap();
+        fs::remove_file(account_a.join("app-icon-7.png")).unwrap();
         drop(disk);
         // Eviction and full directory deletion are disk workloads, not a worker-cancellation
         // deadline: deleting 4096 files can exceed five seconds on a Windows CI filesystem.
@@ -762,6 +851,12 @@ mod tests {
                 format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", MAX_ENCODED + 1).into_bytes(),
                 [b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".to_vec(), format!("{:x}\r\n", MAX_ENCODED + 1).into_bytes(), vec![0; MAX_ENCODED + 1], b"\r\n0\r\n\r\n".to_vec()].concat(),
                 b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/private\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+                {
+                    let metadata = br#"{"id":"7","icon":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#;
+                    [format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", metadata.len()).into_bytes(), metadata.to_vec()].concat()
+                },
+                format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", MAX_APPLICATION_METADATA + 1).into_bytes(),
+                [b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".to_vec(), format!("{:x}\r\n", MAX_APPLICATION_METADATA + 1).into_bytes(), vec![0; MAX_APPLICATION_METADATA + 1], b"\r\n0\r\n\r\n".to_vec()].concat(),
                 b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 123.5\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
             ] {
                 let (mut stream, _) = listener.accept().await.unwrap();
@@ -783,14 +878,54 @@ mod tests {
         let mut cooldown = Instant::now();
         let url = format!("http://{address}/synthetic.png");
         assert_eq!(
-            download(&client, &url, &mut cooldown).await.unwrap(),
+            download(&client, &url, &mut cooldown, MAX_ENCODED)
+                .await
+                .unwrap(),
             expected
         );
-        assert!(download(&client, &url, &mut cooldown).await.is_none());
-        assert!(download(&client, &url, &mut cooldown).await.is_none());
-        assert!(download(&client, &url, &mut cooldown).await.is_none());
-        assert!(download(&client, &url, &mut cooldown).await.is_none());
+        assert!(
+            download(&client, &url, &mut cooldown, MAX_ENCODED)
+                .await
+                .is_none()
+        );
+        assert!(
+            download(&client, &url, &mut cooldown, MAX_ENCODED)
+                .await
+                .is_none()
+        );
+        let metadata_url = format!("http://{address}/applications/7/rpc");
+        let limit = MAX_APPLICATION_METADATA;
+        // The metadata path also refuses redirects.
+        assert!(
+            download(&client, &metadata_url, &mut cooldown, limit)
+                .await
+                .is_none()
+        );
+        let metadata = download(&client, &metadata_url, &mut cooldown, limit)
+            .await
+            .unwrap();
+        assert_eq!(
+            application_icon_url("app-icon-7", &metadata).as_deref(),
+            Some(
+                "https://cdn.discordapp.com/app-icons/7/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png?size=128"
+            )
+        );
+        // Oversized declared length, oversized streamed body, then a rate limit.
+        for _ in 0..3 {
+            assert!(
+                download(&client, &metadata_url, &mut cooldown, limit)
+                    .await
+                    .is_none()
+            );
+        }
         assert!(cooldown.duration_since(Instant::now()) > Duration::from_secs(120));
         server.await.unwrap();
+        let retry_at = cooldown;
+        assert!(
+            download(&client, &metadata_url, &mut cooldown, limit)
+                .await
+                .is_none()
+        );
+        assert_eq!(cooldown, retry_at);
     }
 }

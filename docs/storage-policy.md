@@ -268,4 +268,12 @@ Gateway updates coalesce for 100 ms, at most 100 users / 128 KiB per batch. Init
 filtered to the first 256 known DM recipient IDs and emitted in bounded batches. Unknown users
 are never retained in the core cache. Disconnect hides cached DM presence until successful
 resume; fresh READY, resync, failure and logout discard it. Removed recipients are pruned.
-No activity assets, URLs, secrets, buttons or raw event payloads are persisted or retained.
+One optional artwork reference per activity is retained: two asset IDs, one application ID, or
+a Discord media-proxy path of at most 1,024 bytes. Its enum/vector storage and allocated path
+capacity count toward the same presence budgets. Secrets, buttons and raw event payloads are
+discarded. Images needed by the visible profile share the existing credential-free image worker,
+64-texture / 16-MiB texture cache and account-isolated 1-GiB / 4,096-file / 90-day disk cache.
+Application-icon metadata responses are capped at 64 KiB and discarded after validating the
+application ID and icon hash; only the decoded-valid PNG enters the disk cache. Application icons
+cached by application ID can remain stale until normal cache expiry or clear-cache. Proxy keys
+use the existing SHA-256 disk filenames. No new cache, schema or dependency is introduced.

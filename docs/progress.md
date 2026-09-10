@@ -1768,3 +1768,30 @@ changes; the final combined `cargo xtask check` passed again (353 tests, Clippy 
   in docs/performance.md. Native `--demo-call`/`--demo-voice` captures (dark and light) inspected;
   evidence in docs/pr-evidence/voice-call-ui. No live call, microphone or account action occurred;
   Windows/Linux rendering and real call behaviour with the new controls remain unverified.
+
+### Activity artwork in profile cards
+
+The owner confirmed rich-presence text works after launching main3307396, then requested the
+missing image. Baseline3307396 was preserved in a separate E: worktree/package directory;
+implementation branch feat/activity-artwork does not replace the running main executable.
+
+Profile activity cards now display a 64px static image to the left of name/details/state, for
+both guild and DM profiles. Prefer supplied large artwork, small artwork when large is absent,
+or a public application-icon lookup for application-only activities. Asset IDs and bounded
+Discord media-proxy paths pass through the same presence snapshot/update flow and memory
+budgets. Reuse the existing credential-free worker, cache, placeholders and texture lifetime;
+no dependency, separate cache or background activity-directory loading is added.
+
+Focused model/protocol/core, local HTTP/cache, and headless egui checks pass. The egui check
+verifies actual tessellated artwork appears and disappears with activities in guild/DM profiles;
+an initial assertion checked untessellated shapes and was corrected to inspect rendered meshes.
+Full cargo xtask check passes358 tests, formatting, strict Clippy and policy. The synthetic demo
+uses an original generated emblem, never live game artwork. Native before/after capture and
+process sampling remain unavailable following the owner's earlier Escape stop; a subsequent
+request authorized launching the live build for the owner, not renewed screenshot automation.
+No live account artwork test was performed. Required native evidence therefore remains a draft
+PR blocker under the delivery skill; no completion claim about live artwork or visual QA.
+Both release packages and cargo replay passed. Each executable grows17,408 bytes. Five paired
+replay medians40.3052 ->40.4948 ms are noise with unchanged timeline bounds; see performance.md.
+Independent cross-layer review found no additional blocking defect. Package measurement does not
+substitute for native screenshot/process or live-account artwork evidence.
