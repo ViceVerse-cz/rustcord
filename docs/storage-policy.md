@@ -213,16 +213,31 @@ search index, directory fetch or new worker/queue. Closing clears the query; log
 Schema 7 adds one checked integer `message_kind` (0..255) per cached message, with no new payload or cache. Existing unsupported rows migrate to the unknown sentinel 255; ordinary rows use 0. Reloaded history supplies the actual type. Existing account/item/byte/page limits remain in force. Migration and reopen/roundtrip tests cover retained rows and invalid values. Builds limited to schema 6 cannot reopen this cache. PR #28 independently uses schema 7 for content markers; merge both column-detected migrations and both save/load fields when integrating these branches.
 
 
-### Opt-in member synchronization diagnostics
+### Opt-in synchronization and compatibility diagnostics
 
-`SEREIN_MEMBER_DIAGNOSTICS=1` enables at most 64 fixed-label stderr lines per Gateway run,
-including reconnect attempts, plus one terminal session-failure label (under 8 KiB total). It is disabled
-by default. Labels distinguish subscription/cancellation, empty or populated SYNC,
-identity mismatch, decode/range/capacity failure and timeout. They contain no credentials,
-account/channel/list IDs, usernames, message content or raw payloads. No log file or
-telemetry is created by the application. If the owner redirects stderr to a file, that
-file is owner-managed and may also include unrelated framework stderr; the size bound
-above applies only to the prefixed Serein member diagnostics.
+`SEREIN_MEMBER_DIAGNOSTICS=1` enables fixed-label member synchronization diagnostics;
+`SEREIN_GATEWAY_DIAGNOSTICS=1` enables Gateway compatibility diagnostics. Both are off by default.
+Each enabled scope has a hard budget of 64 attempted records AND 8 KiB of formatted UTF-8
+output per Gateway run, shared across reconnect attempts. The desktop adds at most one
+fixed-label terminal session-failure line per enabled scope (less than 256 bytes). Failed or
+partial writes consume the attempted record's budget; a closed stderr never fails the session.
+No diagnostic strings, raw events, queue, archive, database entries or telemetry are retained.
+
+Member labels distinguish subscription/cancellation, empty or populated SYNC, identity mismatch,
+decode/range/capacity failure and timeout. Gateway labels distinguish an unsupported dispatch,
+a missing/empty dispatch name, and an unsupported opcode that stops the connection. Unsupported
+dispatches continue to be ignored and grant no capabilities. The diagnostic deliberately cannot
+identify the exact unknown service event: even its received name is excluded, along with payloads,
+credentials, account/channel/list IDs, usernames, message content and signed URLs.
+
+Output goes only to stderr. Serein creates no log file; explicit shell redirection is owner-managed
+and can also capture unrelated framework output, to which these limits do not apply. Repeated
+application runs appended to one external file are not bounded by a single Gateway-run budget.
+Windows GUI builds may have no inherited stderr; launch with deliberate stderr redirection to
+capture diagnostics. Do not use a real owner session in default tests. Synthetic tests check
+redaction, UTF-8 byte/line limits, disabled and broken-output cases, and message delivery plus
+heartbeat sequencing after unsupported dispatches. No live interoperability claim follows.
+
 
 
 The reliable Gateway/HTTP-to-UI queue accepts one bounded navigation refresh burst

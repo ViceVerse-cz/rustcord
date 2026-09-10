@@ -478,17 +478,20 @@ impl TimelineView {
 		let mut selected_reply = state.reply;
 		let output = scroll.show_viewport(ui, |ui, viewport| {
 			ui.spacing_mut().item_spacing.y = 0.0;
-			let (first, end, top) = visible_range(
+			let (first, _, top) = visible_range(
 				&self.rows,
 				(viewport.min.y - 100.0).max(0.0),
 				viewport.max.y + 100.0,
 			);
 			let (anchor, _, anchor_top) = visible_range(&self.rows, viewport.min.y, viewport.max.y);
-			self.anchor = self
-				.rows
-				.get(anchor)
-				.map(|(id, _)| (*id, viewport.min.y - anchor_top));
-			ui.add_space(top);
+			let content_top = ui.cursor().top();
+			let clip = ui.clip_rect();
+			// Measure leading overscan without changing the visible rows or parent bounds.
+			// Its new heights take effect together with anchor restoration next pass.
+			let mut leading = ui.new_child(egui::UiBuilder::new().id_salt("leading-measurements"));
+			leading.set_clip_rect(clip.with_max_y(clip.min.y));
+			leading.add_space(top);
+			ui.add_space(anchor_top);
 			let keyboard_focus = ui
 				.memory(|m| m.focused())
 				.and_then(|id| ui.ctx().read_response(id));
@@ -498,11 +501,22 @@ impl TimelineView {
 						.as_ref()
 						.is_some_and(|r| rect.contains_rect(r.rect))
 			});
-			for index in first..end {
+			let mut end = first;
+			for index in first..self.rows.len() {
+				let row_id = ui.make_persistent_id(self.rows[index].0.0);
+				let ui = if index < anchor {
+					&mut leading
+				} else {
+					&mut *ui
+				};
+				if index >= anchor && ui.cursor().top() > content_top + viewport.max.y + 100.0 {
+					break;
+				}
+				end = index + 1;
 				let (id, _) = &self.rows[index];
 				let can_mark_read = state.can_mark_read(*id);
 				let Some(message) = state.timeline.get(*id) else {
-					let row = ui.push_id(id.0, |ui| {
+					let row = ui.scope_builder(egui::UiBuilder::new().id(row_id), |ui| {
 						egui::Frame::NONE
 							.inner_margin(egui::Margin::symmetric(8, 8))
 							.show(ui, |ui| {
@@ -525,7 +539,7 @@ impl TimelineView {
 				let compact = grouped(previous, message, self.unread_boundary);
 				let new_day =
 					previous.is_none_or(|p| timestamp(p.id).date() != timestamp(*id).date());
-				let response = ui.push_id(id.0, |ui| {
+				let response = ui.scope_builder(egui::UiBuilder::new().id(row_id), |ui| {
 					if new_day {
 						let date = timestamp(*id);
 						divider(
@@ -937,7 +951,25 @@ impl TimelineView {
 			}
 			let used: f32 = self.rows[..end].iter().map(|(_, height)| *height).sum();
 			ui.add_space((total - used).max(0.0));
+			// Visible rows occupy their measured height immediately; leading overscan
+			// still occupies its old height until the next anchored pass.
+			for (index, (_, _, height)) in (first..end).zip(&measurements) {
+				if index >= anchor {
+					self.rows[index].1 = *height;
+				}
+			}
 		});
+		// ScrollArea applies wheel input after laying out its contents. Preserve that
+		// movement when new row measurements rebuild the timeline on the next pass.
+		let (anchor, _, anchor_top) = visible_range(
+			&self.rows,
+			output.state.offset.y,
+			output.state.offset.y + output.inner_rect.height(),
+		);
+		self.anchor = self
+			.rows
+			.get(anchor)
+			.map(|(id, _)| (*id, output.state.offset.y - anchor_top));
 		state.reply = selected_reply;
 		let at_bottom =
 			output.state.offset.y + output.inner_rect.height() >= output.content_size.y - 3.0;
@@ -2160,6 +2192,206 @@ mod tests {
 		assert!(
 			view.mark_read.is_none(),
 			"Historical window is not the latest message"
+		);
+	}
+	#[test]
+	fn underestimated_leading_row_does_not_hide_history_or_inflate_scroll_extent() {
+		fn contains_final_row(shape: &egui::Shape) -> bool {
+			match shape {
+				egui::Shape::Text(text) => text.galley.job.text.contains("Visible final row"),
+				egui::Shape::Vec(shapes) => shapes.iter().any(contains_final_row),
+				_ => false,
+			}
+		}
+
+		let mut state = State {
+			selected: Some(Id(20)),
+			revision: 1,
+			demo: true,
+			..Default::default()
+		};
+		for id in 1..=4 {
+			let mut message = text_message(id);
+			message.content = if id == 1 {
+				"Tall leading row\n".repeat(80)
+			} else if id == 4 {
+				"Visible final row".into()
+			} else {
+				"Visible anchor row".into()
+			};
+			state.timeline.insert(message, false, false).unwrap();
+		}
+		let ctx = egui::Context::default();
+		crate::design::apply(&ctx);
+		let mut view = TimelineView::default();
+		let mut avatars = crate::avatars::Avatars::default();
+		let mut frame_number = 0;
+		let mut frame = |view: &mut TimelineView, state: &mut State| {
+			frame_number += 1;
+			ctx.run_ui(
+				egui::RawInput {
+					time: Some(f64::from(frame_number) / 60.0),
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(900.0, 600.0),
+					)),
+					..Default::default()
+				},
+				|ui| view.show(ui, state, &mut None, &mut None, &mut avatars, &mut None),
+			)
+		};
+		for _ in 0..8 {
+			frame(&mut view, &mut state).drop_without_applying_deltas();
+		}
+
+		// Force a severe underestimate without invalidating the row key, as can
+		// happen when content geometry changes independently of its message data.
+		let key = row_key(
+			state.timeline.get(Id(1)).unwrap(),
+			None,
+			view.unread_boundary,
+		);
+		view.heights.insert(Id(1), (key, 76.0));
+		view.following = false;
+		// The extra short row before the anchor also catches premature cutoff while
+		// the leading measurement cursor is still below the visible viewport.
+		view.anchor = Some((Id(3), 5.0));
+		view.revision = u64::MAX;
+		let output = frame(&mut view, &mut state);
+		assert!(
+			view.heights[&Id(1)].1 > 600.0,
+			"Fixture must measure a tall leading row"
+		);
+		assert!(
+			output
+				.shapes
+				.iter()
+				.any(|shape| { shape.clip_rect.is_positive() && contains_final_row(&shape.shape) }),
+			"Leading measurement must not blank the visible rows"
+		);
+		assert!(
+			view.following,
+			"The compensated short content must reach its real bottom; hidden leading bounds must not create phantom scroll space"
+		);
+		output.drop_without_applying_deltas();
+	}
+
+	#[test]
+	fn wheel_scrolling_keeps_visible_messages_stable_during_measurement() {
+		fn texts(shape: &egui::Shape, out: &mut BTreeMap<String, f32>) {
+			match shape {
+				egui::Shape::Text(text) if text.galley.job.text.starts_with("Row ") => {
+					out.insert(text.galley.job.text.clone(), text.pos.y);
+				}
+				egui::Shape::Vec(shapes) => {
+					for shape in shapes {
+						texts(shape, out);
+					}
+				}
+				_ => {}
+			}
+		}
+		let mut worst_error = 0.0_f32;
+		for width in [900.0, 360.0] {
+			let mut state = State {
+				selected: Some(Id(20)),
+				revision: 1,
+				demo: true,
+				..Default::default()
+			};
+			for id in 1..=500 {
+				let mut message = text_message(id);
+				message.content = format!("Row {id}: {}", message.content);
+				if id % 7 == 0 {
+					message
+						.content
+						.push_str(&" Long wrapping content.".repeat(24));
+				}
+				state.timeline.insert(message, false, false).unwrap();
+			}
+			let ctx = egui::Context::default();
+			crate::design::apply(&ctx);
+			let mut view = TimelineView::default();
+			let mut avatars = crate::avatars::Avatars::default();
+			let mut frame_number = 0;
+			let mut frame = |view: &mut TimelineView, delta: f32| {
+				frame_number += 1;
+				let output = ctx.run_ui(
+					egui::RawInput {
+						time: Some(f64::from(frame_number) / 60.0),
+						screen_rect: Some(egui::Rect::from_min_size(
+							egui::Pos2::ZERO,
+							egui::vec2(width, 600.0),
+						)),
+						events: vec![
+							egui::Event::PointerMoved(egui::pos2(150.0, 200.0)),
+							egui::Event::MouseWheel {
+								unit: egui::MouseWheelUnit::Point,
+								delta: egui::vec2(0.0, delta),
+								modifiers: egui::Modifiers::NONE,
+								phase: egui::TouchPhase::Move,
+							},
+						],
+						..Default::default()
+					},
+					|ui| {
+						view.show(
+							ui,
+							&mut state,
+							&mut None,
+							&mut None,
+							&mut avatars,
+							&mut None,
+						)
+					},
+				);
+				let mut labels = BTreeMap::new();
+				for shape in &output.shapes {
+					if shape.clip_rect.is_positive() {
+						texts(&shape.shape, &mut labels);
+					}
+				}
+				output.drop_without_applying_deltas();
+				labels
+			};
+			for _ in 0..8 {
+				frame(&mut view, 0.0);
+			}
+			view.following = false;
+			view.anchor = Some((Id(200), 5.0));
+			view.revision = u64::MAX;
+			for _ in 0..8 {
+				frame(&mut view, 0.0);
+			}
+			let mut max_error = 0.0_f32;
+			// Small point deltas bypass wheel smoothing; each presented frame must move
+			// the same message by four points, including frames that discover new rows.
+			for (delta, frames) in [(4.0, 120), (-4.0, 240), (0.0, 4)] {
+				let mut previous = frame(&mut view, delta);
+				let mut comparisons = 0;
+				for _ in 0..frames {
+					let current = frame(&mut view, delta);
+					for (text, y) in &current {
+						if (50.0..500.0).contains(y)
+							&& let Some(before) = previous.get(text)
+						{
+							max_error = max_error.max((y - before - delta).abs());
+							comparisons += 1;
+						}
+					}
+					previous = current;
+				}
+				assert!(
+					comparisons >= frames,
+					"Every frame needs visible message evidence"
+				);
+			}
+			println!("width={width}, maximum scroll displacement error={max_error:.3}pt");
+			worst_error = worst_error.max(max_error);
+		}
+		assert!(
+			worst_error < 1.0,
+			"wheel movement must not bounce during reflow"
 		);
 	}
 	#[test]

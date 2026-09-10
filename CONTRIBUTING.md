@@ -23,3 +23,12 @@ Agent implementation requests follow the [idea-to-PR contract](AGENTS.md) and th
 [delivery skill](.agents/skills/serein-delivery/SKILL.md). Native UI changes include synthetic
 before/after screenshots; runtime changes include comparable release performance evidence.
 Use the PR template and leave blocked checks/evidence visible in a draft. Do not merge automatically.
+
+
+Use a separate Cargo target directory for each worktree (the default `target/` already does
+this). If `CARGO_TARGET_DIR` moves builds to another drive, give each worktree its own path;
+sharing one directory can reuse stale application/test artifacts across simultaneous edits.
+`xtask` resolves the invocation's Cargo workspace at runtime, including nested working
+directories, instead of embedding the checkout where its cached executable was compiled.
+After `cargo xtask check`, `node tests/xtask-workspace.cjs` checks that behavior without
+building or accessing an owner session.

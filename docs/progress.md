@@ -2,9 +2,9 @@
 
 ## Current scope and gates
 
-Current slice: Debian/Ubuntu distribution packaging from main 68526e8. Full SPEC completion
-remains active; native automation and live-account validation remain owner-controlled.
-See the Linux packaging entry for verification.
+Current slice: bounded Gateway compatibility diagnostics from main 31bf546. Full SPEC
+completion remains active; native automation and live-account validation remain owner-controlled.
+See the Gateway diagnostics entry for verification.
 
 ## Inline message spoilers (merged PR #36)
 
@@ -1844,6 +1844,41 @@ main/CI checks, not claimed as locally executed on Windows. Before integration, 
 security, licenses and fuzz CI passed; Windows CI was still pending. Native screenshots remain
 owner-paused and live artwork remains unverified; this explicit merge request accepts those
 reported limitations without changing repository protection or enabling account automation.
+
+
+## Bounded Gateway compatibility diagnostics (September 10, 2026)
+
+- Baseline main `31bf546a0754f157e131007003b6df70db57f353`; isolated branch
+  `feat/bounded-gateway-diagnostics`. SPEC7.2 unsupported dispatches now have opt-in fixed-label
+  diagnostics, including missing names and unsupported opcodes. Received event names, payloads,
+  credentials and account/message metadata are never logged. Existing ignore/protocol-error
+  behavior is preserved; no new capabilities are inferred from unknown inputs.
+- Reuses member diagnostics with independent 64-record/8-KiB attempted-output budgets per
+  enabled scope, across reconnects. No raw archive, retained strings, queue or new dependency.
+  Broken stderr and partial writes are charged but cannot panic these diagnostic paths.
+  The desktop's existing terminal diagnostic also uses fallible output, for either enabled scope.
+- Focused synthetic tests pass disabled output, exact UTF-8/line bounds, oversized labels,
+  failed writes, redaction and continued message/heartbeat flow after unsupported events.
+  A separate opt-in loopback run emitted exactly the three expected fixed labels and no
+  synthetic private markers. No owner account, desktop, microphone or speaker was accessed.
+- Validation exposed cached xtask selecting its compilation checkout instead of the caller's
+  workspace. `cargo locate-project --workspace` now resolves it at runtime. The new Node
+  regression failed on the old binary and passed after the fix, from a nested synthetic workspace.
+  CI runs that regression. Shared Cargo output also reused an old test binary; those initial
+  full-suite results are discarded. The private-target full suite passed 353 tests, including the new test names, plus Clippy,
+  formatting, policy and the workspace regression. CONTRIBUTING documents separate worktree
+  target directories. Main `34c4a8f` (activity artwork) is integrated with both sets of
+  documentation preserved. The combined private-target check passed 358 Rust tests, doctests,
+  formatting, strict all-feature Clippy, text-only compilation and policy; the cached-workspace
+  regression passed again. Both Windows release packages and replay passed from the private
+  target. Text executable size is unchanged; voice adds 1,536 bytes. Paired reducer medians
+  were 41.1287 ms before and 40.1348 ms after, with identical retained byte/row bounds; this
+  small variation is noise, not a speed claim. See performance.md for package measurements.
+- No visible UI change, so screenshots are not applicable. On the initial PR head, macOS, Linux,
+  security, licenses and fuzz CI passed; Windows was pending. Final integrated-head checks are
+  reported separately. Native desktop, storage tracing and owner-controlled live text/voice
+  evidence gates remain incomplete.
+
 ## September 10, 2026 — egui main and native emoji experiment
 
 Starting from clean `main` at `3307396005f72f2e2b26946204b27991881d4ad1`
@@ -1907,3 +1942,86 @@ stale shared-target artifacts from another worktree; retry could not replace the
 shared running xtask.exe (Windows access denied). Direct Clippy and tests above
 then passed. Full workspace test/policy completion and Linux packaging test remain
 unverified; CI will run them. No checks were disabled.
+
+## September 11, 2026 - message-history scroll stability
+
+Baseline `fd20dc90c5bf25bce1cfc313944661f973f3c9e1`, branch `fix/scroll-jitter`,
+isolated Windows worktree. The original main checkout and its untracked
+`target-relocation-remainder/` were preserved. Rust 1.98.1; unchanged pinned egui,
+text-only default and optional voice features. Baseline release packages were built
+from a separate detached worktree before application edits.
+
+The timeline saved its anchor before egui consumed wheel input, then restored that
+outdated position after measuring new rows. Leading row measurements also shifted
+already visible messages, while estimated trailing heights could leave gaps.
+The fix saves the post-input anchor, measures leading rows in a clipped child whose
+bounds do not move the visible content, and fills the viewport using actual row heights.
+Row widget IDs remain stable across those two layouts. Existing 500-row/content-byte
+bounds and caches are unchanged; no additional rendering passes or dependencies.
+
+Synthetic egui input regression: 500 messages with compact and long wrapped rows,
+900x600 and 360x600 point viewports, explicit 60 Hz timestamps, 120 upward wheel
+frames, 240 downward frames and four idle frames. Maximum visible-message displacement
+error was 80/76 points on the baseline and 0/0 after the fix. These are CPU layout
+coordinates, not native GPU frame-time or live Discord evidence. Existing focused
+timeline checks cover zoom, deletion, spoilers, keyboard actions and jumping to present.
+
+Native Computer Use remains owner-paused from the earlier Escape interruption.
+Before/after native screenshots and native process CPU/RSS sampling are therefore
+unavailable; no desktop automation, live conversation or running owner build was touched.
+The delivery skill requires a draft PR while this evidence is unavailable. Release
+package measurements and their limits are recorded in `docs/performance.md`.
+
+Validation: `cargo test --locked -p ui timeline::tests -- --nocapture` passed;
+`cargo xtask check` passed all 360 tests (one existing opt-in voice test ignored),
+formatting, strict workspace Clippy, text-only check and policy. The tall-leading-row
+regression also verifies first-frame visibility and absence of phantom scroll extent.
+`cargo xtask package` and `cargo xtask package-voice` passed; each executable grew by
+1,024 bytes. Native capture/process metrics and live scrolling remain unverified.
+The shared target initially reused an xtask binary containing the baseline worktree
+path; rebuilding only the xtask cache corrected that before the successful checks
+and final packages. Baseline packages and the owner's running build were preserved.
+
+Owner-requested main integration: preserved the newer DM-ordering fix `990d1c3`;
+the only conflict joined both appended progress sections. The combined
+`cargo xtask check` passed 361 tests, strict Clippy, formatting, text-only check
+and policy (one existing opt-in voice test ignored). Release/size evidence above
+describes `d6909bd` before this integration. The owner explicitly requested pushing
+to main with the previously reported pending CI and paused native evidence.
+
+## Combined DM/group activity ordering - September 11, 2026
+
+DMs and group DMs now share newest-message-first sidebar ordering. Incoming messages
+and confirmed sends update placement; composing or pending sends do not. Existing
+bounded activity cursors retain ordering across deleted latest messages and stale/null
+metadata replacements. Empty conversations fall back to their channel IDs; equal
+activity uses channel ID as a deterministic tie-breaker. Guild/category ordering and
+selection by channel ID remain unchanged. No new storage, dependencies or network calls.
+
+Baseline: clean task worktree from origin/main `fd20dc9`; original local main was
+`2d17054` with unrelated `target-relocation-remainder/`, preserved. Rust 1.98.1.
+The new regression failed against baseline ordering, then passed. Final
+`cargo xtask check` passed all 359 tests, formatting, strict Clippy and policy checks;
+`cargo xtask package` and `cargo xtask package-voice` passed on Windows. Independent
+read-only review found no remaining blockers. Release package/replay comparisons are
+recorded in `docs/performance.md` (text and voice executables each +48,640 bytes).
+
+The existing native `--demo` baseline was inspected; Computer Use was stopped with
+physical Escape before the matched before/after pair, so no visual-pair claim is made.
+The temporary screenshot-only fixture was removed from the delivered change.
+No live Discord session, microphone, macOS or Linux validation was performed.
+The owner explicitly requested rebase and direct push to main instead of a PR.
+
+Protocol basis checked September 11: Discord's [channel fields](https://docs.discord.com/developers/resources/channel)
+provide last_message_id and [snowflake IDs](https://docs.discord.com/developers/reference#snowflakes)
+encode creation time. Ordering is a local interpretation of available metadata;
+synthetic tests do not prove exact official-client ordering or live interoperability.
+
+September 11 owner-requested merge: integrated main 487069f (including scrolling/DM order); retained diagnostics and runtime xtask workspace resolution through formatting conflicts. Full `cargo xtask check` passed 361 tests, strict Clippy, text-only compilation and policy; `node tests/xtask-workspace.cjs` passed. Existing-head cross-platform CI was green. No native/live interaction performed.
+
+September 11 owner-requested audio merge: integrated main 0c41a11, preserving gateway
+diagnostics, scroll stability and DM ordering. Full `cargo xtask check` passed 366
+tests, strict Clippy, formatting, text-only compilation and policy. A stale shared
+model artifact required a package-scoped generated-cache clean before the successful
+rerun. Native playback/screenshots and final release measurements remain unverified;
+the owner paused native automation and explicitly requested merging their PRs.

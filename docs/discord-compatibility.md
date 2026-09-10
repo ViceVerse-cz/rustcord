@@ -458,3 +458,12 @@ available for unsupported formats and clips exceeding preview limits. There is n
 new Discord endpoint or voice protocol. The synthetic demo generates a WAV tone even
 for its MP3-labeled card; a separate original MP3 fixture checks real MP3 decoding.
 Live CDN/account interoperability and native output on other OSes remain unverified.
+
+### Unknown Gateway variants (September 10, 2026)
+
+Unknown dispatches remain ignored without granting capabilities; unsupported opcodes retain the
+existing protocol-error behavior. Opt-in `SEREIN_GATEWAY_DIAGNOSTICS=1` now records bounded fixed
+categories for these cases and missing dispatch names. Received names and payloads never enter
+diagnostics. This changes observability, not the supported service contract. Offline local-socket
+checks cover continued message delivery and heartbeat cursor advancement; normal-user service
+behavior remains unverified. See storage-policy.md for exact per-run limits and stderr handling.

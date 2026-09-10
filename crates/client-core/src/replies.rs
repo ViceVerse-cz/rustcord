@@ -44,6 +44,7 @@ impl State {
 			.iter_mut()
 			.find(|channel| channel.id == message.channel && channel.last_message == Some(target))
 		{
+			self.read_state.activity.observe_latest(channel.id, target);
 			channel.last_message = None;
 		}
 		if self.selected == Some(message.channel) {

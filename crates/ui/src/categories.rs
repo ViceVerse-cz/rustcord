@@ -11,11 +11,12 @@ enum Row<'a> {
 }
 
 fn rows<'a>(
-	channels: &'a [Channel],
+	state: &'a State,
 	guild: Option<Id>,
 	collapsed: &BTreeSet<Id>,
 	selected: Option<Id>,
 ) -> Vec<Row<'a>> {
+	let channels = &state.channels;
 	let mut categories: Vec<_> = channels
 		.iter()
 		.filter(|c| c.guild == guild && guild.is_some() && c.kind == 4)
@@ -45,6 +46,8 @@ fn rows<'a>(
 	for group in groups.values_mut().chain(threads.values_mut()) {
 		if guild.is_some() {
 			group.sort_unstable_by_key(|c| (c.position, c.id));
+		} else {
+			group.sort_unstable_by_key(|c| std::cmp::Reverse((state.channel_activity(c), c.id)));
 		}
 	}
 	let append = |channel: &'a Channel, collapsed: bool, rows: &mut Vec<Row<'a>>| {
@@ -109,7 +112,7 @@ impl MessagingUi {
 		self.collapsed_categories
 			.retain(|id| categories.contains(id));
 		let channel_rows = rows(
-			&state.channels,
+			state,
 			self.guild,
 			&self.collapsed_categories,
 			state.selected,
@@ -477,6 +480,103 @@ mod tests {
 		}
 	}
 	#[test]
+	fn direct_and_group_messages_follow_activity_together() {
+		let mut state = test_support::demo_state();
+		state.channels.retain(|c| c.guild.is_some());
+		for (id, kind, latest) in [
+			(30, 1, Some(100)),
+			(31, 1, Some(300)),
+			(32, 3, Some(200)),
+			(33, 3, None),
+			(34, 1, None),
+			(35, 3, Some(300)),
+		] {
+			let mut dm = channel(id, kind, 0, None);
+			dm.guild = None;
+			dm.last_message = latest.map(Id);
+			state.channels.push(dm);
+		}
+		let order = |state: &State| {
+			rows(state, None, &BTreeSet::new(), state.selected)
+				.into_iter()
+				.filter_map(|row| match row {
+					Row::Channel(channel, _) => Some(channel.id.0),
+					_ => None,
+				})
+				.collect::<Vec<_>>()
+		};
+		assert_eq!(order(&state), [35, 31, 32, 30, 34, 33]);
+		for latest in [model::Patch::Value(Id(90)), model::Patch::Null] {
+			state.apply(client_core::Envelope {
+				generation: state.generation,
+				event: client_core::Event::ReadState(client_core::read_state::Event::Latest(vec![
+					(Id(30), latest),
+				])),
+			});
+			assert_eq!(order(&state), [35, 31, 32, 30, 34, 33]);
+		}
+		state.apply(client_core::Envelope {
+			generation: state.generation,
+			event: client_core::Event::Message(test_support::message(400, Id(32))),
+		});
+		assert_eq!(order(&state), [32, 35, 31, 30, 34, 33]);
+		// Delayed older messages and deletion must not undo recent activity.
+		for event in [
+			client_core::Event::Message(test_support::message(150, Id(32))),
+			client_core::Event::Delete {
+				channel: Id(32),
+				id: Id(400),
+			},
+			client_core::Event::Delete {
+				channel: Id(35),
+				id: Id(300),
+			},
+			client_core::Event::DeleteBulk {
+				channel: Id(31),
+				ids: vec![Id(300)],
+			},
+		] {
+			state.apply(client_core::Envelope {
+				generation: state.generation,
+				event,
+			});
+			assert_eq!(order(&state), [32, 35, 31, 30, 34, 33]);
+		}
+		assert_eq!(state.selected, Some(Id(20)));
+		let Some(client_core::Command::History { request, .. }) = state.select(Id(30)) else {
+			panic!("Synthetic DM requests history");
+		};
+		state.apply(client_core::Envelope {
+			generation: state.generation,
+			event: client_core::Event::History {
+				channel: Id(30),
+				request,
+				older: false,
+				messages: vec![],
+			},
+		});
+		state
+			.drafts
+			.insert(Id(30), "Synthetic outgoing activity".into());
+		let Some(client_core::Command::Send { nonce, .. }) = state.prepare_send() else {
+			panic!("Synthetic DM can send");
+		};
+		assert_eq!(order(&state), [32, 35, 31, 30, 34, 33]);
+		let mut sent = test_support::message(600, Id(30));
+		sent.nonce = Some(nonce.clone());
+		state.apply(client_core::Envelope {
+			generation: state.generation,
+			event: client_core::Event::SendResult {
+				nonce,
+				result: Ok(sent),
+			},
+		});
+		assert_eq!(order(&state), [30, 32, 35, 31, 34, 33]);
+		assert_eq!(state.selected, Some(Id(30)));
+		state.channels.retain(|c| c.guild.is_some());
+		assert!(order(&state).is_empty());
+	}
+	#[test]
 	fn unsupported_channel_opens_confirmation_by_keyboard_without_selecting() {
 		let mut state = State {
 			user: Some(model::User {
@@ -563,13 +663,17 @@ mod tests {
 				})
 				.collect::<Vec<_>>()
 		};
+		let layout = State {
+			channels: channels.clone(),
+			..State::default()
+		};
 		assert_eq!(
-			ids(rows(&channels, Some(Id(100)), &BTreeSet::new(), None)),
+			ids(rows(&layout, Some(Id(100)), &BTreeSet::new(), None)),
 			[3, 2, 4, 7, 8, 5, 9]
 		);
 		assert_eq!(
 			ids(rows(
-				&channels,
+				&layout,
 				Some(Id(100)),
 				&BTreeSet::from([Id(4)]),
 				Some(Id(8))
@@ -596,14 +700,18 @@ mod tests {
 			channel(28, 0, 0, Some(Id(27))),
 		];
 		hierarchy.iter_mut().find(|c| c.id == Id(26)).unwrap().guild = Some(Id(101));
-		let expanded = rows(&hierarchy, Some(Id(100)), &BTreeSet::new(), None);
+		let hierarchy_state = State {
+			channels: hierarchy.clone(),
+			..State::default()
+		};
+		let expanded = rows(&hierarchy_state, Some(Id(100)), &BTreeSet::new(), None);
 		assert_eq!(expanded.len(), hierarchy.len() - 1);
 		assert_eq!(
 			ids(expanded),
 			[20, 21, 22, 23, 24, 25, 27, 28, 4, 7, 9, 8, 10, 11, 12, 13]
 		);
 		let collapsed = rows(
-			&hierarchy,
+			&hierarchy_state,
 			Some(Id(100)),
 			&BTreeSet::from([Id(4)]),
 			Some(Id(8)),

@@ -1622,11 +1622,19 @@ impl Desktop {
 			});
 		}
 		if let Some(failure) = terminal {
-			if std::env::var_os("SEREIN_MEMBER_DIAGNOSTICS").as_deref()
-				== Some(std::ffi::OsStr::new("1"))
-			{
-				// One additional fixed-label diagnostic when the session terminates.
-				eprintln!("[Serein members] Session stopped: {}", failure.label());
+			for (setting, scope) in [
+				("SEREIN_MEMBER_DIAGNOSTICS", "members"),
+				("SEREIN_GATEWAY_DIAGNOSTICS", "gateway"),
+			] {
+				if std::env::var_os(setting).as_deref() == Some(std::ffi::OsStr::new("1")) {
+					use std::io::Write;
+					// One extra fixed-label terminal line per enabled scope; closed stderr is OK.
+					let _ = writeln!(
+						std::io::stderr(),
+						"[Serein {scope}] Session stopped: {}",
+						failure.label()
+					);
+				}
 			}
 			self.connection = None;
 			self.pending_save = None;
