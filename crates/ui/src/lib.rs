@@ -41,6 +41,12 @@ impl Default for VoiceGain {
 	}
 }
 
+pub struct AttachmentPaste {
+	pub target: egui::Id,
+	pub text: Option<String>,
+	pub image: Option<std::sync::Arc<egui::ColorImage>>,
+}
+
 #[derive(Default)]
 pub struct MessagingUi {
 	search: search::SearchUi,
@@ -76,6 +82,10 @@ pub struct MessagingUi {
 	pub draft_restore_pending: bool,
 	pub attachment: Option<(String, u64)>,
 	pub attach_requested: bool,
+	pub attachment_paste_requested: Option<AttachmentPaste>,
+	pub pasted_text: Option<(Id, egui::Id, String)>,
+	paste_key_handled: bool,
+	pasted_text_frame: Option<u64>,
 	pub remove_attachment_requested: bool,
 	pub cancel_upload_requested: bool,
 	pub upload_busy: bool,
@@ -1285,6 +1295,93 @@ impl MessagingUi {
 				)));
 			edit_state.store(ctx, composer_id);
 		}
+		let pasted_text = self.pasted_text.take();
+		let paste_key_released = ctx.input(|input| {
+			input.events.iter().any(|event| {
+				matches!(
+					event,
+					egui::Event::Key {
+						key: egui::Key::V,
+						pressed: false,
+						..
+					}
+				)
+			})
+		});
+		let paste_enabled = keyboard_enabled
+			&& !editing_here
+			&& !self.ime_active
+			&& !ime_this_frame
+			&& ctx.memory(|m| m.has_focus(composer_id));
+		if let Some((paste_channel, target, text)) = pasted_text {
+			if paste_enabled && paste_channel == channel && target == composer_id {
+				ctx.input_mut(|i| i.events.push(egui::Event::Paste(text)));
+				self.pasted_text_frame = Some(ctx.cumulative_frame_nr());
+			} else {
+				state.status = "Paste cancelled; focus the message and paste again";
+			}
+		} else if paste_enabled && self.pasted_text_frame != Some(ctx.cumulative_frame_nr()) {
+			let mut request = AttachmentPaste {
+				target: composer_id,
+				text: None,
+				image: None,
+			};
+			let mut requested = false;
+			ctx.input_mut(|input| {
+				// eframe consumes native paste key-down. File-only clipboards can emit
+				// no Paste event, so the matching key-up is also a paste trigger.
+				let shortcut = input.events.iter().any(|event| {
+					matches!(event,
+					egui::Event::Key { key: egui::Key::V, pressed, repeat: false, modifiers, .. }
+					if !modifiers.shift && (modifiers.ctrl || modifiers.command || modifiers.alt)
+						&& (*pressed || !self.paste_key_handled))
+				});
+				let has_paste = input.events.iter().any(|event| {
+					matches!(event, egui::Event::Paste(_) | egui::Event::PasteImage(_))
+				});
+				if has_paste || shortcut {
+					requested = true;
+					self.paste_key_handled = true;
+					input.events.retain_mut(|event| match event {
+						egui::Event::Paste(text) => {
+							request.text = Some(std::mem::take(text));
+							false
+						}
+						egui::Event::PasteImage(image) => {
+							request.image = Some(image.clone());
+							false
+						}
+						egui::Event::Key {
+							key: egui::Key::V, ..
+						} => false,
+						// Option+V can also produce a platform text character.
+						egui::Event::Text(_) if shortcut => false,
+						_ => true,
+					});
+				}
+			});
+			if requested {
+				if request
+					.text
+					.as_ref()
+					.is_some_and(|text| text.len() > MAX_DRAFT_BYTES)
+				{
+					state.status = "Pasted text exceeds the draft limit";
+				} else if request
+					.image
+					.as_ref()
+					.is_some_and(|image| image.pixels.len() > 4 * 1024 * 1024)
+				{
+					state.status = "Paste an image with at most 4 million pixels";
+				} else {
+					self.attachment_paste_requested = Some(request);
+					self.upload_busy = true;
+				}
+			}
+		}
+		if paste_key_released {
+			self.paste_key_handled = false;
+		}
 		let composer_content = if editing_here {
 			self.editing
 				.as_ref()
@@ -1374,7 +1471,7 @@ impl MessagingUi {
                             icons::button(ui, icons::Icon::Attach, 28.0, "Attach a file")
                         })
                         .inner
-                        .on_hover_text("Choose or drop one file up to 20 MB. Upload starts only when you press Send.");
+                        .on_hover_text("Choose, drop, or paste one file (Ctrl/Cmd/Option+V) up to 20 MB. Send starts the upload.");
                     if attach.clicked() {
                         self.attach_requested = true;
                     }
