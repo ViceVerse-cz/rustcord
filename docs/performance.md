@@ -1397,6 +1397,41 @@ Member storage remains 100 rows/128 KiB. Pending presence is at most 100 complet
 batches admit 64 KiB including allocated vector/string capacity. The existing global event queue
 budget is unchanged. There is no new dependency, cache, persistence or subscription flag.
 
+## Message images and continuation spacing — September 10, 2026
+
+Baseline `c4ae54d` versus this task's changes, same Rust 1.98.1 lockfile, macOS 27.0
+(26A428), Apple M1 Pro / 16 GiB, wgpu/Metal on the built-in 3024×1964 Retina display.
+Release packages built with `cargo xtask package` and `cargo xtask package-voice` on both
+revisions. Sizes include the locally ad-hoc signed executable, the complete package's file
+bytes (text package excludes its sibling voice package), and `tar -czf` distribution.
+Package snapshots precede the final evidence documentation; no dependencies were changed.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable, bytes | 47,434,160 | 47,451,120 | +16,960 (+0.036%) |
+| Text installed files, bytes | 48,060,349 | 48,079,527 | +19,178 (+0.040%) |
+| Text tar.gz, bytes | 30,648,320 | 30,658,560 | +10,240 (+0.033%) |
+| Voice executable, bytes | 50,270,384 | 50,270,928 | +544 (+0.001%) |
+| Voice installed files, bytes | 51,126,784 | 51,129,546 | +2,762 (+0.005%) |
+| Voice tar.gz, bytes | 31,969,280 | 31,969,280 | +0 (+0.000%) |
+| Peak sampled RSS, MiB | 150.52 | 131.53 | -18.98 (-12.6%) |
+| Final sampled RSS, MiB | 150.52 | 124.33 | -26.19 (-17.4%) |
+| Median sampled idle CPU | 0.0% | 0.0% | 0.0 percentage points |
+
+Idle method: fresh native text-only `--demo --demo-chat` processes, default 1120×760 window,
+10-second launch warmup, then ten `ps -p PID -o %cpu=,rss=` samples one second apart.
+No interaction during the matched sampling window; separate native screenshot runs exercised
+scrolling and the image viewer. No helper process was observed in the text demo. Exact egui
+display scale, GPU memory, physical footprint, voice-call memory and p95 latency were not
+instrumented. RSS is resident process memory, not a heap-retention or GPU measure.
+
+These are single-run samples on a shared desktop, not proof of a memory improvement. An
+earlier scroll/screenshot run under concurrent compilation ranged from 73.58 MiB final RSS
+on baseline to 118.66 MiB after; the matched idle rerun above reversed that ordering. OS
+compression, process age and desktop load make the observed RSS delta inconclusive. Both
+matched samples exceed the 80 MiB idle target; no claim is made that this change meets it.
+The two variants' executable deltas are below 0.04%. No frame-latency or live-media claim.
+Raw samples and package counts: `docs/pr-evidence/message-images-spacing/measurements.json`.
 
 ## Unread navigation and forward history - September 10, 2026
 

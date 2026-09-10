@@ -72,6 +72,20 @@ pub fn message(id: u64, channel: Id) -> Message {
                     },
                 },
                 Attachment {
+                    id: Id(702),
+                    filename: "synthetic-second-landscape.png".into(),
+                    description: Some("Second original landscape · offline gallery preview".into()),
+                    content_type: Some("image/png".into()),
+                    size: 2048,
+                    spoiler: false,
+                    media: EmbedMedia {
+                        url: Some("https://cdn.discordapp.com/attachments/1/702/synthetic-second-landscape.png".into()),
+                        proxy_url: None,
+                        width: 480,
+                        height: 320,
+                    },
+                },
+                Attachment {
                     id: Id(701),
                     filename: "synthetic-notes.txt".into(),
                     description: None,
