@@ -440,6 +440,7 @@ mod tests {
             .apply_notification_preferences(Event::Presence(Some(false)))
             .unwrap();
         let message = |id, channel| Message {
+            kind: 0,
             id: Id(id),
             channel: Id(channel),
             author: User {
@@ -455,6 +456,7 @@ mod tests {
             nonce: None,
             reply_to: None,
             unsupported: false,
+            extra_content: Default::default(),
             embeds: vec![],
             embeds_suppressed: false,
             attachments: vec![],

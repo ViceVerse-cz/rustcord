@@ -370,7 +370,7 @@ impl DiscordApi {
                         if profile.user.id != user {
                             return Err(Failure::Protocol);
                         }
-                        Ok(profile)
+                        Ok(Box::new(profile))
                     });
                 Event::Profile {
                     user,

@@ -116,7 +116,11 @@ pub(crate) fn selectable(
         .then(|| image(ui))
         .flatten()
     {
-        image.paint_at(ui, response.rect);
+        let size = image.calc_size(response.rect.size(), image.size());
+        image.paint_at(
+            ui,
+            egui::Rect::from_center_size(response.rect.center(), size),
+        );
     } else {
         ui.painter().text(
             response.rect.center(),

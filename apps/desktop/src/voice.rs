@@ -338,6 +338,8 @@ impl Voice {
                 || deafened
                 || (ui.voice_push_to_talk && !ui.voice_ptt_active);
             live.audio.set_controls(muted, deafened);
+            live.audio
+                .set_gain(ui.voice_gain.input_percent, ui.voice_gain.output_percent);
             live.controls.send_if_modified(|control| {
                 if control.muted == muted && control.deafened == deafened {
                     false
@@ -459,6 +461,7 @@ impl Voice {
             deafened: false,
         });
         audio.set_controls(listen_only || ui.voice_push_to_talk, false);
+        audio.set_gain(ui.voice_gain.input_percent, ui.voice_gain.output_percent);
         let session = pending.session.ok_or("Missing voice session")?;
         let session_copy = Zeroizing::new(session.expose().to_owned());
         let (token, endpoint) = pending.server.ok_or("Missing voice server")?;

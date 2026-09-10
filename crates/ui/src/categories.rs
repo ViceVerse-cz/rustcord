@@ -246,7 +246,8 @@ impl MessagingUi {
                                             self.profile = Some(user.clone());
                                         }
                                         let archives = channel.guild.is_some() && matches!(channel.kind, 0 | 5 | 15 | 16);
-                                        let width = (ui.available_width() - if archives { 68.0 } else { 0.0 }).max(0.0);
+                                        let external = !channel.supports_text();
+                                        let width = (ui.available_width() - if archives { 68.0 } else { 0.0 } - if external { 36.0 } else { 0.0 }).max(0.0);
                                         let response = ui.allocate_ui(egui::vec2(width, 36.0), |ui| ui.add_enabled(
                                             channel.supports_text() && state.can_view(channel.id),
                                             egui::Button::selectable(
@@ -277,6 +278,14 @@ impl MessagingUi {
                                             archive.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button,
                                                 allowed && ui.is_enabled(), format!("Archive for {}", channel.name)));
                                             if archive.clicked() { self.archive_parent = Some(channel.id); }
+                                        }
+                                        if external {
+                                            let allowed = visible && crate::markdown::discord_url(channel, None).is_some();
+                                            let open = ui.add_enabled(allowed, egui::Button::new("↗").min_size(egui::vec2(28.0, 32.0)))
+                                                .on_hover_text("Open in Discord");
+                                            open.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button,
+                                                allowed && ui.is_enabled(), format!("Open {} in Discord", channel.name)));
+                                            if open.clicked() { self.timeline.opening = crate::markdown::discord_url(channel, None); }
                                         }
                                         response
                                     })
@@ -354,6 +363,74 @@ mod tests {
             member_list_id: None,
         }
     }
+    #[test]
+    fn unsupported_channel_opens_confirmation_by_keyboard_without_selecting() {
+        let mut state = State {
+            user: Some(model::User {
+                id: Id(2),
+                name: "Synthetic".into(),
+                avatar: None,
+                discriminator: 0,
+            }),
+            guilds: vec![model::Guild {
+                id: Id(100),
+                name: "Synthetic".into(),
+                icon: None,
+                emojis: None,
+            }],
+            channels: vec![channel(9, 13, 0, None)],
+            demo: true,
+            ..State::default()
+        };
+        state
+            .permissions
+            .replace(test_support::permission_snapshot(&state))
+            .unwrap();
+        let mut view = MessagingUi {
+            guild: Some(Id(100)),
+            ..Default::default()
+        };
+        for permitted in [true, false] {
+            if !permitted {
+                state.permissions = Default::default();
+            }
+            view.timeline.opening = None;
+            let ctx = egui::Context::default();
+            for key in [egui::Key::Tab, egui::Key::Enter] {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(240.0, 180.0),
+                        )),
+                        events: vec![egui::Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: egui::Modifiers::NONE,
+                        }],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        assert!(view.channel_list(ui, &state).is_none());
+                        assert!(ui.min_rect().right() <= ui.max_rect().right() + 1.0);
+                    },
+                );
+                assert!(output.platform_output.commands.is_empty());
+                output.drop_without_applying_deltas();
+            }
+            assert_eq!(
+                view.timeline.opening.as_deref(),
+                permitted.then_some("https://discord.com/channels/100/9")
+            );
+            assert!(state.selected.is_none());
+        }
+        view.timeline.opening = Some("https://discord.com/channels/100/9".into());
+        view.clear();
+        assert!(view.timeline.opening.is_none());
+    }
+
     #[test]
     fn service_order_orphans_collapsed_selection_and_category_buttons() {
         let channels = vec![
@@ -489,7 +566,7 @@ mod tests {
         assert!(state.select(Id(7)).is_none());
         let ctx = egui::Context::default();
         let mut picked = None;
-        for key in [egui::Key::Tab, egui::Key::Enter] {
+        for key in [egui::Key::Tab, egui::Key::Tab, egui::Key::Enter] {
             ctx.run_ui(
                 egui::RawInput {
                     events: vec![egui::Event::Key {

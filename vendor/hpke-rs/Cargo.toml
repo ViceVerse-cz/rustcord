@@ -34,9 +34,7 @@ hazmat = []
 hpke-test = ["std"]
 hpke-test-prng = [
     "hpke-rs-rust-crypto?/deterministic-prng",
-    "hpke-rs-libcrux?/deterministic-prng",
 ]
-libcrux = ["dep:hpke-rs-libcrux"]
 rustcrypto = ["dep:hpke-rs-rust-crypto"]
 serialization = [
     "serde",
@@ -48,7 +46,6 @@ std = [
     "rand_core/std",
     "hpke-rs-crypto/std",
     "hpke-rs-rust-crypto?/std",
-    "hpke-rs-libcrux?/std",
 ]
 
 [lib]
@@ -67,11 +64,6 @@ harness = false
 
 [dependencies.hpke-rs-crypto]
 version = "0.6.1"
-default-features = false
-
-[dependencies.hpke-rs-libcrux]
-version = "0.6.1"
-optional = true
 default-features = false
 
 [dependencies.hpke-rs-rust-crypto]
@@ -115,9 +107,6 @@ features = ["html_reports"]
 [dev-dependencies.hpke-rs-crypto]
 version = "0.6.1"
 features = ["std"]
-
-[dev-dependencies.hpke-rs-libcrux]
-version = "0.6.1"
 
 [dev-dependencies.hpke-rs-rust-crypto]
 version = "0.6.1"

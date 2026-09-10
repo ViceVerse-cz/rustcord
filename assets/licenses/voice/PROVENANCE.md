@@ -23,7 +23,9 @@ This directory covers newly added direct voice libraries and the bundled codec/b
 | openmls-LICENSE.txt | [source](https://raw.githubusercontent.com/openmls/openmls/47dbedecad0c1fd8eb5368d582250ebfcc1e1ce6/LICENSE) | `43e5e3c4b5cca67f9ea912f7e1929702a848aa765d3b3e14f25d3838a5a5565d` |
 | hpke-rs-LICENSE-MPL-2.0.txt | [canonical Mozilla text](https://www.mozilla.org/media/MPL/2.0/index.txt) | `3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04` |
 
-Registry package archive checksums from Cargo.lock:
+Registry package archive checksums from the original Cargo.lock (Davey is now a local
+manifest-only patch; its original archive checksum remains recorded below and in
+`vendor/davey/SEREIN-PATCH.md`):
 
 - chacha20poly1305 0.10.1: `10cd79432192d1c0f4e1a0fef9527696cc039165d729fb41b3f4f4f354c2dc35`
 - cpal 0.18.2: `6f02e8d0327b42d3e2e4ab2119af397344eb9fc54a34bf0ddeaa1277af8681f1`
