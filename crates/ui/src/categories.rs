@@ -306,11 +306,20 @@ impl MessagingUi {
                             inner.spacing_mut().item_spacing.x = if dm_list { 12.0 } else { 6.0 };
                             if channel.guild.is_none() {
                                 if let Some(user) = channel.recipients.first() {
-                                    if self
-                                        .avatars
-                                        .show(&mut inner, user, 32.0, state.demo)
-                                        .clicked()
+                                    let avatar =
+                                        self.avatars.show(&mut inner, user, 32.0, state.demo);
+                                    if channel.kind == 1
+                                        && let Some(status) =
+                                            crate::profiles::presence(state, user.id, None).0
                                     {
+                                        design::presence_dot(
+                                            &inner,
+                                            avatar.rect,
+                                            crate::profiles::presence_color(status),
+                                            colors.sidebar,
+                                        );
+                                    }
+                                    if avatar.clicked() {
                                         self.profile = Some(user.clone());
                                     }
                                 } else {
@@ -342,8 +351,16 @@ impl MessagingUi {
                                     " · hidden"
                                 });
                             }
-                            let subtitle = (dm_list && channel.kind == 3)
-                                .then(|| format!("{} Members", channel.recipients.len().max(1)));
+                            let subtitle = if dm_list && channel.kind == 1 {
+                                channel.recipients.first().and_then(|user| {
+                                    let (_, custom, activities) =
+                                        crate::profiles::presence(state, user.id, None);
+                                    crate::profiles::subtitle(custom, activities)
+                                })
+                            } else {
+                                (dm_list && channel.kind == 3)
+                                    .then(|| format!("{} Members", channel.recipients.len().max(1)))
+                            };
                             let name =
                                 egui::Label::new(design::medium(ui, label, 15.0).color(name_color))
                                     .truncate()

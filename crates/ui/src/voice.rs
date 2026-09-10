@@ -878,6 +878,7 @@ mod tests {
                     roles: vec![],
                     status: None,
                     custom_status: None,
+                    activities: vec![],
                 }),
             })
             .collect();

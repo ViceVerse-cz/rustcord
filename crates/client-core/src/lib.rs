@@ -6,7 +6,7 @@ pub mod permissions;
 mod permissions_tests;
 
 pub mod notifications;
-mod presence;
+pub mod presence;
 pub mod profile;
 pub mod reactions;
 pub mod read_state;
@@ -24,7 +24,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const MAX_DRAFT_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_CONTENT: usize = 2000;
 pub const MAX_NAV: usize = 4000;
-pub const MAX_MEMBER_PRESENCE_BYTES: usize = 64 * 1024;
+pub const MAX_MEMBER_PRESENCE_BYTES: usize = 128 * 1024;
 pub const MAX_EVENT_BYTES: usize = 4 * 1024 * 1024;
 pub const EVENT_SLOTS: usize = 8; // UI drain batch; reliable events share a 32 MiB byte budget.
 pub const COMMAND_SLOTS: usize = 16; // each admitted command <= 16 KiB
@@ -136,6 +136,7 @@ pub enum Event {
         emojis: Vec<CustomEmoji>,
     },
     Members(MemberList),
+    DirectPresence(Vec<presence::Update>),
     MemberPresence {
         guild: Id,
         channel: Id,
@@ -223,6 +224,7 @@ pub struct State {
     pub auth: auth::AuthState,
     pub user: Option<User>,
     pub members: Option<MemberList>,
+    pub direct_presences: Vec<MemberPresence>,
     pub member_request: u64,
     pub guilds: Vec<Guild>,
     pub channels: Vec<Channel>,
@@ -269,6 +271,7 @@ impl Default for State {
             auth: auth::AuthState::Unauthenticated,
             user: None,
             members: None,
+            direct_presences: vec![],
             member_request: 0,
             guilds: vec![],
             channels: vec![],
@@ -377,10 +380,11 @@ impl State {
                 .map(|user| {
                     Some(Member {
                         roles: vec![],
-                        user,
                         nick: None,
                         status: None,
                         custom_status: None,
+                        activities: vec![],
+                        user,
                     })
                 })
                 .collect()
@@ -404,14 +408,16 @@ impl State {
             rows,
             freshness,
         });
-        Some(Command::Members {
+        let command = Command::Members {
             guild: channel
                 .guild
                 .filter(|_| list_id.is_some() && self.freshness != Freshness::Unavailable),
             channel: Some(channel.id),
             request: self.member_request,
             list_id,
-        })
+        };
+        self.apply_direct_presence(&[]);
+        Some(command)
     }
     pub fn close_members(&mut self) -> Command {
         self.member_request = self.member_request.wrapping_add(1);
@@ -694,6 +700,12 @@ impl State {
         {
             if envelope.event.bytes() <= MAX_MEMBER_PRESENCE_BYTES {
                 self.apply_member_presence(*guild, *channel, *request, updates);
+            }
+            return;
+        }
+        if let Event::DirectPresence(updates) = &envelope.event {
+            if envelope.event.bytes() <= MAX_MEMBER_PRESENCE_BYTES {
+                self.apply_direct_presence(updates);
             }
             return;
         }
@@ -1021,6 +1033,7 @@ impl State {
                     self.end_voice_channel(channel);
                     self.read_state.forget(channel);
                     self.channels.retain(|c| c.id != channel);
+                    self.prune_direct_presence();
                     if self.selected == Some(channel) {
                         self.invalidate_members();
                         self.timeline.clear();
@@ -1042,7 +1055,7 @@ impl State {
                 }
                 Ok(())
             }
-            Event::MemberPresence { .. } => {
+            Event::MemberPresence { .. } | Event::DirectPresence(_) => {
                 unreachable!("presence handled before timeline revision")
             }
             Event::Members(list) => {
@@ -1058,6 +1071,7 @@ impl State {
                     return;
                 }
                 if list.rows.len() > 100
+                    || list.rows.iter().flatten().any(|row| !row.valid())
                     || list
                         .rows
                         .iter()
@@ -1077,6 +1091,7 @@ impl State {
                 guilds,
                 channels,
             } => {
+                self.direct_presences.clear();
                 if self
                     .user
                     .as_ref()
@@ -1441,6 +1456,7 @@ impl State {
                 Ok(())
             }
             Event::Resync | Event::PermissionsChanged => {
+                self.direct_presences.clear();
                 self.permissions = permissions::Permissions::default();
                 self.read_state.cancel();
                 self.clear_profile();
@@ -1504,6 +1520,9 @@ impl State {
             .is_some_and(|view| !self.can_archive(view.parent, view.kind))
         {
             self.clear_archives();
+        }
+        if access_changed {
+            self.prune_direct_presence();
         }
         self.enforce_resident_budget();
     }
@@ -1571,6 +1590,7 @@ impl State {
             _ => {}
         }
         if failure.ends_session() {
+            self.direct_presences.clear();
             self.clear_cached_history();
             self.clear_search();
             self.search_target = None;
@@ -1686,6 +1706,13 @@ impl Event {
                         + updates
                             .iter()
                             .map(MemberPresence::heap_bytes)
+                            .sum::<usize>()
+                }
+                Self::DirectPresence(updates) => {
+                    updates.capacity() * size_of::<presence::Update>()
+                        + updates
+                            .iter()
+                            .map(presence::Update::heap_bytes)
                             .sum::<usize>()
                 }
                 Self::Members(list) => {

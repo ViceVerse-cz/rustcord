@@ -88,6 +88,7 @@ impl Calls {
             nick: member.nick.map(|n| n.chars().take(128).collect()),
             status: None,
             custom_status: None,
+            activities: vec![],
         })
     }
     pub(super) fn snapshot(&self, guild: &mut GuildDto, partial: bool) -> Result<Event, Failure> {
@@ -259,7 +260,11 @@ impl Calls {
             channel: state.channel_id.filter(|_| allowed),
             user: state.user_id,
             session: secret,
-            member: state.member.and_then(|m| self.member(m)).or(member),
+            member: state
+                .member
+                .and_then(|m| self.member(m))
+                .or(member)
+                .map(Box::new),
             muted: participant.muted,
             deafened: participant.deafened,
             server_muted: participant.server_muted,

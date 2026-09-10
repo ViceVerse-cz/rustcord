@@ -270,12 +270,56 @@ pub enum Delivery {
     Ambiguous,
 }
 
-/// Complete, bounded presence values for one already-loaded member row.
+pub const MAX_RICH_ACTIVITIES: usize = 4;
+
+/// Text-only activity metadata. Assets, secrets and actions are never retained.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RichActivity {
+    pub kind: u8,
+    pub name: String,
+    pub details: Option<String>,
+    pub state: Option<String>,
+}
+impl RichActivity {
+    pub fn valid(&self) -> bool {
+        matches!(self.kind, 0..=3 | 5)
+            && valid_presence_text(&self.name)
+            && self.details.as_deref().is_none_or(valid_presence_text)
+            && self.state.as_deref().is_none_or(valid_presence_text)
+    }
+    pub fn heap_bytes(&self) -> usize {
+        self.name.capacity()
+            + self.details.as_ref().map_or(0, String::capacity)
+            + self.state.as_ref().map_or(0, String::capacity)
+    }
+    pub fn summary(&self) -> String {
+        let verb = match self.kind {
+            0 => "Playing",
+            1 => "Streaming",
+            2 => "Listening to",
+            3 => "Watching",
+            5 => "Competing in",
+            _ => return self.name.clone(),
+        };
+        format!("{verb} {}", self.name)
+    }
+}
+
+fn valid_presence_text(text: &str) -> bool {
+    !text.is_empty()
+        && text.len() <= 512
+        && text.chars().count() <= 128
+        && text.trim() == text
+        && !text.chars().any(char::is_control)
+}
+
+/// Complete, bounded presence values for an already-loaded user.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MemberPresence {
     pub user: Id,
     pub status: Option<String>,
     pub custom_status: Option<String>,
+    pub activities: Vec<RichActivity>,
 }
 
 impl MemberPresence {
@@ -285,17 +329,22 @@ impl MemberPresence {
                 .status
                 .as_deref()
                 .is_none_or(|status| matches!(status, "online" | "idle" | "dnd" | "offline"))
-            && self.custom_status.as_deref().is_none_or(|text| {
-                !text.is_empty()
-                    && text.len() <= 512
-                    && text.chars().count() <= 128
-                    && text.trim() == text
-                    && !text.chars().any(char::is_control)
-            })
+            && self
+                .custom_status
+                .as_deref()
+                .is_none_or(valid_presence_text)
+            && self.activities.len() <= MAX_RICH_ACTIVITIES
+            && self.activities.iter().all(RichActivity::valid)
     }
     pub fn heap_bytes(&self) -> usize {
         self.status.as_ref().map_or(0, String::capacity)
             + self.custom_status.as_ref().map_or(0, String::capacity)
+            + self.activities.capacity() * size_of::<RichActivity>()
+            + self
+                .activities
+                .iter()
+                .map(RichActivity::heap_bytes)
+                .sum::<usize>()
     }
 }
 
@@ -308,8 +357,22 @@ pub struct Member {
     pub status: Option<String>,
     /// Custom status text with any unicode emoji; bounded, never a rich activity.
     pub custom_status: Option<String>,
+    pub activities: Vec<RichActivity>,
 }
 impl Member {
+    pub fn valid(&self) -> bool {
+        self.user.id.0 != 0
+            && self
+                .status
+                .as_deref()
+                .is_none_or(|status| matches!(status, "online" | "idle" | "dnd" | "offline"))
+            && self
+                .custom_status
+                .as_deref()
+                .is_none_or(valid_presence_text)
+            && self.activities.len() <= MAX_RICH_ACTIVITIES
+            && self.activities.iter().all(RichActivity::valid)
+    }
     pub fn bytes(&self) -> usize {
         size_of::<Self>()
             + self.roles.capacity() * size_of::<Id>()
@@ -317,6 +380,12 @@ impl Member {
             + self.nick.as_ref().map_or(0, String::capacity)
             + self.status.as_ref().map_or(0, String::capacity)
             + self.custom_status.as_ref().map_or(0, String::capacity)
+            + self.activities.capacity() * size_of::<RichActivity>()
+            + self
+                .activities
+                .iter()
+                .map(RichActivity::heap_bytes)
+                .sum::<usize>()
     }
 }
 #[derive(Clone)]
@@ -327,6 +396,73 @@ pub struct MemberList {
     pub rows: Vec<Option<Member>>,
     pub total: u64,
     pub freshness: Freshness,
+}
+
+#[cfg(test)]
+mod presence_tests {
+    use super::*;
+
+    #[test]
+    fn rich_presence_validates_retained_fields_and_accounts_for_allocations() {
+        let activity = RichActivity {
+            kind: 0,
+            name: "Synthetic".into(),
+            details: Some("Level 2".into()),
+            state: Some("In a party".into()),
+        };
+        let mut presence = MemberPresence {
+            user: Id(2),
+            status: None,
+            custom_status: None,
+            activities: vec![activity.clone(); MAX_RICH_ACTIVITIES],
+        };
+        assert!(presence.valid());
+        assert_eq!(
+            presence.heap_bytes(),
+            presence.activities.capacity() * size_of::<RichActivity>()
+                + presence
+                    .activities
+                    .iter()
+                    .map(RichActivity::heap_bytes)
+                    .sum::<usize>()
+        );
+        presence.activities.push(activity.clone());
+        assert!(!presence.valid());
+        for text in [
+            "",
+            " padded",
+            "control\n",
+            &"x".repeat(129),
+            &"🌙".repeat(129),
+        ] {
+            let mut invalid = activity.clone();
+            invalid.name = text.into();
+            assert!(!invalid.valid());
+            invalid.name = activity.name.clone();
+            invalid.details = Some(text.into());
+            assert!(!invalid.valid());
+            invalid.details = None;
+            invalid.state = Some(text.into());
+            assert!(!invalid.valid());
+        }
+        for kind in [4, 6, 255] {
+            assert!(
+                !RichActivity {
+                    kind,
+                    ..activity.clone()
+                }
+                .valid()
+            );
+        }
+        let mut allocated = activity;
+        allocated.name.reserve(100);
+        assert_eq!(
+            allocated.heap_bytes(),
+            allocated.name.capacity()
+                + allocated.details.as_ref().unwrap().capacity()
+                + allocated.state.as_ref().unwrap().capacity()
+        );
+    }
 }
 
 #[cfg(test)]

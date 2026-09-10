@@ -151,7 +151,7 @@ pub enum Event {
     },
     State {
         guild: Option<Id>,
-        member: Option<Member>,
+        member: Option<Box<Member>>,
         server_muted: bool,
         server_deafened: bool,
         request: Option<u64>,
@@ -200,7 +200,8 @@ impl Event {
             Self::State {
                 session, member, ..
             } => {
-                session.as_ref().map_or(0, Secret::bytes) + member.as_ref().map_or(0, Member::bytes)
+                session.as_ref().map_or(0, Secret::bytes)
+                    + member.as_deref().map_or(0, Member::bytes)
             }
             Self::Server {
                 token, endpoint, ..
@@ -404,7 +405,7 @@ impl ClientState {
                             guild,
                             channel,
                             participant,
-                            member: member.or(previous),
+                            member: member.map(|member| *member).or(previous),
                         });
                     }
                 }
@@ -691,6 +692,7 @@ mod tests {
             nick: None,
             status: None,
             custom_status: None,
+            activities: vec![],
         });
         state.apply_voice(Event::Snapshot {
             guild: None,
