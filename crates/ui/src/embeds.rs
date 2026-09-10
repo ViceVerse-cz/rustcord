@@ -59,14 +59,14 @@ fn link(
 fn text(
     ui: &mut egui::Ui,
     message: &Message,
-    part: u16,
-    source: &str,
+    part: (u16, &str),
     cache: &mut FormatCache,
     opening: &mut Option<String>,
     profile: &mut Option<model::User>,
+    media: (&mut Avatars, bool),
 ) {
-    let formatted = cache.get_part(message.id, part, source);
-    formatted.show_mentions(ui, opening, &message.mentions, profile);
+    let formatted = cache.get_part(message.id, part.0, part.1);
+    formatted.show_with_images(ui, opening, &message.mentions, profile, media.0, media.1);
     if formatted.limited {
         ui.small("Text display limited");
     }
@@ -150,11 +150,11 @@ pub fn show(
                                         text(
                                             ui,
                                             message,
-                                            part,
-                                            description,
+                                            (part, description),
                                             cache,
                                             opening,
                                             profile,
+                                            (images, demo),
                                         );
                                     }
                                 });
@@ -191,11 +191,11 @@ pub fn show(
                                         text(
                                             column,
                                             message,
-                                            part + 1 + (field + offset) as u16,
-                                            &f.value,
+                                            (part + 1 + (field + offset) as u16, &f.value),
                                             cache,
                                             opening,
                                             profile,
+                                            (images, demo),
                                         );
                                     }
                                 });

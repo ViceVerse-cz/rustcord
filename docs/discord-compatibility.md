@@ -64,3 +64,44 @@ Read-state continuation (September 10): channel read cursors and latest-message 
 Search continuation (September 10): guild conversations use the guild search route with an exact channel filter; DMs use the channel route. Search content is percent-encoded, with timestamp-descending order and explicit max_id pagination. One replaceable task uses existing REST permits, deadlines and cooldowns. Indexing responses require another deliberate Search action after the service delay; no automatic polling, broad account search, advanced filters, NSFW override or search-result persistence is implemented. Service totals and partial-index status are displayed as supplied, not asserted complete. Opening a result fetches up to 50 history messages ending at that ID and positions the timeline there; unavailable results are reported. Existing reload returns to latest history. Search snapshots are cleared on relevant edits/deletes, navigation, disconnect, permission invalidation and logout. Original-client sources supply wire evidence only; no source-code blocks were copied and no authenticated service request was used as validation.
 
 Login compatibility correction (September 10): READY read_state accepts both the legacy array and the versioned entries/version/partial object, under the same 4000-entry bound. Serein's Identify does not request the versioned_read_states capability; rejecting the legacy shape previously rejected the entire login payload. The capability's effect is described in the original [discord.py-self capability definitions](https://github.com/dolfies/discord.py-self/blob/master/discord/flags.py), rechecked September 10. Partial snapshots leave omitted channels unknown. Identify capabilities remain unchanged. Static error labels distinguish account verification, Gateway discovery, READY decoding and connection setup without exposing payloads, credentials or remote error text. Synthetic regression and loopback evidence do not establish actual account login success.
+
+### Unicode emoji artwork (September 10, 2026)
+
+Formatted messages (including existing formatted embed/search surfaces), Unicode reaction
+counts and the reaction menu use bundled [Twemoji 17.0.3](https://github.com/jdecked/twemoji/releases/tag/v17.0.3)
+artwork from Twitter and contributors, under CC BY 4.0. This is a local rendering feature,
+not a new protocol endpoint or proof of matching Discord's current artwork revision.
+Grapheme matching supports flags, modifiers, keycaps and ZWJ sequences, including optional
+emoji presentation selectors. Code, explicit text-presentation and unknown sequences remain
+literal. Original message/reaction strings and outgoing requests are unchanged. Whole-message
+Copy preserves the original text; drag-selection of rendered text excludes inline image widgets.
+The editable composer continues to use native font text. Custom server emoji and animation
+are not supplied by Twemoji and retain their existing text fallback. Validation is synthetic;
+no live Discord session was used.
+
+### Custom server emoji, chat picker and copying (September 10, 2026)
+
+The current server's catalog is received from READY and known-guild GUILD_CREATE, updated
+by GUILD_EMOJIS_UPDATE, and cleared on GUILD_DELETE. The documented emoji fields and update
+shape are supported by [Emoji Resource](https://docs.discord.com/developers/resources/emoji)
+and [Gateway Events](https://docs.discord.com/developers/events/gateway-events#guild-emojis-update).
+Normal-user READY remains unofficial/unstable; this change was tested with synthetic events
+and local sockets, not a live account. Joining new guilds' full navigation remains pre-existing
+unsupported behavior. Missing catalogs are displayed as unavailable rather than empty.
+
+Formatted message/profile/embed text renders `<:name:id>` and `<a:name:id>` as static CDN
+images, using the documented [custom emoji CDN endpoint](https://docs.discord.com/developers/reference#image-formatting-cdn-endpoints).
+Custom reactions use the same bounded media worker. Deleted/failing previews have a fixed
+placeholder and retain copyable original markup. Standard Unicode and custom image widgets
+participate in text selection: copying a selection retains Unicode sequences/custom markup,
+and right-click Copy emoji copies the entire token. Selection endpoints treat each image as
+one item, avoiding broken ZWJ sequences or partial custom markup. Whole-message Copy is unchanged.
+
+The chat Emoji button opens a searchable Unicode/name palette and current-server tab. Choosing
+inserts at the saved text cursor or replaces its selection, preserves Unicode presentation
+selectors, and records the draft without sending. Escape/close restores keyboard focus.
+Only catalog entries explicitly available, unmanaged and unrestricted by roles are enabled;
+unknown eligibility remains disabled. Cross-server/DM catalog selection and full role/Nitro
+entitlement inference are not implemented; the service remains authoritative for actual sends.
+Animated emoji are inserted with their original animated markup and shown as still previews.
+The editable composer itself continues to display raw Unicode/markup while editing.

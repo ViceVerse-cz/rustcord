@@ -6532,10 +6532,12 @@ version = "0.1.0"
 dependencies = [
  "client-core",
  "egui",
+ "image",
  "model",
  "pulldown-cmark",
  "skrifa",
  "time",
+ "unicode-segmentation",
  "url",
 ]
 

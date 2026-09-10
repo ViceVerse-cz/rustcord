@@ -163,6 +163,16 @@ fn package(voice: bool) -> Result<(), String> {
         )
         .map_err(|e| e.to_string())?;
     }
+    std::fs::copy(
+        "assets/twemoji/LICENSE-GRAPHICS",
+        resources.join("licenses/Twemoji-CC-BY-4.0.txt"),
+    )
+    .map_err(|e| e.to_string())?;
+    std::fs::copy(
+        "assets/twemoji/LICENSE-UNICODE",
+        resources.join("licenses/Unicode-LICENSE.txt"),
+    )
+    .map_err(|e| e.to_string())?;
     copy_directory(
         std::path::Path::new("assets/licenses/files"),
         &resources.join("licenses/files"),

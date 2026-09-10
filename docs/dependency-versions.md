@@ -427,3 +427,9 @@ Rust toolchain: 1.98.1, edition 2024. Host resolution: aarch64-apple-darwin. Car
 | zmij | 1.0.23 | MIT |
 | zune-core | 0.5.3 | MIT OR Apache-2.0 OR Zlib |
 | zune-jpeg | 0.5.15 | MIT OR Apache-2.0 OR Zlib |
+
+September 10, 2026 Twemoji rendering: `ui` directly reuses already-locked `image 0.25.10`
+(PNG only, default features disabled) and `unicode-segmentation 1.13.3`; no new resolved
+Cargo package was added. Bundled Twemoji 17.0.3 artwork is CC BY 4.0, with provenance,
+modifications and full license in `assets/twemoji`. The atlas generator uses Pillow 11.3.0
+only during development; it is not a runtime or Cargo-build requirement.

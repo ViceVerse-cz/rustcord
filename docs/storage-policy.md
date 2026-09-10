@@ -40,3 +40,25 @@ Image attachment metadata remains bounded by 10 attachments / 64 KiB retained me
 Explicit Download creates an original image only at the user-selected location. Suggested filenames are sanitized; downloads never reinterpret message filenames as destination paths, follow redirects, or send credentials to the CDN. Existing regular files are replaced only after native Save confirmation and a complete, flushed transfer. A new destination is published without overwriting a file created meanwhile. The one worker closes/removes its sibling partial on cancellation or failure; cleanup failures are visible. Forced termination or a filesystem error can leave a `.serein-*.partial` sibling, and filesystems without hard links cannot use the atomic new-file publication path. Normal close waits for the active worker; a cancelled native dialog must still be dismissed. Downloads are explicit user files, not account cache entries, and survive logout/cache clearing. See [chat-images.md](chat-images.md) for limits and test evidence.
 
 Conversation search queries and result snippets are session-only, limited to one 25-result / 64 KiB page and a 256-character query. Neither is written to SQLite or diagnostics. Opening a result uses normal bounded history retrieval, whose revalidated messages can enter the existing account cache.
+
+Twemoji artwork is public bundled data, not an account cache: one 6,002,931-byte PNG
+and a fixed 4,009-entry Unicode index are embedded in the executable. Startup decodes
+one 2,048×2,016 RGBA atlas (15.75 MiB) before the first render callback; the GPU texture
+has the same pixel payload, with driver overhead additional. Decode/conversion/upload
+can temporarily hold multiple copies. The context retains the single atlas until exit,
+including across logout; there are no emoji downloads, disk writes, or growing texture
+queues. Unknown sequences and explicit text-presentation selectors remain font text.
+
+Custom server emoji catalogs live only in session navigation memory: at most 1,000 entries
+and 256 KiB allocated data per server, including names and role lists, within the shared
+4 MiB navigation budget. Reconnect READY replaces catalogs; full emoji-update events replace
+a server catalog; deletion clears it and old session generations cannot repopulate it.
+No catalog table or schema migration is added. Custom PNG previews reuse the existing
+account-isolated image worker/disk cache and its 64-texture / 16 MiB GPU working set, request
+and retry limits, 512 KiB icon decode input and 128×128 decoded dimension cap. They use
+validated numeric `emoji-ID` keys and credential-free Discord CDN PNG requests (64px static
+preview), never arbitrary URLs or automatic animation. Cache clear/logout follows the existing
+image-cache policy. Synthetic IDs 9001/9002 only get local generated images in `--demo`.
+The standard picker palette has 3,953 fixed named entries and renders only viewport rows;
+search input is capped at 64 characters. Picker insertion honors character and total draft
+capacity limits and never sends a message on selection.

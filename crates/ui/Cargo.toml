@@ -11,6 +11,8 @@ client-core.workspace = true
 pulldown-cmark = { version = "=0.13.4", default-features = false }
 url.workspace = true
 time.workspace = true
+unicode-segmentation = "=1.13.3"
+image = { version = "=0.25.10", default-features = false, features = ["png"] }
 
 [dev-dependencies]
 skrifa = { version = "=0.44.0", default-features = false, features = ["std"] }
