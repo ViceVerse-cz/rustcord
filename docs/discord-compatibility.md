@@ -78,3 +78,30 @@ Copy preserves the original text; drag-selection of rendered text excludes inlin
 The editable composer continues to use native font text. Custom server emoji and animation
 are not supplied by Twemoji and retain their existing text fallback. Validation is synthetic;
 no live Discord session was used.
+
+### Custom server emoji, chat picker and copying (September 10, 2026)
+
+The current server's catalog is received from READY and known-guild GUILD_CREATE, updated
+by GUILD_EMOJIS_UPDATE, and cleared on GUILD_DELETE. The documented emoji fields and update
+shape are supported by [Emoji Resource](https://docs.discord.com/developers/resources/emoji)
+and [Gateway Events](https://docs.discord.com/developers/events/gateway-events#guild-emojis-update).
+Normal-user READY remains unofficial/unstable; this change was tested with synthetic events
+and local sockets, not a live account. Joining new guilds' full navigation remains pre-existing
+unsupported behavior. Missing catalogs are displayed as unavailable rather than empty.
+
+Formatted message/profile/embed text renders `<:name:id>` and `<a:name:id>` as static CDN
+images, using the documented [custom emoji CDN endpoint](https://docs.discord.com/developers/reference#image-formatting-cdn-endpoints).
+Custom reactions use the same bounded media worker. Deleted/failing previews have a fixed
+placeholder and retain copyable original markup. Standard Unicode and custom image widgets
+participate in text selection: copying a selection retains Unicode sequences/custom markup,
+and right-click Copy emoji copies the entire token. Selection endpoints treat each image as
+one item, avoiding broken ZWJ sequences or partial custom markup. Whole-message Copy is unchanged.
+
+The chat Emoji button opens a searchable Unicode/name palette and current-server tab. Choosing
+inserts at the saved text cursor or replaces its selection, preserves Unicode presentation
+selectors, and records the draft without sending. Escape/close restores keyboard focus.
+Only catalog entries explicitly available, unmanaged and unrestricted by roles are enabled;
+unknown eligibility remains disabled. Cross-server/DM catalog selection and full role/Nitro
+entitlement inference are not implemented; the service remains authoritative for actual sends.
+Animated emoji are inserted with their original animated markup and shown as still previews.
+The editable composer itself continues to display raw Unicode/markup while editing.

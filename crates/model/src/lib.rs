@@ -92,11 +92,18 @@ pub fn valid_avatar_hash(hash: &str) -> bool {
 }
 #[derive(Clone, PartialEq, Eq)]
 pub struct Guild {
+    pub emojis: Option<Vec<CustomEmoji>>,
     pub id: Id,
     pub name: String,
     pub icon: Option<String>,
 }
 impl Guild {
+    pub fn bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.name.capacity()
+            + self.icon.as_ref().map_or(0, String::capacity)
+            + self.emojis.as_ref().map_or(0, custom_emoji_bytes)
+    }
     pub fn icon_key(&self) -> Option<String> {
         self.icon
             .as_deref()

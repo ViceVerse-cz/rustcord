@@ -8,7 +8,7 @@ pub mod search;
 use attachments::AttachmentList;
 use embeds::EmbedList;
 use model::{Channel, Guild, Id, Message, MessagePatch, Patch, User};
-pub use reactions::ReactionTarget;
+pub use reactions::{GuildEmojisUpdate, ReactionTarget};
 use serde::Deserialize;
 use serde_json::value::RawValue;
 
@@ -180,6 +180,8 @@ mod channel_tests {
 }
 #[derive(Deserialize)]
 pub struct GuildDto {
+    #[serde(default)]
+    pub emojis: Option<reactions::CustomEmojiList>,
     pub id: Id,
     #[serde(default)]
     pub properties: Option<GuildProperties>,
@@ -266,6 +268,7 @@ impl Ready {
                     channel
                 }));
                 Guild {
+                    emojis: g.emojis.map(|emojis| emojis.0),
                     id: g.id,
                     name: g.name.chars().take(128).collect(),
                     icon: g.icon.filter(|hash| model::valid_avatar_hash(hash)),

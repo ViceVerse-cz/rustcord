@@ -6,6 +6,7 @@ pub fn show(
     enabled: bool,
     writing: bool,
     refreshing: bool,
+    media: (&mut crate::avatars::Avatars, bool),
 ) -> Option<Option<ReactionEmoji>> {
     let mut action = None;
     ui.horizontal_wrapped(|ui| {
@@ -18,6 +19,8 @@ pub fn show(
             let label=format!("{} {}",reaction.emoji.label(),reaction.count);
             let button = if reaction.emoji.id.is_none() {
                 crate::emoji::button(ui.ctx(), &reaction.emoji.label(), reaction.count.to_string())
+            } else if let Some(image) = reaction.emoji.id.and_then(|id| media.0.custom_image(ui.ctx(), id, 18.0, media.1)) {
+                egui::Button::image_and_text(image.alt_text(reaction.emoji.label()), reaction.count.to_string()).image_tint_follows_text_color(false)
             } else { egui::Button::new(label.clone()) };
             let response=ui.add_enabled(enabled && !writing && reaction.emoji.name.is_some(),button.small().selected(reaction.me));
             response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, response.enabled(), reaction.me, &label));
@@ -77,7 +80,14 @@ mod tests {
                     ..Default::default()
                 };
                 let mut output = ctx.run_ui(input, |ui| {
-                    action = show(ui, Some(&values), enabled, false, false);
+                    action = show(
+                        ui,
+                        Some(&values),
+                        enabled,
+                        false,
+                        false,
+                        (&mut crate::avatars::Avatars::default(), true),
+                    );
                 });
                 assert!(output.platform_output.commands.is_empty());
                 output.textures_delta.clear();
