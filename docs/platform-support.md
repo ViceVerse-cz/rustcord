@@ -6,9 +6,9 @@ Target platforms are Windows, macOS and Linux. **macOS arm64, Windows x64 and Li
 |---|---|---|
 | macOS | Rust 1.98.1, Xcode command-line tools; Metal/wgpu, system WKWebView, Keychain | Local arm64 build and native synthetic window tested on macOS 27.0 beta, Apple M1 Pro / 16 GiB |
 | Windows | Rust MSVC toolchain, Visual Studio C++ build tools, system graphics drivers, WebView2 Runtime 101+ (current supported runtime recommended), Credential Manager | Local x64 checks and unsigned release packaging on Windows 11 build 26200; synthetic process/window startup passed. Visual interaction, InPrivate behavior, IME and accessibility unverified |
-| Linux | Rust, C compiler, pkg-config, GTK >=4.10, WebKitGTK 6.0, libxkbcommon, X11/Wayland development packages, Vulkan-compatible GPU/driver, Secret Service session bus/keyring | Ubuntu 26.04 x64 / WSL2 text and voice releases and Debian package smoke passed; X11/Wayland rendering and login window unverified |
+| Linux | Rust, C compiler, pkg-config, GTK >=4.10, WebKitGTK 6.0, fontconfig, libxkbcommon, X11/Wayland development packages, Vulkan-compatible GPU/driver, Secret Service session bus/keyring | Ubuntu 26.04 x64 / WSL2 text and voice releases and Debian package smoke passed; X11/Wayland rendering and login window unverified |
 
-Debian/Ubuntu development packages typically include `build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libxrandr-dev libxcursor-dev libvulkan-dev`. Package names vary by distribution. SQLite is bundled through rusqlite; it is an embedded client cache, with no database service.
+Debian/Ubuntu development packages typically include `build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev libfontconfig1-dev libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libxrandr-dev libxcursor-dev libvulkan-dev`. Package names vary by distribution. SQLite is bundled through rusqlite; it is an embedded client cache, with no database service.
 
 Linux packaging also requires `python3 dpkg-dev desktop-file-utils`.
 
@@ -25,3 +25,8 @@ The webview lives only during login: WKWebView on macOS, WebView2 on Windows, GT
 `cargo xtask package-voice` stages a separate voice-enabled release under `dist/voice` (`dist/voice/Serein.app` on macOS). The default `cargo xtask package` stays text-only. The macOS bundle includes its microphone-use description; actual microphone permission, capture/playback, device switching and sleep/resume have not been exercised. Windows x64 voice release packaging and synthetic protocol/audio tests pass; physical audio and live calls remain unverified on Windows. Linux x64 text/voice release builds and Debian package smoke passed on Ubuntu 26.04 under WSL2; native Linux desktop/audio runtime remains unverified. CMake is a source-build dependency, not a runtime voice service.
 
 Both packages use the same application identity and account cache; they are build variants, not isolated accounts. Device choices and push-to-talk settings last only for the current session. Focused V push-to-talk has no global-key guarantee; use headphones because there is no acoustic echo cancellation. No signing, desktop integration, physical audio or live-compatibility claim follows from compilation alone.
+
+Native emoji use eframe system-font fallback and installed OS color fonts. macOS
+Apple Color Emoji was visually checked with a synthetic moon status on September
+10, 2026. Windows/Linux emoji coverage is unverified and depends on installed fonts
+(e.g. Segoe UI Emoji / Noto Color Emoji); no OS font is redistributed.

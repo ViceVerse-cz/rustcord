@@ -70,7 +70,7 @@ impl MessagingUi {
             || self.reading_sidebar_constrained != constrained
         {
             ui.ctx()
-                .data_mut(|data| data.remove::<PanelState>(egui::Id::new("channels")));
+                .data_mut(|data| data.remove::<PanelState>(ui.id().with("channels")));
             self.reading_sidebar_applied = Some(self.reading_preferences.sidebar_width);
         }
         self.reading_sidebar_constrained = constrained;

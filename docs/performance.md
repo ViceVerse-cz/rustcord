@@ -1806,3 +1806,42 @@ release commands reported 3m14s text and 3m19s voice. These one-off shared-host 
 exclude package-tool timing and are not a before/after performance comparison. No desktop or
 audio device was opened. Minimum distro compatibility is limited by generated dependencies
 (in this host's artifacts, libc6 >=2.43); older systems and actual installation remain unverified.
+## September 10, 2026 — egui main with native font fallback
+
+Baseline: clean `3307396005f72f2e2b26946204b27991881d4ad1` (registry egui 0.36.2).
+After: egui main `65e7db3c06d779c60ac56647bdd3011ed8ba1cbd`, with eframe
+`system_fonts` and its color-font support. macOS 27.0, Apple M1 Pro, 16 GiB,
+Rust 1.98.1, unchanged release profile, wgpu Metal. Both variants were built
+and ad-hoc signature-verified with `cargo xtask package` / `package-voice`.
+Baseline bundles were copied before edits to a separate ignored directory.
+
+| Metric (bytes) | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| text executable | 47,704,288 | 47,910,256 | +205,968 (+0.43%) |
+| text installed | 48,380,318 | 48,588,993 | +208,675 (+0.43%) |
+| text zip | 30,780,448 | 30,695,297 | -85,151 (-0.28%) |
+| voice executable | 50,540,576 | 50,730,160 | +189,584 (+0.38%) |
+| voice installed | 51,446,817 | 51,640,560 | +193,743 (+0.38%) |
+| voice zip | 32,124,914 | 32,039,962 | -84,952 (-0.26%) |
+
+Installed is the sum of all regular files in the complete `Serein.app` bundle,
+including its staged notices/docs; ZIP is that bundle with Python zipfile
+DEFLATE level 9, sorted paths and fixed timestamps. One package sample each,
+taken before this final evidence addendum. System fonts/frameworks remain OS
+resources outside the distribution. Smaller compressed output is not evidence
+of faster rendering. Font enumeration runs upstream on a worker thread; initial
+fallback may wait for it. Long-session font-cache growth, GPU allocations, p95
+frame/startup latency and Windows/Linux performance remain unmeasured.
+
+Native-font-only comparison: the intermediate egui main text build without
+`system_fonts` versus the final text build, both `--demo --demo-profile`, same
+1120×760-point viewport at 2× scale, no scripted input after launch. Fresh process
+per build, 10-second warmup then ten `ps -p PID -o %cpu=,rss=` samples at one-second
+intervals; no auth or voice helper process. This single synthetic run is noisy
+and does not represent live account memory or a long-session cache bound.
+
+| Metric | No system fonts | With system fonts | Delta |
+| --- | ---: | ---: | ---: |
+| Median RSS (MiB) | 160.88 | 161.97 | +1.09 |
+| Peak sampled RSS (MiB) | 160.89 | 161.98 | +1.09 |
+| Median idle CPU (%) | 0.00 | 0.00 | +0.00 |

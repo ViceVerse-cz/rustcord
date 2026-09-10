@@ -136,7 +136,7 @@ pub fn viewer(
     let colors = crate::design::palette(ui);
     let size = ui.ctx().content_rect().size() - egui::vec2(56.0, 56.0);
     let mut close = false;
-    let modal = egui::Modal::new(egui::Id::new("attachment-viewer"))
+    let modal = egui::Modal::new(egui::Id::unique("attachment-viewer"))
         .backdrop_color(egui::Color32::from_black_alpha(235))
         .frame(
             egui::Frame::new()
