@@ -9,6 +9,7 @@ use std::{
 
 #[derive(Default)]
 pub struct TimelineView {
+    pub(super) edit_started: bool,
     pub(super) channel_reference: Option<Id>,
     channel_labels: u64,
     pub(super) mark_read: Option<Id>,
@@ -86,6 +87,7 @@ fn layout_key(message: &Message) -> u64 {
     message.embeds_suppressed.hash(&mut key);
     key.finish()
 }
+const DELETED_ROW_KEY: u64 = u64::MAX;
 // Discord snowflakes carry milliseconds since 2015-01-01. All u64 IDs fit time's range.
 fn timestamp(id: Id) -> time::OffsetDateTime {
     time::OffsetDateTime::from_unix_timestamp(((id.0 >> 22) / 1000) as i64 + 1_420_070_400)
@@ -182,9 +184,10 @@ fn message_actions(
     actions: (bool, bool, bool, bool),
     mark_read: Option<&mut Option<Id>>,
     reply: &mut Option<Id>,
-    editing: &mut Option<(Id, Id, String)>,
+    editing: (&mut Option<(Id, Id, String)>, &mut bool),
     deleting: &mut Option<(Id, Id)>,
 ) {
+    let (editing, edit_started) = editing;
     let (own, can_reply, can_edit, can_delete) = actions;
     let (menu, _) = egui::containers::menu::MenuButton::from_button(
         egui::Button::new(RichText::new("…").color(crate::design::palette(ui).muted))
@@ -224,6 +227,7 @@ fn message_actions(
                 .clicked()
             {
                 *editing = Some((message.channel, message.id, message.content.clone()));
+                *edit_started = true;
                 ui.close();
             }
             if ui
@@ -321,19 +325,31 @@ impl TimelineView {
             self.width = width;
             self.text_size = text_size;
             self.scale = scale;
+            let row_ids: Vec<_> = state.timeline.row_ids().collect();
             self.heights
-                .retain(|id, _| state.timeline.get(*id).is_some());
+                .retain(|id, _| row_ids.binary_search(id).is_ok());
             self.formatted.retain(|id| state.timeline.get(id).is_some());
+            self.toolbar = self
+                .toolbar
+                .filter(|(id, _)| state.timeline.get(*id).is_some());
             self.revealed.retain(|id, content| {
                 state.timeline.get(*id).is_some_and(|m| {
                     m.content == content.0 && m.embeds == content.1 && m.attachments == content.2
                 })
             });
             let mut previous = None;
-            self.rows = state
-                .timeline
-                .iter()
-                .map(|m| {
+            self.rows = row_ids
+                .into_iter()
+                .map(|id| {
+                    let Some(m) = state.timeline.get(id) else {
+                        previous = None;
+                        let height = self
+                            .heights
+                            .get(&id)
+                            .filter(|(key, _)| *key == DELETED_ROW_KEY)
+                            .map_or(text_size + 16.0, |(_, height)| *height);
+                        return (id, height);
+                    };
                     let key = row_key(m, previous, self.unread_boundary);
                     previous = Some(m);
                     let estimate = (if m.embeds_suppressed {
@@ -373,7 +389,7 @@ impl TimelineView {
         if !history_available {
             ui.weak("Message history is unavailable with current permission information.");
         }
-        if state.timeline.is_empty() && history_available {
+        if state.timeline.row_count() == 0 && history_available {
             ui.label(match state.freshness {
                 model::Freshness::Loading => "Loading messages…",
                 model::Freshness::Unavailable => "You cannot view this conversation.",
@@ -426,6 +442,14 @@ impl TimelineView {
                 let (id, _) = &self.rows[index];
                 let can_mark_read = state.can_mark_read(*id);
                 let Some(message) = state.timeline.get(*id) else {
+                    let row = ui.push_id(id.0, |ui| {
+                        egui::Frame::NONE.inner_margin(egui::Margin::symmetric(8, 8)).show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.add(egui::Label::new(RichText::new("Message deleted")
+                                .color(crate::design::palette(ui).muted)).truncate());
+                        });
+                    });
+                    measurements.push((*id, DELETED_ROW_KEY, row.response.rect.height()));
                     continue;
                 };
                 let previous = index.checked_sub(1).and_then(|i| state.timeline.get(self.rows[i].0));
@@ -539,8 +563,8 @@ impl TimelineView {
                         let can_edit = state.can_edit(message.channel, *id);
                         let can_delete = state.can_delete(message.channel, *id);
                         if toolbar.add_enabled_ui(can_reply, |ui| action_button(ui, "↩", "Reply")).inner.clicked() { selected_reply = Some(*id); }
-                        if own && toolbar.add_enabled_ui(can_edit, |ui| action_button(ui, "✎", "Edit message")).inner.clicked() { *editing = Some((message.channel, *id, message.content.clone())); }
-                        message_actions(&mut toolbar, message, (own, can_reply, can_edit, can_delete), can_mark_read.then_some(&mut self.mark_read), &mut selected_reply, editing, deleting);
+                        if own && toolbar.add_enabled_ui(can_edit, |ui| action_button(ui, "✎", "Edit message")).inner.clicked() { *editing = Some((message.channel, *id, message.content.clone())); self.edit_started = true; }
+                        message_actions(&mut toolbar, message, (own, can_reply, can_edit, can_delete), can_mark_read.then_some(&mut self.mark_read), &mut selected_reply, (editing, &mut self.edit_started), deleting);
                         self.toolbar = Some((*id, toolbar_rect));
                     }
                 });
@@ -1190,6 +1214,17 @@ mod tests {
                 render(&mut view, &mut state);
             }
             assert_eq!(view.anchor.unwrap().0, anchor.0);
+            state.timeline.delete(anchor.0).unwrap();
+            state.revision += 1;
+            for _ in 0..4 {
+                render(&mut view, &mut state);
+            }
+            assert_eq!(
+                view.anchor.unwrap().0,
+                anchor.0,
+                "Deleting the anchored row retains its ID"
+            );
+            assert!(view.anchor.unwrap().1 <= view.heights[&anchor.0].1);
             view.jump = true;
             view.following = true;
             for _ in 0..8 {
@@ -1217,6 +1252,111 @@ mod tests {
         assert_eq!(anchor_offset(&neighbors, Id(3), 25.0), 65.0);
         assert_eq!(anchor_offset(&neighbors, Id(3), 200.0), 140.0);
         assert_eq!(anchor_offset(&[], Id(2), 25.0), 0.0);
+    }
+
+    #[test]
+    fn deleted_only_timeline_discards_content_and_has_no_message_actions() {
+        fn texts(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(text) => out.push(text.galley.job.text.clone()),
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        texts(shape, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for (width, dark) in [(240.0, false), (600.0, true)] {
+            let mut state = test_support::demo_state();
+            state.read_state.reset();
+            state.timeline.clear();
+            let mut message = text_message(42);
+            message.channel = state.selected.unwrap();
+            message.author.name = "Deleted synthetic author".into();
+            message.content = "||Deleted synthetic body||".into();
+            state
+                .timeline
+                .insert(message.clone(), false, false)
+                .unwrap();
+            let ctx = egui::Context::default();
+            ctx.set_visuals(if dark {
+                egui::Visuals::dark()
+            } else {
+                egui::Visuals::light()
+            });
+            let mut view = TimelineView::default();
+            let mut avatars = crate::avatars::Avatars::default();
+            let mut render = |view: &mut TimelineView, state: &mut State| {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 480.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        view.show(ui, state, &mut None, &mut None, &mut avatars, &mut None);
+                        assert!(ui.min_rect().right() <= ui.max_rect().right() + 1.0);
+                    },
+                );
+                assert!(output.platform_output.commands.is_empty());
+                let mut labels = vec![];
+                for shape in &output.shapes {
+                    texts(&shape.shape, &mut labels);
+                }
+                output.drop_without_applying_deltas();
+                labels
+            };
+            for _ in 0..3 {
+                render(&mut view, &mut state);
+            }
+            view.revealed.insert(
+                message.id,
+                (
+                    message.content.clone(),
+                    message.embeds.clone(),
+                    message.attachments.clone(),
+                ),
+            );
+            view.viewing = Some((message.id, Id(9)));
+            view.toolbar = Some((message.id, egui::Rect::EVERYTHING));
+            state.timeline.delete(message.id).unwrap();
+            state.revision += 1;
+            for _ in 0..3 {
+                render(&mut view, &mut state);
+            }
+            let labels = render(&mut view, &mut state);
+            assert!(state.timeline.is_empty());
+            assert_eq!(state.timeline.row_count(), 1);
+            assert_eq!(
+                view.rows.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+                vec![message.id]
+            );
+            assert_eq!(
+                labels
+                    .iter()
+                    .filter(|text| text.as_str() == "Message deleted")
+                    .count(),
+                1
+            );
+            for text in [
+                "Deleted synthetic author",
+                "Deleted synthetic body",
+                "Reveal spoiler",
+                "Reply",
+                "Open in Discord",
+                "No messages yet. Start the conversation below.",
+            ] {
+                assert!(
+                    !labels.iter().any(|label| label.contains(text)),
+                    "Deleted row exposed {text}"
+                );
+            }
+            assert!(view.revealed.is_empty() && view.viewing.is_none() && view.toolbar.is_none());
+            assert!(view.reaction.is_none() && view.mark_read.is_none());
+        }
     }
     #[test]
     fn channel_rename_invalidates_offscreen_reference_heights() {

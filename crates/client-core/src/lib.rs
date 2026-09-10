@@ -445,13 +445,13 @@ impl State {
             && self.freshness == Freshness::Fresh
             && !self.history_pending
             && !self.older_exhausted
-            && !self.timeline.is_empty()
+            && self.timeline.row_count() != 0
     }
     pub fn older_history(&mut self) -> Option<Command> {
         if !self.can_load_older() {
             return None;
         }
-        let before = self.timeline.iter().next()?.id;
+        let before = self.timeline.row_ids().next()?;
         Some(self.history(Some(before)))
     }
     pub fn prepare_send(&mut self) -> Option<Command> {
@@ -1201,6 +1201,9 @@ impl State {
                     channel.last_message = None;
                 }
                 if self.selected == Some(channel) {
+                    if self.reply == Some(id) {
+                        self.reply = None;
+                    }
                     self.timeline.delete(id)
                 } else {
                     Ok(())
@@ -1222,6 +1225,9 @@ impl State {
                 if ids.len() > 100 {
                     Err("Bulk deletion exceeds safe capacity")
                 } else if self.selected == Some(channel) {
+                    if self.reply.is_some_and(|id| ids.contains(&id)) {
+                        self.reply = None;
+                    }
                     ids.into_iter().try_for_each(|id| self.timeline.delete(id))
                 } else {
                     Ok(())
@@ -2240,6 +2246,139 @@ mod tests {
             mentions: Vec::new(),
             embeds_suppressed: false,
         }
+    }
+    #[test]
+    fn deleted_reading_rows_keep_pagination_and_release_reply_targets() {
+        let mut state = State {
+            user: Some(message(1).author),
+            gateway_connected: true,
+            auth: auth::AuthState::Authenticated,
+            selected: Some(Id(1)),
+            channels: vec![Channel {
+                id: Id(1),
+                guild: None,
+                parent_id: None,
+                kind: 1,
+                position: 0,
+                name: "Synthetic DM".into(),
+                recipients: vec![],
+                last_message: None,
+                member_list_id: None,
+            }],
+            ..State::default()
+        };
+        state.drafts.insert(Id(1), "unsent draft".into());
+        state.history(None);
+        let request = state.request;
+        apply(
+            &mut state,
+            Event::History {
+                channel: Id(1),
+                request,
+                older: false,
+                messages: (100..150).map(message).collect(),
+            },
+        );
+        let positions = state.timeline.row_ids().collect::<Vec<_>>();
+        state.reply = Some(Id(100));
+        apply(
+            &mut state,
+            Event::Delete {
+                channel: Id(2),
+                id: Id(100),
+            },
+        );
+        assert_eq!(state.reply, Some(Id(100)));
+        assert!(state.timeline.get(Id(100)).is_some());
+        apply(
+            &mut state,
+            Event::Delete {
+                channel: Id(1),
+                id: Id(100),
+            },
+        );
+        assert_eq!(state.reply, None);
+        state.reply = Some(Id(101));
+        let mut ids: Vec<_> = (101..150).map(Id).collect();
+        ids.extend([Id(101), Id(999)]); // Duplicate and unknown IDs create no extra rows.
+        apply(
+            &mut state,
+            Event::DeleteBulk {
+                channel: Id(1),
+                ids,
+            },
+        );
+        assert_eq!(state.reply, None);
+        assert_eq!(state.timeline.row_ids().collect::<Vec<_>>(), positions);
+        assert!(state.timeline.is_empty());
+        assert_eq!(state.timeline.bytes(), 0);
+        assert!(state.can_load_older());
+        assert!(!state.can_edit(Id(1), Id(100)));
+        assert!(matches!(
+            state.older_history(),
+            Some(Command::History {
+                before: Some(Id(100)),
+                ..
+            })
+        ));
+        let request = state.request;
+        apply(
+            &mut state,
+            Event::SendResult {
+                nonce: "synthetic-late".into(),
+                result: Ok(message(100)),
+            },
+        );
+        assert!(state.timeline.get(Id(100)).is_none());
+        apply(
+            &mut state,
+            Event::History {
+                channel: Id(1),
+                request,
+                older: true,
+                messages: vec![message(99)],
+            },
+        );
+        assert_eq!(state.timeline.len(), 1);
+        assert_eq!(state.timeline.row_count(), 51);
+        assert_eq!(state.timeline.row_ids().next(), Some(Id(99)));
+        state.history(None);
+        let request = state.request;
+        apply(
+            &mut state,
+            Event::Delete {
+                channel: Id(1),
+                id: Id(99),
+            },
+        );
+        apply(
+            &mut state,
+            Event::History {
+                channel: Id(1),
+                request,
+                older: false,
+                messages: vec![message(99), message(150)],
+            },
+        );
+        assert_eq!(
+            state.timeline.row_ids().collect::<Vec<_>>(),
+            [Id(99), Id(150)]
+        );
+        assert!(state.timeline.get(Id(99)).is_none());
+        state.history(None);
+        let request = state.request;
+        apply(&mut state, Event::Resync);
+        apply(
+            &mut state,
+            Event::History {
+                channel: Id(1),
+                request,
+                older: false,
+                messages: vec![message(99)],
+            },
+        );
+        assert_eq!(state.timeline.row_count(), 0);
+        assert_eq!(state.drafts[&Id(1)], "unsent draft");
     }
     #[test]
     fn members_reject_late_requests_and_permission_invalidations() {

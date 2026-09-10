@@ -2,6 +2,36 @@
 
 ## Current scope and gates
 
+Current work: visible deletion state (SPEC 9.3) and known-deleted disk-cache safety (SPEC 2.1).
+Only an already-loaded message leaves a Message deleted row at its existing ID; live message
+lookup remains absent so edit/reaction/media paths cannot treat a placeholder as content.
+Author/body/media data is released. Visible rows share the existing item/byte ceilings and
+history reconciliation, while unknown deletion IDs remain internal guards. Pagination includes
+deleted rows. An unchanged editor closes; modified unsent edit text remains available to copy
+or cancel, with saving disabled while the message is absent. Focused session-cache/client-core/UI
+tests passed (102 tests and doctests), including headless light/dark and narrow deleted-only views,
+reading anchors, payload release, reconciliation limits and all-deleted pagination.
+Disk deletion covers inactive/loading conversations and rejects stale queued cache work
+independently of timeline freshness. Windows cargo xtask check passed 217 offline Rust tests,
+doctests, formatting, strict all-feature Clippy, text-only compilation and policy checks.
+SQLite tests cover reopen, transaction rollback, channel/account isolation and preserved drafts;
+cache tests cover queue saturation, delayed hydration, stale saves, cross-generation cleanup
+acknowledgements and the permanent failure latch. A hard storage failure disables history caching
+until restart and reports that content may remain on disk. No restart-erasure guarantee is made.
+Independent review found and verified fixes for retained editor undo snapshots and re-editing the
+same message; the headless regression verifies actual hover Edit and Undo after deletion.
+Deletion events also clean the single retained editor immediately while viewing another channel,
+without suppressing that channel's input or sending the old channel's draft on a closing-frame Enter.
+Both unsigned Windows release packages passed; measured executable, installed and ZIP sizes
+and SHA256 hashes are in performance.md. The seven original dirty files remain hash-identical.
+Native before/after images and live validation remain pending.
+Baseline e0f18d0 (PR #28) packages were copied/hash-verified. The baseline replay executable
+was copied separately and sampled once for warmup plus five measured runs. Native automation
+remains owner-paused; this work uses synthetic data and does not open accounts or native apps.
+The existing release replay median changed from 36.9497 to 37.0905 ms across five measured runs
+each, with overlapping ranges; both retain 500 live records / 220,992..221,477 estimated payload
+bytes. This ordinary-message workload does not measure deletion I/O, UI latency or process RSS.
+
 Current work: preserve unsupported-content presence in ordinary message types (SPEC 9.1).
 Polls, sticker_items, legacy stickers, components and the Components V2 flag have independently
 patchable markers. Missing fields preserve state; explicit null/empty values clear only their

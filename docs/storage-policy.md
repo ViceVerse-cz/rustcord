@@ -1,5 +1,23 @@
 # Local storage policy and audit
 
+Loaded messages deleted by the service leave only their ID as a session-local reading row.
+Author, body, attachment and embed metadata are dropped from the timeline and its formatted /
+revealed-content views. An untouched open editor closes; text the user modified remains an
+unsent edit with Copy/Cancel and no Save. Old editor undo snapshots are cleared immediately,
+including when the user is viewing a different channel. Unknown deletion IDs never create visible rows.
+Live and deleted rows share the 500-row / 4 MiB estimated storage ceiling; deletion guards
+retain the existing 1,024-ID bound. Placeholders are not written to SQLite.
+
+Gateway deletion removes matching account/channel/message rows in a bounded SQLite transaction,
+including inactive and loading conversations. Cache history operations carry a session epoch;
+deletion invalidates older queued snapshots and returned pages. If deletion cannot be queued,
+history reuse pauses until account-scoped cleanup finishes. Cleanup retains at most 16 pending
+account IDs in addition to the existing 16-command / 16-result worker queues, preserving drafts
+and unrelated accounts. Storage failure or cleanup-scope overflow disables history caching for
+the rest of the session and reports that content may remain on disk. This cannot guarantee
+removal after filesystem failure or forced termination; no forensic-erasure claim is made.
+No schema change or persistent deletion journal is introduced.
+
 Schema 7 adds one integer extra_content column (0..31) for presence of polls, sticker_items,
 legacy stickers, component arrays and the Components V2 flag. RAM uses five booleans; partial
 updates preserve each source independently. Poll answers, sticker data, component payloads and

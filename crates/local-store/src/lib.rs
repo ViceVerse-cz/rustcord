@@ -409,6 +409,25 @@ impl LocalStore {
         transaction.commit()?;
         Ok(())
     }
+    pub fn delete_messages(&mut self, account: Id, channel: Id, ids: &[Id]) -> Result<()> {
+        if ids.len() > 100 || account.0 == 0 || channel.0 == 0 || ids.iter().any(|id| id.0 == 0) {
+            return Err(StoreError::Capacity);
+        }
+        let transaction = self.0.transaction()?;
+        {
+            let mut statement = transaction
+                .prepare("DELETE FROM messages WHERE account=?1 AND channel=?2 AND id=?3")?;
+            for id in ids {
+                statement.execute(params![
+                    account.to_string(),
+                    channel.to_string(),
+                    id.to_string()
+                ])?;
+            }
+        }
+        transaction.commit()?;
+        Ok(())
+    }
     pub fn forget_account(&mut self, account: Id) -> Result<()> {
         let transaction = self.0.transaction()?;
         for table in ["messages", "channels", "drafts"] {
@@ -424,6 +443,46 @@ impl LocalStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn known_deletions_survive_reopen_and_preserve_other_channels_accounts_and_drafts() {
+        let root =
+            std::env::temp_dir().join(format!("serein-synthetic-deletions-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("test.sqlite3");
+        let mut store = LocalStore::open(&path).unwrap();
+        for (account, channel, id) in [(1, 2, 10), (1, 2, 11), (1, 3, 10), (9, 2, 10)] {
+            store.0.execute("INSERT INTO messages(account,channel,id,author,name,content,edited,unsupported) VALUES(?1,?2,?3,'4','Synthetic','deleted synthetic body',0,0)", params![account.to_string(), channel.to_string(), id.to_string()]).unwrap();
+        }
+        store.save_draft(Id(1), Id(2), "preserved draft").unwrap();
+        store.0.execute_batch("CREATE TRIGGER reject_second_deletion BEFORE DELETE ON messages WHEN old.id='11' BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END;").unwrap();
+        assert_eq!(
+            store.delete_messages(Id(1), Id(2), &[Id(10), Id(11)]),
+            Err(StoreError::Unavailable)
+        );
+        assert_eq!(store.load_channel(Id(1), Id(2)).unwrap().len(), 2);
+        store
+            .0
+            .execute_batch("DROP TRIGGER reject_second_deletion;")
+            .unwrap();
+        // Disk deletion is independent of whether a channel is selected, stale, or loading.
+        store.delete_messages(Id(1), Id(2), &[Id(10)]).unwrap();
+        store
+            .delete_messages(Id(1), Id(2), &[Id(11), Id(11), Id(999)])
+            .unwrap();
+        assert_eq!(
+            store.delete_messages(Id(9), Id(2), &[Id(10); 101]),
+            Err(StoreError::Capacity)
+        );
+        drop(store);
+        let store = LocalStore::open(&path).unwrap();
+        assert!(store.load_channel(Id(1), Id(2)).unwrap().is_empty());
+        assert_eq!(store.load_channel(Id(1), Id(3)).unwrap().len(), 1);
+        assert_eq!(store.load_channel(Id(9), Id(2)).unwrap().len(), 1);
+        assert_eq!(store.load_drafts(Id(1)).unwrap()[&Id(2)], "preserved draft");
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn schema_six_marker_migration_preserves_rows_and_rejects_invalid_bits() {
         let root = std::env::temp_dir().join(format!(

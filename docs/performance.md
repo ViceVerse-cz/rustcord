@@ -1,5 +1,49 @@
 # Initial performance evidence
 
+## Deleted message state - September 10, 2026
+
+Baseline e0f18d0d2c2d783ad85ec8793f62288aca259d31 (PR #28) packages and replay executable
+were separately copied and hash-verified before edits. Same Windows 11 Home 10.0.26200 /
+Ryzen 7 7800X3D (16 logical CPUs) / about 31 GiB RAM / Rust 1.98.1, release thin LTO,
+one codegen unit, wgpu.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| text executable bytes | 49,810,944 | 49,824,256 | +13,312 (+0.027%) |
+| text installed bytes | 50,304,421 | 50,326,094 | +21,673 (+0.043%) |
+| text ZIP bytes | 31,173,706 | 31,186,721 | +13,015 (+0.042%) |
+| voice executable bytes | 53,163,520 | 53,180,416 | +16,896 (+0.032%) |
+| voice installed bytes | 53,879,770 | 53,905,027 | +25,257 (+0.047%) |
+| voice ZIP bytes | 32,543,824 | 32,560,106 | +16,282 (+0.050%) |
+
+Both unsigned Windows packages passed. One size measurement each; ZIP DEFLATE level 9;
+text excludes the voice folder. File counts remain 50/96; no dependency or notices changes.
+Installed totals describe staged docs before this measurement addendum; no PR evidence is bundled.
+
+SHA256 of measured executables:
+
+- text: 57AF34D6F35E3576E2D0C3E3F9560265ED3991863BB2D1356CE5FF7225F6804C
+- voice: 6608248BC069ADD7CE9520411C9AF7C1DC832FC5139DC166F6641CECE7D38A56
+
+The synthetic 100,000-event reducer replay used one warmup and five measured direct executable
+runs per revision. Baseline: 36.4297, 37.0517, 38.0769, 36.5077, 36.9497 ms; changed:
+36.0073, 37.0905, 39.5844, 40.1928, 36.6144 ms. Median 36.9497 -> 37.0905 ms,
++0.1408 ms (+0.38%); ranges overlap. Both retain 500 live records and
+220,992..221,477 estimated live payload bytes. No speed or acceptance-latency claim is made.
+This workload has ordinary message events, not deletion I/O, process RSS or UI frame timing.
+
+Deleted reading rows retain an ID and an empty Option<Message> slot, without message payloads.
+Eviction charges live heap plus the Option slots against the existing 500-row / 4 MiB estimate;
+the live-only bytes API still returns zero for an all-deleted window. These component bounds
+exclude tree allocator overhead and are not whole-process RAM measurements. Tests exercise
+deleted rows at both eviction edges, payload release, late arrivals and the 1,024-deletion guard.
+SQLite deletion uses one transaction for at most 100 IDs. The existing worker keeps its
+16-command / 16-result queues, with at most 16 additional pending cleanup account IDs.
+No new worker, dependency, schema or persistent journal is added.
+
+Native screenshots, CPU/RSS and frame timing remain unmeasured while desktop automation is
+owner-paused. No account, browser or microphone was used.
+
 ## Unsupported-content markers - September 10, 2026
 
 Baseline 8c6976edc85cc0d5b5e86b636cfd331b4063c747 (PR #27) packages were copied and

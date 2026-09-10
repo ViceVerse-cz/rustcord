@@ -55,6 +55,7 @@ struct Desktop {
     store: Option<credentials::Store>,
     cache: Option<cache::Cache>,
     cache_pending: usize,
+    cache_clears: cache::HistoryClears,
     cache_error: bool,
     cache_status: &'static str,
     appearance: egui::ThemePreference,
@@ -92,6 +93,18 @@ fn hydrate_cached_history(
     {
         state.revision += 1;
         state.status = "Showing cached history · waiting for Discord revalidation";
+    }
+}
+fn hydrate_cache_result(state: &mut State, safety: &cache::HistorySafety, outcome: cache::Outcome) {
+    if let cache::Outcome::Channel {
+        channel,
+        request,
+        messages,
+        epoch,
+    } = outcome
+        && safety.allows(epoch)
+    {
+        hydrate_cached_history(state, channel, request, messages);
     }
 }
 
@@ -180,14 +193,11 @@ impl Desktop {
             .is_some_and(|store| store.load(state.generation, std::time::Instant::now()));
         let cache_pending = usize::from(cache.as_ref().is_some_and(|cache| {
             // Appearance has its own singleton table; this account ID is unused.
-            cache
-                .send
-                .try_send((
-                    state.generation,
-                    model::Id(0),
-                    cache::Operation::LoadAppearance,
-                ))
-                .is_ok()
+            cache.queue(
+                state.generation,
+                model::Id(0),
+                cache::Operation::LoadAppearance,
+            )
         }));
         let synthetic_id = state
             .timeline
@@ -226,6 +236,7 @@ impl Desktop {
             store,
             cache,
             cache_pending,
+            cache_clears: Default::default(),
             cache_error: false,
             cache_status: "Loading local appearance…",
             appearance: egui::ThemePreference::System,
@@ -300,11 +311,7 @@ impl Desktop {
         let old_account = self.state.user.as_ref().filter(|_| !was_demo).map(|u| u.id);
         self.state.logout();
         if let (Some(cache), Some(account)) = (&self.cache, old_account) {
-            if cache
-                .send
-                .try_send((self.state.generation, account, cache::Operation::Forget))
-                .is_ok()
-            {
+            if cache.queue(self.state.generation, account, cache::Operation::Forget) {
                 self.cache_pending += 1;
             } else {
                 self.cache_error = true;
@@ -335,6 +342,10 @@ impl Desktop {
     }
     fn queue_cache(&mut self, operation: cache::Operation) -> bool {
         if let Some(user) = &self.state.user {
+            if matches!(operation, cache::Operation::ClearHistory) {
+                self.request_history_clear(user.id);
+                return true;
+            }
             self.queue_cache_for(user.id, operation)
         } else {
             false
@@ -345,11 +356,14 @@ impl Desktop {
             return false;
         }
         if let Some(cache) = &self.cache {
-            if cache
-                .send
-                .try_send((self.state.generation, account, operation))
-                .is_ok()
+            if matches!(
+                operation,
+                cache::Operation::LoadChannel { .. } | cache::Operation::SaveChannel { .. }
+            ) && !cache.history.allows(cache.history.epoch())
             {
+                return false;
+            }
+            if cache.queue(self.state.generation, account, operation) {
                 self.cache_pending += 1;
                 if !self.cache_error {
                     self.cache_status = "Saving local changes…";
@@ -361,6 +375,73 @@ impl Desktop {
             }
         }
         false
+    }
+    fn request_history_clear(&mut self, account: model::Id) {
+        if self.state.demo || self.fixture_only {
+            return;
+        }
+        let Some(cache) = &self.cache else {
+            return;
+        };
+        cache.history.invalidate();
+        cache.history.block();
+        if !self.cache_clears.request(account) {
+            cache.history.fail();
+            self.cache_error = true;
+            self.cache_status = "Cache cleanup backlog exceeded; history cache disabled until restart; deleted messages may remain on disk";
+            return;
+        }
+        if !self.cache_error {
+            self.cache_status =
+                "Waiting to clear cached history; cached history temporarily disabled";
+        }
+        self.retry_history_clears();
+    }
+    fn retry_history_clears(&mut self) {
+        let Some(cache) = &self.cache else {
+            return;
+        };
+        for _ in 0..16 {
+            let Some(account) = self.cache_clears.next() else {
+                break;
+            };
+            if !cache.queue(
+                self.state.generation,
+                account,
+                cache::Operation::ClearHistory,
+            ) {
+                break;
+            }
+            self.cache_clears.queued(account);
+            self.cache_pending += 1;
+        }
+    }
+    fn delete_cached_messages(&mut self, event: &Event) {
+        if self.state.demo || self.fixture_only {
+            return;
+        }
+        let Some(account) = self.state.user.as_ref().map(|user| user.id) else {
+            return;
+        };
+        let (channel, ids) = match event {
+            Event::Delete { channel, id } => (*channel, vec![*id]),
+            Event::DeleteBulk { channel, ids } if !ids.is_empty() && ids.len() <= 100 => {
+                (*channel, ids.clone())
+            }
+            Event::DeleteBulk { ids, .. } if ids.len() > 100 => {
+                self.request_history_clear(account);
+                return;
+            }
+            _ => return,
+        };
+        let Some(cache) = &self.cache else {
+            return;
+        };
+        if cache.delete_messages(self.state.generation, account, channel, ids) {
+            self.cache_pending += 1;
+        } else {
+            self.request_history_clear(account);
+        }
     }
     fn command(&mut self, command: Command) {
         if let Command::Send { channel, nonce, .. } = &command
@@ -837,7 +918,7 @@ impl Desktop {
                         ui.label(self.state.status);
                     }
                     ui.label(egui::RichText::new(self.credential_status).size(12.0));
-                    if self.cache_error || self.cache_pending > 0 { ui.small(self.cache_status); }
+                    if self.cache_error || self.cache_pending > 0 || self.cache_clears.pending() { ui.small(self.cache_status); }
                     ui.label(egui::RichText::new("Unofficial clients may put your Discord account at risk.").size(12.0).color(p.muted));
                 }
                 ui.add_space(18.0);
@@ -996,13 +1077,30 @@ impl Desktop {
                     error,
                     message,
                     draft_restore,
+                    history_cleanup,
                 } => {
+                    if *history_cleanup && let Some(cache) = &self.cache {
+                        self.cache_clears.acknowledge(&cache.history);
+                    }
                     let _ = error;
                     self.cache_error = true;
                     self.cache_status = message;
                     if *draft_restore && generation == self.state.generation {
                         self.messaging.draft_restore_pending = false;
                         self.state.drafts.retain(|_, content| !content.is_empty());
+                    }
+                    continue;
+                }
+                cache::Outcome::HistoryCleared => {
+                    if let Some(cache) = &self.cache
+                        && self.cache_clears.acknowledge(&cache.history)
+                        && !self.cache_error
+                    {
+                        if cache.history.allows(cache.history.epoch()) {
+                            self.cache_status = "Cached history cleared; saved drafts preserved";
+                        } else {
+                            self.cache_status = "Requested history cleanup completed; history cache remains disabled until restart after a storage failure";
+                        }
                     }
                     continue;
                 }
@@ -1029,21 +1127,22 @@ impl Desktop {
                         self.cache_status = "Saved drafts restored; check the conversation before resending recovered text";
                     }
                 }
-                cache::Outcome::Channel {
-                    channel,
-                    request,
-                    messages,
-                } => {
-                    hydrate_cached_history(&mut self.state, channel, request, messages);
+                outcome @ cache::Outcome::Channel { .. } => {
+                    if let Some(cache) = &self.cache {
+                        hydrate_cache_result(&mut self.state, &cache.history, outcome);
+                    }
                 }
                 cache::Outcome::Saved => {
                     if !self.cache_error {
                         self.cache_status = "Local changes saved";
                     }
                 }
-                cache::Outcome::Appearance(_) | cache::Outcome::Failed { .. } => unreachable!(),
+                cache::Outcome::Appearance(_)
+                | cache::Outcome::HistoryCleared
+                | cache::Outcome::Failed { .. } => unreachable!(),
             }
         }
+        self.retry_history_clears();
         let mut results = Vec::new();
         if let Some(store) = &mut self.store {
             for _ in 0..4 {
@@ -1100,6 +1199,17 @@ impl Desktop {
         for mut event in events {
             if event.generation != self.state.generation {
                 continue;
+            }
+            self.delete_cached_messages(&event.event);
+            match &event.event {
+                Event::Delete { channel, id } => {
+                    self.messaging
+                        .messages_deleted(ctx, *channel, std::slice::from_ref(id));
+                }
+                Event::DeleteBulk { channel, ids } if ids.len() <= 100 => {
+                    self.messaging.messages_deleted(ctx, *channel, ids);
+                }
+                _ => {}
             }
             #[cfg(feature = "voice")]
             let voice_failure = self.voice.observe(&self.state, &mut event.event);
@@ -1391,6 +1501,7 @@ impl eframe::App for Desktop {
                 || self.forgetting
                 || self.avatar_cleanup.is_some()
                 || self.cache_pending > 0
+                || self.cache_clears.pending()
                 || self.cache_error)
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -1529,6 +1640,7 @@ impl eframe::App for Desktop {
             egui::Window::new("Leave this session?").collapsible(false).show(&ctx,|ui|{
                 ui.label("Saved text drafts survive exit; selected files must be reselected. Logout removes local account data. Edits and uncertain sends need your attention.");
                 if self.forgetting{ui.label("Wait for saved-login removal to finish.");}
+                if self.cache_clears.pending(){ui.label("Cached history cleanup is pending; closing now may leave deleted messages on disk.");}
                 ui.horizontal(|ui|{
                     if ui.button("Keep working").clicked(){self.confirming_close=false;self.confirming_logout=false;self.download_close_pending=false;}
                     if ui.add_enabled(!self.forgetting,egui::Button::new("Discard and continue")).clicked(){
@@ -1543,6 +1655,32 @@ impl eframe::App for Desktop {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn delayed_cache_results_cannot_hydrate_after_a_known_deletion() {
+        let mut state = test_support::demo_state();
+        let channel = state.selected.unwrap();
+        state.timeline.clear();
+        state.history(None);
+        let request = state.request;
+        let safety = cache::HistorySafety::default();
+        let outcome = |epoch| cache::Outcome::Channel {
+            channel,
+            request,
+            epoch,
+            messages: vec![test_support::message(1000, channel)],
+        };
+        let old_epoch = safety.epoch();
+        safety.invalidate();
+        hydrate_cache_result(&mut state, &safety, outcome(old_epoch));
+        assert!(state.timeline.is_empty());
+        safety.block();
+        hydrate_cache_result(&mut state, &safety, outcome(safety.epoch()));
+        assert!(state.timeline.is_empty());
+        safety.cleared();
+        hydrate_cache_result(&mut state, &safety, outcome(safety.epoch()));
+        assert_eq!(state.timeline.len(), 1);
+    }
+
     #[test]
     fn cached_history_requires_current_readable_navigation_and_pending_request() {
         let mut state = test_support::demo_state();

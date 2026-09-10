@@ -7,7 +7,9 @@ pub const MAX_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_MUTATIONS: usize = 1024;
 #[derive(Default)]
 pub struct Timeline {
-    messages: BTreeMap<Id, Message>,
+    // None preserves only the position of a message deleted while it was loaded.
+    messages: BTreeMap<Id, Option<Message>>,
+    live_count: usize,
     bytes: usize,
     changed: BTreeSet<Id>,
     patches: BTreeMap<Id, MessagePatch>,
@@ -17,19 +19,31 @@ pub struct Timeline {
 }
 impl Timeline {
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = &Message> {
-        self.messages.values()
+        self.messages.values().filter_map(Option::as_ref)
     }
     pub fn get(&self, id: Id) -> Option<&Message> {
-        self.messages.get(&id)
+        self.messages.get(&id).and_then(Option::as_ref)
     }
     pub fn len(&self) -> usize {
-        self.messages.len()
+        self.live_count
     }
     pub fn is_empty(&self) -> bool {
-        self.messages.is_empty()
+        self.live_count == 0
     }
+    /// Reading positions, including ID-only placeholders for previously loaded messages.
+    pub fn row_ids(&self) -> impl DoubleEndedIterator<Item = Id> {
+        self.messages.keys().copied()
+    }
+    pub fn row_count(&self) -> usize {
+        self.messages.len()
+    }
+    /// Live message payloads; empty row storage is also charged during eviction.
     pub fn bytes(&self) -> usize {
         self.bytes
+    }
+    fn retained_bytes(&self) -> usize {
+        self.bytes - self.live_count * size_of::<Message>()
+            + self.row_count() * size_of::<Option<Message>>()
     }
     pub fn begin_page(&mut self, older: bool) {
         // Set eviction direction before live events can race the history response.
@@ -84,7 +98,7 @@ impl Timeline {
         } else if !live && self.changed.contains(&message.id) {
             return Ok(());
         }
-        if let Some(previous) = self.messages.get(&message.id) {
+        if let Some(previous) = self.get(message.id) {
             if previous
                 .edited_at
                 .is_some_and(|old| message.edited_at.is_none_or(|new| new < old))
@@ -105,17 +119,19 @@ impl Timeline {
                 );
         }
         self.bytes += message.bytes();
-        if let Some(old) = self.messages.insert(message.id, message) {
-            self.bytes -= old.bytes();
+        match self.messages.insert(message.id, Some(message)) {
+            Some(Some(old)) => self.bytes -= old.bytes(),
+            _ => self.live_count += 1,
         }
-        while self.messages.len() > MAX_MESSAGES || self.bytes > MAX_BYTES {
+        while self.row_count() > MAX_MESSAGES || self.retained_bytes() > MAX_BYTES {
             let item = if older || self.retain_older {
                 self.messages.pop_last()
             } else {
                 self.messages.pop_first()
             };
-            if let Some((_, old)) = item {
+            if let Some((_, Some(old))) = item {
                 self.bytes -= old.bytes();
+                self.live_count -= 1;
             }
         }
         Ok(())
@@ -132,7 +148,8 @@ impl Timeline {
         self.retain_older = older;
         if !older {
             self.messages.retain(|id, _| self.changed.contains(id));
-            self.bytes = self.messages.values().map(Message::bytes).sum();
+            self.bytes = self.iter().map(Message::bytes).sum();
+            self.live_count = self.iter().count();
         }
         for item in items {
             self.insert(item, false, older)?;
@@ -155,8 +172,9 @@ impl Timeline {
             return Err("Message patch exceeds capacity");
         }
         self.remember(patch.id)?;
-        if let Some(mut message) = self.messages.remove(&patch.id) {
+        if let Some(Some(mut message)) = self.messages.remove(&patch.id) {
             self.bytes -= message.bytes();
+            self.live_count -= 1;
             // Once hydrated, changed protects this record from the in-flight history page.
             self.patches.remove(&patch.id);
             apply_patch(&mut message, &patch);
@@ -207,11 +225,12 @@ impl Timeline {
         if self.deleted.len() >= MAX_MUTATIONS && !self.deleted.contains(&id) {
             return Err("Deletion reconciliation capacity exceeded; reload required");
         }
-        self.deleted.insert(id);
         self.remember(id)?;
+        self.deleted.insert(id);
         self.patches.remove(&id);
-        if let Some(old) = self.messages.remove(&id) {
+        if let Some(old) = self.messages.get_mut(&id).and_then(Option::take) {
             self.bytes -= old.bytes();
+            self.live_count -= 1;
         }
         Ok(())
     }
@@ -229,7 +248,9 @@ impl Timeline {
         {
             return Err("Reaction data exceeds safe capacity");
         }
-        let Some(message) = self.messages.get_mut(&id) else {
+        // Take the footprint before borrowing a live row mutably.
+        let retained = self.retained_bytes();
+        let Some(message) = self.messages.get_mut(&id).and_then(Option::as_mut) else {
             return Ok(());
         };
         let old = message.bytes();
@@ -241,7 +262,7 @@ impl Timeline {
             model::reaction_bytes(r)
                 + r.capacity().saturating_sub(r.len()) * size_of::<model::Reaction>()
         });
-        if self.bytes - previous + new > MAX_BYTES {
+        if retained - previous + new > MAX_BYTES {
             return Err("Reaction data exceeds timeline capacity");
         }
         message.reactions = reactions;
@@ -326,6 +347,141 @@ fn apply_patch(message: &mut Message, patch: &MessagePatch) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn deleted_rows_release_payloads_keep_their_id_and_reject_late_content() {
+        let mut timeline = Timeline::default();
+        let mut loaded = message(10);
+        loaded.content = "x".repeat(64 * 1024);
+        loaded.author.name = "Synthetic author".repeat(20);
+        loaded.mentions = vec![loaded.author.clone()];
+        loaded.embeds = vec![model::Embed {
+            title: Some("Synthetic embed".into()),
+            ..Default::default()
+        }];
+        loaded.attachments = vec![model::Attachment {
+            id: Id(20),
+            filename: "SPOILER_synthetic.png".into(),
+            description: Some("Synthetic attachment".into()),
+            content_type: Some("image/png".into()),
+            size: 100,
+            spoiler: true,
+            media: model::EmbedMedia {
+                url: Some("https://cdn.discordapp.com/attachments/1/20/synthetic.png".into()),
+                ..Default::default()
+            },
+        }];
+        timeline.insert(loaded, false, false).unwrap();
+        let positions = timeline.row_ids().collect::<Vec<_>>();
+        assert!(timeline.bytes() > 64 * 1024);
+        timeline.begin_page(false);
+        timeline.delete(Id(10)).unwrap();
+        timeline.delete(Id(10)).unwrap();
+        timeline.delete(Id(5)).unwrap(); // Never loaded: guard only, no fabricated row.
+        assert_eq!(timeline.row_ids().collect::<Vec<_>>(), positions);
+        assert_eq!(timeline.row_count(), 1);
+        assert!(timeline.messages[&Id(10)].is_none());
+        assert!(timeline.get(Id(10)).is_none());
+        assert_eq!(timeline.len(), 0);
+        assert!(timeline.is_empty());
+        assert_eq!(timeline.iter().count(), 0);
+        assert_eq!(timeline.bytes(), 0);
+        assert_eq!(timeline.retained_bytes(), size_of::<Option<Message>>());
+        timeline
+            .patch(MessagePatch {
+                id: Id(10),
+                channel: Id(1),
+                content: Patch::Value("late body".into()),
+                extra_content: Default::default(),
+                reactions: Patch::Absent,
+                mentions: Patch::Absent,
+                edited: Patch::Absent,
+                embeds: Patch::Absent,
+                attachments: Patch::Absent,
+                embeds_suppressed: Patch::Absent,
+            })
+            .unwrap();
+        timeline
+            .finish_page(vec![message(5), message(10)], false)
+            .unwrap();
+        timeline.insert(message(10), true, false).unwrap();
+        timeline.insert(message(10), false, false).unwrap();
+        timeline.set_reactions(Id(10), Some(Vec::new())).unwrap();
+        assert_eq!(timeline.row_ids().collect::<Vec<_>>(), positions);
+        assert_eq!(timeline.bytes(), 0);
+        assert!(timeline.patches.is_empty());
+        timeline.begin_page(true);
+        timeline.finish_page(vec![message(4)], true).unwrap();
+        assert_eq!(timeline.row_ids().collect::<Vec<_>>(), [Id(4), Id(10)]);
+        timeline.begin_page(false);
+        timeline
+            .finish_page(vec![message(10), message(11)], false)
+            .unwrap();
+        assert_eq!(timeline.row_ids().collect::<Vec<_>>(), [Id(11)]);
+        assert!(timeline.get(Id(10)).is_none());
+        timeline.clear();
+        assert_eq!(timeline.row_count(), 0);
+        timeline.insert(message(10), false, false).unwrap();
+        assert_eq!(timeline.len(), 1);
+    }
+
+    #[test]
+    fn deleted_rows_share_both_eviction_directions_and_byte_limits() {
+        let mut timeline = Timeline::default();
+        for id in 1001..=1500 {
+            timeline.insert(message(id), false, false).unwrap();
+        }
+        timeline.delete(Id(1001)).unwrap();
+        timeline.delete(Id(1500)).unwrap();
+        assert_eq!(timeline.len(), 498);
+        assert_eq!(timeline.row_count(), MAX_MESSAGES);
+        timeline.insert(message(1501), true, false).unwrap();
+        assert_eq!(timeline.row_ids().next(), Some(Id(1002)));
+        assert_eq!(timeline.len(), 499);
+        timeline.begin_page(true);
+        timeline.finish_page(vec![message(1000)], true).unwrap();
+        assert_eq!(timeline.row_ids().next_back(), Some(Id(1500)));
+        assert!(timeline.get(Id(1500)).is_none());
+        timeline.begin_page(true);
+        timeline.finish_page(vec![message(999)], true).unwrap();
+        assert_eq!(timeline.row_ids().next_back(), Some(Id(1499)));
+        assert_eq!(timeline.len(), MAX_MESSAGES);
+        timeline.insert(message(1500), false, false).unwrap();
+        assert_eq!(timeline.row_ids().next_back(), Some(Id(1499)));
+        timeline.begin_page(false);
+        timeline.cancel_page();
+        for id in 2000..2100 {
+            let mut large = message(id);
+            large.content = "x".repeat(64 * 1024);
+            timeline.insert(large, true, false).unwrap();
+            if id % 3 == 0 {
+                timeline.delete(Id(id)).unwrap();
+            }
+            assert!(timeline.row_count() <= MAX_MESSAGES);
+            assert!(timeline.retained_bytes() <= MAX_BYTES);
+            assert_eq!(timeline.len(), timeline.iter().count());
+        }
+        assert!(timeline.row_count() < MAX_MESSAGES);
+        assert!(timeline.row_count() > timeline.len());
+    }
+
+    #[test]
+    fn unknown_deletions_have_no_rows_and_keep_the_reconciliation_cap() {
+        let mut timeline = Timeline::default();
+        timeline.insert(message(5000), false, false).unwrap();
+        for id in 1..=MAX_MUTATIONS as u64 {
+            timeline.delete(Id(id)).unwrap();
+        }
+        assert_eq!(timeline.row_ids().collect::<Vec<_>>(), [Id(5000)]);
+        assert_eq!(timeline.deleted.len(), MAX_MUTATIONS);
+        timeline.delete(Id(1)).unwrap();
+        assert!(timeline.delete(Id(5000)).is_err());
+        assert!(timeline.get(Id(5000)).is_some());
+        timeline.clear();
+        timeline.insert(message(5000), false, false).unwrap();
+        timeline.delete(Id(5000)).unwrap();
+        assert_eq!(timeline.row_count(), 1);
+        assert!(timeline.is_empty());
+    }
     #[test]
     fn content_markers_reconcile_independent_updates_before_and_after_history() {
         let update = |extra_content| MessagePatch {
