@@ -127,6 +127,14 @@ impl MessagingUi {
 		self.members_narrow_open = true;
 		self.profile = Some(user);
 	}
+	/// Fixture-only entry point: opens the emoji popout as if the composer button was clicked.
+	pub fn preview_emoji_picker(&mut self) {
+		self.emoji_picker.preview();
+	}
+	/// Fixture-only entry point: opens the search pane and submits `query` on the first frame.
+	pub fn preview_search(&mut self, query: &str) {
+		self.search.preview(query);
+	}
 	pub fn downloads(&mut self) -> &mut DownloadUi {
 		&mut self.timeline.download
 	}
@@ -870,46 +878,59 @@ impl MessagingUi {
 					ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 						ui.spacing_mut().item_spacing.x = 4.0;
 						if state.selected.is_some() && !selected_voice {
-							// Search pill.
-							let (pill, response) = ui
-								.allocate_exact_size(egui::vec2(144.0, 28.0), egui::Sense::click());
-							let enabled = state.can_search();
-							response.widget_info(|| {
-								egui::WidgetInfo::labeled(
-									egui::WidgetType::Button,
-									enabled,
-									"Search",
-								)
-							});
-							ui.painter().rect_filled(pill, 6, colors.raised);
-							let pill_text = if enabled {
-								colors.muted
+							if self.search.open && !self.search.pins() {
+								ui.allocate_ui_with_layout(
+									egui::vec2(
+										240.0_f32.min(ui.available_width() * 0.5).max(120.0),
+										28.0,
+									),
+									egui::Layout::left_to_right(egui::Align::Center),
+									|ui| self.search.header_input(ui, state, commands),
+								);
 							} else {
-								colors.muted.gamma_multiply(0.5)
-							};
-							ui.painter().text(
-								pill.left_center() + egui::vec2(10.0, 0.0),
-								egui::Align2::LEFT_CENTER,
-								"Search",
-								egui::FontId::proportional(13.0),
-								pill_text,
-							);
-							icons::paint(
-								ui.painter(),
-								icons::Icon::Search,
-								egui::Rect::from_center_size(
-									pill.right_center() - egui::vec2(14.0, 0.0),
-									egui::Vec2::splat(16.0),
-								),
-								pill_text,
-							);
-							if enabled
-								&& response.on_hover_text("Search this conversation").clicked()
-							{
-								if state.archives.is_some() {
-									commands.push(state.clear_archives());
+								// Search pill.
+								let (pill, response) = ui.allocate_exact_size(
+									egui::vec2(144.0, 28.0),
+									egui::Sense::click(),
+								);
+								let enabled = state.can_search();
+								response.widget_info(|| {
+									egui::WidgetInfo::labeled(
+										egui::WidgetType::Button,
+										enabled,
+										"Search",
+									)
+								});
+								ui.painter().rect_filled(pill, 6, colors.raised);
+								let pill_text = if enabled {
+									colors.muted
+								} else {
+									colors.muted.gamma_multiply(0.5)
+								};
+								ui.painter().text(
+									pill.left_center() + egui::vec2(10.0, 0.0),
+									egui::Align2::LEFT_CENTER,
+									"Search",
+									egui::FontId::proportional(13.0),
+									pill_text,
+								);
+								icons::paint(
+									ui.painter(),
+									icons::Icon::Search,
+									egui::Rect::from_center_size(
+										pill.right_center() - egui::vec2(14.0, 0.0),
+										egui::Vec2::splat(16.0),
+									),
+									pill_text,
+								);
+								if enabled
+									&& response.on_hover_text("Search this conversation").clicked()
+								{
+									if state.archives.is_some() {
+										commands.push(state.clear_archives());
+									}
+									self.search.toggle(false);
 								}
-								self.search.toggle(false);
 							}
 							ui.add_space(4.0);
 							if icons::toggle(
@@ -1751,13 +1772,34 @@ impl MessagingUi {
 			.iter()
 			.any(|c| Some(c.id) == state.selected && c.kind == 2);
 		let wide_members = ui.available_width() >= 720.0;
+		self.search.sync(&ctx, state, &mut commands);
+		let search_open = self.search.open && state.selected.is_some() && !selected_voice;
 		let show_members = !selected_voice
+			&& !search_open
 			&& state.selected.is_some()
 			&& if wide_members {
 				self.reading_preferences.show_members
 			} else {
 				self.members_narrow_open
 			};
+		if search_open {
+			let width = if wide_members {
+				search::PANE_WIDTH.min(ui.available_width() * 0.45)
+			} else {
+				(ui.available_width() * 0.6).max(240.0)
+			};
+			egui::Panel::right("search-pane")
+				.resizable(false)
+				.exact_size(width)
+				.frame(
+					egui::Frame::new()
+						.fill(colors.sidebar)
+						.inner_margin(egui::Margin::same(12)),
+				)
+				.show(ui, |ui| {
+					self.search.pane(ui, state, &mut commands);
+				});
+		}
 		if show_members {
 			if state
 				.members
@@ -1955,7 +1997,6 @@ impl MessagingUi {
 		{
 			commands.push(state.clear_archives());
 		}
-		self.search.show(&ctx, state, &mut commands);
 		self.archives.show(&ctx, state, &mut commands);
 		if let Some(id) = self.timeline.channel_reference.take()
 			&& let Some(target) = state

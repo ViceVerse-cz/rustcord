@@ -373,6 +373,17 @@ impl Desktop {
 			messaging.preview_profile(test_support::message(1, model::Id(20)).author);
 			state.status = "Offline fixture · synthetic profile card opened at startup";
 		}
+		if demo && std::env::args().any(|arg| arg == "--demo-emoji") {
+			messaging.preview_emoji_picker();
+			state.status = "Offline fixture · emoji popout opened at startup";
+		}
+		if demo
+			&& let Some(query) = std::env::args()
+				.find_map(|arg| arg.strip_prefix("--demo-search=").map(str::to_owned))
+		{
+			messaging.preview_search(&query);
+			state.status = "Offline fixture · synthetic search opened at startup";
+		}
 		Ok(Self {
 			login: None,
 			connection: None,

@@ -1,5 +1,10 @@
+use crate::{design, icons};
 use client_core::{Command, State};
+use egui::RichText;
 use model::Id;
+
+/// Width of the results pane when the window is wide enough to keep the timeline readable.
+pub const PANE_WIDTH: f32 = 420.0;
 
 #[derive(Default)]
 pub struct SearchUi {
@@ -9,6 +14,8 @@ pub struct SearchUi {
 	channel: Option<Id>,
 	focus: bool,
 	composing: bool,
+	ime_frame: bool,
+	pending_submit: bool,
 }
 
 impl SearchUi {
@@ -18,16 +25,28 @@ impl SearchUi {
 		self.focus = self.open;
 		self.open
 	}
-	pub fn show(&mut self, ctx: &egui::Context, state: &mut State, commands: &mut Vec<Command>) {
+	/// Fixture-only: open a text search for `query` and submit it on the next frame.
+	pub fn preview(&mut self, query: &str) {
+		self.open = true;
+		self.pins = false;
+		self.query = query.to_owned();
+		self.pending_submit = true;
+	}
+	/// True while the pane shows pinned messages rather than query results.
+	pub fn pins(&self) -> bool {
+		self.pins
+	}
+	/// Per-frame bookkeeping: Escape closes, navigation resets and closed views cancel requests.
+	pub fn sync(&mut self, ctx: &egui::Context, state: &mut State, commands: &mut Vec<Command>) {
 		if self.open && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
 			self.open = false;
 		}
 		if self.channel != state.selected {
 			self.channel = state.selected;
-			self.query.clear();
-			self.open = false;
-			if state.search.is_some() {
-				commands.push(state.clear_search());
+			// A fixture preview adopts the initial selection instead of closing.
+			if !self.pending_submit {
+				self.query.clear();
+				self.open = false;
 			}
 		}
 		if !self.open {
@@ -36,210 +55,276 @@ impl SearchUi {
 			}
 			return;
 		}
-		let mut open = true;
 		if state
 			.search
 			.as_ref()
 			.is_some_and(|view| view.pins != self.pins)
+			|| (!state.can_search() && state.search.is_some())
 		{
 			commands.push(state.clear_search());
 		}
-		if !state.can_search() && state.search.is_some() {
-			commands.push(state.clear_search());
-		}
-		let mut submit = false;
-		let mut older = None;
-		let mut older_pins = false;
-		let mut target = None;
-		let allowed = state.can_search();
-		let mut ime_frame = self.composing;
+		self.ime_frame = self.composing;
 		ctx.input(|i| {
 			for event in &i.events {
 				if let egui::Event::Ime(event) = event {
-					ime_frame = true;
+					self.ime_frame = true;
 					self.composing =
 						matches!(event, egui::ImeEvent::Preedit { text,.. } if !text.is_empty());
 				}
 			}
 		});
-		egui::Window::new(if self.pins {
-			"Pinned messages"
-		} else {
-			"Search this conversation"
-		})
-		.open(&mut open)
-		.collapsible(false)
-		.default_width(420.0)
-		.max_height((ctx.content_rect().height() * 0.75).max(180.0))
-		.show(ctx, |ui| {
-			if self.pins {
-				ui.weak(
-					"One page of up to 25 pins. Snapshot only; Reload returns to the newest pins.",
-				);
-				ui.horizontal_wrapped(|ui| {
+	}
+	/// Query field shown in the conversation header while a text search is open.
+	pub fn header_input(
+		&mut self,
+		ui: &mut egui::Ui,
+		state: &mut State,
+		commands: &mut Vec<Command>,
+	) {
+		let colors = design::palette(ui);
+		let allowed = state.can_search();
+		let mut submit = false;
+		egui::Frame::new()
+			.fill(colors.raised)
+			.corner_radius(6)
+			.stroke(egui::Stroke::new(1.0, colors.accent))
+			.inner_margin(egui::Margin::symmetric(8, 0))
+			.show(ui, |ui| {
+				ui.set_height(28.0);
+				ui.horizontal_centered(|ui| {
+					ui.spacing_mut().item_spacing.x = 6.0;
+					let clear = icons::button(ui, icons::Icon::Close, 22.0, "Close search");
+					let input = ui.add(
+						egui::TextEdit::singleline(&mut self.query)
+							.char_limit(256)
+							.frame(egui::Frame::NONE)
+							.hint_text("Search")
+							.desired_width(ui.available_width().max(60.0)),
+					);
+					input.widget_info(|| {
+						egui::WidgetInfo::labeled(
+							egui::WidgetType::TextEdit,
+							true,
+							"Search messages in this conversation",
+						)
+					});
+					if self.focus {
+						input.request_focus();
+						self.focus = false;
+					}
+					let valid = allowed && model::valid_search_query(&self.query);
+					submit = valid
+						&& input.lost_focus()
+						&& ui.input(|i| i.key_pressed(egui::Key::Enter))
+						&& !self.ime_frame;
+					if clear.clicked() {
+						self.open = false;
+					}
+				});
+			});
+		if submit && let Some(command) = state.request_search(self.query.trim().into(), None) {
+			commands.push(command);
+		}
+	}
+	/// Results pane rendered where the member list normally lives.
+	pub fn pane(&mut self, ui: &mut egui::Ui, state: &mut State, commands: &mut Vec<Command>) {
+		let colors = design::palette(ui);
+		let allowed = state.can_search();
+		let mut submit = std::mem::take(&mut self.pending_submit) && !self.pins;
+		let mut older = None;
+		let mut older_pins = false;
+		let mut target = None;
+		ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+		ui.horizontal(|ui| {
+			let title = if self.pins {
+				"Pinned Messages".to_owned()
+			} else {
+				match state.search.as_ref().and_then(|view| view.page.as_ref()) {
+					Some(page) if !state.search.as_ref().is_some_and(|v| v.loading) => {
+						format!("{} Results", page.total)
+					}
+					_ => "Search".to_owned(),
+				}
+			};
+			ui.label(design::semibold(ui, title, 16.0).color(colors.text_strong));
+			ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+				if icons::button(ui, icons::Icon::Close, 28.0, "Close").clicked() {
+					self.open = false;
+				}
+				if self.pins {
 					let reload = ui.add_enabled(allowed, egui::Button::new("Reload pins"));
 					if self.focus {
 						reload.request_focus();
 						self.focus = false;
 					}
 					submit = reload.clicked();
-					if let Some(view) = &state.search {
-						let retry = view.error.is_some() && view.pin_before.is_some();
-						if retry
-							|| view
-								.page
-								.as_ref()
-								.is_some_and(|page| page.pin_cursor.is_some())
-						{
-							older_pins = ui
-								.push_id("older-pins", |ui| {
-									ui.add_enabled(
-										allowed && !view.loading,
-										egui::Button::new(if retry {
-											"Retry older pins"
-										} else {
-											"Older pins"
-										}),
-									)
-								})
-								.inner
-								.clicked();
-						}
+				} else if let Some(view) = &state.search
+					&& let Some(page) = &view.page
+				{
+					if let Some(last) = page.hits.last()
+						&& (page.total > page.hits.len() as u64 || page.partial)
+						&& ui
+							.add_enabled(allowed && !view.loading, egui::Button::new("Older"))
+							.clicked()
+					{
+						older = Some((view.query.clone(), Some(last.id)));
 					}
-				});
-			} else {
-				let input = ui.add(
-					egui::TextEdit::singleline(&mut self.query)
-						.char_limit(256)
-						.hint_text("Search messages")
-						.desired_width(f32::INFINITY),
-				);
-				input.widget_info(|| {
-					egui::WidgetInfo::labeled(
-						egui::WidgetType::TextEdit,
-						true,
-						"Search messages in this conversation",
-					)
-				});
-				if self.focus {
-					input.request_focus();
-					self.focus = false;
+					if view.before.is_some()
+						&& ui
+							.add_enabled(allowed && !view.loading, egui::Button::new("Newest"))
+							.clicked()
+					{
+						older = Some((view.query.clone(), None));
+					}
 				}
-				let valid = allowed && model::valid_search_query(&self.query);
-				let enter = input.lost_focus()
-					&& ui.input(|i| i.key_pressed(egui::Key::Enter))
-					&& !ime_frame;
-				ui.horizontal(|ui| {
-					submit = ui.add_enabled(valid, egui::Button::new("Search")).clicked()
-						|| (valid && enter);
-				});
+			});
+		});
+		if self.pins
+			&& let Some(view) = &state.search
+		{
+			let retry = view.error.is_some() && view.pin_before.is_some();
+			if retry
+				|| view
+					.page
+					.as_ref()
+					.is_some_and(|page| page.pin_cursor.is_some())
+			{
+				older_pins = ui
+					.push_id("older-pins", |ui| {
+						ui.add_enabled(
+							allowed && !view.loading,
+							egui::Button::new(if retry {
+								"Retry older pins"
+							} else {
+								"Older pins"
+							}),
+						)
+					})
+					.inner
+					.clicked();
 			}
-			if ui.button("Close").clicked() {
-				self.open = false;
-			}
-			if !allowed {
-				ui.weak("Messages are unavailable while disconnected or without channel access.");
-			}
-			if let Some(view) = &state.search {
-				ui.separator();
-				if !view.pins {
-					ui.label(format!("Results for: {}", view.query));
-				}
-				if view.loading {
-					ui.weak(if view.pins {
+		}
+		if !allowed {
+			ui.label(
+				RichText::new(
+					"Messages are unavailable while disconnected or without channel access.",
+				)
+				.small()
+				.color(colors.muted),
+			);
+		}
+		if state.search.is_none() && !self.pins {
+			ui.label(
+				RichText::new("Type a query above and press Enter.")
+					.small()
+					.color(colors.muted),
+			);
+		}
+		if let Some(view) = &state.search {
+			if view.loading {
+				ui.label(
+					RichText::new(if view.pins {
 						if view.pin_before.is_some() {
-							"Loading older pins..."
+							"Loading older pins…"
 						} else {
-							"Loading newest pins..."
+							"Loading newest pins…"
 						}
 					} else {
-						"Searching..."
-					});
-				}
-				if let Some(error) = view.error {
-					ui.label(error);
-				}
-				if let Some(page) = &view.page {
-					if view.pins {
-						ui.weak(format!(
-							"{} pinned messages · {} page",
-							page.hits.len(),
-							if view.pin_before.is_some() {
-								"older"
-							} else {
-								"newest"
-							}
-						));
-						if page.pin_cursor.is_none() && !view.loading {
-							ui.label(if page.partial {
-								"More pins may exist, but this page has no usable continuation."
-							} else {
-								"No older pins reported by the service."
-							});
-						}
+						"Searching…"
+					})
+					.small()
+					.color(colors.muted),
+				);
+			}
+			if let Some(error) = view.error {
+				ui.label(RichText::new(error).color(colors.danger));
+			}
+			if let Some(page) = &view.page {
+				let note = if view.pins {
+					if page.pin_cursor.is_none() && !view.loading {
+						Some(if page.partial {
+							"More pins may exist, but this page has no usable continuation."
+						} else {
+							"Showing one page of up to 25 pins."
+						})
 					} else {
-						ui.weak(format!("{} results reported by the service", page.total));
-						if page.partial {
-							ui.label("Indexing is incomplete; results may be missing.");
-						}
+						None
 					}
-					if page.hits.is_empty() {
-						ui.label(if view.pins {
+				} else if page.partial {
+					Some("Indexing is incomplete; results may be missing.")
+				} else {
+					None
+				};
+				if let Some(note) = note {
+					ui.label(RichText::new(note).small().color(colors.muted));
+				}
+				if page.hits.is_empty() {
+					ui.label(
+						RichText::new(if view.pins {
 							"No pinned messages returned; history access may be unavailable."
 						} else {
 							"No matching messages in this page."
-						});
-					}
-					ui.weak("Opening a message reloads its history.");
-					if !view.pins {
-						ui.horizontal(|ui| {
-							if view.before.is_some()
-								&& ui
-									.add_enabled(allowed, egui::Button::new("Newest results"))
-									.clicked()
-							{
-								older = Some((view.query.clone(), None));
-							}
-							if let Some(last) = page.hits.last()
-								&& (page.total > page.hits.len() as u64 || page.partial)
-								&& ui
-									.add_enabled(allowed, egui::Button::new("Older results"))
-									.clicked()
-							{
-								older = Some((view.query.clone(), Some(last.id)));
-							}
-						});
-					}
-					egui::ScrollArea::vertical()
-						.id_salt(("search-results", view.request))
-						.show_rows(ui, 94.0, page.hits.len(), |ui, range| {
-							for hit in &page.hits[range] {
-								ui.push_id(hit.id, |ui| {
-									ui.set_height(90.0);
-									ui.horizontal(|ui| {
-										ui.label(egui::RichText::new(&hit.author).strong());
-										if ui
-											.add_enabled(
-												allowed && hit.id.0 < u64::MAX,
-												egui::Button::new("Open message"),
-											)
-											.clicked()
-										{
-											target = Some(hit.id);
-										}
-									});
-									ui.add(
-										egui::Label::new(&hit.excerpt).truncate().selectable(true),
-									);
-									ui.weak(format!("Message {}", hit.id));
-									ui.separator();
-								});
-							}
-						});
+						})
+						.color(colors.muted),
+					);
 				}
+				egui::ScrollArea::vertical()
+					.id_salt(("search-results", view.request))
+					.auto_shrink([false, false])
+					.show(ui, |ui| {
+						ui.spacing_mut().item_spacing.y = 8.0;
+						for hit in &page.hits {
+							ui.push_id(hit.id, |ui| {
+								egui::Frame::new()
+									.fill(colors.raised)
+									.stroke(egui::Stroke::new(1.0, colors.border))
+									.corner_radius(8)
+									.inner_margin(egui::Margin::same(10))
+									.show(ui, |ui| {
+										ui.set_width(ui.available_width());
+										ui.horizontal(|ui| {
+											ui.label(
+												design::semibold(ui, &hit.author, 14.0)
+													.color(colors.text_strong),
+											);
+											ui.label(
+												RichText::new(format!("#{}", hit.id))
+													.size(11.0)
+													.color(colors.muted),
+											);
+											ui.with_layout(
+												egui::Layout::right_to_left(egui::Align::Center),
+												|ui| {
+													if ui
+														.add_enabled(
+															allowed && hit.id.0 < u64::MAX,
+															egui::Button::new(
+																RichText::new("Jump").size(12.0),
+															),
+														)
+														.on_hover_text(
+															"Open this message in the timeline",
+														)
+														.clicked()
+													{
+														target = Some(hit.id);
+													}
+												},
+											);
+										});
+										ui.add(
+											egui::Label::new(
+												RichText::new(&hit.excerpt).color(colors.text),
+											)
+											.wrap()
+											.selectable(true),
+										);
+									});
+							});
+						}
+					});
 			}
-		});
-		self.open &= open;
+		}
 		if submit
 			&& let Some(command) = if self.pins {
 				state.request_pins()
@@ -262,15 +347,21 @@ impl SearchUi {
 			commands.push(command);
 			self.open = false;
 		}
-		if !self.open {
-			commands.push(state.clear_search());
-		}
 	}
 }
 
 #[cfg(test)]
 mod tests {
 	use super::*;
+	fn run(ui: &mut egui::Ui, view: &mut SearchUi, state: &mut State, commands: &mut Vec<Command>) {
+		view.sync(ui.ctx(), state, commands);
+		if view.open {
+			if !view.pins {
+				view.header_input(ui, state, commands);
+			}
+			view.pane(ui, state, commands);
+		}
+	}
 	#[test]
 	fn pins_reload_is_keyboard_operable_and_close_cancels_at_narrow_width() {
 		for dark in [false, true] {
@@ -324,7 +415,7 @@ mod tests {
 						events,
 						..Default::default()
 					},
-					|_| view.show(&ctx, &mut state, &mut commands),
+					|ui| run(ui, &mut view, &mut state, &mut commands),
 				);
 				assert!(output.platform_output.commands.is_empty());
 				output.textures_delta.clear();
@@ -351,7 +442,7 @@ mod tests {
 					}],
 					..Default::default()
 				},
-				|_| view.show(&ctx, &mut state, &mut commands),
+				|ui| run(ui, &mut view, &mut state, &mut commands),
 			);
 			output.textures_delta.clear();
 			assert!(!view.open);
@@ -418,7 +509,7 @@ mod tests {
 								.collect(),
 							..Default::default()
 						},
-						|_| view.show(&ctx, &mut state, &mut commands),
+						|ui| run(ui, &mut view, &mut state, &mut commands),
 					);
 					assert!(output.platform_output.commands.is_empty());
 					output.drop_without_applying_deltas();
@@ -493,7 +584,7 @@ mod tests {
 						events,
 						..Default::default()
 					},
-					|_| view.show(&ctx, &mut state, &mut commands),
+					|ui| run(ui, &mut view, &mut state, &mut commands),
 				);
 				assert!(output.platform_output.commands.is_empty());
 				output.textures_delta.clear();
@@ -509,8 +600,8 @@ mod tests {
 				usize::from(!ime)
 			);
 			view.open = false;
-			let mut output = ctx.run_ui(egui::RawInput::default(), |_| {
-				view.show(&ctx, &mut state, &mut commands)
+			let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+				run(ui, &mut view, &mut state, &mut commands)
 			});
 			output.textures_delta.clear();
 			assert!(state.search.is_none());
