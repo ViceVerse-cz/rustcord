@@ -30,7 +30,7 @@ pub fn presence_label(status: &str) -> &'static str {
         _ => "Presence unavailable",
     }
 }
-fn presence_color(status: &str) -> Color32 {
+pub(crate) fn presence_color(status: &str) -> Color32 {
     match status {
         "online" => Color32::from_rgb(35, 165, 89),
         "idle" => Color32::from_rgb(240, 178, 50),

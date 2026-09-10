@@ -21,10 +21,21 @@ use zeroize::Zeroizing;
 fn main() -> eframe::Result {
     let demo = std::env::args().any(|arg| arg == "--demo");
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1120.0, 760.0])
-            .with_min_inner_size([760.0, 520.0])
-            .with_app_id("org.serein.desktop"),
+        viewport: {
+            let builder = egui::ViewportBuilder::default()
+                .with_inner_size([1120.0, 760.0])
+                .with_min_inner_size([760.0, 520.0])
+                .with_app_id("org.serein.desktop");
+            if cfg!(target_os = "macos") {
+                // Discord-style inline title bar: traffic lights sit over the app's own strip.
+                builder
+                    .with_title_shown(false)
+                    .with_titlebar_shown(false)
+                    .with_fullsize_content_view(true)
+            } else {
+                builder
+            }
+        },
         renderer: eframe::Renderer::Wgpu,
         persist_window: false,
         persistence_path: None,
@@ -62,6 +73,7 @@ struct Desktop {
     appearance: egui::ThemePreference,
     appearance_changed: bool,
     reading: reading_settings::ReadingSettings,
+    variant_changed: bool,
     pending_save: Option<Arc<SessionSecret>>,
     credential_status: &'static str,
     forgetting: bool,
@@ -197,8 +209,23 @@ impl Desktop {
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         ui::fonts::install(&cc.egui_ctx);
         ui::emoji::install(&cc.egui_ctx)?;
+        if demo {
+            // Fixture-only preset preview, e.g. `--demo --demo-theme=onyx --demo-light`.
+            if let Some(variant) = std::env::args()
+                .find_map(|arg| arg.strip_prefix("--demo-theme=").map(str::to_owned))
+                .and_then(|key| ui::design::Variant::from_key(&key))
+            {
+                ui::design::set_variant(variant);
+            }
+        }
         ui::design::apply(&cc.egui_ctx);
-        cc.egui_ctx.set_theme(egui::ThemePreference::System);
+        cc.egui_ctx.set_theme(
+            if demo && std::env::args().any(|arg| arg == "--demo-light") {
+                egui::ThemePreference::Light
+            } else {
+                egui::ThemePreference::System
+            },
+        );
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -295,6 +322,7 @@ impl Desktop {
             appearance: egui::ThemePreference::System,
             appearance_changed: false,
             reading,
+            variant_changed: false,
             pending_save: None,
             credential_status: if demo {
                 "Fixture mode never opens the credential store or network"
@@ -1153,7 +1181,7 @@ impl Desktop {
                     self.reading.saved(*result);
                     continue;
                 }
-                cache::Outcome::Appearance(appearance) => {
+                cache::Outcome::Appearance(appearance, variant) => {
                     if !self.state.demo && !self.appearance_changed {
                         self.appearance = match appearance {
                             local_store::Appearance::System => egui::ThemePreference::System,
@@ -1161,6 +1189,15 @@ impl Desktop {
                             local_store::Appearance::Dark => egui::ThemePreference::Dark,
                         };
                         ctx.set_theme(self.appearance);
+                    }
+                    if !self.state.demo && !self.variant_changed {
+                        // Unknown keys from a newer build fall back to the default preset.
+                        let variant = variant
+                            .as_deref()
+                            .and_then(ui::design::Variant::from_key)
+                            .unwrap_or_default();
+                        ui::design::set_variant(variant);
+                        ui::design::apply(ctx);
                     }
                     continue;
                 }
@@ -1228,7 +1265,7 @@ impl Desktop {
                         self.cache_status = "Local changes saved";
                     }
                 }
-                cache::Outcome::Appearance(_)
+                cache::Outcome::Appearance(..)
                 | cache::Outcome::ReadingPreferences(_)
                 | cache::Outcome::ReadingPreferencesSaved(_)
                 | cache::Outcome::HistoryCleared
@@ -1531,6 +1568,7 @@ impl eframe::App for Desktop {
     }
     fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        ui::design::paint_backdrop(&ctx);
         let upload_allowed = self.state.user.is_some()
             && self.state.gateway_connected
             && self.state.freshness == model::Freshness::Fresh;
@@ -1760,6 +1798,11 @@ impl eframe::App for Desktop {
                 egui::ThemePreference::Dark => local_store::Appearance::Dark,
             };
             self.queue_cache_for(model::Id(0), cache::Operation::SaveAppearance(preference));
+        }
+        if let Some(variant) = self.messaging.theme_variant_changed.take() {
+            self.variant_changed = true;
+            let key = (variant != ui::design::Variant::Standard).then(|| variant.key().to_owned());
+            self.queue_cache_for(model::Id(0), cache::Operation::SaveThemeVariant(key));
         }
         if self.confirming_close || self.confirming_logout {
             egui::Window::new("Leave this session?").collapsible(false).show(&ctx,|ui|{

@@ -22,39 +22,69 @@ impl MessagingUi {
             .as_ref()
             .filter(|c| c.channel == channel.id);
         let connected = call.is_some_and(|c| matches!(c.phase, Phase::Waiting | Phase::Connected));
-        let color = if connected {
-            colors.accent
-        } else {
-            colors.text
-        };
         let elapsed = call.and_then(elapsed_label);
-        let response = ui
+        // A channel the account cannot view stays visible but inert, as before the restyle.
+        let viewable = state.can_view(channel.id);
+        let (rect, response) = ui
             .push_id(channel.id, |ui| {
-                ui.add_enabled(
-                    state.can_view(channel.id),
-                    egui::Button::selectable(
-                        selected,
-                        RichText::new(format!("     {}", channel.name)).color(color),
-                    )
-                    .right_text(
-                        RichText::new(elapsed.as_deref().unwrap_or(""))
-                            .monospace()
-                            .size(11.0)
-                            .color(color),
-                    )
-                    .min_size(egui::vec2(ui.available_width(), 36.0))
-                    .truncate(),
+                ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), 34.0),
+                    if viewable {
+                        egui::Sense::click()
+                    } else {
+                        egui::Sense::hover()
+                    },
                 )
             })
             .inner;
-        speaker(
-            ui,
+        let row = rect.shrink2(egui::vec2(0.0, 1.0));
+        let hovered = viewable && (response.hovered() || response.has_focus());
+        if selected {
+            ui.painter().rect_filled(row, 8, colors.selected);
+        } else if hovered {
+            ui.painter().rect_filled(row, 8, colors.hover);
+        }
+        let text_color = if !viewable {
+            colors.muted.gamma_multiply(0.6)
+        } else if connected {
+            colors.accent
+        } else if selected || hovered {
+            colors.text_strong
+        } else {
+            colors.muted
+        };
+        crate::icons::paint(
+            ui.painter(),
+            crate::icons::Icon::Speaker,
             egui::Rect::from_center_size(
-                response.rect.left_center() + egui::vec2(16.0, 0.0),
-                egui::vec2(18.0, 18.0),
+                row.left_center() + egui::vec2(18.0, 0.0),
+                egui::Vec2::splat(20.0),
             ),
-            color,
+            text_color,
         );
+        let elapsed_width = if elapsed.is_some() { 64.0 } else { 0.0 };
+        let name = ui.painter().layout(
+            channel.name.clone(),
+            egui::FontId::new(15.0, design::medium_family(ui.ctx())),
+            text_color,
+            (row.width() - 40.0 - elapsed_width).max(10.0),
+        );
+        let name_rect = egui::Rect::from_min_size(
+            egui::pos2(row.left() + 34.0, row.center().y - name.size().y * 0.5),
+            egui::vec2(row.width() - 40.0 - elapsed_width, name.size().y),
+        );
+        ui.painter()
+            .with_clip_rect(name_rect)
+            .galley(name_rect.min, name, text_color);
+        if let Some(elapsed) = &elapsed {
+            ui.painter().text(
+                row.right_center() - egui::vec2(8.0, 0.0),
+                egui::Align2::RIGHT_CENTER,
+                elapsed,
+                egui::FontId::monospace(11.0),
+                text_color,
+            );
+        }
         if elapsed.is_some() && ui.is_rect_visible(response.rect) {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_secs(1));
@@ -62,7 +92,7 @@ impl MessagingUi {
         response.widget_info(|| {
             egui::WidgetInfo::selected(
                 egui::WidgetType::SelectableLabel,
-                response.enabled(),
+                viewable,
                 selected,
                 format!(
                     "{} voice channel{}",
@@ -285,22 +315,29 @@ impl MessagingUi {
             .channels
             .iter()
             .any(|c| c.id == channel && c.kind == 2);
-        let response = ui
-            .add_enabled(
-                unavailable.is_none(),
-                egui::Button::new(if guild {
-                    "Join voice"
-                } else if incoming {
-                    "Answer"
-                } else {
-                    "Call"
-                }),
-            )
-            .on_hover_text(unavailable.unwrap_or(if state.can_speak(channel) {
-                "Join audio. Your microphone starts after the call is secured."
-            } else {
-                "Join to listen. Speaking is unavailable in this channel."
-            }));
+        let label = if guild {
+            "Join voice"
+        } else if incoming {
+            "Answer call"
+        } else {
+            "Start voice call"
+        };
+        let hint = unavailable.unwrap_or(if state.can_speak(channel) {
+            "Join audio. Your microphone starts after the call is secured."
+        } else {
+            "Join to listen. Speaking is unavailable in this channel."
+        });
+        // Guild channels keep a labelled button in the voice view; DM headers use an icon.
+        let response = if guild {
+            ui.add_enabled(unavailable.is_none(), egui::Button::new(label))
+        } else {
+            ui.add_enabled_ui(unavailable.is_none(), |ui| {
+                crate::icons::button(ui, crate::icons::Icon::Phone, 32.0, label)
+            })
+            .inner
+        }
+        .on_hover_text(hint)
+        .on_disabled_hover_text(hint);
         if response.clicked()
             && let Some(command) = state.start_call(channel, !guild && !incoming)
         {
@@ -310,7 +347,9 @@ impl MessagingUi {
     }
 
     pub(super) fn voice_settings(&mut self, ui: &mut egui::Ui, demo: bool, active: bool) {
-        ui.menu_button("Audio", |ui| {
+        let trigger =
+            crate::icons::button(ui, crate::icons::Icon::Headphones, 32.0, "Voice settings");
+        egui::Popup::menu(&trigger).show(|ui| {
             ui.set_max_width(300.0);
             ui.strong("Voice settings");
             if demo || !self.voice_available {
@@ -576,29 +615,6 @@ fn elapsed_label(call: &client_core::voice::Call) -> Option<String> {
         seconds / 60 % 60,
         seconds % 60
     ))
-}
-
-pub(super) fn speaker(ui: &egui::Ui, rect: egui::Rect, color: egui::Color32) {
-    let point = |x, y| rect.min + egui::vec2(rect.width() * x, rect.height() * y);
-    let stroke = egui::Stroke::new(1.6, color);
-    ui.painter().add(egui::Shape::convex_polygon(
-        vec![
-            point(0.05, 0.35),
-            point(0.25, 0.35),
-            point(0.50, 0.12),
-            point(0.50, 0.88),
-            point(0.25, 0.65),
-            point(0.05, 0.65),
-        ],
-        color,
-        egui::Stroke::NONE,
-    ));
-    for x in [0.64, 0.80] {
-        ui.painter().add(egui::Shape::line(
-            vec![point(x, 0.25), point(x + 0.08, 0.5), point(x, 0.75)],
-            stroke,
-        ));
-    }
 }
 
 fn status_icon(ui: &mut egui::Ui, deafened: bool, label: &str) {

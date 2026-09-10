@@ -115,7 +115,13 @@ impl Picker {
             self.query.clear();
             self.filter();
         }
-        let trigger = ui.button("Emoji").on_hover_text("Insert an emoji");
+        let trigger = crate::icons::toggle(
+            ui,
+            crate::icons::Icon::Smile,
+            28.0,
+            self.open,
+            "Insert an emoji",
+        );
         if trigger.clicked() {
             self.open = !self.open;
             self.focus = self.open;
