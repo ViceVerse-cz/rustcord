@@ -59,7 +59,10 @@ impl Timeline {
         if self.deleted.contains(&message.id) {
             return Ok(());
         }
-        if message.bytes() > MAX_BYTES || message.content.len() > 64 * 1024 {
+        if message.bytes() > MAX_BYTES
+            || message.content.len() > 64 * 1024
+            || !model::valid_embeds(&message.embeds)
+        {
             return Err("Message exceeds safe capacity");
         }
         if live {
@@ -80,7 +83,10 @@ impl Timeline {
             }
             message.revision = previous.revision
                 + u64::from(
-                    previous.content != message.content || previous.edited != message.edited,
+                    previous.content != message.content
+                        || previous.edited != message.edited
+                        || previous.embeds != message.embeds
+                        || previous.embeds_suppressed != message.embeds_suppressed,
                 );
         }
         self.bytes += message.bytes();
@@ -125,12 +131,16 @@ impl Timeline {
         if self.deleted.contains(&patch.id) {
             return Ok(());
         }
-        if matches!(&patch.content, Patch::Value(s) if s.len() > 64 * 1024) {
+        if matches!(&patch.content, Patch::Value(s) if s.len() > 64 * 1024)
+            || matches!(&patch.embeds, Patch::Value(embeds) if !model::valid_embeds(embeds))
+        {
             return Err("Message patch exceeds capacity");
         }
         self.remember(patch.id)?;
         if let Some(mut message) = self.messages.remove(&patch.id) {
             self.bytes -= message.bytes();
+            // Once hydrated, changed protects this record from the in-flight history page.
+            self.patches.remove(&patch.id);
             apply_patch(&mut message, &patch);
             self.insert(message, true, false)?;
         } else if self.loading {
@@ -139,38 +149,29 @@ impl Timeline {
             }) {
                 return Ok(());
             }
-            let bytes: usize = self
+            let bytes: usize = self.patches.values().map(patch_bytes).sum();
+            let mut merged = self
                 .patches
-                .values()
-                .map(|p| match &p.content {
-                    Patch::Value(s) => s.capacity(),
-                    _ => 0,
-                })
-                .sum();
-            let incoming = match &patch.content {
-                Patch::Value(s) => s.capacity(),
-                _ => 0,
-            };
-            let replaced = self.patches.get(&patch.id).map_or(0, |previous| {
-                match (&patch.content, &previous.content) {
-                    (Patch::Absent, _) => 0,
-                    (_, Patch::Value(s)) => s.capacity(),
-                    _ => 0,
-                }
-            });
-            if bytes - replaced + incoming > 1024 * 1024 {
+                .get(&patch.id)
+                .cloned()
+                .unwrap_or_else(|| patch.clone());
+            if !matches!(patch.content, Patch::Absent) {
+                merged.content = patch.content;
+            }
+            if !matches!(patch.edited, Patch::Absent) {
+                merged.edited = patch.edited;
+            }
+            if !matches!(patch.embeds, Patch::Absent) {
+                merged.embeds = patch.embeds;
+            }
+            if !matches!(patch.embeds_suppressed, Patch::Absent) {
+                merged.embeds_suppressed = patch.embeds_suppressed;
+            }
+            let replaced = self.patches.get(&patch.id).map_or(0, patch_bytes);
+            if bytes - replaced + patch_bytes(&merged) > 1024 * 1024 {
                 return Err("Pending patch byte budget exceeded; reload required");
             }
-            if let Some(previous) = self.patches.get_mut(&patch.id) {
-                if !matches!(patch.content, Patch::Absent) {
-                    previous.content = patch.content;
-                }
-                if !matches!(patch.edited, Patch::Absent) {
-                    previous.edited = patch.edited;
-                }
-            } else {
-                self.patches.insert(patch.id, patch);
-            }
+            self.patches.insert(merged.id, merged);
         }
         Ok(())
     }
@@ -190,6 +191,17 @@ impl Timeline {
         *self = Self::default();
     }
 }
+fn patch_bytes(patch: &MessagePatch) -> usize {
+    let content = match &patch.content {
+        Patch::Value(value) => value.capacity(),
+        _ => 0,
+    };
+    content
+        + match &patch.embeds {
+            Patch::Value(value) => model::embed_bytes(value),
+            _ => 0,
+        }
+}
 fn apply_patch(message: &mut Message, patch: &MessagePatch) {
     if matches!(patch.edited,Patch::Value(new) if message.edited_at.is_some_and(|old|new<old)) {
         return;
@@ -208,6 +220,16 @@ fn apply_patch(message: &mut Message, patch: &MessagePatch) {
             message.edited = false;
             message.edited_at = None;
         }
+        Patch::Absent => {}
+    }
+    match &patch.embeds {
+        Patch::Value(embeds) => message.embeds.clone_from(embeds),
+        Patch::Null => message.embeds.clear(),
+        Patch::Absent => {}
+    }
+    match patch.embeds_suppressed {
+        Patch::Value(suppressed) => message.embeds_suppressed = suppressed,
+        Patch::Null => message.embeds_suppressed = false,
         Patch::Absent => {}
     }
     message.revision += 1;
@@ -233,7 +255,79 @@ mod tests {
             nonce: None,
             reply_to: None,
             unsupported: false,
+            embeds: Vec::new(),
+            embeds_suppressed: false,
         }
+    }
+    #[test]
+    fn embed_only_mutations_merge_clear_and_survive_late_history() {
+        let embed = |title: &str| model::Embed {
+            title: Some(title.into()),
+            ..Default::default()
+        };
+        let update = |embeds| MessagePatch {
+            id: Id(1),
+            channel: Id(1),
+            content: Patch::Absent,
+            edited: Patch::Absent,
+            embeds,
+            embeds_suppressed: Patch::Absent,
+        };
+        let mut timeline = Timeline::default();
+        timeline.begin_page();
+        timeline
+            .patch(update(Patch::Value(vec![embed("first")])))
+            .unwrap();
+        let mut suppression = update(Patch::Absent);
+        suppression.embeds_suppressed = Patch::Value(true);
+        timeline.patch(suppression).unwrap();
+        timeline.insert(message(1), true, false).unwrap();
+        assert_eq!(
+            timeline.get(Id(1)).unwrap().embeds[0].title.as_deref(),
+            Some("first")
+        );
+        assert!(timeline.get(Id(1)).unwrap().embeds_suppressed);
+        let revision = timeline.get(Id(1)).unwrap().revision;
+        timeline
+            .patch(update(Patch::Value(vec![embed("newer")])))
+            .unwrap();
+        timeline.finish_page(vec![message(1)], false).unwrap();
+        assert_eq!(
+            timeline.get(Id(1)).unwrap().embeds[0].title.as_deref(),
+            Some("newer")
+        );
+        assert!(timeline.get(Id(1)).unwrap().revision > revision);
+        for clear in [Patch::Null, Patch::Value(Vec::new())] {
+            timeline.begin_page();
+            let mut old = message(1);
+            old.embeds = vec![embed("stale")];
+            timeline.patch(update(clear)).unwrap();
+            timeline.finish_page(vec![old], false).unwrap();
+            assert!(timeline.get(Id(1)).unwrap().embeds.is_empty());
+            assert_eq!(
+                timeline.bytes(),
+                timeline.iter().map(Message::bytes).sum::<usize>()
+            );
+        }
+        timeline.clear();
+        timeline.begin_page();
+        let large = model::Embed {
+            description: Some("x".repeat(16_384)),
+            ..Default::default()
+        };
+        let mut rejected = false;
+        for id in 1..100 {
+            let mut patch = update(Patch::Value(vec![large.clone()]));
+            patch.id = Id(id);
+            if timeline.patch(patch).is_err() {
+                rejected = true;
+                break;
+            }
+        }
+        assert!(
+            rejected,
+            "Pending embeds must share the one MiB patch budget"
+        );
     }
     #[test]
     fn mutations_win_over_late_history_and_memory_is_bounded() {
@@ -245,6 +339,8 @@ mod tests {
             channel: Id(1),
             content: Patch::Value("after".into()),
             edited: Patch::Value(1),
+            embeds: Patch::Absent,
+            embeds_suppressed: Patch::Absent,
         })
         .unwrap();
         t.finish_page(vec![message(1), message(2)], false).unwrap();
@@ -254,6 +350,8 @@ mod tests {
             channel: Id(1),
             content: Patch::Value("late edit".into()),
             edited: Patch::Absent,
+            embeds: Patch::Absent,
+            embeds_suppressed: Patch::Absent,
         })
         .unwrap();
         t.insert(message(1), false, false).unwrap();
@@ -302,6 +400,8 @@ mod tests {
                     channel: Id(1),
                     content: Patch::Value(content.into()),
                     edited: Patch::Value(at),
+                    embeds: Patch::Absent,
+                    embeds_suppressed: Patch::Absent,
                 })
                 .unwrap();
         }

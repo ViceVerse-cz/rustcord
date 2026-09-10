@@ -1,7 +1,7 @@
 //! Bounded native text formatting. No HTML renderer, image loader, or automatic URL access.
 use egui::{FontId, Stroke, TextFormat, text::LayoutJob};
 use model::Id;
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, TextMergeStream};
 use std::collections::VecDeque;
 
 const MAX_INPUT: usize = 8192;
@@ -16,7 +16,8 @@ struct Style {
     code: bool,
     strike: bool,
     quote: bool,
-    link: bool,
+    link: Option<usize>,
+    no_autolink: bool,
 }
 pub struct Formatted {
     spans: Vec<(String, Style)>,
@@ -27,12 +28,12 @@ pub struct Formatted {
 
 #[derive(Default)]
 pub struct FormatCache {
-    entries: VecDeque<(Id, String, Formatted)>,
+    entries: VecDeque<((Id, u16), String, Formatted)>,
     bytes: usize,
 }
 impl FormatCache {
     pub fn retain(&mut self, mut keep: impl FnMut(Id) -> bool) {
-        self.entries.retain(|(id, _, _)| keep(*id));
+        self.entries.retain(|((id, _), _, _)| keep(*id));
         self.bytes = self
             .entries
             .iter()
@@ -40,6 +41,10 @@ impl FormatCache {
             .sum();
     }
     pub fn get(&mut self, id: Id, source: &str) -> &Formatted {
+        self.get_part(id, 0, source)
+    }
+    pub fn get_part(&mut self, message: Id, part: u16, source: &str) -> &Formatted {
+        let id = (message, part);
         let existing = self.entries.iter().position(|(cached, _, _)| *cached == id);
         let entry = existing.and_then(|index| self.entries.remove(index));
         let entry = match entry {
@@ -95,7 +100,9 @@ impl Formatted {
         };
         let mut stack = Vec::new();
         let mut style = Style::default();
-        for (count, event) in Parser::new_ext(input, Options::ENABLE_STRIKETHROUGH).enumerate() {
+        for (count, event) in
+            TextMergeStream::new(Parser::new_ext(input, Options::ENABLE_STRIKETHROUGH)).enumerate()
+        {
             if count >= MAX_EVENTS || stack.len() > MAX_DEPTH {
                 // Complexity overflow displays bounded literal text, never a partial misleading parse.
                 output.spans = vec![(input.to_owned(), Style::default())];
@@ -117,16 +124,13 @@ impl Formatted {
                         }
                         Tag::Item => output.push("• ", style),
                         Tag::Link { dest_url, .. } => {
-                            if let Some(url) = external_url(&dest_url)
-                                && output.links.len() < MAX_LINKS
-                            {
-                                if !output.links.contains(&url) {
-                                    output.links.push(url);
-                                }
-                                style.link = true;
-                            }
+                            style.no_autolink = true;
+                            style.link = output.add_link(&dest_url);
                         }
-                        Tag::Image { .. } => output.push("[image: ", style),
+                        Tag::Image { .. } => {
+                            style.no_autolink = true;
+                            output.push("[image: ", style);
+                        }
                         _ => {}
                     }
                 }
@@ -143,19 +147,11 @@ impl Formatted {
                     style = stack.pop().unwrap_or_default();
                 }
                 Event::Text(text) => {
-                    if !style.code {
-                        for word in text.split_whitespace() {
-                            let target = word.trim_end_matches(['.', ',', ';', '!', '?', ')', ']']);
-                            if (target.starts_with("https://") || target.starts_with("http://"))
-                                && output.links.len() < MAX_LINKS
-                                && let Some(url) = external_url(target)
-                                && !output.links.contains(&url)
-                            {
-                                output.links.push(url);
-                            }
-                        }
+                    if style.code || style.no_autolink {
+                        output.push(&text, style);
+                    } else {
+                        output.push_autolinks(&text, style);
                     }
-                    output.push(&text, style);
                 }
                 Event::Html(text) | Event::InlineHtml(text) => {
                     output.push(&text, style);
@@ -174,6 +170,84 @@ impl Formatted {
         }
         output
     }
+    fn add_link(&mut self, target: &str) -> Option<usize> {
+        let url = external_url(target)?;
+        if let Some(index) = self.links.iter().position(|existing| *existing == url) {
+            return Some(index);
+        }
+        if self.links.len() >= MAX_LINKS {
+            return None;
+        }
+        self.links.push(url);
+        Some(self.links.len() - 1)
+    }
+    fn push_autolinks(&mut self, text: &str, style: Style) {
+        let mut consumed = 0;
+        let mut scanned = 0;
+        for word in text.split_whitespace() {
+            let start = scanned + text[scanned..].find(word).expect("word from source");
+            scanned = start + word.len();
+            let candidate = word.trim_start_matches(['(', '[', '{']);
+            let mut target = candidate.trim_end_matches(['.', ',', ';', '!', '?', ']', '}']);
+            while target.ends_with(')') && target.matches(')').count() > target.matches('(').count()
+            {
+                target = &target[..target.len() - 1];
+            }
+            if (target.starts_with("https://") || target.starts_with("http://"))
+                && let Some(link) = self.add_link(target)
+            {
+                let link_start = start + word.len() - candidate.len();
+                self.push(&text[consumed..link_start], style);
+                self.push(
+                    target,
+                    Style {
+                        link: Some(link),
+                        ..style
+                    },
+                );
+                consumed = link_start + target.len();
+            }
+        }
+        self.push(&text[consumed..], style);
+    }
+    pub fn show(&self, ui: &mut egui::Ui, opening: &mut Option<String>) {
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), 0.0),
+            egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true),
+            |ui| {
+                ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                let mut start = 0;
+                while start < self.spans.len() {
+                    let target = self.spans[start].1.link;
+                    let count = self.spans[start..]
+                        .iter()
+                        .take_while(|(_, style)| style.link == target)
+                        .count();
+                    let job = Self::layout(&self.spans[start..start + count], ui);
+                    if let Some(index) = target {
+                        let url = &self.links[index];
+                        let label = job.text.clone();
+                        let response = ui.add(egui::Link::new(job)).on_hover_text(url);
+                        // Text selection in egui's Link overwrites its accessibility role.
+                        response.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::WidgetType::Link,
+                                ui.is_enabled(),
+                                &label,
+                            )
+                        });
+                        if response.clicked() {
+                            *opening = Some(url.clone());
+                        }
+                    } else {
+                        ui.add(egui::Label::new(job).wrap().selectable(true));
+                    }
+                    start += count;
+                }
+            },
+        );
+    }
     fn push(&mut self, text: &str, style: Style) {
         if !text.is_empty() {
             self.spans.push((text.to_owned(), style));
@@ -185,12 +259,12 @@ impl Formatted {
             + self.links.capacity() * size_of::<String>()
             + self.links.iter().map(String::capacity).sum::<usize>()
     }
-    pub fn layout(&self, ui: &egui::Ui) -> LayoutJob {
+    fn layout(spans: &[(String, Style)], ui: &egui::Ui) -> LayoutJob {
         let mut job = LayoutJob::default();
         let visuals = ui.visuals();
         let body = egui::TextStyle::Body.resolve(ui.style());
-        for (text, style) in &self.spans {
-            let color = if style.link {
+        for (text, style) in spans {
+            let color = if style.link.is_some() {
                 visuals.hyperlink_color
             } else if style.strong {
                 visuals.strong_text_color()
@@ -220,7 +294,7 @@ impl Formatted {
                     } else {
                         Stroke::NONE
                     },
-                    underline: if style.link {
+                    underline: if style.link.is_some() {
                         Stroke::new(1.0, color)
                     } else {
                         Stroke::NONE
@@ -236,6 +310,89 @@ impl Formatted {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn inline_links_preserve_markdown_and_activate_their_own_destinations() {
+        let source = "Before [**Markdown** *label*](https://example.com/masked) then (https://example.org/a_(b)). `https://code.test` [https://label.test](javascript:bad)";
+        let parsed = Formatted::parse(source);
+        assert_eq!(
+            parsed.links,
+            ["https://example.com/masked", "https://example.org/a_(b)"]
+        );
+        assert!(
+            parsed
+                .spans
+                .iter()
+                .any(|(s, f)| s == "Markdown" && f.strong && f.link == Some(0))
+        );
+        assert!(
+            parsed
+                .spans
+                .iter()
+                .any(|(s, f)| s == "label" && f.italic && f.link == Some(0))
+        );
+        assert!(
+            parsed
+                .spans
+                .iter()
+                .any(|(s, f)| s == "https://example.org/a_(b)" && f.link == Some(1))
+        );
+        let repeated = Formatted::parse("nothttps://example.org https://example.org");
+        assert_eq!(repeated.spans[0].0, "nothttps://example.org ");
+        assert!(repeated.spans[0].1.link.is_none());
+
+        let ctx = egui::Context::default();
+        let mut opening = None;
+        let mut render = |events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(220.0, 500.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| parsed.show(ui, &mut opening),
+            );
+            assert!(
+                output.platform_output.commands.is_empty(),
+                "Links must use confirmation, never open while rendering or on first activation"
+            );
+            output.textures_delta.clear();
+            opening.take()
+        };
+        assert!(render(vec![]).is_none());
+        // Native links participate in keyboard focus; each targets its own normalized URL.
+        for target in &parsed.links {
+            assert!(
+                render(vec![egui::Event::Key {
+                    key: egui::Key::Tab,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }])
+                .is_none()
+            );
+            assert_eq!(
+                render(vec![egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }]),
+                Some(target.clone())
+            );
+            render(vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: false,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }]);
+        }
+    }
     #[test]
     fn bounded_formatting_and_inert_external_content() {
         let parsed = Formatted::parse(

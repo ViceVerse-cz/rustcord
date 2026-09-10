@@ -3,6 +3,8 @@ use model::{Id, Message, User};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::{collections::BTreeMap, path::Path};
 
+const MAX_EMBED_JSON: usize = 256 * 1024;
+const MAX_WINDOW_BYTES: usize = 4 * 1024 * 1024;
 pub struct LocalStore(Connection);
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Appearance {
@@ -21,6 +23,38 @@ type Result<T> = std::result::Result<T, StoreError>;
 impl From<rusqlite::Error> for StoreError {
     fn from(_: rusqlite::Error) -> Self {
         Self::Unavailable
+    }
+}
+/// Reject excess entries during parsing, before allocating a whole malformed array.
+struct CachedEmbeds(Vec<model::Embed>);
+impl<'de> serde::Deserialize<'de> for CachedEmbeds {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = CachedEmbeds;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("at most ten cached embeds")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut sequence: A,
+            ) -> std::result::Result<Self::Value, A::Error> {
+                let mut embeds = Vec::new();
+                for _ in 0..model::MAX_EMBEDS {
+                    match sequence.next_element()? {
+                        Some(embed) => embeds.push(embed),
+                        None => return Ok(CachedEmbeds(embeds)),
+                    }
+                }
+                if sequence.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                    return Err(serde::de::Error::custom("cached embed limit"));
+                }
+                Ok(CachedEmbeds(embeds))
+            }
+        }
+        deserializer.deserialize_seq(Visitor)
     }
 }
 impl LocalStore {
@@ -43,7 +77,7 @@ impl LocalStore {
     fn initialize(connection: Connection) -> Result<Self> {
         connection.busy_timeout(std::time::Duration::from_secs(2))?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 3 {
+        if version > 4 {
             return Err(StoreError::Incompatible);
         }
         connection.execute_batch("PRAGMA page_size=4096; PRAGMA max_page_count=16384; PRAGMA cache_size=-2048; PRAGMA temp_store=MEMORY; PRAGMA journal_mode=DELETE; PRAGMA secure_delete=ON; PRAGMA auto_vacuum=FULL;
@@ -59,8 +93,16 @@ impl LocalStore {
         )?;
         if !has_avatar {
             connection.execute_batch("BEGIN; ALTER TABLE messages ADD COLUMN avatar TEXT; ALTER TABLE messages ADD COLUMN discriminator INTEGER NOT NULL DEFAULT 0; PRAGMA user_version=3; COMMIT;")?;
+        }
+        let has_embeds: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('messages') WHERE name='embeds')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_embeds {
+            connection.execute_batch("BEGIN; ALTER TABLE messages ADD COLUMN embeds TEXT NOT NULL DEFAULT '[]'; ALTER TABLE messages ADD COLUMN embeds_suppressed INTEGER NOT NULL DEFAULT 0; PRAGMA user_version=4; COMMIT;")?;
         } else {
-            connection.pragma_update(None, "user_version", 3)?;
+            connection.pragma_update(None, "user_version", 4)?;
         }
         Ok(Self(connection))
     }
@@ -98,8 +140,10 @@ impl LocalStore {
     }
     pub fn save_channel(&mut self, account: Id, channel: Id, messages: &[Message]) -> Result<()> {
         if messages.len() > 500
-            || messages.iter().map(Message::bytes).sum::<usize>() > 4 * 1024 * 1024
-            || messages.iter().any(|m| m.channel != channel)
+            || messages.iter().map(Message::bytes).sum::<usize>() > MAX_WINDOW_BYTES
+            || messages
+                .iter()
+                .any(|m| m.channel != channel || !model::valid_embeds(&m.embeds))
         {
             return Err(StoreError::Capacity);
         }
@@ -112,8 +156,13 @@ impl LocalStore {
             params![account, channel],
         )?;
         for message in messages {
+            let embeds =
+                serde_json::to_string(&message.embeds).map_err(|_| StoreError::Incompatible)?;
+            if embeds.len() > MAX_EMBED_JSON {
+                return Err(StoreError::Capacity);
+            }
             transaction.execute(
-                "INSERT INTO messages(account,channel,id,author,name,content,edited,reply,unsupported,avatar,discriminator) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                "INSERT INTO messages(account,channel,id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
                 params![
                     account,
                     channel,
@@ -125,14 +174,16 @@ impl LocalStore {
                     message.reply_to.map(|id| id.to_string()),
                     message.unsupported,
                     message.author.avatar,
-                    message.author.discriminator
+                    message.author.discriminator,
+                    embeds,
+                    message.embeds_suppressed
                 ],
             )?;
         }
         transaction.execute("INSERT INTO channels VALUES(?1,?2,unixepoch('subsec')*1000) ON CONFLICT(account,channel) DO UPDATE SET touched=excluded.touched",params![account,channel])?;
         // Global limit: 20 channel windows, 10000 messages AND 48 MiB content, below the 64 MiB database page ceiling.
         loop {
-            let (channels,bytes):(i64,i64)=transaction.query_row("SELECT (SELECT count(*) FROM channels),(SELECT coalesce(sum(length(CAST(content AS BLOB))+length(CAST(name AS BLOB))+256),0) FROM messages)",[],|r|Ok((r.get(0)?,r.get(1)?)))?;
+            let (channels,bytes):(i64,i64)=transaction.query_row("SELECT (SELECT count(*) FROM channels),(SELECT coalesce(sum(length(CAST(content AS BLOB))+length(CAST(name AS BLOB))+length(CAST(embeds AS BLOB))+256),0) FROM messages)",[],|r|Ok((r.get(0)?,r.get(1)?)))?;
             if channels <= 20 && bytes <= 48 * 1024 * 1024 {
                 break;
             }
@@ -154,34 +205,76 @@ impl LocalStore {
         Ok(())
     }
     pub fn load_channel(&self, account: Id, channel: Id) -> Result<Vec<Message>> {
-        let mut query=self.0.prepare("SELECT id,author,name,content,edited,reply,unsupported,avatar,discriminator FROM messages WHERE account=?1 AND channel=?2 ORDER BY length(id),id LIMIT 500")?;
-        let rows = query.query_map(params![account.to_string(), channel.to_string()], |r| {
-            let parse = |value: String| {
-                value
-                    .parse::<Id>()
-                    .map_err(|_| rusqlite::Error::InvalidQuery)
-            };
-            Ok(Message {
-                id: parse(r.get(0)?)?,
+        let mut query = self.0.prepare("SELECT id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed FROM messages WHERE account=?1 AND channel=?2 ORDER BY length(id),id LIMIT 500")?;
+        let mut rows = query.query(params![account.to_string(), channel.to_string()])?;
+        let mut messages = Vec::new();
+        let mut bytes = 0;
+        while let Some(row) = rows.next()? {
+            // Inspect borrowed SQLite fields before allocating attacker-controlled cache strings.
+            for (column, maximum) in [
+                (0, 20),
+                (1, 20),
+                (2, 512),
+                (3, 64 * 1024),
+                (9, MAX_EMBED_JSON),
+            ] {
+                if row
+                    .get_ref(column)?
+                    .as_str()
+                    .map_err(|_| StoreError::Incompatible)?
+                    .len()
+                    > maximum
+                {
+                    return Err(StoreError::Capacity);
+                }
+            }
+            for (column, maximum) in [(5, 20), (7, 34)] {
+                if !matches!(row.get_ref(column)?, rusqlite::types::ValueRef::Null)
+                    && row
+                        .get_ref(column)?
+                        .as_str()
+                        .map_err(|_| StoreError::Incompatible)?
+                        .len()
+                        > maximum
+                {
+                    return Err(StoreError::Capacity);
+                }
+            }
+            let embeds = serde_json::from_str::<CachedEmbeds>(
+                row.get_ref(9)?
+                    .as_str()
+                    .map_err(|_| StoreError::Incompatible)?,
+            )
+            .map_err(|_| StoreError::Incompatible)?
+            .0;
+            if !model::valid_embeds(&embeds) {
+                return Err(StoreError::Capacity);
+            }
+            let parse = |value: String| value.parse::<Id>().map_err(|_| StoreError::Incompatible);
+            let message = Message {
+                id: parse(row.get(0)?)?,
                 channel,
                 author: User {
-                    id: parse(r.get(1)?)?,
-                    name: r.get(2)?,
-                    avatar: r.get(7)?,
-                    discriminator: r.get(8)?,
+                    id: parse(row.get(1)?)?,
+                    name: row.get(2)?,
+                    avatar: row.get(7)?,
+                    discriminator: row.get(8)?,
                 },
-                content: r.get(3)?,
-                edited: r.get(4)?,
+                content: row.get(3)?,
+                edited: row.get(4)?,
                 edited_at: None,
-                reply_to: r.get::<_, Option<String>>(5)?.map(parse).transpose()?,
-                unsupported: r.get(6)?,
+                reply_to: row.get::<_, Option<String>>(5)?.map(parse).transpose()?,
+                unsupported: row.get(6)?,
                 nonce: None,
                 revision: 0,
-            })
-        })?;
-        let messages: Vec<_> = rows.collect::<std::result::Result<_, _>>()?;
-        if messages.iter().map(Message::bytes).sum::<usize>() > 4 * 1024 * 1024 {
-            return Err(StoreError::Capacity);
+                embeds,
+                embeds_suppressed: row.get(10)?,
+            };
+            bytes += message.bytes();
+            if bytes > MAX_WINDOW_BYTES {
+                return Err(StoreError::Capacity);
+            }
+            messages.push(message);
         }
         Ok(messages)
     }
@@ -259,6 +352,51 @@ impl LocalStore {
 mod tests {
     use super::*;
     #[test]
+    fn schema_three_and_untrusted_cached_embeds_remain_bounded() {
+        let store = LocalStore::initialize(Connection::open_in_memory().unwrap()).unwrap();
+        store.0.execute_batch("ALTER TABLE messages DROP COLUMN embeds; ALTER TABLE messages DROP COLUMN embeds_suppressed; PRAGMA user_version=3;").unwrap();
+        store.0.execute("INSERT INTO messages(account,channel,id,author,name,content,edited,unsupported) VALUES('1','2','3','4','Synthetic','body',0,0)", []).unwrap();
+        let store = LocalStore::initialize(store.0).unwrap();
+        let loaded = store.load_channel(Id(1), Id(2)).unwrap();
+        assert_eq!(loaded[0].content, "body");
+        assert!(loaded[0].embeds.is_empty());
+        assert!(!loaded[0].embeds_suppressed);
+        let version: u32 = store
+            .0
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 4);
+        for (json, error) in [
+            ("broken JSON".to_owned(), StoreError::Incompatible),
+            (
+                serde_json::to_string(&vec![model::Embed::default(); 11]).unwrap(),
+                StoreError::Incompatible,
+            ),
+            (
+                serde_json::json!([{"fields": vec![model::EmbedField::default(); 26]}]).to_string(),
+                StoreError::Incompatible,
+            ),
+            (" ".repeat(MAX_EMBED_JSON + 1), StoreError::Capacity),
+        ] {
+            store
+                .0
+                .execute("UPDATE messages SET embeds=?1", [json])
+                .unwrap();
+            assert!(matches!(store.load_channel(Id(1), Id(2)), Err(actual) if actual == error));
+        }
+        store
+            .0
+            .execute(
+                "UPDATE messages SET embeds='[]',content=?1",
+                ["x".repeat(64 * 1024 + 1)],
+            )
+            .unwrap();
+        assert!(matches!(
+            store.load_channel(Id(1), Id(2)),
+            Err(StoreError::Capacity)
+        ));
+    }
+    #[test]
     fn account_isolation_draft_reopen_eviction_and_logout() {
         let root =
             std::env::temp_dir().join(format!("serein-synthetic-store-{}", std::process::id()));
@@ -272,6 +410,8 @@ mod tests {
         let upgraded = store.load_channel(Id(9), Id(90)).unwrap();
         assert!(upgraded[0].author.avatar.is_none());
         assert_eq!(upgraded[0].author.discriminator, 0);
+        assert!(upgraded[0].embeds.is_empty());
+        assert!(!upgraded[0].embeds_suppressed);
         assert_eq!(store.appearance().unwrap(), Appearance::System);
         store.save_appearance(Appearance::Light).unwrap();
         store.save_draft(Id(1), Id(20), "synthetic draft").unwrap();
@@ -322,6 +462,11 @@ mod tests {
                 edited_at: None,
                 reply_to: None,
                 unsupported: false,
+                embeds: vec![model::Embed {
+                    title: Some("Cached synthetic embed".into()),
+                    ..Default::default()
+                }],
+                embeds_suppressed: true,
                 nonce: None,
                 revision: 0,
             };
@@ -333,7 +478,15 @@ mod tests {
             .unwrap();
         assert_eq!(count, 20);
         assert!(store.load_channel(Id(2), Id(30)).unwrap().is_empty());
-        let cached_author = &store.load_channel(Id(1), Id(30)).unwrap()[0].author;
+        drop(store);
+        let mut store = LocalStore::open(&path).unwrap();
+        let cached = store.load_channel(Id(1), Id(30)).unwrap();
+        assert_eq!(
+            cached[0].embeds[0].title.as_deref(),
+            Some("Cached synthetic embed")
+        );
+        assert!(cached[0].embeds_suppressed);
+        let cached_author = &cached[0].author;
         assert_eq!(
             cached_author.avatar.as_deref(),
             Some("0123456789abcdef0123456789abcdef")

@@ -26,6 +26,8 @@ local-store.workspace = true
 winit.workspace = true
 reqwest.workspace = true
 dirs.workspace = true
+url.workspace = true
+sha2 = "=0.10.9"
 image = { version = "=0.25.10", default-features = false, features = ["png"] }
 
 [lints]

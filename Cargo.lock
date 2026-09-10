@@ -3549,6 +3549,8 @@ dependencies = [
  "dirs",
  "model",
  "rusqlite",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -5658,9 +5660,11 @@ dependencies = [
  "model",
  "platform",
  "reqwest",
+ "sha2 0.10.9",
  "test-support",
  "tokio",
  "ui",
+ "url",
  "winit",
  "zeroize",
 ]

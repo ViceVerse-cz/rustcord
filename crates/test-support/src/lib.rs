@@ -32,7 +32,26 @@ pub fn message(id: u64, channel: Id) -> Message {
         nonce: None,
         reply_to: None,
         unsupported: false,
+        embeds: demo_embeds(id),
+        embeds_suppressed: false,
     }
+}
+fn demo_embeds(id: u64) -> Vec<Embed> {
+    if id != 500 {
+        return vec![];
+    }
+    vec![Embed {
+        kind: "rich".into(),
+        title: Some("A quieter place for your conversations".into()),
+        description: Some("**Native embed preview**\nFormatted descriptions, *useful details*, and a static image.\n[Markdown link](https://example.com/synthetic) · https://example.org".into()),
+        url: Some("https://example.com/synthetic".into()),
+        color: Some(0x68ada4),
+        author: Some(EmbedAuthor { name: "Serein · synthetic example".into(), ..Default::default() }),
+        fields: vec![EmbedField { name:"Interface".into(),value:"Rust + egui".into(),inline:true },EmbedField { name:"Preview".into(),value:"Offline only".into(),inline:true }],
+        image: Some(EmbedMedia { url:Some("https://example.com/synthetic-image.png".into()),width:640,height:240,..Default::default() }),
+        footer: Some(EmbedFooter { text:"Synthetic content · no service request".into(),..Default::default() }),
+        ..Default::default()
+    }]
 }
 pub fn demo_state() -> State {
     let mut state = State {
@@ -49,6 +68,7 @@ pub fn demo_state() -> State {
                 name: "You (synthetic)".into(),
             },
             guilds: vec![Guild {
+                icon: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
                 id: Id(10),
                 name: "Synthetic workspace".into(),
             }],
@@ -56,6 +76,8 @@ pub fn demo_state() -> State {
                 Channel {
                     id: Id(20),
                     guild: Some(Id(10)),
+                    parent_id: Some(Id(23)),
+                    position: 0,
                     name: "getting-started".into(),
                     kind: 0,
                     recipients: vec![],
@@ -64,6 +86,8 @@ pub fn demo_state() -> State {
                 Channel {
                     id: Id(21),
                     guild: Some(Id(10)),
+                    parent_id: Some(Id(24)),
+                    position: 0,
                     name: "long-form".into(),
                     kind: 0,
                     recipients: vec![],
@@ -72,9 +96,41 @@ pub fn demo_state() -> State {
                 Channel {
                     id: Id(22),
                     guild: None,
+                    parent_id: None,
+                    position: 0,
                     name: "Robin (synthetic)".into(),
                     kind: 1,
                     recipients: vec![message(1, Id(22)).author],
+                    member_list_id: None,
+                },
+                Channel {
+                    id: Id(23),
+                    guild: Some(Id(10)),
+                    parent_id: None,
+                    position: 0,
+                    name: "WELCOME".into(),
+                    kind: 4,
+                    recipients: vec![],
+                    member_list_id: None,
+                },
+                Channel {
+                    id: Id(24),
+                    guild: Some(Id(10)),
+                    parent_id: None,
+                    position: 1,
+                    name: "CONVERSATIONS".into(),
+                    kind: 4,
+                    recipients: vec![],
+                    member_list_id: None,
+                },
+                Channel {
+                    id: Id(25),
+                    guild: Some(Id(10)),
+                    parent_id: Some(Id(24)),
+                    position: 1,
+                    name: "hangout".into(),
+                    kind: 2,
+                    recipients: vec![],
                     member_list_id: None,
                 },
             ],

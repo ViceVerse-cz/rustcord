@@ -1,4 +1,6 @@
 //! Discord wire DTOs. JSON values never become application state.
+mod embeds;
+use embeds::EmbedList;
 use model::{Channel, Guild, Id, Message, MessagePatch, Patch, User};
 use serde::Deserialize;
 use serde_json::value::RawValue;
@@ -63,6 +65,10 @@ pub struct ChannelDto {
     #[serde(default)]
     pub guild_id: Option<Id>,
     #[serde(default)]
+    pub parent_id: Option<Id>,
+    #[serde(default)]
+    pub position: i32,
+    #[serde(default)]
     pub name: Option<String>,
     #[serde(rename = "type")]
     pub kind: u8,
@@ -82,6 +88,8 @@ impl ChannelDto {
         Channel {
             id: self.id,
             guild: self.guild_id,
+            parent_id: self.parent_id,
+            position: self.position,
             name: self.name.unwrap_or_else(|| {
                 recipients
                     .iter()
@@ -96,14 +104,102 @@ impl ChannelDto {
     }
 }
 #[derive(Deserialize)]
+pub struct ChannelPatchDto {
+    pub id: Id,
+    #[serde(default)]
+    pub name: Patch<String>,
+    #[serde(default)]
+    pub parent_id: Patch<Id>,
+    #[serde(default)]
+    pub position: Patch<i32>,
+    #[serde(rename = "type", default)]
+    pub kind: Patch<u8>,
+    #[serde(default)]
+    pub permission_overwrites: Patch<Vec<Overwrite>>,
+    #[serde(default)]
+    pub flags: Patch<u64>,
+}
+impl ChannelPatchDto {
+    pub fn into_model(self) -> model::ChannelPatch {
+        model::ChannelPatch {
+            id: self.id,
+            name: self.name,
+            parent_id: self.parent_id,
+            position: self.position,
+            kind: self.kind,
+        }
+    }
+}
+#[cfg(test)]
+mod channel_tests {
+    use super::*;
+    #[test]
+    fn category_metadata_and_partial_channel_updates() {
+        let channel = decode::<ChannelDto>(
+            br#"{"id":"3","guild_id":"1","type":0,"name":"general","position":12,"parent_id":"2"}"#,
+        )
+        .unwrap()
+        .into_model();
+        assert_eq!(channel.parent_id, Some(Id(2)));
+        assert_eq!(channel.position, 12);
+        assert!(channel.supports_text());
+        let category =
+            decode::<ChannelDto>(br#"{"id":"2","guild_id":"1","type":4,"name":"Category"}"#)
+                .unwrap()
+                .into_model();
+        assert!(!category.supports_text());
+        let patch = decode::<ChannelPatchDto>(br#"{"id":"3","position":0,"parent_id":null}"#)
+            .unwrap()
+            .into_model();
+        assert_eq!(patch.parent_id, Patch::Null);
+        assert_eq!(patch.position, Patch::Value(0));
+        assert_eq!(patch.name, Patch::Absent);
+        assert_eq!(patch.kind, Patch::Absent);
+        assert_eq!(
+            decode::<ChannelPatchDto>(br#"{"id":"3"}"#)
+                .unwrap()
+                .into_model()
+                .parent_id,
+            Patch::Absent
+        );
+        assert!(decode::<ChannelDto>(br#"{"id":"3","type":0,"position":4294967296}"#).is_err());
+    }
+}
+#[derive(Deserialize)]
 pub struct GuildDto {
     pub id: Id,
+    #[serde(default)]
+    pub properties: Option<GuildProperties>,
+    #[serde(default)]
+    pub icon: Option<String>,
     #[serde(default)]
     pub name: String,
     #[serde(default)]
     pub channels: Vec<ChannelDto>,
     #[serde(default)]
     pub roles: Vec<RoleDto>,
+}
+#[derive(Deserialize)]
+pub struct GuildProperties {
+    #[serde(default)]
+    pub name: Patch<String>,
+    #[serde(default)]
+    pub icon: Patch<String>,
+}
+#[derive(Deserialize)]
+pub struct GuildPatchDto {
+    pub id: Id,
+    #[serde(flatten)]
+    pub properties: GuildProperties,
+}
+impl GuildPatchDto {
+    pub fn into_model(self) -> model::GuildPatch {
+        model::GuildPatch {
+            id: self.id,
+            name: self.properties.name,
+            icon: self.properties.icon,
+        }
+    }
 }
 #[derive(Deserialize)]
 pub struct Ready {
@@ -123,7 +219,21 @@ impl Ready {
             .collect();
         let guilds = std::mem::take(&mut self.guilds)
             .into_iter()
-            .map(|g| {
+            .map(|mut g| {
+                // Normal-user READY may wrap guild identity in `properties`; public bot objects
+                // are flat. The nested values override only fields actually present there.
+                if let Some(properties) = g.properties {
+                    match properties.name {
+                        Patch::Value(name) => g.name = name,
+                        Patch::Null => g.name.clear(),
+                        Patch::Absent => {}
+                    }
+                    match properties.icon {
+                        Patch::Value(icon) => g.icon = Some(icon),
+                        Patch::Null => g.icon = None,
+                        Patch::Absent => {}
+                    }
+                }
                 let everyone = g
                     .roles
                     .iter()
@@ -142,7 +252,8 @@ impl Ready {
                 }));
                 Guild {
                     id: g.id,
-                    name: g.name,
+                    name: g.name.chars().take(128).collect(),
+                    icon: g.icon.filter(|hash| model::valid_avatar_hash(hash)),
                 }
             })
             .collect();
@@ -165,7 +276,9 @@ pub struct MessageDto {
     #[serde(default)]
     pub attachments: Vec<Box<RawValue>>,
     #[serde(default)]
-    pub embeds: Vec<Box<RawValue>>,
+    pub embeds: EmbedList,
+    #[serde(default)]
+    pub flags: u64,
     #[serde(rename = "type", default)]
     pub kind: u8,
 }
@@ -194,9 +307,9 @@ impl MessageDto {
                 Nonce::Number(n) => n.to_string(),
             }),
             reply_to: self.message_reference.and_then(|r| r.message_id),
-            unsupported: !self.attachments.is_empty()
-                || !self.embeds.is_empty()
-                || !matches!(self.kind, 0 | 19),
+            unsupported: !self.attachments.is_empty() || !matches!(self.kind, 0 | 19 | 20 | 23),
+            embeds: embeds::bounded(self.embeds.0),
+            embeds_suppressed: self.flags & 4 != 0,
         }
     }
 }
@@ -208,6 +321,10 @@ pub struct PatchDto {
     pub content: Patch<String>,
     #[serde(default)]
     pub edited_timestamp: Patch<Timestamp>,
+    #[serde(default)]
+    pub embeds: Patch<EmbedList>,
+    #[serde(default)]
+    pub flags: Patch<u64>,
 }
 impl PatchDto {
     pub fn into_model(self) -> MessagePatch {
@@ -215,6 +332,16 @@ impl PatchDto {
             id: self.id,
             channel: self.channel_id,
             content: self.content,
+            embeds: match self.embeds {
+                Patch::Absent => Patch::Absent,
+                Patch::Null => Patch::Null,
+                Patch::Value(values) => Patch::Value(embeds::bounded(values.0)),
+            },
+            embeds_suppressed: match self.flags {
+                Patch::Absent => Patch::Absent,
+                Patch::Null => Patch::Null,
+                Patch::Value(flags) => Patch::Value(flags & 4 != 0),
+            },
             edited: match self.edited_timestamp {
                 Patch::Absent => Patch::Absent,
                 Patch::Null => Patch::Null,
@@ -420,6 +547,29 @@ mod member_tests {
     use super::*;
     #[test]
     fn avatars_recipients_and_permission_scoped_list_ids() {
+        let mut nested: Ready = decode(br#"{"user":{"id":"1","username":"Synthetic"},"session_id":"synthetic","resume_gateway_url":"wss://gateway.discord.gg","guilds":[{"id":"2","properties":{"name":"Nested","icon":"0123456789abcdef0123456789abcdef"}},{"id":"3","name":"Flat fallback","icon":"0123456789abcdef0123456789abcdef","properties":{"icon":null}}]}"#).unwrap();
+        let (nested_guilds, _) = nested.navigation();
+        assert_eq!(nested_guilds[0].name, "Nested");
+        assert!(nested_guilds[0].icon_key().is_some());
+        assert_eq!(nested_guilds[1].name, "Flat fallback");
+        assert!(nested_guilds[1].icon.is_none());
+        let patch = decode::<GuildPatchDto>(br#"{"id":"2","icon":null}"#)
+            .unwrap()
+            .into_model();
+        assert_eq!(patch.name, Patch::Absent);
+        assert_eq!(patch.icon, Patch::Null);
+        let patch = decode::<GuildPatchDto>(br#"{"id":"2","name":"Renamed"}"#)
+            .unwrap()
+            .into_model();
+        assert_eq!(patch.name, Patch::Value("Renamed".into()));
+        assert_eq!(patch.icon, Patch::Absent);
+        let mut ready: Ready = decode(br#"{"user":{"id":"1","username":"Synthetic"},"session_id":"synthetic","resume_gateway_url":"wss://gateway.discord.gg","guilds":[{"id":"2","name":"Server","icon":"a_0123456789abcdef0123456789abcdef"},{"id":"3","name":"Missing icon","icon":"../../invalid"}]}"#).unwrap();
+        let (guilds, _) = ready.navigation();
+        assert_eq!(
+            guilds[0].icon_key().as_deref(),
+            Some("guild-2-a_0123456789abcdef0123456789abcdef")
+        );
+        assert!(guilds[1].icon_key().is_none());
         let user: UserDto = decode(
             br#"{"id":"4194304","username":"Name","avatar":"../../invalid","discriminator":"0"}"#,
         )

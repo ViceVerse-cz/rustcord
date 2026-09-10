@@ -277,6 +277,8 @@ mod tests {
             channels: vec![model::Channel {
                 id: Id(1),
                 guild: None,
+                parent_id: None,
+                position: 0,
                 name: "Synthetic DM".into(),
                 kind: 1,
                 recipients: vec![model::User {

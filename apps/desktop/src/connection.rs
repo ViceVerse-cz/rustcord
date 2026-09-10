@@ -68,6 +68,12 @@ impl Connection {
                             if ready_user.id!=user.id {return Err(Failure::InvalidCredential);}
                             *gateway_channels.lock().map_err(|_|Failure::Protocol)?=channels.iter().filter(|c|c.guild.is_none()&&c.kind==1&&c.recipients.len()==1).map(|c|c.id).collect();
                         }
+                        if let Event::ChannelCreated(channel)=&event {
+                            let mut channels=gateway_channels.lock().map_err(|_|Failure::Protocol)?;
+                            channels.remove(&channel.id);
+                            if channel.guild.is_none() && channel.kind==1 && channel.recipients.len()==1 && channels.len()<client_core::MAX_NAV {channels.insert(channel.id);}
+                        }
+                        if let Event::Unavailable(channel)=&event {gateway_channels.lock().map_err(|_|Failure::Protocol)?.remove(channel);}
 
                         if matches!(&event,Event::Ready{..}|Event::Resumed) {let _=voice_online.send(true);}
                         if matches!(&event,Event::Disconnected|Event::Resync) {let _=voice_online.send(false);}

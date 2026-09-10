@@ -19,7 +19,7 @@ pub struct TimelineView {
     formatted: FormatCache,
     // Exact revealed content prevents a reload that resets model revisions from revealing edits.
     // Pruned with the active window: at most its 500 records / 4 MiB content budget.
-    revealed: BTreeMap<Id, String>,
+    revealed: BTreeMap<Id, (String, Vec<model::Embed>)>,
     opening: Option<String>,
     text_size: f32,
     scale: f32,
@@ -62,6 +62,8 @@ fn layout_key(message: &Message) -> u64 {
     message.edited.hash(&mut key);
     message.reply_to.hash(&mut key);
     message.unsupported.hash(&mut key);
+    message.embeds.hash(&mut key);
+    message.embeds_suppressed.hash(&mut key);
     key.finish()
 }
 impl TimelineView {
@@ -102,13 +104,17 @@ impl TimelineView {
                 state
                     .timeline
                     .get(*id)
-                    .is_some_and(|m| m.content == *content)
+                    .is_some_and(|m| m.content == content.0 && m.embeds == content.1)
             });
             self.rows = state
                 .timeline
                 .iter()
                 .map(|m| {
-                    let estimate = 58.0
+                    let estimate = (if m.embeds_suppressed {
+                        0.0
+                    } else {
+                        crate::embeds::estimated_height(&m.embeds)
+                    }) + 58.0
                         + 18.0
                             * (m.content
                                 .lines()
@@ -237,40 +243,25 @@ impl TimelineView {
                                         ui.label(RichText::new("↳ Reply to an earlier message").small().color(colors.muted));
                                     }
                                     let formatted = self.formatted.get(*id, &message.content);
-                                    if formatted.spoilers
-                                        && self.revealed.get(id) != Some(&message.content)
+                                    let spoilers = formatted.spoilers || crate::embeds::has_spoilers(message);
+                                    if spoilers
+                                        && !self.revealed.get(id).is_some_and(|(content, embeds)| content == &message.content && embeds == &message.embeds)
                                     {
                                         if ui.button("Reveal spoiler").clicked() {
-                                            self.revealed.insert(*id, message.content.clone());
+                                            self.revealed.insert(*id, (message.content.clone(), message.embeds.clone()));
                                         }
                                     } else {
-                                        ui.add(
-                                            egui::Label::new(formatted.layout(ui))
-                                                .wrap()
-                                                .selectable(true),
-                                        );
+                                        formatted.show(ui, &mut self.opening);
                                         if formatted.limited {
                                             ui.label(RichText::new("Display limited · Copy message for the full text").small().color(colors.muted));
                                         }
-                                        if !formatted.links.is_empty() {
-                                            ui.horizontal_wrapped(|ui| {
-                                                for (index, url) in formatted.links.iter().enumerate() {
-                                                    if ui
-                                                        .small_button(format!("Open link {}…", index + 1))
-                                                        .on_hover_text(url)
-                                                        .clicked()
-                                                    {
-                                                        self.opening = Some(url.clone());
-                                                    }
-                                                }
-                                            });
-                                        }
-                                        if formatted.spoilers && ui.small_button("Hide spoiler").clicked() {
+                                        crate::embeds::show(ui, message, &mut self.formatted, avatars, &mut self.opening, state.demo);
+                                        if spoilers && ui.small_button("Hide spoiler").clicked() {
                                             self.revealed.remove(id);
                                         }
                                     }
                                     if message.unsupported {
-                                        ui.label(RichText::new("Attachment, embed, or system content · Preview unavailable").small().color(colors.muted));
+                                        ui.label(RichText::new("Attachment or system content · Preview unavailable").small().color(colors.muted));
                                     }
                                 });
                             });
@@ -365,12 +356,17 @@ mod tests {
             nonce: None,
             reply_to: None,
             unsupported: false,
+            embeds: vec![],
+            embeds_suppressed: false,
         };
         let mut view = TimelineView {
             channel: Some(Id(2)),
             ..Default::default()
         };
-        view.revealed.insert(message.id, message.content.clone());
+        view.revealed.insert(
+            message.id,
+            (message.content.clone(), message.embeds.clone()),
+        );
         view.heights
             .insert(message.id, (layout_key(&message), 4000.0));
         message.content = "||new concealed content||".into();
@@ -405,5 +401,141 @@ mod tests {
             "A short concealed message must keep a compact row even in an unbounded scroll layout: {}",
             view.heights[&Id(1)].1
         );
+    }
+    #[test]
+    fn embed_cards_conceal_spoilers_and_invalidate_reveals_on_embed_only_edits() {
+        fn painted_text(shape: &egui::Shape, text: &mut String) {
+            match shape {
+                egui::Shape::Text(value) => text.push_str(&value.galley.job.text),
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        painted_text(shape, text);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut message = Message {
+            id: Id(1),
+            channel: Id(2),
+            author: model::User {
+                id: Id(3),
+                name: "Synthetic".into(),
+                avatar: None,
+                discriminator: 0,
+            },
+            content: "Ordinary text".into(),
+            edited: false,
+            edited_at: None,
+            revision: 0,
+            nonce: None,
+            reply_to: None,
+            unsupported: false,
+            embeds_suppressed: false,
+            embeds: vec![model::Embed {
+                kind: "rich".into(),
+                title: Some("||Hidden title||".into()),
+                description: Some("Embed description".into()),
+                image: Some(model::EmbedMedia {
+                    url: Some("https://example.com/image.png".into()),
+                    width: 320,
+                    height: 120,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+        };
+        // A card near the viewport bottom retains its natural height.
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(480.0, 80.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                super::super::embeds::show(
+                    ui,
+                    &message,
+                    &mut FormatCache::default(),
+                    &mut crate::avatars::Avatars::default(),
+                    &mut None,
+                    true,
+                );
+                assert!(ui.min_rect().height() > 200.0);
+            },
+        );
+        output.textures_delta.clear();
+        let mut state = State {
+            demo: true,
+            selected: Some(Id(2)),
+            ..Default::default()
+        };
+        state
+            .timeline
+            .insert(message.clone(), false, false)
+            .unwrap();
+        let mut view = TimelineView {
+            channel: state.selected,
+            ..Default::default()
+        };
+        let mut images = crate::avatars::Avatars::default();
+        let ctx = egui::Context::default();
+        let render =
+            |view: &mut TimelineView, state: &mut State, images: &mut crate::avatars::Avatars| {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(900.0, 900.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| view.show(ui, state, &mut None, &mut None, images, &mut None),
+                );
+                assert!(
+                    output.platform_output.commands.is_empty(),
+                    "Rendering must not open external links"
+                );
+                let mut text = String::new();
+                for shape in &output.shapes {
+                    painted_text(&shape.shape, &mut text);
+                }
+                output.drop_without_applying_deltas();
+                text
+            };
+        render(&mut view, &mut state, &mut images);
+        let concealed = render(&mut view, &mut state, &mut images);
+        assert!(concealed.contains("Reveal spoiler"));
+        assert!(!concealed.contains("Hidden title"));
+        assert!(!concealed.contains("Embed description"));
+        view.revealed.insert(
+            message.id,
+            (message.content.clone(), message.embeds.clone()),
+        );
+        let revealed = render(&mut view, &mut state, &mut images);
+        assert!(revealed.contains("Hidden title"));
+        assert!(revealed.contains("Embed description"));
+        assert!(
+            images.take_requests().is_empty(),
+            "Demo images never enqueue network requests"
+        );
+        let previous_key = layout_key(&message);
+        message.embeds[0].title = Some("||Changed secret||".into());
+        assert_ne!(previous_key, layout_key(&message));
+        state.timeline.insert(message.clone(), true, false).unwrap();
+        state.revision += 1;
+        let changed = render(&mut view, &mut state, &mut images);
+        assert!(view.revealed.is_empty());
+        assert!(!changed.contains("Changed secret"));
+        message.embeds[0].title = Some("Visible title".into());
+        message.embeds_suppressed = true;
+        state.timeline.insert(message, true, false).unwrap();
+        state.revision += 1;
+        let suppressed = render(&mut view, &mut state, &mut images);
+        assert!(!suppressed.contains("Visible title"));
+        assert!(!suppressed.contains("Embed description"));
     }
 }

@@ -1,4 +1,6 @@
 //! UI-neutral session entities. No filesystem or network dependencies.
+mod embeds;
+pub use embeds::*;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{fmt, str::FromStr};
 
@@ -82,11 +84,28 @@ pub fn valid_avatar_hash(hash: &str) -> bool {
 pub struct Guild {
     pub id: Id,
     pub name: String,
+    pub icon: Option<String>,
+}
+impl Guild {
+    pub fn icon_key(&self) -> Option<String> {
+        self.icon
+            .as_deref()
+            .filter(|hash| valid_avatar_hash(hash))
+            .map(|hash| format!("guild-{}-{hash}", self.id))
+    }
+}
+#[derive(Clone)]
+pub struct GuildPatch {
+    pub id: Id,
+    pub name: Patch<String>,
+    pub icon: Patch<String>,
 }
 #[derive(Clone, PartialEq, Eq)]
 pub struct Channel {
     pub id: Id,
     pub guild: Option<Id>,
+    pub parent_id: Option<Id>,
+    pub position: i32,
     pub name: String,
     pub kind: u8,
     pub recipients: Vec<User>,
@@ -94,9 +113,24 @@ pub struct Channel {
     pub member_list_id: Option<String>,
 }
 impl Channel {
+    pub fn bytes(&self) -> usize {
+        size_of::<Self>()
+            + self.name.capacity()
+            + self.member_list_id.as_ref().map_or(0, String::capacity)
+            + self.recipients.capacity() * size_of::<User>()
+            + self.recipients.iter().map(User::heap_bytes).sum::<usize>()
+    }
     pub fn supports_text(&self) -> bool {
         matches!(self.kind, 0 | 1 | 3 | 5 | 10..=12)
     }
+}
+#[derive(Clone)]
+pub struct ChannelPatch {
+    pub id: Id,
+    pub name: Patch<String>,
+    pub parent_id: Patch<Id>,
+    pub position: Patch<i32>,
+    pub kind: Patch<u8>,
 }
 #[derive(Clone, PartialEq, Eq)]
 pub struct Message {
@@ -110,6 +144,8 @@ pub struct Message {
     pub nonce: Option<String>,
     pub reply_to: Option<Id>,
     pub unsupported: bool,
+    pub embeds: Vec<Embed>,
+    pub embeds_suppressed: bool,
 }
 impl Message {
     pub fn bytes(&self) -> usize {
@@ -117,6 +153,8 @@ impl Message {
             + self.content.capacity()
             + self.author.heap_bytes()
             + self.nonce.as_ref().map_or(0, String::capacity)
+            + embed_bytes(&self.embeds)
+            + self.embeds.capacity().saturating_sub(self.embeds.len()) * size_of::<Embed>()
     }
 }
 /// Missing differs from explicit null in partial service updates.
@@ -138,6 +176,8 @@ pub struct MessagePatch {
     pub channel: Id,
     pub content: Patch<String>,
     pub edited: Patch<i128>,
+    pub embeds: Patch<Vec<Embed>>,
+    pub embeds_suppressed: Patch<bool>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Freshness {

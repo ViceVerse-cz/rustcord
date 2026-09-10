@@ -1,6 +1,7 @@
 //! Credential-free, viewport-driven static avatars. No tokens enter this worker.
 use eframe::egui;
 use model::Id;
+use sha2::{Digest, Sha256};
 use std::{
     collections::BinaryHeap,
     fs::{self, OpenOptions},
@@ -15,11 +16,12 @@ use std::{
 };
 use tokio::sync::{mpsc as async_mpsc, watch};
 
-const MAX_ENCODED: usize = 512 * 1024;
+const MAX_ENCODED: usize = 2 * 1024 * 1024;
+const MAX_AVATAR_ENCODED: usize = 512 * 1024;
 const MAX_DISK: u64 = 1024 * 1024 * 1024;
 const MAX_FILES: usize = 4096;
 const RETENTION: Duration = Duration::from_secs(90 * 24 * 60 * 60);
-const CACHE_ERROR: &str = "Profile pictures could not be cached; they remain available in memory";
+const CACHE_ERROR: &str = "Images could not be cached; they remain available in memory";
 pub type Cleanup = mpsc::Receiver<Result<(), &'static str>>;
 
 pub struct AvatarResult {
@@ -54,7 +56,7 @@ impl AvatarWorker {
         ctx: egui::Context,
     ) -> Result<Self, &'static str> {
         let (requests, receive) = async_mpsc::channel(128);
-        let (send, results) = async_mpsc::channel(8);
+        let (send, results) = async_mpsc::channel(2);
         let (cancel, cancelled) = watch::channel(false);
         let clear = Arc::new(AtomicBool::new(false));
         let cleanup_flag = clear.clone();
@@ -72,7 +74,7 @@ impl AvatarWorker {
                 let _ = done.send(result);
                 ctx.request_repaint();
             })
-            .map_err(|_| "Could not start profile picture worker")?;
+            .map_err(|_| "Could not start image worker")?;
         Ok(Self {
             requests,
             results,
@@ -109,16 +111,25 @@ impl Drop for AvatarWorker {
 }
 
 fn clear_directory(root: Option<&Path>) -> Result<(), &'static str> {
-    let root = root.ok_or("Could not locate cached profile pictures for removal")?;
+    let root = root.ok_or("Could not locate cached images for removal")?;
     match fs::remove_dir_all(root) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(_) => Err("Could not remove cached profile pictures; files may remain on disk"),
+        Err(_) => Err("Could not remove cached images; files may remain on disk"),
     }
 }
 
 // Build, rather than accept, URLs. Even malformed service metadata cannot choose a host/path.
 fn cdn_url(key: &str) -> Option<String> {
+    if let Some(source) = key.strip_prefix("embed:") {
+        return embed_url(source);
+    }
+    if let Some(icon) = key.strip_prefix("guild-") {
+        let (id, hash) = icon.split_once('-')?;
+        let id: Id = id.parse().ok()?;
+        return model::valid_avatar_hash(hash)
+            .then(|| format!("https://cdn.discordapp.com/icons/{id}/{hash}.png?size=128"));
+    }
     if let Some(index) = key.strip_prefix("default-") {
         return (index.len() == 1 && matches!(index.as_bytes()[0], b'0'..=b'5'))
             .then(|| format!("https://cdn.discordapp.com/embed/avatars/{index}.png"));
@@ -128,6 +139,90 @@ fn cdn_url(key: &str) -> Option<String> {
     let digest = hash.strip_prefix("a_").unwrap_or(hash);
     (digest.len() == 32 && digest.bytes().all(|b| b.is_ascii_hexdigit()))
         .then(|| format!("https://cdn.discordapp.com/avatars/{id}/{hash}.png?size=128"))
+}
+
+// Only service-provided image objects reach this path. Never fetch an arbitrary embed source.
+fn embed_url(source: &str) -> Option<String> {
+    if source.len() > 2048 || source.bytes().any(|b| b.is_ascii_control() || b == b'\\') {
+        return None;
+    }
+    let mut url = url::Url::parse(source).ok()?;
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+        || url.fragment().is_some()
+    {
+        return None;
+    }
+    let host = url.host_str()?;
+    let path = url.path();
+    let valid_path = if path.starts_with("/attachments/") {
+        let mut parts = path.trim_start_matches('/').split('/');
+        parts.next();
+        parts.next()?.parse::<Id>().is_ok()
+            && parts.next()?.parse::<Id>().is_ok()
+            && parts.next().is_some_and(|name| !name.is_empty())
+            && parts.next().is_none()
+    } else if path.starts_with("/external/") {
+        let mut parts = path.trim_start_matches('/').split('/');
+        parts.next();
+        parts.next().is_some_and(|hash| {
+            (16..=256).contains(&hash.len())
+                && hash
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        }) && matches!(parts.next(), Some("https" | "http"))
+            && parts.next().is_some_and(|domain| !domain.is_empty())
+    } else {
+        let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
+        matches!(parts.as_slice(), ["avatars" | "icons", id, hash]
+            if id.parse::<Id>().is_ok() && hash.rsplit_once('.').is_some_and(|(hash, _)| model::valid_avatar_hash(hash)))
+            || matches!(parts.as_slice(), ["embed", "avatars", index]
+                if matches!(*index, "0.png" | "1.png" | "2.png" | "3.png" | "4.png" | "5.png"))
+    };
+    if !valid_path
+        || !matches!(
+            host,
+            "cdn.discordapp.com"
+                | "media.discordapp.net"
+                | "images-ext-1.discordapp.net"
+                | "images-ext-2.discordapp.net"
+        )
+    {
+        return None;
+    }
+    if host == "cdn.discordapp.com" {
+        url.set_host(Some("media.discordapp.net")).ok()?;
+    }
+    // Static proxy conversion is unofficial. A rejected/unsupported format stays a placeholder;
+    // do not follow redirects, contact the original host, or add animation decoders as fallback.
+    let query: Vec<_> = url
+        .query_pairs()
+        .filter(|(key, _)| {
+            !matches!(
+                key.as_ref(),
+                "format" | "width" | "height" | "quality" | "animated"
+            )
+        })
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    url.set_query(None);
+    url.query_pairs_mut()
+        .extend_pairs(query)
+        .append_pair("format", "png")
+        .append_pair("width", "512")
+        .append_pair("height", "512");
+    Some(url.into())
+}
+
+fn disk_key(key: &str) -> Option<String> {
+    cdn_url(key)?;
+    if key.starts_with("embed:") {
+        Some(format!("embed-{:x}", Sha256::digest(key.as_bytes())))
+    } else {
+        Some(key.to_owned())
+    }
 }
 
 async fn run(
@@ -166,7 +261,8 @@ async fn run(
                 None
             }
         });
-        let mut image = cached.as_deref().and_then(decode);
+        let embed = key.starts_with("embed:");
+        let mut image = cached.as_deref().and_then(|bytes| decode(bytes, embed));
         if image.is_none()
             && Instant::now() >= cooldown
             && let Some(client) = &client
@@ -177,7 +273,7 @@ async fn run(
                 bytes = download(client, &url, &mut cooldown) => bytes,
             };
             if let Some(bytes) = downloaded {
-                image = decode(&bytes);
+                image = decode(&bytes, embed);
                 if *cancelled.borrow() {
                     break;
                 }
@@ -239,17 +335,24 @@ async fn download(client: &reqwest::Client, url: &str, cooldown: &mut Instant) -
     Some(bytes)
 }
 
-fn decode(bytes: &[u8]) -> Option<egui::ColorImage> {
-    if bytes.len() > MAX_ENCODED {
+fn decode(bytes: &[u8], embed: bool) -> Option<egui::ColorImage> {
+    if bytes.len()
+        > if embed {
+            MAX_ENCODED
+        } else {
+            MAX_AVATAR_ENCODED
+        }
+    {
         return None;
     }
     let mut reader = image::ImageReader::with_format(Cursor::new(bytes), image::ImageFormat::Png);
     let mut limits = image::Limits::default();
-    limits.max_image_width = Some(256);
-    limits.max_image_height = Some(256);
-    limits.max_alloc = Some(1024 * 1024);
+    limits.max_image_width = Some(if embed { 1024 } else { 256 });
+    limits.max_image_height = Some(if embed { 1024 } else { 256 });
+    limits.max_alloc = Some(if embed { 8 * 1024 * 1024 } else { 1024 * 1024 });
     reader.limits(limits);
-    let image = reader.decode().ok()?.thumbnail(128, 128).into_rgba8();
+    let size = if embed { 512 } else { 128 };
+    let image = reader.decode().ok()?.thumbnail(size, size).into_rgba8();
     Some(egui::ColorImage::from_rgba_unmultiplied(
         [image.width() as usize, image.height() as usize],
         image.as_raw(),
@@ -280,7 +383,8 @@ impl Disk {
         Ok(disk)
     }
     fn read(&mut self, key: &str) -> io::Result<Option<Vec<u8>>> {
-        let path = self.root.join(format!("{key}.png"));
+        let name = disk_key(key).ok_or(io::ErrorKind::InvalidInput)?;
+        let path = self.root.join(format!("{name}.png"));
         let file = match OpenOptions::new().read(true).write(true).open(&path) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -309,7 +413,8 @@ impl Disk {
         if cdn_url(key).is_none() || bytes.len() > MAX_ENCODED {
             return Err(io::ErrorKind::InvalidInput.into());
         }
-        let path = self.root.join(format!("{key}.png"));
+        let name = disk_key(key).ok_or(io::ErrorKind::InvalidInput)?;
+        let path = self.root.join(format!("{name}.png"));
         if self.bytes + bytes.len() as u64 > MAX_DISK
             || self.files + 1 > MAX_FILES
             || self.last_prune.elapsed() >= Duration::from_secs(24 * 60 * 60)
@@ -421,11 +526,47 @@ mod tests {
             cdn_url("1-a_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
             "https://cdn.discordapp.com/avatars/1/a_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png?size=128"
         );
-        assert!(decode(&vec![0; MAX_ENCODED + 1]).is_none());
-        assert!(decode(b"not an image").is_none());
-        assert!(decode(&png(257, 1)).is_none());
+        assert_eq!(
+            cdn_url("guild-1-a_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
+            "https://cdn.discordapp.com/icons/1/a_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png?size=128"
+        );
+        for source in [
+            "http://media.discordapp.net/attachments/1/2/image.png",
+            "https://media.discordapp.net.evil.test/attachments/1/2/image.png",
+            "https://user@media.discordapp.net/attachments/1/2/image.png",
+            "https://media.discordapp.net:444/attachments/1/2/image.png",
+            "https://127.0.0.1/attachments/1/2/image.png",
+            "https://media.discordapp.net/attachments/1/2/image.png#fragment",
+            "https://cdn.discordapp.com/api/v10/users/@me",
+            "https://media.discordapp.net/attachments/../api",
+            "https://images-ext-1.discordapp.net/external/short/https/example.com/a.png",
+        ] {
+            assert!(
+                embed_url(source).is_none(),
+                "Unsafe or unsupported test URL was accepted"
+            );
+        }
+        let embed_key = "embed:https://cdn.discordapp.com/attachments/1/2/image.png?ex=abc&is=def&hm=synthetic&format=webp&width=4096";
+        let transformed = cdn_url(embed_key).unwrap();
+        assert!(transformed.starts_with("https://media.discordapp.net/attachments/1/2/image.png?"));
+        assert!(transformed.ends_with("format=png&width=512&height=512"));
+        assert!(transformed.contains("hm=synthetic"));
+        assert!(!transformed.contains("4096"));
+        assert_eq!(disk_key(embed_key).unwrap().len(), 70);
+        assert!(
+            disk_key(embed_key)
+                .unwrap()
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() || matches!(b, b'm' | b'-'))
+        );
+        assert!(embed_url("https://images-ext-1.discordapp.net/external/abcdefghijklmnop/https/example.com/image.jpg").is_some());
+        assert!(decode(&png(1025, 1), true).is_none());
+        assert_eq!(decode(&png(1024, 512), true).unwrap().size, [512, 256]);
+        assert!(decode(&vec![0; MAX_ENCODED + 1], false).is_none());
+        assert!(decode(b"not an image", false).is_none());
+        assert!(decode(&png(257, 1), false).is_none());
         let bytes = png(256, 256);
-        assert_eq!(decode(&bytes).unwrap().size, [128, 128]);
+        assert_eq!(decode(&bytes, false).unwrap().size, [128, 128]);
         let root = std::env::temp_dir().join(format!(
             "serein-avatar-test-{}-{}",
             std::process::id(),
@@ -438,9 +579,18 @@ mod tests {
         let account_b = root.join("2");
         let mut disk = Disk::open(account_a.clone()).unwrap();
         disk.write("default-0", &bytes).unwrap();
+        disk.write(embed_key, &bytes).unwrap();
+        assert!(fs::read_dir(&account_a).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("synthetic")
+        }));
         drop(disk);
         let mut disk = Disk::open(account_a.clone()).unwrap();
         assert_eq!(disk.read("default-0").unwrap().unwrap(), bytes);
+        assert_eq!(disk.read(embed_key).unwrap().unwrap(), bytes);
         assert!(
             Disk::open(account_b.clone())
                 .unwrap()
@@ -465,6 +615,7 @@ mod tests {
             .unwrap();
         disk.prune(0, 0).unwrap();
         assert!(disk.read("default-0").unwrap().is_none());
+        fs::remove_file(account_a.join(format!("{}.png", disk_key(embed_key).unwrap()))).unwrap();
         for index in 0..MAX_FILES + 1 {
             fs::write(account_a.join(format!("synthetic-{index}.png")), []).unwrap();
         }

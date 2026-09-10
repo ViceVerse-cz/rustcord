@@ -439,12 +439,20 @@ async fn run_inner(
                                     "MESSAGE_DELETE" => { let d: Deleted = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?; emit(Event::Delete { channel:d.channel_id, id:d.id })?; }
                                     "MESSAGE_DELETE_BULK" => { let d: BulkDeleted = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?; if d.ids.len() > 100 { return Err(Failure::Capacity); } emit(Event::DeleteBulk { channel:d.channel_id, ids: d.ids })?; }
                                     "AUTH_SESSION_CHANGE" => return Err(Failure::Expired),
-                                    "CHANNEL_DELETE" => { let c: ChannelDto = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?; emit(Event::Unavailable(c.id))?; }
+                                    "CHANNEL_DELETE" => { let c: ChannelDto = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?; calls.allowed.remove(&c.id); emit(Event::Unavailable(c.id))?; }
+                                    "CHANNEL_CREATE" => { let c=decode::<ChannelDto>(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?.into_model(); if c.guild.is_none() && c.kind==1 && c.recipients.len()==1 && calls.allowed.len()<MAX_NAV {calls.allowed.insert(c.id);} emit(Event::ChannelCreated(c))?; }
+                                    "CHANNEL_UPDATE" => {
+                                        let patch:ChannelPatchDto=decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
+                                        let permissions=!matches!(patch.permission_overwrites,model::Patch::Absent) || !matches!(patch.flags,model::Patch::Absent);
+                                        emit(Event::ChannelChanged(patch.into_model()))?;
+                                        if permissions {emit(Event::PermissionsChanged)?;}
+                                    }
+                                    "GUILD_UPDATE" => emit(Event::GuildChanged(decode::<GuildPatchDto>(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?.into_model()))?,
                                     "GUILD_MEMBER_UPDATE" => {
                                         let update:MemberIdentity=decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
                                         if Some(update.user.id)==owner_id {emit(Event::PermissionsChanged)?;}
                                     }
-                                    "CHANNEL_UPDATE" | "GUILD_ROLE_UPDATE" | "GUILD_ROLE_DELETE" | "GUILD_DELETE" => emit(Event::PermissionsChanged)?,
+                                    "GUILD_ROLE_UPDATE" | "GUILD_ROLE_DELETE" | "GUILD_DELETE" => emit(Event::PermissionsChanged)?,
                                     _ => {} // No raw-event archive; unsupported events grant no capabilities.
                                 },
                                 _ => return Err(Failure::Protocol),
@@ -512,6 +520,63 @@ mod tests {
             "user":{"id":"1","username":"synthetic"}, "session_id":session,
             "resume_gateway_url":"wss://gateway.discord.gg/", "guilds":[], "private_channels":[]
         }})
+    }
+
+    #[tokio::test]
+    async fn local_category_create_move_permission_update_and_delete() {
+        timeout(Duration::from_secs(10),async {
+            let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint=format!("ws://{}/",listener.local_addr().unwrap());
+            let (client_finished, terminal_observed)=tokio::sync::oneshot::channel();
+            let server=async {
+                let (stream,_)=listener.accept().await.unwrap();
+                let mut socket=accept_async(stream).await.unwrap();
+                send(&mut socket,json!({"op":10,"d":{"heartbeat_interval":1000}})).await;
+                assert_eq!(packet(&mut socket).await["op"],2);
+                send(&mut socket,ready(1,"synthetic-session")).await;
+                for (sequence,name,data) in [
+                    (2,"CHANNEL_CREATE",json!({"id":"3","guild_id":"2","type":4,"name":"Synthetic category","position":0})),
+                    (3,"CHANNEL_CREATE",json!({"id":"4","guild_id":"2","type":0,"name":"Synthetic channel","parent_id":"3","position":1})),
+                    (4,"CHANNEL_UPDATE",json!({"id":"4","parent_id":null,"position":0})),
+                    (5,"CHANNEL_UPDATE",json!({"id":"4","permission_overwrites":[]})),
+                    (6,"CHANNEL_DELETE",json!({"id":"3","guild_id":"2","type":4})),
+                ] {send(&mut socket,json!({"op":0,"t":name,"s":sequence,"d":data})).await;}
+                acknowledge(&mut socket,6).await;
+                // Force a heartbeat reply to race the following terminal close.
+                send(&mut socket,json!({"op":1,"d":null})).await;
+                socket.send(Frame::Close(Some(CloseFrame {code:CloseCode::from(4004),reason:"synthetic expiration".into()}))).await.unwrap();
+                // Do not drop TCP with an unread timer heartbeat: that can reset the socket
+                // and discard the close frame, correctly making the client try to resume.
+                terminal_observed.await.unwrap();
+            };
+            let state=std::sync::Mutex::new(client_core::State::default());
+            let permission_changes=std::sync::atomic::AtomicUsize::new(0);
+            let client=run_inner(
+                Arc::new(SessionSecret::from_owner_input("synthetic-owner-session".into()).unwrap()),
+                "wss://gateway.discord.gg/".into(),watch::channel(None).1,mpsc::channel(1).1,
+                |event| {
+                    if matches!(event,Event::PermissionsChanged) {permission_changes.fetch_add(1,std::sync::atomic::Ordering::Relaxed);}
+                    let mut state=state.lock().unwrap();
+                    let generation=state.generation;
+                    state.apply(client_core::Envelope {generation,event});
+                    Ok(())
+                },Some(&endpoint)
+            );
+            let client=async {
+                let result=client.await;
+                let _=client_finished.send(());
+                result
+            };
+            let (result,())=tokio::join!(client,server);
+            assert_eq!(result,Err(Failure::Expired));
+            let state=state.into_inner().unwrap();
+            assert_eq!(state.channels.len(),1);
+            assert_eq!(state.channels[0].id,Id(4));
+            assert_eq!(state.channels[0].parent_id,None);
+            assert_eq!(state.channels[0].position,0);
+            assert_eq!(state.channels[0].name,"Synthetic channel");
+            assert_eq!(permission_changes.load(std::sync::atomic::Ordering::Relaxed),1);
+        }).await.unwrap();
     }
 
     #[tokio::test]

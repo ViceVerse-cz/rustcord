@@ -7,13 +7,14 @@ use std::{
 };
 
 const TEXTURES: usize = 64;
+const TEXTURE_BYTES: usize = 16 * 1024 * 1024;
 const REQUESTS: usize = 128;
 const RETRY: Duration = Duration::from_secs(60);
 
 #[derive(Default)]
 pub(crate) struct Avatars {
     textures: VecDeque<(String, TextureHandle)>,
-    attempts: HashMap<String, Instant>,
+    attempts: HashMap<String, (Instant, bool)>,
     requests: Vec<String>,
 }
 impl Avatars {
@@ -23,12 +24,13 @@ impl Avatars {
     fn request(&mut self, key: String) {
         let now = Instant::now();
         self.attempts
-            .retain(|_, at| now.duration_since(*at) < RETRY);
-        if self.attempts.len() < REQUESTS
+            .retain(|_, at| now.duration_since(at.0) < RETRY);
+        if key.len() <= 2054
+            && self.attempts.len() < REQUESTS
             && self.requests.len() < REQUESTS
             && !self.attempts.contains_key(&key)
         {
-            self.attempts.insert(key.clone(), now);
+            self.attempts.insert(key.clone(), (now, false));
             self.requests.push(key);
         }
     }
@@ -39,19 +41,177 @@ impl Avatars {
         let Some(image) = image.filter(|image| {
             image.size[0] > 0
                 && image.size[1] > 0
-                && image.size[0] <= 128
-                && image.size[1] <= 128
+                && image.size[0] <= if key.starts_with("embed:") { 512 } else { 128 }
+                && image.size[1] <= if key.starts_with("embed:") { 512 } else { 128 }
                 && image.pixels.len() == image.size[0] * image.size[1]
         }) else {
+            if let Some(attempt) = self.attempts.get_mut(&key) {
+                attempt.1 = true;
+            }
             return;
         };
         self.attempts.remove(&key);
         self.textures.retain(|(old, _)| *old != key);
-        while self.textures.len() >= TEXTURES {
+        while self.textures.len() >= TEXTURES
+            || self
+                .textures
+                .iter()
+                .map(|(_, t)| t.byte_size())
+                .sum::<usize>()
+                + image.pixels.len() * 4
+                > TEXTURE_BYTES
+        {
             self.textures.pop_front();
         }
-        let texture = ctx.load_texture("avatar", image, egui::TextureOptions::LINEAR);
+        let texture = ctx.load_texture("service-image", image, egui::TextureOptions::LINEAR);
         self.textures.push_back((key, texture));
+    }
+    fn paint(&mut self, ui: &mut egui::Ui, key: &str, rect: egui::Rect, radius: u8) -> bool {
+        let Some(index) = self.textures.iter().position(|(stored, _)| stored == key) else {
+            return false;
+        };
+        let entry = self.textures.remove(index).expect("located texture");
+        egui::Image::new((entry.1.id(), rect.size()))
+            .corner_radius(radius)
+            .paint_at(ui, rect);
+        self.textures.push_back(entry);
+        true
+    }
+    pub fn show_guild(
+        &mut self,
+        ui: &mut egui::Ui,
+        guild: &model::Guild,
+        selected: bool,
+        demo: bool,
+    ) -> egui::Response {
+        let short: String = guild
+            .name
+            .split_whitespace()
+            .filter_map(|word| word.chars().next())
+            .take(2)
+            .collect();
+        let response = ui.add_sized(
+            [48.0, 44.0],
+            egui::Button::selectable(selected, egui::RichText::new(short).strong())
+                .corner_radius(15),
+        );
+        if ui.is_rect_visible(response.rect)
+            && let Some(key) = guild.icon_key()
+        {
+            if demo && !self.textures.iter().any(|(stored, _)| stored == &key) {
+                let mut image = ColorImage::filled([32, 32], egui::Color32::from_rgb(49, 112, 111));
+                for row in [8, 14, 20] {
+                    for y in row..row + 3 {
+                        for x in 7..25 {
+                            image.pixels[y * 32 + x] = egui::Color32::from_rgb(227, 244, 237);
+                        }
+                    }
+                }
+                self.attempts.insert(key.clone(), (Instant::now(), false));
+                self.accept(ui.ctx(), key.clone(), Some(image));
+            }
+            if !self.paint(ui, &key, response.rect.shrink(3.0), 12) && !demo {
+                self.request(key);
+            }
+        }
+        if selected || response.has_focus() {
+            ui.painter().rect_stroke(
+                response.rect,
+                15,
+                egui::Stroke::new(2.0, crate::design::palette(ui).accent),
+                egui::StrokeKind::Inside,
+            );
+        }
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(
+                egui::WidgetType::SelectableLabel,
+                ui.is_enabled(),
+                selected,
+                format!("Server {}", guild.name),
+            )
+        });
+        response.on_hover_text(&guild.name)
+    }
+    pub fn show_embed(
+        &mut self,
+        ui: &mut egui::Ui,
+        media: &model::EmbedMedia,
+        max_size: egui::Vec2,
+        demo: bool,
+    ) -> egui::Response {
+        // Reserve geometry from bounded metadata so image arrivals do not move the reading anchor.
+        let max_size = egui::vec2(
+            max_size.x.min(ui.available_width()).clamp(1.0, 512.0),
+            max_size.y.clamp(1.0, 512.0),
+        );
+        let original = if media.width > 0 && media.height > 0 {
+            egui::vec2(
+                media.width.min(16384) as f32,
+                media.height.min(16384) as f32,
+            )
+        } else {
+            egui::vec2(320.0, 180.0)
+        };
+        let scale = (max_size.x / original.x)
+            .min(max_size.y / original.y)
+            .min(1.0);
+        let size = (original * scale).max(egui::vec2(1.0, 1.0));
+        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
+        if ui.is_rect_visible(rect) {
+            let source = media.proxy_url.as_deref().or(media.url.as_deref());
+            let key = source
+                .filter(|source| source.len() <= 2048)
+                .map(|source| format!("embed:{source}"));
+            let painted = key
+                .as_deref()
+                .is_some_and(|key| self.paint(ui, key, rect, 5));
+            if !painted {
+                let colors = crate::design::palette(ui);
+                ui.painter().rect_filled(rect, 5, colors.canvas);
+                if demo {
+                    // Original native landscape, never a service request or bundled third-party image.
+                    let ridge = vec![
+                        rect.left_bottom(),
+                        rect.left_center(),
+                        rect.center_top() + egui::vec2(0.0, rect.height() * 0.35),
+                        rect.right_bottom(),
+                    ];
+                    ui.painter().add(egui::Shape::convex_polygon(
+                        ridge,
+                        colors.accent.gamma_multiply(0.4),
+                        egui::Stroke::NONE,
+                    ));
+                    ui.painter().circle_filled(
+                        rect.min + size * egui::vec2(0.8, 0.25),
+                        size.y * 0.08,
+                        colors.accent,
+                    );
+                } else if let Some(key) = key.as_ref() {
+                    self.request(key.clone());
+                }
+                if size.x >= 100.0 && size.y >= 32.0 {
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        if demo {
+                            "Synthetic preview"
+                        } else if key.as_ref().is_some_and(|key| {
+                            self.attempts.get(key).is_some_and(|(_, failed)| *failed)
+                        }) {
+                            "Preview unavailable"
+                        } else {
+                            "Image preview"
+                        },
+                        egui::FontId::proportional(11.0),
+                        colors.muted,
+                    );
+                }
+            }
+        }
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Image, ui.is_enabled(), "Embedded image")
+        });
+        response
     }
     pub fn show(
         &mut self,
@@ -85,7 +245,7 @@ impl Avatars {
                         }
                     }
                 }
-                self.attempts.insert(key.clone(), Instant::now());
+                self.attempts.insert(key.clone(), (Instant::now(), false));
                 self.accept(ui.ctx(), key.clone(), Some(image));
             }
             if let Some(index) = self.textures.iter().position(|(stored, _)| stored == &key) {
@@ -158,5 +318,38 @@ mod tests {
             Some(ColorImage::filled([128, 128], egui::Color32::WHITE)),
         );
         assert_eq!(avatars.textures.len(), TEXTURES);
+        for index in 0..40 {
+            let key = format!("embed:synthetic-{index}");
+            avatars.request(key.clone());
+            avatars.accept(
+                &ctx,
+                key,
+                Some(ColorImage::filled([512, 512], egui::Color32::WHITE)),
+            );
+        }
+        assert_eq!(avatars.textures.len(), 16);
+        assert_eq!(
+            avatars
+                .textures
+                .iter()
+                .map(|(_, texture)| texture.byte_size())
+                .sum::<usize>(),
+            TEXTURE_BYTES
+        );
+        let mut preview = Avatars::default();
+        let guild = model::Guild {
+            id: model::Id(10),
+            name: "Synthetic server".into(),
+            icon: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
+        };
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            preview.show_guild(ui, &guild, true, true);
+        });
+        output.textures_delta.clear();
+        assert!(preview.take_requests().is_empty());
+        assert_eq!(preview.textures.len(), 1);
+        assert_eq!(preview.textures[0].1.size(), [32, 32]);
+        avatars.request("x".repeat(2055));
+        assert!(avatars.attempts.keys().all(|key| key.len() <= 2054));
     }
 }

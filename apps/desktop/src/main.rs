@@ -392,6 +392,8 @@ impl Desktop {
                     message,
                     content,
                 } => Event::Patch(model::MessagePatch {
+                    embeds: model::Patch::Absent,
+                    embeds_suppressed: model::Patch::Absent,
                     id: message,
                     channel,
                     content: model::Patch::Value(content),

@@ -1,6 +1,8 @@
 //! Native egui views; emits commands without owning transports or session credentials.
 mod avatars;
+mod categories;
 pub mod design;
+mod embeds;
 pub mod fonts;
 mod markdown;
 mod timeline;
@@ -18,6 +20,7 @@ pub struct MessagingUi {
     members_narrow_open: bool,
     member_reload_requested: bool,
     guild: Option<Id>,
+    collapsed_categories: std::collections::BTreeSet<Id>,
     navigation_channel: Option<Id>,
     pub logout_requested: bool,
     pub reconnect_requested: bool,
@@ -377,22 +380,9 @@ impl MessagingUi {
                     .show(ui, |ui| {
                         ui.spacing_mut().item_spacing.y = 10.0;
                         for guild in &state.guilds {
-                            let short: String = guild
-                                .name
-                                .split_whitespace()
-                                .filter_map(|word| word.chars().next())
-                                .take(2)
-                                .collect();
-                            if ui
-                                .add_sized(
-                                    [48.0, 44.0],
-                                    egui::Button::selectable(
-                                        self.guild == Some(guild.id),
-                                        RichText::new(short).strong(),
-                                    )
-                                    .corner_radius(15),
-                                )
-                                .on_hover_text(&guild.name)
+                            if self
+                                .avatars
+                                .show_guild(ui, guild, self.guild == Some(guild.id), state.demo)
                                 .clicked()
                             {
                                 self.guild = Some(guild.id);
@@ -527,74 +517,7 @@ impl MessagingUi {
                     .color(colors.muted),
                 );
                 ui.add_space(6.0);
-                let mut select = None;
-                egui::ScrollArea::vertical()
-                    .id_salt("channel-list")
-                    .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing.y = 4.0;
-                        let mut any = false;
-                        for channel in state.channels.iter().filter(|c| c.guild == self.guild) {
-                            any = true;
-                            let selected = state.selected == Some(channel.id);
-                            let name = format!(
-                                "{}   {}",
-                                if channel.guild.is_some() { "#" } else { "@" },
-                                channel.name
-                            );
-                            let response = ui
-                                .horizontal(|ui| {
-                                    if channel.guild.is_none()
-                                        && let Some(user) = channel.recipients.first()
-                                        && self.avatars.show(ui, user, 32.0, state.demo).clicked()
-                                    {
-                                        self.profile = Some(user.clone());
-                                    }
-                                    ui.add_enabled(
-                                        channel.supports_text(),
-                                        egui::Button::selectable(
-                                            selected,
-                                            RichText::new(name).color(if selected {
-                                                colors.accent
-                                            } else {
-                                                colors.text
-                                            }),
-                                        )
-                                        .right_text(())
-                                        .min_size(egui::vec2(ui.available_width(), 36.0))
-                                        .corner_radius(7)
-                                        .truncate(),
-                                    )
-                                    .on_hover_text(
-                                        if channel.supports_text() {
-                                            channel.name.as_str()
-                                        } else {
-                                            "This channel kind is not implemented"
-                                        },
-                                    )
-                                })
-                                .inner;
-                            if selected {
-                                ui.painter().rect_filled(
-                                    egui::Rect::from_min_size(
-                                        response.rect.left_top() + egui::vec2(0.0, 9.0),
-                                        egui::vec2(3.0, 18.0),
-                                    ),
-                                    2,
-                                    colors.accent,
-                                );
-                            }
-                            if response.clicked() {
-                                select = Some(channel.id);
-                            }
-                        }
-                        if !any {
-                            ui.add_space(8.0);
-                            ui.label(
-                                RichText::new("No conversations available here.")
-                                    .color(colors.muted),
-                            );
-                        }
-                    });
+                let select = self.channel_list(ui, state);
                 if let Some(id) = select
                     && let Some(command) = state.select(id)
                 {
@@ -948,6 +871,8 @@ mod composer_tests {
             channels: vec![model::Channel {
                 id: Id(1),
                 guild: Some(Id(2)),
+                parent_id: None,
+                position: 0,
                 name: "Synthetic".into(),
                 kind: 0,
                 recipients: Vec::new(),
@@ -1009,6 +934,8 @@ mod composer_tests {
             channels: vec![model::Channel {
                 id: Id(1),
                 guild: None,
+                parent_id: None,
+                position: 0,
                 name: "Synthetic".into(),
                 kind: 1,
                 recipients: Vec::new(),

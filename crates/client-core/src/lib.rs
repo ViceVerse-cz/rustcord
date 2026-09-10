@@ -43,6 +43,9 @@ pub enum Command {
 }
 pub enum Event {
     Voice(voice::Event),
+    ChannelCreated(Channel),
+    ChannelChanged(ChannelPatch),
+    GuildChanged(GuildPatch),
     Members(MemberList),
     RecipientAdded {
         channel: Id,
@@ -354,6 +357,72 @@ impl State {
         }
         self.revision += 1;
         let result = match envelope.event {
+            Event::GuildChanged(patch) => {
+                if let Some(guild) = self.guilds.iter_mut().find(|guild| guild.id == patch.id) {
+                    match patch.name {
+                        Patch::Value(name) => guild.name = name.chars().take(128).collect(),
+                        Patch::Null => guild.name.clear(),
+                        Patch::Absent => {}
+                    }
+                    match patch.icon {
+                        Patch::Value(icon) => guild.icon = valid_avatar_hash(&icon).then_some(icon),
+                        Patch::Null => guild.icon = None,
+                        Patch::Absent => {}
+                    }
+                }
+                Ok(())
+            }
+            Event::ChannelCreated(channel) => {
+                let old = self.channels.iter().position(|c| c.id == channel.id);
+                if channel.recipients.len() > 64
+                    || (old.is_none() && self.channels.len() + self.guilds.len() >= MAX_NAV)
+                    || self
+                        .channels
+                        .iter()
+                        .filter(|c| c.id != channel.id)
+                        .map(Channel::bytes)
+                        .sum::<usize>()
+                        + channel.bytes()
+                        > MAX_EVENT_BYTES
+                {
+                    self.fail(auth::Failure::Capacity);
+                    return;
+                }
+                if let Some(index) = old {
+                    self.channels[index] = channel;
+                } else {
+                    self.channels.push(channel);
+                }
+                Ok(())
+            }
+            Event::ChannelChanged(patch) => {
+                if let Some(channel) = self.channels.iter_mut().find(|c| c.id == patch.id) {
+                    match patch.name {
+                        Patch::Value(name) => channel.name = name.chars().take(128).collect(),
+                        Patch::Null => channel.name.clear(),
+                        Patch::Absent => {}
+                    }
+                    match patch.parent_id {
+                        Patch::Value(id) => channel.parent_id = Some(id),
+                        Patch::Null => channel.parent_id = None,
+                        Patch::Absent => {}
+                    }
+                    if let Patch::Value(position) = patch.position {
+                        channel.position = position;
+                    }
+                    if let Patch::Value(kind) = patch.kind {
+                        channel.kind = kind;
+                    }
+                    if self.selected == Some(channel.id) && !channel.supports_text() {
+                        self.selected = None;
+                        self.invalidate_members();
+                        self.timeline.clear();
+                        self.cancel_history();
+                        self.freshness = Freshness::Unavailable;
+                    }
+                }
+                Ok(())
+            }
             Event::Voice(event) => {
                 self.apply_voice(event);
                 Ok(())
@@ -605,6 +674,7 @@ impl State {
                 Ok(())
             }
             Event::Unavailable(channel) => {
+                self.channels.retain(|c| c.id != channel);
                 if self
                     .voice
                     .active
@@ -675,6 +745,18 @@ impl Event {
         size_of::<Self>()
             + match self {
                 Self::Voice(event) => event.bytes(),
+                Self::GuildChanged(patch) => [&patch.name, &patch.icon]
+                    .into_iter()
+                    .map(|value| match value {
+                        Patch::Value(value) => value.capacity(),
+                        _ => 0,
+                    })
+                    .sum(),
+                Self::ChannelCreated(channel) => channel.bytes(),
+                Self::ChannelChanged(patch) => match &patch.name {
+                    Patch::Value(name) => name.capacity(),
+                    _ => 0,
+                },
                 Self::Ready {
                     user,
                     guilds,
@@ -683,20 +765,13 @@ impl Event {
                     user.heap_bytes()
                         + guilds
                             .iter()
-                            .map(|g| size_of::<Guild>() + g.name.capacity())
-                            .sum::<usize>()
-                        + channels
-                            .iter()
-                            .map(|c| {
-                                size_of::<Channel>()
-                                    + c.name.capacity()
-                                    + c.member_list_id.as_ref().map_or(0, String::capacity)
-                                    + c.recipients
-                                        .iter()
-                                        .map(|u| size_of::<User>() + u.heap_bytes())
-                                        .sum::<usize>()
+                            .map(|g| {
+                                size_of::<Guild>()
+                                    + g.name.capacity()
+                                    + g.icon.as_ref().map_or(0, String::capacity)
                             })
                             .sum::<usize>()
+                        + channels.iter().map(Channel::bytes).sum::<usize>()
                 }
                 Self::Members(list) => {
                     list.rows.capacity() * size_of::<Option<Member>>()
@@ -705,10 +780,17 @@ impl Event {
                 Self::RecipientAdded { user, .. } => user.heap_bytes(),
                 Self::History { messages, .. } => messages.iter().map(Message::bytes).sum(),
                 Self::Message(m) => m.bytes(),
-                Self::Patch(p) => match &p.content {
-                    Patch::Value(s) => s.capacity(),
-                    _ => 0,
-                },
+                Self::Patch(p) => {
+                    let content = match &p.content {
+                        Patch::Value(s) => s.capacity(),
+                        _ => 0,
+                    };
+                    content
+                        + match &p.embeds {
+                            Patch::Value(embeds) => model::embed_bytes(embeds),
+                            _ => 0,
+                        }
+                }
                 Self::DeleteBulk { ids, .. } => ids.capacity() * size_of::<Id>(),
                 Self::SendResult { nonce, result } => {
                     nonce.capacity() + result.as_ref().map_or(0, Message::bytes)
@@ -721,6 +803,141 @@ impl Event {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guild_identity_patches_preserve_omitted_fields_and_change_icon_keys() {
+        let mut state = State {
+            guilds: vec![Guild {
+                id: Id(2),
+                name: "Synthetic server".into(),
+                icon: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
+            }],
+            ..State::default()
+        };
+        let key = state.guilds[0].icon_key();
+        apply(
+            &mut state,
+            Event::GuildChanged(GuildPatch {
+                id: Id(2),
+                name: Patch::Value("Renamed".into()),
+                icon: Patch::Absent,
+            }),
+        );
+        assert_eq!(state.guilds[0].name, "Renamed");
+        assert_eq!(state.guilds[0].icon_key(), key);
+        apply(
+            &mut state,
+            Event::GuildChanged(GuildPatch {
+                id: Id(2),
+                name: Patch::Absent,
+                icon: Patch::Value("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into()),
+            }),
+        );
+        assert_ne!(state.guilds[0].icon_key(), key);
+        assert_eq!(state.guilds[0].name, "Renamed");
+        apply(
+            &mut state,
+            Event::GuildChanged(GuildPatch {
+                id: Id(2),
+                name: Patch::Absent,
+                icon: Patch::Null,
+            }),
+        );
+        assert!(state.guilds[0].icon_key().is_none());
+        apply(
+            &mut state,
+            Event::GuildChanged(GuildPatch {
+                id: Id(2),
+                name: Patch::Value("x".repeat(1024)),
+                icon: Patch::Value("../../invalid".into()),
+            }),
+        );
+        assert_eq!(state.guilds[0].name.len(), 128);
+        assert!(state.guilds[0].icon.is_none());
+        apply(
+            &mut state,
+            Event::GuildChanged(GuildPatch {
+                id: Id(3),
+                name: Patch::Value("Unknown".into()),
+                icon: Patch::Absent,
+            }),
+        );
+        assert_eq!(state.guilds.len(), 1);
+        state.apply(Envelope {
+            generation: state.generation + 1,
+            event: Event::GuildChanged(GuildPatch {
+                id: Id(2),
+                name: Patch::Value("Late event".into()),
+                icon: Patch::Absent,
+            }),
+        });
+        assert_eq!(state.guilds[0].name.len(), 128);
+    }
+
+    #[test]
+    fn channel_mutations_preserve_partial_metadata_and_remove_deleted_categories() {
+        let mut state = State::default();
+        let channel = Channel {
+            id: Id(2),
+            guild: Some(Id(1)),
+            parent_id: Some(Id(3)),
+            position: 7,
+            name: "Synthetic channel".into(),
+            kind: 0,
+            recipients: vec![],
+            member_list_id: None,
+        };
+        apply(&mut state, Event::ChannelCreated(channel.clone()));
+        apply(&mut state, Event::ChannelCreated(channel));
+        assert_eq!(state.channels.len(), 1);
+        apply(
+            &mut state,
+            Event::ChannelChanged(ChannelPatch {
+                id: Id(2),
+                name: Patch::Absent,
+                parent_id: Patch::Null,
+                position: Patch::Value(0),
+                kind: Patch::Absent,
+            }),
+        );
+        assert_eq!(state.channels[0].parent_id, None);
+        assert_eq!(state.channels[0].position, 0);
+        assert_eq!(state.channels[0].name, "Synthetic channel");
+        assert_eq!(state.channels[0].kind, 0);
+        assert!(state.select(Id(2)).is_some());
+        apply(
+            &mut state,
+            Event::ChannelChanged(ChannelPatch {
+                id: Id(2),
+                name: Patch::Absent,
+                parent_id: Patch::Absent,
+                position: Patch::Absent,
+                kind: Patch::Value(4),
+            }),
+        );
+        assert!(state.selected.is_none());
+        assert!(!state.history_pending);
+        assert!(state.select(Id(2)).is_none());
+        apply(&mut state, Event::Unavailable(Id(2)));
+        assert!(state.channels.is_empty());
+        for id in 1..=MAX_NAV + 1 {
+            apply(
+                &mut state,
+                Event::ChannelCreated(Channel {
+                    id: Id(id as u64),
+                    guild: None,
+                    parent_id: None,
+                    position: 0,
+                    name: String::new(),
+                    kind: 4,
+                    recipients: vec![],
+                    member_list_id: None,
+                }),
+            );
+        }
+        assert_eq!(state.channels.len(), MAX_NAV);
+        assert_eq!(state.status, auth::Failure::Capacity.label());
+    }
 
     fn apply(state: &mut State, event: Event) {
         state.apply(Envelope {
@@ -745,6 +962,8 @@ mod tests {
             nonce: None,
             reply_to: None,
             unsupported: false,
+            embeds: vec![],
+            embeds_suppressed: false,
         }
     }
     #[test]
@@ -757,6 +976,8 @@ mod tests {
             channels: vec![Channel {
                 id: Id(1),
                 guild: None,
+                parent_id: None,
+                position: 0,
                 name: "DM".into(),
                 kind: 1,
                 recipients: vec![user.clone()],
@@ -820,6 +1041,8 @@ mod tests {
                 channels: vec![Channel {
                     id: Id(1),
                     guild: None,
+                    parent_id: None,
+                    position: 0,
                     name: "Synthetic".into(),
                     kind: 1,
                     recipients: vec![],

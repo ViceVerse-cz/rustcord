@@ -370,6 +370,8 @@ mod tests {
                 id: Id(2),
                 name: "DM".into(),
                 guild: None,
+                parent_id: None,
+                position: 0,
                 kind: 1,
                 recipients: vec![User {
                     id: Id(3),
