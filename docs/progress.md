@@ -1742,6 +1742,8 @@ explicit limitations of the authorized merge.
 Both integrated release packages passed: text 51,126,272 bytes and voice 54,479,360 bytes.
 These include main's new voice UI and atlas; earlier paired presence measurements remain
 historical evidence of the isolated fix, not the combined UI change. Remote CI is pending.
+Main's subsequently landed fuzz tooling (`68526e8`) merged cleanly without application runtime
+changes; the final combined `cargo xtask check` passed again (353 tests, Clippy and policy).
 
 ## Discord-style voice UI and Phosphor icon atlas (September 10, 2026)
 
