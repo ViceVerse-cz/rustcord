@@ -2,9 +2,9 @@
 
 ## Current scope and gates
 
-Current slice: incoming custom-status updates after voice PR #39, from main 5b2cc9e.
-Full SPEC completion remains active; native automation and live-account validation remain
-owner-controlled. See the final dated entry for this slice and its verification.
+Current slice: unread navigation and bounded forward history after custom-status PR #40, from
+main c4ae54d. Full SPEC completion remains active; native automation and live-account validation
+remain owner-controlled. See the final dated entry for this slice and its verification.
 
 ## Inline message spoilers (merged PR #36)
 
@@ -1358,3 +1358,33 @@ native screenshots were accessed; the owner performs the live retry.
   13,824/13,312 bytes; installed packages and ZIPs are measured in docs/performance.md.
   `cargo replay` plus one warmup/five direct runs passed, retaining 500 messages within the
   unchanged estimated 228,992..229,477-byte range. Timings are noisy; no speedup claim.
+
+
+## Unread navigation and forward history (September 10, 2026)
+
+- Baseline: clean main `c4ae54def29b3cb87984a59d171b47f0a483283a`; isolated worktree/branch
+  `feat/unread-navigation`. SPEC8.2/9.4 requires preserving reading position and deliberate read
+  state. Jump to unread now starts after the service read boundary and Next messages walks
+  forward in bounded replacement pages. Existing older history and explicit present navigation
+  remain available, with drafts/reply context preserved.
+- A known unread gap does not auto-ack just because the first recent page opens at its bottom.
+  UI actions suppress automatic ACKs while browsing, including short pages and empty results.
+- History requests retain existing permissions, cancellation, request/session generations and
+  response limits; after pages validate every returned ID above the cursor. Latest-page SQLite
+  hydration never substitutes for a forward request. Demo pages follow the same cursor shape.
+- Review found and fixed distant Gateway/HTTP-confirmed messages splicing a live tail into old
+  history, deletion knowledge lost while suppressing a distant source, and progress lost when
+  every page message/newest navigation message was deleted. Bounded accepted cursors/full-page
+  state preserve forward progress without treating an after-page maximum as the channel latest.
+- Native automation remains owner-paused. Native before/after screenshots, frame/resource
+  measurements, screen-reader inspection and live account delivery are unverified. No account,
+  message or audio-device actions were performed.
+- `cargo xtask check` passed 313 offline Rust tests, doctests, formatting, strict all-feature
+  Clippy, text-only compilation and policy checks. Synthetic tests cover local HTTP cursor
+  queries/exclusivity/capacity, demo after-pages, deleted/empty pages, stale requests, old-window
+  sends in either arrival order, cursor replacement, and keyboard/pointer UI navigation.
+  A UI test initially clicked the explanatory history notice; targeting the actual button
+  fixed the test without weakening assertions. Independent review findings are resolved.
+- Both unsigned Windows packages passed. Text/voice executables grow 8,704/10,752 bytes.
+  Package/ZIP deltas and one-warmup/five-run replay results are in docs/performance.md;
+  retained 500-message data remains 228,992..229,477 estimated bytes. No speedup claim.

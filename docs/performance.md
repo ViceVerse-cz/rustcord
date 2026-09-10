@@ -1396,3 +1396,34 @@ Member storage remains 100 rows/128 KiB. Pending presence is at most 100 complet
 7 status bytes and 128 characters/512 custom-text bytes each plus bounded map overhead; emitted
 batches admit 64 KiB including allocated vector/string capacity. The existing global event queue
 budget is unchanged. There is no new dependency, cache, persistence or subscription flag.
+
+
+## Unread navigation and forward history - September 10, 2026
+
+| Metric / method | Main c4ae54d | Unread navigation | Delta |
+| --- | ---: | ---: | ---: |
+| text executable, bytes | 50,805,760 | 50,814,464 | +8,704 (+0.017%) |
+| text installed, bytes | 51,397,479 | 51,413,035 | +15,556 (+0.030%) |
+| text zip, bytes | 31,751,925 | 31,758,083 | +6,158 (+0.019%) |
+| voice executable, bytes | 54,159,872 | 54,170,624 | +10,752 (+0.020%) |
+| voice installed, bytes | 54,974,364 | 54,991,968 | +17,604 (+0.032%) |
+| voice zip, bytes | 33,129,218 | 33,134,023 | +4,805 (+0.015%) |
+| 100,000-event replay median, ms | 37.6836 | 36.6610 | -1.0226 (-2.71%; noise) |
+| Retained 500-message timeline, estimated bytes | 228,992..229,477 | 228,992..229,477 | 0 |
+
+Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical CPUs), approximately 31 GiB RAM,
+Rust 1.98.1, release thin LTO/one codegen unit. Both unsigned Windows packages passed.
+Baseline executables from PR #40 were SHA256-verified; its source tree matches main c4ae54d.
+Text uses no default features; voice explicitly enables voice. Installed sums and DEFLATE 9 ZIPs
+exclude PR screenshots; text excludes nested voice. Package documentation is its build-time
+snapshot before final measurement addenda; installed deltas include documentation updates.
+
+One warmup and five direct replay runs per revision. Baseline samples: 37.0051,37.6836,38.9883,37.3383,38.0065ms.
+New samples: 36.0087,36.8362,36.0801,37.7125,36.661ms. This shared-host reducer workload checks the common
+message path, not forward-page network latency or native rendering. Timing differences are noisy;
+no speedup claim. Native RSS/CPU, startup/frame timing and screenshots remain unmeasured because
+desktop automation is owner-paused. No live account or audio-device interaction occurred.
+
+Forward history adds fixed-size cursor/flag state and reuses the 50-message response limit,
+500-row/4-MiB active window, global resident ceiling and existing cancellable request worker.
+Pages replace the active window. No added dependency, migration, cache or queue.

@@ -63,6 +63,7 @@ fn navigation() {
         let Some(client_core::Command::History {
             channel: selected,
             before: None,
+            after: None,
             request,
         }) = command
         else {

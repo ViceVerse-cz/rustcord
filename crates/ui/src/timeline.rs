@@ -13,6 +13,10 @@ pub struct TimelineView {
     pub(super) channel_reference: Option<Id>,
     pub(super) reply_target: Option<Id>,
     target_browsing: bool,
+    unread_browsing: bool,
+    initial_read_checked: bool,
+    pub(super) unread_jump: bool,
+    pub(super) load_newer: bool,
     channel_labels: u64,
     pub(super) mark_read: Option<Id>,
     auto_read_attempt: Option<Id>,
@@ -255,6 +259,7 @@ impl TimelineView {
     }
     pub(super) fn follow_latest(&mut self) {
         self.target_browsing = false;
+        self.unread_browsing = false;
         self.following = true;
         self.jump = true;
         self.anchor = None;
@@ -279,6 +284,45 @@ impl TimelineView {
                 jump: true,
                 ..Self::default()
             };
+        }
+        if !self.initial_read_checked
+            && state.freshness == model::Freshness::Fresh
+            && !state.history_pending
+            && let Some(channel) = state.selected
+            && let Some(unread) = state.unread(channel)
+        {
+            self.initial_read_checked = true;
+            let marker_loaded = state
+                .read_marker(channel)
+                .flatten()
+                .is_some_and(|marker| state.timeline.row_ids().any(|id| id == marker));
+            if unread && !marker_loaded {
+                // Opening a recent page is not consent to skip an unseen unread gap.
+                self.target_browsing = true;
+                self.unread_browsing = true;
+                self.following = false;
+                self.jump = false;
+                self.mark_read = None;
+            }
+        }
+        let can_jump_unread = state.can_jump_unread();
+        let can_load_newer = state.can_load_newer();
+        if can_jump_unread || can_load_newer {
+            ui.horizontal_wrapped(|ui| {
+                if can_jump_unread && ui.button("Jump to unread").clicked() {
+                    self.unread_jump = true;
+                }
+                if can_load_newer && ui.button("Next messages").clicked() {
+                    self.load_newer = true;
+                }
+            });
+        }
+        if self.unread_jump || self.load_newer {
+            self.target_browsing = true;
+            self.unread_browsing = true;
+            self.following = false;
+            self.jump = false;
+            self.mark_read = None;
         }
         let boundary = state
             .selected
@@ -613,6 +657,7 @@ impl TimelineView {
         let at_bottom =
             output.state.offset.y + output.inner_rect.height() >= output.content_size.y - 3.0;
         if at_bottom
+            && !self.unread_browsing
             && ui.input(|input| {
                 input.smooth_scroll_delta().y < 0.0
                     && input
@@ -634,6 +679,9 @@ impl TimelineView {
             })
         });
         if self.following
+            && !state.history_targeted
+            && state.history_before.is_none()
+            && state.history_after.is_none()
             && ui.input(|i| i.focused)
             && let Some(message) = state.timeline.iter().last()
             && self.auto_read_attempt != Some(message.id)
@@ -669,7 +717,10 @@ impl TimelineView {
                         .is_some_and(|pos| output.inner_rect.contains(pos))
             })
             && state.can_load_older();
-        if (!self.following || state.history_before.is_some())
+        if (!self.following
+            || state.history_targeted
+            || state.history_before.is_some()
+            || state.history_after.is_some())
             && ui
                 .add(
                     egui::Button::new(
@@ -692,7 +743,10 @@ impl TimelineView {
                 )
                 .clicked()
         {
-            if state.history_before.is_some() {
+            if state.history_targeted
+                || state.history_before.is_some()
+                || state.history_after.is_some()
+            {
                 self.latest = true;
             }
             self.follow_latest();
@@ -1514,6 +1568,103 @@ mod tests {
             frame(&mut view, &mut state, vec![]);
             assert!(!view.target_browsing);
             assert_eq!(view.mark_read.take(), Some(Id(20)));
+        }
+    }
+
+    #[test]
+    fn initial_unread_gap_stays_unacknowledged_and_keyboard_jump_is_explicit() {
+        for (marker, width, dark) in [
+            (Some(Id(10)), 320.0, false),
+            (None, 900.0, true),
+            (Some(Id(19)), 900.0, true),
+        ] {
+            let mut state = State {
+                auth: client_core::auth::AuthState::Authenticated,
+                gateway_connected: true,
+                freshness: model::Freshness::Fresh,
+                selected: Some(Id(20)),
+                channels: vec![model::Channel {
+                    id: Id(20),
+                    guild: None,
+                    parent_id: None,
+                    position: 0,
+                    name: "Synthetic unread conversation".into(),
+                    kind: 1,
+                    recipients: vec![],
+                    member_list_id: None,
+                    last_message: Some(Id(20)),
+                }],
+                ..Default::default()
+            };
+            for id in [19, 20] {
+                state
+                    .timeline
+                    .insert(text_message(id), false, false)
+                    .unwrap();
+            }
+            state
+                .apply_read_state(client_core::read_state::Event::Snapshot {
+                    entries: Some(vec![(Id(20), marker, 0)]),
+                    version: Some(1),
+                    partial: false,
+                })
+                .unwrap();
+            let ctx = egui::Context::default();
+            ctx.set_visuals(if dark {
+                egui::Visuals::dark()
+            } else {
+                egui::Visuals::light()
+            });
+            let mut view = TimelineView::default();
+            let mut avatars = crate::avatars::Avatars::default();
+            let mut frame = |view: &mut TimelineView, state: &mut State, events| {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        focused: true,
+                        events,
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 600.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        view.show(ui, state, &mut None, &mut None, &mut avatars, &mut None);
+                        assert!(ui.min_rect().right() <= ui.max_rect().right() + 1.0);
+                    },
+                );
+                assert!(output.platform_output.commands.is_empty());
+                output.drop_without_applying_deltas();
+            };
+            for _ in 0..3 {
+                frame(&mut view, &mut state, vec![]);
+            }
+            if marker == Some(Id(19)) {
+                assert_eq!(
+                    view.mark_read.take(),
+                    Some(Id(20)),
+                    "Loaded read boundary preserves ordinary auto-read"
+                );
+                continue;
+            }
+            assert!(view.target_browsing && view.unread_browsing);
+            assert!(view.mark_read.is_none());
+            for key in [egui::Key::Tab, egui::Key::Enter] {
+                frame(
+                    &mut view,
+                    &mut state,
+                    vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+            }
+            assert!(view.unread_jump);
+            assert!(view.mark_read.is_none());
+            assert_eq!(state.read_marker(Id(20)), Some(marker));
         }
     }
 
