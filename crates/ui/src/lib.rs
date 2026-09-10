@@ -1640,8 +1640,11 @@ impl MessagingUi {
                     state.read_state.status.map(str::to_owned),
                     (state.archived_thread.is_some() && state.archived_thread == state.selected)
                         .then(|| "Opened from archive".to_owned()),
-                    state.history_before.is_some().then(|| {
-                        "Browsing earlier messages · Jump to present to return".to_owned()
+                    (state.history_targeted
+                        || state.history_before.is_some()
+                        || state.history_after.is_some())
+                    .then(|| {
+                        "Browsing message history \u{b7} Jump to present to return".to_owned()
                     }),
                 ]
                 .into_iter()
@@ -1705,6 +1708,16 @@ impl MessagingUi {
                         }
                         if let Some(target) = self.timeline.reply_target.take() {
                             if let Some(command) = state.open_reply_target(target) {
+                                commands.push(command);
+                            }
+                            ctx.request_repaint();
+                        } else if std::mem::take(&mut self.timeline.unread_jump) {
+                            if let Some(command) = state.open_unread() {
+                                commands.push(command);
+                            }
+                            ctx.request_repaint();
+                        } else if std::mem::take(&mut self.timeline.load_newer) {
+                            if let Some(command) = state.newer_history() {
                                 commands.push(command);
                             }
                             ctx.request_repaint();
@@ -2418,6 +2431,159 @@ mod composer_tests {
         assert!(!view.has_edit());
         assert_eq!(state.drafts[&Id(10)], "Unsent draft 👋");
         assert!(view.draft_changes.is_empty());
+    }
+
+    #[test]
+    fn unread_pages_and_return_to_present_preserve_drafts_without_automatic_ack() {
+        fn collect(shape: &egui::Shape, labels: &mut Vec<(String, egui::Rect)>) {
+            match shape {
+                egui::Shape::Text(text) => labels.push((
+                    text.galley.job.text.clone(),
+                    text.galley.rect.translate(text.pos.to_vec2()),
+                )),
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        collect(shape, labels);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for (marker, width, dark) in [(None, 760.0, false), (Some(Id(10)), 1100.0, true)] {
+            let ctx = egui::Context::default();
+            ctx.set_visuals(if dark {
+                egui::Visuals::dark()
+            } else {
+                egui::Visuals::light()
+            });
+            let mut view = MessagingUi::default();
+            let mut state = edit_state();
+            state.channels[0].last_message = Some(Id(20));
+            state
+                .apply_read_state(client_core::read_state::Event::Snapshot {
+                    entries: Some(vec![(Id(10), marker, 0)]),
+                    version: Some(1),
+                    partial: false,
+                })
+                .unwrap();
+            let message = state.timeline.get(Id(20)).unwrap().clone();
+            let drafts = state.drafts.clone();
+            let frame = |view: &mut MessagingUi, state: &mut State, events| {
+                let mut commands = vec![];
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        focused: true,
+                        events,
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 720.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| commands = view.show(ui, state),
+                );
+                assert!(output.platform_output.commands.is_empty());
+                assert!(
+                    !commands.iter().any(|command| matches!(
+                        command,
+                        Command::Send { .. } | Command::Edit { .. } | Command::MarkRead { .. }
+                    )),
+                    "Browsing unread pages must not send or acknowledge"
+                );
+                let mut labels = vec![];
+                for shape in &output.shapes {
+                    collect(&shape.shape, &mut labels);
+                }
+                output.drop_without_applying_deltas();
+                (labels, commands)
+            };
+            let click = |view: &mut MessagingUi, state: &mut State, label: &str| {
+                let (labels, _) = frame(view, state, vec![]);
+                let pos = labels
+                    .iter()
+                    .find(|(text, _)| {
+                        text == label || (label == "Jump to present" && text.ends_with(label))
+                    })
+                    .expect("navigation control")
+                    .1
+                    .center();
+                let mut commands = vec![];
+                for pressed in [true, false] {
+                    commands.extend(
+                        frame(
+                            view,
+                            state,
+                            vec![
+                                egui::Event::PointerMoved(pos),
+                                egui::Event::PointerButton {
+                                    pos,
+                                    button: egui::PointerButton::Primary,
+                                    pressed,
+                                    modifiers: egui::Modifiers::NONE,
+                                },
+                            ],
+                        )
+                        .1,
+                    );
+                }
+                commands
+            };
+            for _ in 0..3 {
+                frame(&mut view, &mut state, vec![]);
+            }
+            assert_eq!(state.read_marker(Id(10)), Some(marker));
+            let commands = click(&mut view, &mut state, "Jump to unread");
+            assert!(commands.iter().any(|command| matches!(command,
+                Command::History { channel: Id(10), before: None, after: Some(after), .. } if *after == marker.unwrap_or(Id(0))
+            )));
+            let (labels, _) = frame(&mut view, &mut state, vec![]);
+            assert!(!labels.iter().any(|(text, _)| text == "Next messages"));
+            for (first, last) in [(11, 15), (16, 20)] {
+                let messages = (first..=last)
+                    .map(|id| {
+                        let mut message = message.clone();
+                        message.id = Id(id);
+                        message
+                    })
+                    .collect();
+                state.apply(client_core::Envelope {
+                    generation: state.generation,
+                    event: client_core::Event::History {
+                        channel: Id(10),
+                        request: state.request,
+                        older: false,
+                        messages,
+                    },
+                });
+                for _ in 0..3 {
+                    frame(&mut view, &mut state, vec![]);
+                }
+                if last == 15 {
+                    let commands = click(&mut view, &mut state, "Next messages");
+                    assert!(commands.iter().any(|command| matches!(
+                        command,
+                        Command::History {
+                            before: None,
+                            after: Some(Id(15)),
+                            ..
+                        }
+                    )));
+                }
+            }
+            let (labels, _) = frame(&mut view, &mut state, vec![]);
+            assert!(!labels.iter().any(|(text, _)| text == "Next messages"));
+            assert_eq!(state.read_marker(Id(10)), Some(marker));
+            let commands = click(&mut view, &mut state, "Jump to present");
+            assert!(commands.iter().any(|command| matches!(
+                command,
+                Command::History {
+                    before: None,
+                    after: None,
+                    ..
+                }
+            )));
+            assert_eq!(state.drafts, drafts);
+        }
     }
 
     #[test]

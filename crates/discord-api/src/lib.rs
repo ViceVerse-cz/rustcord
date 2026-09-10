@@ -384,11 +384,18 @@ impl DiscordApi {
             Command::History {
                 channel,
                 before,
+                after,
                 request,
             } => {
+                if before.is_some() && after.is_some() {
+                    return Event::Failure(Failure::Protocol);
+                }
                 let mut path = format!("/channels/{channel}/messages?limit=50");
                 if let Some(before) = before {
                     path.push_str(&format!("&before={before}"));
+                }
+                if let Some(after) = after {
+                    path.push_str(&format!("&after={after}"));
                 }
                 match self
                     .request(Method::GET, &path, None)
@@ -638,6 +645,59 @@ mod tests {
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
     };
+    #[tokio::test]
+    async fn history_after_includes_zero_and_rejects_combined_cursors() {
+        use model::Id;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let mut api = DiscordApi::new(Arc::new(SessionSecret::from_owner_input(
+                "SYNTHETIC_HISTORY_TOKEN".into(),
+            ).unwrap())).unwrap();
+            api.base = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                for (cursor, ids) in [
+                    ("after=0", vec![2, 1]),
+                    ("after=9", vec![11, 10]),
+                    ("before=9", vec![8, 7]),
+                    ("after=99", (100..151).collect()),
+                ] {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut request = Vec::new();
+                    loop {
+                        let mut buffer = [0; 1024];
+                        let n = socket.read(&mut buffer).await.unwrap();
+                        assert!(n > 0);
+                        request.extend_from_slice(&buffer[..n]);
+                        assert!(request.len() < 4096);
+                        if request.windows(4).any(|w| w == b"\r\n\r\n") { break; }
+                    }
+                    assert!(std::str::from_utf8(&request).unwrap().starts_with(
+                        &format!("GET /channels/1/messages?limit=50&{cursor} HTTP/1.1\r\n"),
+                    ));
+                    let body = serde_json::to_string(&ids.into_iter().map(|id| serde_json::json!({
+                        "id": id.to_string(), "channel_id": "1", "author": {"id":"3","username":"Synthetic"},
+                        "content":"Synthetic history",
+                    })).collect::<Vec<_>>()).unwrap();
+                    socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+                }
+            });
+            assert!(matches!(api.execute(Command::History {
+                channel: Id(1), before: Some(Id(9)), after: Some(Id(0)), request: 1,
+            }).await, Event::Failure(Failure::Protocol)));
+            for (before, after, first) in [(None, Some(Id(0)), Id(2)), (None, Some(Id(9)), Id(11)), (Some(Id(9)), None, Id(8))] {
+                let Event::History {channel, request, older, messages} = api.execute(Command::History {
+                    channel: Id(1), before, after, request: 7,
+                }).await else { panic!("expected bounded history page"); };
+                assert_eq!((channel, request, older), (Id(1), 7, before.is_some()));
+                assert_eq!(messages.len(), 2);
+                assert_eq!(messages[0].id, first);
+            }
+            assert!(matches!(api.execute(Command::History {
+                channel: Id(1), before: None, after: Some(Id(99)), request: 8,
+            }).await, Event::Failure(Failure::Capacity)));
+            server.await.unwrap();
+        }).await.unwrap();
+    }
     #[tokio::test]
     async fn search_routes_are_encoded_scoped_and_indexing_never_auto_retries() {
         use client_core::search::Outcome;

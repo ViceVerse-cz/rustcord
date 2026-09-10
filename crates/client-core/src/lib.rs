@@ -72,6 +72,7 @@ pub enum Command {
     History {
         channel: Id,
         before: Option<Id>,
+        after: Option<Id>,
         request: u64,
     },
     Send {
@@ -236,6 +237,9 @@ pub struct State {
     pub send_sequence: u64,
     pub request: u64,
     pub history_before: Option<Id>,
+    pub history_after: Option<Id>,
+    pub newer_cursor: Option<Id>,
+    pub newer_may_have_more: bool,
     pub history_pending: bool,
     pub older_exhausted: bool,
     pub gateway_connected: bool,
@@ -279,6 +283,9 @@ impl Default for State {
             send_sequence: 0,
             request: 0,
             history_before: None,
+            history_after: None,
+            newer_cursor: None,
+            newer_may_have_more: false,
             history_pending: false,
             older_exhausted: false,
             gateway_connected: false,
@@ -415,8 +422,15 @@ impl State {
         }
     }
     pub fn history(&mut self, before: Option<Id>) -> Command {
+        self.history_range(before, None)
+    }
+    fn history_range(&mut self, before: Option<Id>, after: Option<Id>) -> Command {
         self.typing.clear();
         if before.is_none() {
+            self.newer_cursor = None;
+            self.newer_may_have_more = false;
+        }
+        if before.is_none() && after.is_none() {
             self.history_targeted = false;
         }
         let Some(channel) = self.selected.filter(|id| {
@@ -457,12 +471,14 @@ impl State {
         self.reactions.cancel_read();
         self.request += 1;
         self.history_before = before;
+        self.history_after = after;
         self.history_pending = true;
         self.freshness = Freshness::Loading;
         self.timeline.begin_page(before.is_some());
         Command::History {
             channel,
             before,
+            after,
             request: self.request,
         }
     }
@@ -1155,6 +1171,7 @@ impl State {
                             || self
                                 .history_before
                                 .is_some_and(|before| message.id >= before)
+                            || self.history_after.is_some_and(|after| message.id <= after)
                             || !ids.insert(message.id)
                     })
                 {
@@ -1166,7 +1183,10 @@ impl State {
                     self.record_reply_deletion(message);
                 }
                 self.history_pending = false;
-                if !older && let Some(latest) = messages.iter().map(|m| m.id).max() {
+                if !older
+                    && self.history_after.is_none()
+                    && let Some(latest) = messages.iter().map(|m| m.id).max()
+                {
                     self.observe_last_message(channel, latest);
                 }
                 for message in &mut messages {
@@ -1174,8 +1194,22 @@ impl State {
                         message.reactions = None;
                     }
                 }
-                self.older_exhausted = messages.len() < 50;
+                self.older_exhausted = if let Some(after) = self.history_after {
+                    after.0 == 0
+                } else {
+                    messages.len() < 50
+                };
+                if self.history_after.is_some() {
+                    self.newer_cursor = messages.iter().map(|m| m.id).max();
+                    self.newer_may_have_more = messages.len() == 50;
+                }
                 let r = self.timeline.finish_page(messages, older);
+                if r.is_ok() && self.history_after.is_some() {
+                    self.search_target = self.timeline.iter().next().map(|m| m.id);
+                    if self.search_target.is_none() {
+                        self.status = "No messages returned after this boundary; use Jump to present to reload";
+                    }
+                }
                 if r.is_ok() && self.gateway_connected {
                     self.freshness = Freshness::Fresh;
                 }
@@ -1205,9 +1239,16 @@ impl State {
             }
             Event::Message(mut m) => {
                 self.typing_message(&m);
-                if m.reply_deleted && self.accepts_reply_source(&m) {
+                let deletion = if m.reply_deleted && self.accepts_reply_source(&m) {
                     self.record_reply_deletion(&m);
-                }
+                    if self.selected == Some(m.channel) {
+                        self.timeline.observe_deleted_reference(&m)
+                    } else {
+                        Ok(())
+                    }
+                } else {
+                    Ok(())
+                };
                 self.observe_notification(&m);
                 self.observe_last_message(m.channel, m.id);
                 if self.selected == Some(m.channel)
@@ -1220,9 +1261,14 @@ impl State {
                     m.reactions = None;
                 }
                 self.confirm(&m);
-                if self.selected == Some(m.channel)
+                if deletion.is_err() {
+                    deletion
+                } else if self.selected == Some(m.channel)
                     && self.can_view(m.channel)
                     && self.freshness != Freshness::Unavailable
+                    // Do not splice a new live tail into a deliberately browsed history page.
+                    // Loaded edits still reconcile; navigation/read state continues to observe it.
+                    && (!self.history_targeted || self.timeline.get(m.id).is_some())
                 {
                     self.timeline.insert(m, true, false)
                 } else {
@@ -1305,6 +1351,9 @@ impl State {
                                     && known.author.id == m.author.id
                                     && known.nonce.as_deref() == Some(nonce.as_str())
                             }));
+                        if correlated {
+                            self.observe_last_message(m.channel, m.id);
+                        }
                         let accepted_reference = correlated && self.accepts_reply_source(&m);
                         if accepted_reference {
                             self.record_reply_deletion(&m);
@@ -1324,6 +1373,7 @@ impl State {
                             && self.can_view(m.channel)
                             && self.freshness != Freshness::Unavailable
                             && self.timeline.get(m.id).is_none()
+                            && !self.history_targeted
                             && (!m.reply_deleted || accepted_reference)
                             && self.timeline.insert(m, false, false).is_err()
                         {
@@ -1516,6 +1566,9 @@ impl State {
         self.search_target = None;
         self.request += 1;
         self.history_pending = false;
+        self.history_after = None;
+        self.newer_cursor = None;
+        self.newer_may_have_more = false;
         self.timeline.cancel_page();
     }
 }
