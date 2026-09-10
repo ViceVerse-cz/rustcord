@@ -1301,3 +1301,8 @@ strict all-feature Clippy and policy checks; the strengthened focused hydration 
 also passed. `cargo xtask package` and `cargo xtask package-voice` built and verified their
 ad-hoc signatures. Text/voice executables grew by 1,216/1,200 bytes; synthetic reducer
 median was 37.244→37.569 ms with identical retained bounds, within run variation.
+
+Delivery: [draft PR #38](https://github.com/ViceVerse-cz/rustcord/pull/38), implementation
+commit `c11b7ab`. macOS, Ubuntu, Windows and security checks were pending at initial
+inspection; no remote CI success is claimed. The reported server still needs the owner's
+live verification with the repaired build.
