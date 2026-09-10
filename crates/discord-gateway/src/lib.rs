@@ -359,9 +359,9 @@ async fn run_inner(
                     let connect=if let client_core::voice::Command::Join{channel,..}=command {Some(channel)}else{None};
                     let packet=match calls.packet(command) {
                         Ok(packet)=>packet,
-                        Err(_) => {if let client_core::voice::Command::Join{channel,request,..}=command {emit(Event::Voice(client_core::voice::Event::Failed{channel,request,message:"Previous call is still leaving, or the DM is unavailable; wait for departure or reconnect"}))?;}continue;}
+                        Err(_) => {if let client_core::voice::Command::Join{channel,request,..}=command {emit(Event::Voice(client_core::voice::Event::Failed{channel,request,message:"Previous call is still leaving, or the channel is unavailable; wait for departure or reconnect"}))?;}continue;}
                     };
-                    if let Some(channel)=connect {
+                    if let Some(channel)=connect && calls.allowed.get(&channel) == Some(&None) {
                         let packet=Frame::Text(serde_json::json!({"op":13,"d":{"channel_id":channel}}).to_string().into());
                         if !matches!(timeout(Duration::from_secs(5),socket.send(packet)).await,Ok(Ok(()))) {break;}
                     }
@@ -414,14 +414,42 @@ async fn run_inner(
                                         if ready.session_id.len() > 2048 { return Err(Failure::Capacity); }
                                         state.url = Some(validated_url(&ready.resume_gateway_url).map_err(|f|f.protocol_at("Gateway login: resume address rejected"))?);
                                         state.session = Some(Zeroizing::new(std::mem::take(&mut ready.session_id)));
+                                        calls.remember_users(std::mem::take(&mut ready.users))?;
+                                        let mut participants = Vec::new();
+                                        let mut roster_bytes = 0;
+                                        for guild in &mut ready.guilds {
+                                            if guild.voice_states.is_empty() { continue; }
+                                            if let Event::Voice(client_core::voice::Event::Snapshot { participants: mut rows, .. }) = calls.snapshot(guild, false)? {
+                                                roster_bytes += rows.iter().map(client_core::voice::RosterEntry::bytes).sum::<usize>();
+                                                if participants.len() + rows.len() > client_core::voice::MAX_ROSTER || roster_bytes > client_core::voice::MAX_ROSTER_BYTES { return Err(Failure::Capacity); }
+                                                participants.append(&mut rows);
+                                            }
+                                        }
                                         let (guilds, channels) = ready.navigation();
                                         let (read_entries,read_version,partial)=ready.read_state.take().map_or((None,None,false),|snapshot|(Some(snapshot.entries.into_iter().filter(|e|e.kind==0).map(|e|(e.id,e.last_message_id)).collect()),snapshot.version,snapshot.partial));
                                         if guilds.len() + channels.len() > MAX_NAV { return Err(Failure::Capacity); }
-                                        calls.allowed=channels.iter().filter(|c|c.guild.is_none() && c.kind==1 && c.recipients.len()==1).map(|c|c.id).collect();
+                                        calls.allowed=channels.iter().filter(|c|(c.guild.is_none() && c.kind==1 && c.recipients.len()==1) || (c.guild.is_some() && c.kind==2)).map(|c|(c.id,c.guild)).collect();
                                         if was_ready { emit(Event::Resync)?; }
                                         emit(Event::Ready { user: ready.user.into_model(), guilds, channels })?; was_ready = true;
                                         emit(Event::ReadState(client_core::read_state::Event::Snapshot{entries:read_entries,version:read_version,partial}))?;
+                                        if !participants.is_empty() { emit(Event::Voice(client_core::voice::Event::Snapshot { partial: false, guild: None, participants }))?; }
                                         ready_at = Some(Instant::now());
+                                    }
+                                    "READY_SUPPLEMENTAL" => {
+                                        let mut extra: ReadySupplemental = decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
+                                        if extra.guilds.len() > MAX_NAV || extra.merged_members.len() > MAX_NAV { return Err(Failure::Capacity); }
+                                        let mut participants = Vec::new();
+                                        let mut roster_bytes = 0;
+                                        for (index, guild) in extra.guilds.iter_mut().enumerate() {
+                                            if let Some(members) = extra.merged_members.get_mut(index) { guild.members.append(members); }
+                                            if let Event::Voice(client_core::voice::Event::Snapshot { participants: mut rows, .. }) = calls.snapshot(guild, true)? {
+                                                roster_bytes += rows.iter().map(client_core::voice::RosterEntry::bytes).sum::<usize>();
+                                                if participants.len() + rows.len() > client_core::voice::MAX_ROSTER || roster_bytes > client_core::voice::MAX_ROSTER_BYTES { return Err(Failure::Capacity); }
+                                                participants.append(&mut rows);
+                                            }
+                                        }
+                                        if !participants.is_empty() { emit(Event::Voice(client_core::voice::Event::Snapshot { partial: true, guild: None, participants }))?; }
+                                        calls.users.clear();
                                     }
                                     "RESUMED" => { emit(Event::Resumed)?; ready_at = Some(Instant::now()); },
                                     "CALL_CREATE" | "CALL_UPDATE" | "CALL_DELETE" | "VOICE_STATE_UPDATE" | "VOICE_SERVER_UPDATE" => calls.dispatch(packet.t.as_deref().unwrap_or(""),packet.d.get().as_bytes(),owner_id,&emit)?,
@@ -442,6 +470,7 @@ async fn run_inner(
                                         emit(Event::ReadState(client_core::read_state::Event::Ack{channel:ack.channel_id,message:ack.message_id,manual:ack.manual,version:ack.version}))?;
                                     }
                                     "PASSIVE_UPDATE_V2" => {
+                                        calls.passive(decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?,owner_id,&emit)?;
                                         let update=decode::<read_state::PassiveUpdate>(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
                                         emit(Event::ReadState(client_core::read_state::Event::Latest(update.updated_channels.into_iter().map(|c|(c.id,c.last_message_id)).collect())))?;
                                     }
@@ -454,9 +483,10 @@ async fn run_inner(
                                     "MESSAGE_DELETE_BULK" => { let d: BulkDeleted = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?; if d.ids.len() > 100 { return Err(Failure::Capacity); } emit(Event::DeleteBulk { channel:d.channel_id, ids: d.ids })?; }
                                     "AUTH_SESSION_CHANGE" => return Err(Failure::Expired),
                                     "CHANNEL_DELETE" => { let c: ChannelDto = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?; calls.allowed.remove(&c.id); emit(Event::Unavailable(c.id))?; }
-                                    "CHANNEL_CREATE" => { let c=decode::<ChannelDto>(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?.into_model(); if c.guild.is_none() && c.kind==1 && c.recipients.len()==1 && calls.allowed.len()<MAX_NAV {calls.allowed.insert(c.id);} emit(Event::ChannelCreated(c))?; }
+                                    "CHANNEL_CREATE" => { let c=decode::<ChannelDto>(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?.into_model(); if ((c.guild.is_none() && c.kind==1 && c.recipients.len()==1) || (c.guild.is_some() && c.kind==2)) && calls.allowed.len()<MAX_NAV {calls.allowed.insert(c.id,c.guild);} emit(Event::ChannelCreated(c))?; }
                                     "CHANNEL_UPDATE" => {
                                         let patch:ChannelPatchDto=decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
+                                        if let model::Patch::Value(kind) = patch.kind && kind != 2 && kind != 1 { calls.allowed.remove(&patch.id); }
                                         let permissions=!matches!(patch.permission_overwrites,model::Patch::Absent) || !matches!(patch.flags,model::Patch::Absent);
                                         emit(Event::ChannelChanged(patch.into_model()))?;
                                         if permissions {emit(Event::PermissionsChanged)?;}
@@ -466,7 +496,15 @@ async fn run_inner(
                                         emit(Event::GuildEmojis { guild: update.guild_id, emojis: update.emojis.0 })?;
                                     }
                                     "GUILD_CREATE" => {
-                                        let guild: GuildDto = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?;
+                                        let mut guild: GuildDto = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?;
+                                        if guild.channels.len() + calls.allowed.len() > MAX_NAV { return Err(Failure::Capacity); }
+                                        for mut channel in std::mem::take(&mut guild.channels) {
+                                            channel.guild_id = Some(guild.id);
+                                            let channel = channel.into_model();
+                                            if channel.kind == 2 { calls.allowed.insert(channel.id, channel.guild); }
+                                            emit(Event::ChannelCreated(channel))?;
+                                        }
+                                        emit(calls.snapshot(&mut guild, false)?)?;
                                         if let Some(emojis) = guild.emojis { emit(Event::GuildEmojis { guild: guild.id, emojis: emojis.0 })?; }
                                     }
                                     "GUILD_UPDATE" => emit(Event::GuildChanged(decode::<GuildPatchDto>(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?.into_model()))?,
@@ -476,6 +514,8 @@ async fn run_inner(
                                     }
                                     "GUILD_DELETE" => {
                                         let guild: GuildDto = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?;
+                                        let removed: Vec<_> = calls.allowed.iter().filter_map(|(channel, id)| (*id == Some(guild.id)).then_some(*channel)).collect();
+                                        for channel in removed { calls.allowed.remove(&channel); emit(Event::Unavailable(channel))?; }
                                         emit(Event::GuildEmojis { guild: guild.id, emojis: Vec::new() })?;
                                         emit(Event::PermissionsChanged)?;
                                     }

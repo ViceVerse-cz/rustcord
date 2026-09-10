@@ -136,7 +136,9 @@ impl Desktop {
         let mut store = (!demo).then(|| credentials::Store::start(cc.egui_ctx.clone()));
         let cache = (!demo).then(|| cache::Cache::start(cc.egui_ctx.clone()));
         let state = if demo {
-            if std::env::args().any(|arg| arg == "--demo-chat") {
+            if std::env::args().any(|arg| arg == "--demo-voice") {
+                test_support::voice_demo_state()
+            } else if std::env::args().any(|arg| arg == "--demo-chat") {
                 test_support::chat_demo_state()
             } else {
                 test_support::demo_state()

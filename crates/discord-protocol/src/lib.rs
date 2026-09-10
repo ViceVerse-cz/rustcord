@@ -193,6 +193,10 @@ pub struct GuildDto {
     pub channels: Vec<ChannelDto>,
     #[serde(default)]
     pub roles: Vec<RoleDto>,
+    #[serde(default)]
+    pub voice_states: Vec<VoiceStateDto>,
+    #[serde(default)]
+    pub members: Vec<VoiceMemberDto>,
 }
 #[derive(Deserialize)]
 pub struct GuildProperties {
@@ -218,6 +222,8 @@ impl GuildPatchDto {
 }
 #[derive(Deserialize)]
 pub struct Ready {
+    #[serde(default)]
+    pub users: Vec<UserDto>,
     #[serde(default)]
     pub read_state: Option<read_state::Snapshot>,
     pub user: UserDto,
@@ -733,6 +739,14 @@ pub struct VoiceStateDto {
     pub self_mute: bool,
     #[serde(default)]
     pub self_deaf: bool,
+    #[serde(default)]
+    pub mute: bool,
+    #[serde(default)]
+    pub deaf: bool,
+    #[serde(default)]
+    pub suppress: bool,
+    #[serde(default)]
+    pub member: Option<VoiceMemberDto>,
 }
 #[derive(Deserialize)]
 pub struct VoiceServerDto {
@@ -742,4 +756,33 @@ pub struct VoiceServerDto {
     pub channel_id: Option<Id>,
     pub token: String,
     pub endpoint: Option<String>,
+}
+
+/// READY_SUPPLEMENTAL member identities can reference the READY users array.
+#[derive(Deserialize)]
+pub struct VoiceMemberDto {
+    #[serde(default)]
+    pub user: Option<UserDto>,
+    #[serde(default)]
+    pub user_id: Option<Id>,
+    #[serde(default)]
+    pub nick: Option<String>,
+}
+#[derive(Deserialize)]
+pub struct ReadySupplemental {
+    #[serde(default)]
+    pub guilds: Vec<GuildDto>,
+    #[serde(default)]
+    pub merged_members: Vec<Vec<VoiceMemberDto>>,
+}
+#[derive(Deserialize)]
+pub struct PassiveVoiceUpdate {
+    #[serde(default)]
+    pub guild_id: Option<Id>,
+    #[serde(default)]
+    pub updated_voice_states: Vec<VoiceStateDto>,
+    #[serde(default)]
+    pub removed_voice_states: Vec<Id>,
+    #[serde(default)]
+    pub updated_members: Vec<VoiceMemberDto>,
 }

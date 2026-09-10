@@ -1,9 +1,13 @@
-//! One explicitly joined one-to-one DM call. No media or persistent credentials live here.
+//! One explicitly joined DM or guild voice channel; bounded ephemeral participant state.
 use crate::{
     State as ClientState,
     auth::{AuthState, Failure},
 };
-use model::Id;
+use model::{Id, Member};
+use std::time::Instant;
+pub const MAX_PARTICIPANTS: usize = 64;
+pub const MAX_ROSTER: usize = 4096;
+pub const MAX_ROSTER_BYTES: usize = 1024 * 1024;
 use std::fmt;
 use zeroize::Zeroizing;
 
@@ -30,8 +34,9 @@ impl fmt::Debug for Secret {
 }
 pub struct VoiceConnection {
     pub channel: Id,
+    pub guild: Option<Id>,
     pub user: Id,
-    pub peer: Id,
+    pub peer: Option<Id>,
     pub session: Secret,
     pub token: Secret,
     pub endpoint: String,
@@ -43,6 +48,7 @@ pub enum Phase {
     Ringing,
     Securing,
     Connected,
+    Waiting,
     Failed,
 }
 impl Phase {
@@ -51,6 +57,7 @@ impl Phase {
             Self::Connecting => "Connecting call…",
             Self::Ringing => "Ringing…",
             Self::Securing => "Securing audio…",
+            Self::Waiting => "Connected · waiting for others",
             Self::Connected => "Voice connected",
             Self::Failed => "Call failed",
         }
@@ -61,9 +68,27 @@ pub struct Participant {
     pub user: Id,
     pub muted: bool,
     pub deafened: bool,
+    pub server_muted: bool,
+    pub server_deafened: bool,
+}
+#[derive(Clone)]
+pub struct RosterEntry {
+    pub guild: Id,
+    pub channel: Id,
+    pub participant: Participant,
+    pub member: Option<Member>,
+}
+impl RosterEntry {
+    pub fn bytes(&self) -> usize {
+        size_of::<Self>() + self.member.as_ref().map_or(0, Member::bytes)
+    }
 }
 pub struct Call {
     pub channel: Id,
+    pub guild: Option<Id>,
+    pub connected_at: Option<Instant>,
+    pub server_muted: bool,
+    pub server_deafened: bool,
     pub request: u64,
     pub phase: Phase,
     pub muted: bool,
@@ -75,6 +100,7 @@ pub struct Call {
 pub struct State {
     pub active: Option<Call>,
     pub incoming: Option<Id>,
+    pub roster: Vec<RosterEntry>,
     sequence: u64,
 }
 #[derive(Clone, Copy, Debug)]
@@ -103,6 +129,11 @@ pub enum Command {
     },
 }
 pub enum Event {
+    Snapshot {
+        partial: bool,
+        guild: Option<Id>,
+        participants: Vec<RosterEntry>,
+    },
     Call {
         channel: Id,
         ringing: Option<Vec<Id>>,
@@ -113,6 +144,10 @@ pub enum Event {
         channel: Id,
     },
     State {
+        guild: Option<Id>,
+        member: Option<Member>,
+        server_muted: bool,
+        server_deafened: bool,
         request: Option<u64>,
         channel: Option<Id>,
         user: Id,
@@ -140,6 +175,10 @@ pub enum Event {
 impl Event {
     pub fn bytes(&self) -> usize {
         match self {
+            Self::Snapshot { participants, .. } => {
+                participants.capacity() * size_of::<RosterEntry>()
+                    + participants.iter().map(RosterEntry::bytes).sum::<usize>()
+            }
             Self::Call {
                 ringing,
                 participants,
@@ -152,7 +191,11 @@ impl Event {
                         .as_ref()
                         .map_or(0, |v| v.capacity() * size_of::<Participant>())
             }
-            Self::State { session, .. } => session.as_ref().map_or(0, Secret::bytes),
+            Self::State {
+                session, member, ..
+            } => {
+                session.as_ref().map_or(0, Secret::bytes) + member.as_ref().map_or(0, Member::bytes)
+            }
             Self::Server {
                 token, endpoint, ..
             } => {
@@ -169,22 +212,45 @@ impl ClientState {
             && self.auth == AuthState::Authenticated
             && self.gateway_connected
             && self.channels.iter().any(|c| {
-                c.id == channel && c.guild.is_none() && c.kind == 1 && c.recipients.len() == 1
+                c.id == channel
+                    && ((c.guild.is_some() && c.kind == 2)
+                        || (c.guild.is_none() && c.kind == 1 && c.recipients.len() == 1))
             })
     }
     pub fn start_call(&mut self, channel: Id, ring: bool) -> Option<crate::Command> {
         if !self.can_call(channel) || self.voice.active.is_some() {
             return None;
         }
+        let guild = self.channels.iter().find(|c| c.id == channel)?.guild;
+        let participants: Vec<_> = self
+            .voice
+            .roster
+            .iter()
+            .filter(|r| r.channel == channel)
+            .map(|r| r.participant)
+            .collect();
+        if participants.len() >= MAX_PARTICIPANTS {
+            self.status = "Voice channel exceeds the 64 participant limit";
+            return None;
+        }
+        let own = participants
+            .iter()
+            .find(|p| self.user.as_ref().is_some_and(|u| u.id == p.user));
+        let server_muted = own.is_some_and(|p| p.server_muted);
+        let server_deafened = own.is_some_and(|p| p.server_deafened);
         self.voice.sequence = self.voice.sequence.wrapping_add(1);
         let request = self.voice.sequence;
         self.voice.active = Some(Call {
             channel,
+            guild,
+            connected_at: None,
+            server_muted,
+            server_deafened,
             request,
             phase: Phase::Connecting,
             muted: false,
             deafened: false,
-            participants: Vec::new(),
+            participants,
             error: None,
         });
         if self.voice.incoming == Some(channel) {
@@ -193,7 +259,7 @@ impl ClientState {
         Some(crate::Command::Voice(Command::Join {
             channel,
             request,
-            ring,
+            ring: ring && guild.is_none(),
         }))
     }
     pub fn leave_call(&mut self) -> Option<crate::Command> {
@@ -224,6 +290,26 @@ impl ClientState {
     }
     pub fn apply_voice(&mut self, event: Event) {
         match event {
+            Event::Snapshot {
+                partial,
+                guild,
+                participants,
+            } => {
+                if !partial {
+                    self.voice
+                        .roster
+                        .retain(|r| Some(r.guild) != guild && guild.is_some());
+                }
+                for entry in participants {
+                    if guild.is_some_and(|guild| entry.guild != guild) {
+                        continue;
+                    }
+                    if !self.update_roster(entry) {
+                        break;
+                    }
+                }
+                self.refresh_voice_participants();
+            }
             Event::Call {
                 channel,
                 ringing,
@@ -266,6 +352,10 @@ impl ClientState {
             }
             Event::Deleted { channel } => self.end_voice_channel(channel),
             Event::State {
+                guild,
+                member,
+                server_muted,
+                server_deafened,
                 request,
                 channel,
                 user,
@@ -273,6 +363,32 @@ impl ClientState {
                 deafened,
                 ..
             } => {
+                let participant = Participant {
+                    user,
+                    muted,
+                    deafened,
+                    server_muted,
+                    server_deafened,
+                };
+                if let Some(guild) = guild {
+                    let previous = self
+                        .voice
+                        .roster
+                        .iter()
+                        .find(|r| r.guild == guild && r.participant.user == user)
+                        .and_then(|r| r.member.clone());
+                    self.voice
+                        .roster
+                        .retain(|r| r.guild != guild || r.participant.user != user);
+                    if let Some(channel) = channel {
+                        self.update_roster(RosterEntry {
+                            guild,
+                            channel,
+                            participant,
+                            member: member.or(previous),
+                        });
+                    }
+                }
                 let Some(call) = &mut self.voice.active else {
                     return;
                 };
@@ -280,18 +396,26 @@ impl ClientState {
                     if request != Some(call.request) {
                         return;
                     }
-                    if channel != Some(call.channel) {
+                    if channel != Some(call.channel) || guild != call.guild {
                         self.voice.active = None;
                         return;
                     }
                 }
+                if guild != call.guild {
+                    return;
+                }
+                if self.user.as_ref().is_some_and(|u| u.id == user) {
+                    call.server_muted = server_muted;
+                    call.server_deafened = server_deafened;
+                }
                 call.participants.retain(|p| p.user != user);
-                if channel == Some(call.channel) && call.participants.len() < 2 {
-                    call.participants.push(Participant {
-                        user,
-                        muted,
-                        deafened,
-                    });
+                if channel == Some(call.channel) {
+                    if call.participants.len() >= MAX_PARTICIPANTS {
+                        self.disconnect_voice();
+                        self.status = "Voice channel exceeds the 64 participant limit";
+                        return;
+                    }
+                    call.participants.push(participant);
                 }
             }
             Event::Progress {
@@ -305,6 +429,11 @@ impl ClientState {
                     && call.phase != Phase::Failed
                 {
                     call.phase = phase;
+                    if matches!(phase, Phase::Connected | Phase::Waiting)
+                        && call.connected_at.is_none()
+                    {
+                        call.connected_at = Some(Instant::now());
+                    }
                 }
             }
             Event::Failed {
@@ -327,7 +456,60 @@ impl ClientState {
             Event::Server { .. } => {} // The desktop consumes negotiation material; core never retains it.
         }
     }
-    fn end_voice_channel(&mut self, channel: Id) {
+    fn update_roster(&mut self, entry: RosterEntry) -> bool {
+        if !self
+            .channels
+            .iter()
+            .any(|c| c.id == entry.channel && c.guild == Some(entry.guild) && c.kind == 2)
+        {
+            return true;
+        }
+        self.voice
+            .roster
+            .retain(|r| r.guild != entry.guild || r.participant.user != entry.participant.user);
+        if self.voice.roster.len() >= MAX_ROSTER
+            || self
+                .voice
+                .roster
+                .iter()
+                .map(RosterEntry::bytes)
+                .sum::<usize>()
+                + entry.bytes()
+                > MAX_ROSTER_BYTES
+        {
+            self.disconnect_voice();
+            self.status = "Voice roster exceeds safe capacity; reconnect to refresh";
+            return false;
+        }
+        self.voice.roster.push(entry);
+        true
+    }
+    fn refresh_voice_participants(&mut self) {
+        if let Some(call) = &mut self.voice.active
+            && call.guild.is_some()
+        {
+            call.participants = self
+                .voice
+                .roster
+                .iter()
+                .filter(|r| r.channel == call.channel)
+                .map(|r| r.participant)
+                .collect();
+            if let Some(own) = call
+                .participants
+                .iter()
+                .find(|p| self.user.as_ref().is_some_and(|u| u.id == p.user))
+            {
+                call.server_muted = own.server_muted;
+                call.server_deafened = own.server_deafened;
+            }
+            if call.participants.len() > MAX_PARTICIPANTS {
+                self.disconnect_voice();
+            }
+        }
+    }
+    pub(crate) fn end_voice_channel(&mut self, channel: Id) {
+        self.voice.roster.retain(|r| r.channel != channel);
         if self.voice.incoming == Some(channel) {
             self.voice.incoming = None;
         }
@@ -341,6 +523,7 @@ impl ClientState {
         }
     }
     pub fn disconnect_voice(&mut self) {
+        self.voice.roster.clear();
         self.voice.incoming = None;
         if let Some(call) = &mut self.voice.active {
             call.phase = Phase::Failed;
@@ -355,6 +538,154 @@ mod tests {
     use super::*;
     use crate::{Envelope, Event as CoreEvent};
     use model::{Channel, User};
+    #[test]
+    fn guild_roster_moves_mutes_limits_and_selection_never_join_implicitly() {
+        let mut state = ClientState {
+            auth: AuthState::Authenticated,
+            gateway_connected: true,
+            user: Some(User {
+                id: Id(1),
+                name: "Owner".into(),
+                avatar: None,
+                discriminator: 0,
+            }),
+            channels: [20, 21]
+                .into_iter()
+                .map(|id| Channel {
+                    id: Id(id),
+                    guild: Some(Id(10)),
+                    kind: 2,
+                    name: "Room".into(),
+                    last_message: None,
+                    parent_id: None,
+                    position: 0,
+                    recipients: vec![],
+                    member_list_id: None,
+                })
+                .collect(),
+            ..ClientState::default()
+        };
+        let entry = |user, channel| RosterEntry {
+            guild: Id(10),
+            channel: Id(channel),
+            participant: Participant {
+                user: Id(user),
+                muted: true,
+                deafened: false,
+                server_muted: true,
+                server_deafened: false,
+            },
+            member: None,
+        };
+        state.apply_voice(Event::Snapshot {
+            guild: None,
+            partial: false,
+            participants: vec![entry(2, 20)],
+        });
+        assert!(state.voice.active.is_none());
+        assert!(state.select(Id(20)).is_none());
+        assert_eq!(state.selected, Some(Id(20)));
+        assert!(!state.history_pending);
+        state.apply_voice(Event::Snapshot {
+            guild: None,
+            partial: true,
+            participants: vec![entry(3, 21)],
+        });
+        assert_eq!(state.voice.roster.len(), 2);
+        assert!(matches!(
+            state.start_call(Id(20), true),
+            Some(crate::Command::Voice(Command::Join { ring: false, .. }))
+        ));
+        let call = state.voice.active.as_ref().unwrap();
+        let request = call.request;
+        assert_eq!(call.guild, Some(Id(10)));
+        assert!(call.connected_at.is_none());
+        assert_eq!(call.participants.len(), 1);
+        state.apply_voice(Event::Progress {
+            channel: Id(20),
+            request,
+            phase: Phase::Waiting,
+        });
+        let connected_at = state.voice.active.as_ref().unwrap().connected_at;
+        assert!(connected_at.is_some());
+        state.apply_voice(Event::Progress {
+            channel: Id(20),
+            request,
+            phase: Phase::Connected,
+        });
+        assert_eq!(
+            state.voice.active.as_ref().unwrap().connected_at,
+            connected_at
+        );
+        state.apply_voice(Event::State {
+            guild: Some(Id(10)),
+            channel: Some(Id(21)),
+            user: Id(2),
+            request: None,
+            session: None,
+            member: None,
+            muted: false,
+            deafened: true,
+            server_muted: false,
+            server_deafened: true,
+        });
+        assert!(state.voice.active.as_ref().unwrap().participants.is_empty());
+        assert_eq!(
+            state
+                .voice
+                .roster
+                .iter()
+                .find(|r| r.participant.user == Id(2))
+                .unwrap()
+                .channel,
+            Id(21)
+        );
+        state.apply(Envelope {
+            generation: state.generation,
+            event: CoreEvent::Disconnected,
+        });
+        assert_eq!(state.voice.roster.len(), 2);
+        assert_eq!(state.voice.active.as_ref().unwrap().phase, Phase::Failed);
+        state.apply(Envelope {
+            generation: state.generation,
+            event: CoreEvent::PermissionsChanged,
+        });
+        assert!(state.voice.roster.is_empty());
+        let mut oversized = entry(2, 20);
+        oversized.member = Some(Member {
+            user: User {
+                id: Id(2),
+                name: "x".repeat(MAX_ROSTER_BYTES),
+                avatar: None,
+                discriminator: 0,
+            },
+            nick: None,
+            status: None,
+        });
+        state.apply_voice(Event::Snapshot {
+            guild: None,
+            partial: false,
+            participants: vec![oversized],
+        });
+        assert!(state.voice.roster.is_empty());
+        assert!(state.status.contains("capacity"));
+        state.apply_voice(Event::Snapshot {
+            guild: None,
+            partial: false,
+            participants: (1..=MAX_PARTICIPANTS as u64)
+                .map(|user| entry(user, 20))
+                .collect(),
+        });
+        state.leave_call();
+        state.gateway_connected = true;
+        assert!(state.start_call(Id(20), false).is_none());
+        state.apply(Envelope {
+            generation: state.generation,
+            event: CoreEvent::Unavailable(Id(20)),
+        });
+        assert!(state.voice.roster.is_empty());
+    }
+
     #[test]
     fn dm_calls_require_gesture_and_reject_late_states() {
         let mut state = ClientState {

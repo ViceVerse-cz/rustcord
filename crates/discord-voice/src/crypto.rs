@@ -14,6 +14,7 @@ use zeroize::Zeroize;
 pub(crate) const MODE: &str = "aead_xchacha20_poly1305_rtpsize";
 pub(crate) const MAX_PACKET: usize = 4096;
 pub(crate) const MAX_SIGNAL: usize = 64 * 1024;
+pub(crate) use client_core::voice::MAX_PARTICIPANTS;
 
 pub(crate) struct Encryption {
     cipher: XChaCha20Poly1305,
@@ -102,7 +103,9 @@ impl Encryption {
 pub(crate) struct Dave {
     pub session: DaveSession,
     own: u64,
-    peer: u64,
+    peer: Option<u64>,
+    participants: Vec<u64>,
+    pub waiting: bool,
     channel: u64,
     pub pending: Option<u16>,
     pub ready: bool,
@@ -112,13 +115,15 @@ pub(crate) struct Dave {
     pending_commit: Option<Vec<u8>>,
 }
 impl Dave {
-    pub fn new(own: u64, peer: u64, channel: u64) -> Result<Self, &'static str> {
+    pub fn new(own: u64, peer: Option<u64>, channel: u64) -> Result<Self, &'static str> {
         let identity = SigningKeyPair::generate();
         Ok(Self {
             session: DaveSession::new(NonZeroU16::new(1).unwrap(), own, channel, Some(&identity))
                 .map_err(|_| "DAVE initialization failed")?,
             own,
             peer,
+            participants: std::iter::once(own).chain(peer).collect(),
+            waiting: false,
             channel,
             pending: None,
             ready: false,
@@ -128,12 +133,75 @@ impl Dave {
             pending_commit: None,
         })
     }
+    pub fn contains(&self, user: u64) -> bool {
+        self.participants.contains(&user)
+    }
+    pub fn connect(&mut self, users: &[u64]) -> Result<bool, &'static str> {
+        if users.len() > MAX_PARTICIPANTS
+            || users.iter().any(|user| {
+                *user == 0
+                    || self
+                        .peer
+                        .is_some_and(|peer| *user != self.own && *user != peer)
+            })
+        {
+            return Err("Voice participants do not match this call");
+        }
+        let mut next = self.participants.clone();
+        for user in users {
+            if !next.contains(user) {
+                if next.len() == MAX_PARTICIPANTS {
+                    return Err("Voice channel exceeds the 64 participant limit");
+                }
+                next.push(*user);
+            }
+        }
+        let changed = next != self.participants;
+        if changed {
+            self.participants = next;
+            self.ready = false;
+            self.waiting = false;
+        }
+        Ok(changed)
+    }
+    pub fn disconnect(&mut self, user: u64) -> Result<bool, &'static str> {
+        if user == self.own || self.peer == Some(user) {
+            return Err("A required participant left the call");
+        }
+        let before = self.participants.len();
+        self.participants.retain(|id| *id != user);
+        let changed = before != self.participants.len();
+        if changed {
+            self.ready = false;
+            self.waiting = false;
+        }
+        Ok(changed)
+    }
+    /// Epoch zero has no media ratchets in Davey. Remain joined without opening audio devices.
+    pub fn wait_for_peer(&mut self) -> Result<(), &'static str> {
+        self.validate_group()?;
+        if self.peer.is_some()
+            || self.participants.len() != 1
+            || self.session.epoch().is_none_or(|epoch| epoch.as_u64() != 0)
+        {
+            return Err("Unexpected sole-member DAVE transition");
+        }
+        self.pending = None;
+        self.ready = false;
+        self.waiting = true;
+        Ok(())
+    }
     pub fn reset(&mut self) -> Result<(), &'static str> {
         self.resets += 1;
         if self.resets > 3 {
             return Err("DAVE recovery limit reached; rejoin the call");
         }
+        self.reinitialize()
+    }
+    pub fn reinitialize(&mut self) -> Result<(), &'static str> {
+        self.transition_budget()?;
         self.ready = false;
+        self.waiting = false;
         self.pending = None;
         self.pending_commit = None;
         self.session
@@ -156,6 +224,9 @@ impl Dave {
         Ok(out)
     }
     pub fn proposals(&mut self, payload: &[u8]) -> Result<Option<Vec<u8>>, &'static str> {
+        if payload.len() > MAX_SIGNAL {
+            return Err("DAVE proposals exceed the signaling budget");
+        }
         let (&operation, data) = payload.split_first().ok_or("Truncated DAVE proposal")?;
         let operation = match operation {
             0 => ProposalsOperationType::APPEND,
@@ -169,8 +240,8 @@ impl Dave {
             let mut count = 0;
             while !remaining.is_empty() {
                 count += 1;
-                if count > 4 {
-                    return Err("Too many proposals for a one-to-one call");
+                if count > MAX_PARTICIPANTS * 2 {
+                    return Err("Too many DAVE proposals");
                 }
                 let (message, rest) = MlsMessageIn::tls_deserialize_bytes(remaining)
                     .map_err(|_| "Invalid MLS proposal message")?;
@@ -187,10 +258,10 @@ impl Dave {
         }
         let result = self
             .session
-            .process_proposals(operation, data, Some(&[self.own, self.peer]))
+            .process_proposals(operation, data, Some(&self.participants))
             .map_err(|_| "DAVE proposal validation failed")?;
         if let Some(group) = self.session.group()
-            && (group.pending_proposals().count() > 4
+            && (group.pending_proposals().count() > MAX_PARTICIPANTS * 2
                 || group.pending_proposals().any(|p| {
                     !matches!(p.proposal(), Proposal::Add(_) | Proposal::Remove(_))
                         || *p.sender() != Sender::External(SenderExtensionIndex::new(0))
@@ -219,18 +290,12 @@ impl Dave {
         }
     }
     pub fn group_changed(&mut self, opcode: u8, payload: &[u8]) -> Result<u16, &'static str> {
-        if payload.len() < 3 {
+        if payload.len() < 3 || payload.len() > MAX_SIGNAL {
             return Err("Truncated DAVE group transition");
         }
         self.ready = false;
-        self.epochs = self
-            .epochs
-            .checked_add(1)
-            .ok_or("Call key transition budget exhausted")?;
-        // ponytail: cap long-lived MLS storage at 1024 epochs; rejoin creates a fresh bounded provider.
-        if self.epochs > 1024 {
-            return Err("Call key transition budget exhausted; rejoin the call");
-        }
+        self.waiting = false;
+        self.transition_budget()?;
         let transition = u16::from_be_bytes([payload[0], payload[1]]);
         if opcode == 29 {
             if self
@@ -257,6 +322,17 @@ impl Dave {
         }
         Ok(transition)
     }
+    fn transition_budget(&mut self) -> Result<(), &'static str> {
+        self.epochs = self
+            .epochs
+            .checked_add(1)
+            .ok_or("Call key transition budget exhausted")?;
+        // ponytail: cap long-lived MLS storage at 1024 transitions; rejoin creates a fresh provider.
+        if self.epochs > 1024 {
+            return Err("Call key transition budget exhausted; rejoin the call");
+        }
+        Ok(())
+    }
     fn validate_group(&self) -> Result<(), &'static str> {
         let group = self.session.group().ok_or("DAVE group is missing")?;
         let ids = self
@@ -264,11 +340,16 @@ impl Dave {
             .get_user_ids()
             .ok_or("DAVE members are missing")?;
         if group.group_id().as_slice() != self.channel.to_be_bytes()
-            || ids.len() != 2
+            || ids.is_empty()
+            || ids.len() > MAX_PARTICIPANTS
             || !ids.contains(&self.own)
-            || !ids.contains(&self.peer)
+            || ids.iter().any(|id| !self.contains(*id))
+            || ids.iter().enumerate().any(|(i, id)| ids[..i].contains(id))
+            || self
+                .peer
+                .is_some_and(|peer| ids.len() != 2 || !ids.contains(&peer))
         {
-            return Err("DAVE group does not match this one-to-one conversation");
+            return Err("DAVE group does not match the authenticated call participants");
         }
         Ok(())
     }
@@ -337,7 +418,7 @@ mod tests {
         assert_eq!(crypto.open(&extension_packet).unwrap().2, vec![9, 8, 7]);
         crypto.counter = u32::MAX;
         assert!(crypto.seal(&header, b"x").is_err());
-        let mut dave = Dave::new(1, 2, 3).unwrap();
+        let mut dave = Dave::new(1, Some(2), 3).unwrap();
         assert!(!dave.ready);
         assert!(dave.execute(0).is_err());
         assert_eq!(&dave.key_package().unwrap()[..5], &[26, 0, 1, 0, 5]);

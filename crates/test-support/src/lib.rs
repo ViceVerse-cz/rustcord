@@ -220,6 +220,78 @@ pub fn demo_state() -> State {
     state.status = "Offline fixture · no network access";
     state
 }
+/// Voice-only visual evidence: synthetic membership, no media or gateway commands.
+pub fn voice_demo_state() -> State {
+    use client_core::voice::{Call, Participant, Phase, RosterEntry};
+    use std::time::{Duration, Instant};
+    let mut state = demo_state();
+    state
+        .channels
+        .iter_mut()
+        .find(|c| c.id == Id(25))
+        .unwrap()
+        .name = "Room 3,5".into();
+    state.channels.push(Channel {
+        id: Id(26),
+        guild: Some(Id(10)),
+        parent_id: Some(Id(24)),
+        position: 2,
+        name: "Quiet room".into(),
+        kind: 2,
+        recipients: vec![],
+        member_list_id: None,
+        last_message: None,
+    });
+    state.voice.roster = [
+        (1, "You (synthetic)", false, false),
+        (2, "Robin with a rather long display name", true, true),
+        (3, "Fern and the midnight orchestra", true, false),
+    ]
+    .into_iter()
+    .map(|(id, name, muted, deafened)| RosterEntry {
+        guild: Id(10),
+        channel: Id(25),
+        participant: Participant {
+            user: Id(id),
+            muted,
+            deafened,
+            server_muted: false,
+            server_deafened: false,
+        },
+        member: Some(Member {
+            user: User {
+                id: Id(id),
+                name: name.into(),
+                avatar: None,
+                discriminator: 0,
+            },
+            nick: None,
+            status: None,
+        }),
+    })
+    .collect();
+    state.voice.active = Some(Call {
+        channel: Id(25),
+        guild: Some(Id(10)),
+        request: 0,
+        phase: Phase::Connected,
+        connected_at: Some(Instant::now() - Duration::from_secs(3663)),
+        muted: false,
+        deafened: false,
+        server_muted: false,
+        server_deafened: false,
+        participants: state
+            .voice
+            .roster
+            .iter()
+            .map(|entry| entry.participant)
+            .collect(),
+        error: None,
+    });
+    state.select(Id(25));
+    state.status = "Offline voice fixture · no microphone or network access";
+    state
+}
 pub fn load_page(state: &mut State, before: Option<Id>) {
     let channel = state.selected.unwrap();
     let end = before.map_or(501, |id| id.0);

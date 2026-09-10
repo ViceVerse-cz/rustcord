@@ -136,10 +136,10 @@ impl Connection {
                             if let Command::Voice(control)=command {
                                 use client_core::voice::{Command as V,Event as E};
                                 let (channel,request)=match control {V::Join{channel,request,..}|V::Ring{channel,request}|V::Leave{channel,request}|V::SetMute{channel,request,..}=>(channel,request),V::Decline{channel}=>(channel,0)};
-                                if !*voice_availability.borrow() || !dm_channels.lock().map_err(|_|Failure::Protocol)?.contains(&channel) {
-                                    emit(Event::Voice(E::Failed{channel,request,message:"The DM is unavailable; no call was started"}))?;continue;
+                                if !*voice_availability.borrow() {
+                                    emit(Event::Voice(E::Failed{channel,request,message:"Voice is disconnected; no call was started"}))?;continue;
                                 }
-                                let ring=match ring_action(control,user.id,&mut voice_request) {
+                                let ring=match ring_action(control,user.id,&mut voice_request,dm_channels.lock().map_err(|_|Failure::Protocol)?.contains(&channel)) {
                                     Ok(action)=>action,
                                     Err(())=>{emit(Event::Voice(E::Failed{channel,request,message:"Call action expired; no ringing request was sent"}))?;continue;}
                                 };
@@ -211,8 +211,15 @@ fn ring_action(
     control: client_core::voice::Command,
     owner: model::Id,
     active: &mut Option<(model::Id, u64, bool)>,
+    dm: bool,
 ) -> Result<Option<(Option<model::Id>, bool)>, ()> {
     use client_core::voice::Command as V;
+    if !dm {
+        return match control {
+            V::Ring { .. } | V::Decline { .. } | V::Join { ring: true, .. } => Err(()),
+            V::Join { .. } | V::Leave { .. } | V::SetMute { .. } => Ok(None),
+        };
+    }
     match control {
         V::Join {
             channel,
@@ -276,7 +283,8 @@ mod tests {
                     ring: true
                 },
                 owner,
-                &mut active
+                &mut active,
+                true
             ),
             Ok(None)
         );
@@ -287,7 +295,8 @@ mod tests {
                     request: 6
                 },
                 owner,
-                &mut active
+                &mut active,
+                true
             )
             .is_err()
         );
@@ -298,7 +307,8 @@ mod tests {
                     request: 7
                 },
                 owner,
-                &mut active
+                &mut active,
+                true
             ),
             Ok(Some((None, false)))
         );
@@ -309,7 +319,8 @@ mod tests {
                     request: 7
                 },
                 owner,
-                &mut active
+                &mut active,
+                true
             )
             .is_err()
         );
@@ -320,7 +331,8 @@ mod tests {
                     request: 7
                 },
                 owner,
-                &mut active
+                &mut active,
+                true
             ),
             Ok(Some((None, true)))
         );
@@ -331,7 +343,8 @@ mod tests {
                     request: 7
                 },
                 owner,
-                &mut active
+                &mut active,
+                true
             )
             .is_err()
         );
@@ -343,7 +356,8 @@ mod tests {
                     ring: false
                 },
                 owner,
-                &mut active
+                &mut active,
+                true
             ),
             Ok(None)
         );
@@ -354,7 +368,8 @@ mod tests {
                     request: 7
                 },
                 owner,
-                &mut active
+                &mut active,
+                true
             ),
             Ok(None)
         );
@@ -366,10 +381,51 @@ mod tests {
                     request: 8
                 },
                 owner,
-                &mut active
+                &mut active,
+                true
             )
             .is_err()
         );
+    }
+    #[test]
+    fn guild_join_mute_leave_never_ring_a_dm() {
+        use client_core::voice::Command as V;
+        let mut active = None;
+        let channel = model::Id(20);
+        let owner = model::Id(1);
+        for control in [
+            V::Join {
+                channel,
+                request: 1,
+                ring: false,
+            },
+            V::SetMute {
+                channel,
+                request: 1,
+                mute: true,
+                deaf: false,
+            },
+            V::Leave {
+                channel,
+                request: 1,
+            },
+        ] {
+            assert_eq!(ring_action(control, owner, &mut active, false), Ok(None));
+        }
+        assert!(
+            ring_action(
+                V::Ring {
+                    channel,
+                    request: 1
+                },
+                owner,
+                &mut active,
+                false
+            )
+            .is_err()
+        );
+        assert!(ring_action(V::Decline { channel }, owner, &mut active, false).is_err());
+        assert!(active.is_none());
     }
     #[test]
     fn reads_scope_permission_errors_but_expiry_stays_global() {
