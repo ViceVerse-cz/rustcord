@@ -14,7 +14,7 @@ User and member banner/avatar CDN paths are **documented** in [Discord's image r
 
 ## Profile popout — September 10, 2026
 
-Clicking a user now opens a 300-point popout beside the click position instead of a centered modal. It flips to the left of the anchor near the right window edge, stays inside the window, and closes on Escape, on a click outside it, or when its Message action changes conversation. Presence comes only from the People rows already retained for the open conversation: a colored dot on the avatar and the custom status bubble. Custom status is the type-4 activity's `state` plus a unicode emoji name when present; custom emoji names are not fabricated. The text is bounded to 128 characters, is counted in the existing 128 KiB member budget, and never turns rich activities into anything.
+Clicking a user now opens a 300-point popout beside the click position instead of a centered modal. It flips to the left of the anchor near the right window edge, stays inside the window, and closes on Escape, on a click outside it, or when its Message action changes conversation. Presence comes only from the People rows already retained for the open conversation: a colored dot on the avatar and the custom status bubble. Custom status is the type-4 activity's `state` plus a unicode emoji name when present; custom emoji names are not fabricated. The text is bounded to 128 characters, is counted in the existing 128 KiB member budget, and at this stage did not render rich activities.
 
 The profile payload additionally retains, when returned, `user_profile.theme_colors` (exactly two RGB values; the card paints them as a vertical gradient and picks light or dark text from their luminance), `user.primary_guild` or the older `user.clan` (server tag text, up to 8 characters, plus its badge hash; `identity_enabled: false` hides it), and `badges[].icon` hashes. These fields follow the same public payload definitions and remain **unofficial**; they are not documented developer capabilities. Badge artwork is requested from `https://cdn.discordapp.com/badge-icons/{hash}.png` and server-tag artwork from `https://cdn.discordapp.com/clan-badges/{guild_id}/{hash}.png`, both at size 64. Those CDN paths are observed, not documented; a missing image falls back to a neutral disc. Only validated 32-hex hashes and positive IDs form keys, and both share the ordinary credential-free image worker, disk cache and 16 MiB texture allowance. The animated avatar decoration and profile effect are deliberately not implemented.
 
@@ -28,6 +28,22 @@ Offline evidence: the popout tests check anchor placement, right-edge flipping, 
 The loaded People pane and an already-open profile now read updated custom text from the same
 member row. Status-only events preserve that text; supplied custom activities replace it and
 explicit empty/null activities clear it. No profile refetch, extra subscription or persistence
-is introduced. This only applies to already-loaded members in the selected guild conversation;
-DM/global presence and full rich activities remain outside this path. See the presence section
+is introduced. That original custom-status slice applied to already-loaded members in the selected guild
+conversation. The rich-presence slice below extends it to rich text and known DM recipients. See the presence section
 of [compatibility](discord-compatibility.md) for protocol and live-validation limitations.
+
+
+## Rich presence (September 10, 2026)
+
+Member rows and one-to-one DM navigation/header show the first received activity (playing,
+streaming, listening, watching or competing), falling back to custom status when no activity is
+available. Profile cards retain the separate custom-status bubble and show every retained
+activity's name, details and state in the scrollable details panel, including while profile
+metadata is loading or unavailable. Changes do not refetch profile metadata.
+
+This is a text-only presentation: artwork, timestamps/progress, party counters, joining,
+spectating, streaming links and activity buttons are not implemented. At most four activities
+are retained per user, with each field limited to 128 characters / 512 bytes. Unknown types are
+ignored. No presence is persisted. Presence availability depends on events delivered by Discord;
+an empty activity list is not proof that a person has no activity. Synthetic fixtures do not
+establish live compatibility.

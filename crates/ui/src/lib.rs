@@ -305,9 +305,8 @@ impl MessagingUi {
         }
         let members: Vec<_> = list.rows.iter().flatten().collect();
         let online = |member: &&model::Member| {
-            member
-                .status
-                .as_deref()
+            profiles::presence(state, member.user.id, list.guild)
+                .0
                 .is_some_and(|s| matches!(s, "online" | "idle" | "dnd"))
         };
         let (online_members, offline_members): (Vec<_>, Vec<_>) =
@@ -395,7 +394,9 @@ impl MessagingUi {
                         }
                         Row::Member(member, online) => {
                             let name = member.nick.as_deref().unwrap_or(&member.user.name);
-                            let subtitle = member.custom_status.as_deref();
+                            let (status, custom, activities) =
+                                profiles::presence(state, member.user.id, list.guild);
+                            let subtitle = profiles::subtitle(custom, activities);
                             let (rect, response) = ui.allocate_exact_size(
                                 egui::vec2(ui.available_width(), 42.0),
                                 egui::Sense::click(),
@@ -405,11 +406,9 @@ impl MessagingUi {
                                     egui::WidgetType::Button,
                                     true,
                                     format!(
-                                        "{name}, {}",
-                                        member
-                                            .status
-                                            .as_deref()
-                                            .map_or("presence unknown", profiles::presence_label)
+                                        "{name}, {}, {}",
+                                        status.map_or("presence unknown", profiles::presence_label),
+                                        subtitle.as_deref().unwrap_or_default()
                                     ),
                                 )
                             });
@@ -428,7 +427,7 @@ impl MessagingUi {
                                 if avatar.clicked() {
                                     self.profile = Some(member.user.clone());
                                 }
-                                if let Some(status) = member.status.as_deref() {
+                                if let Some(status) = status {
                                     design::presence_dot(
                                         ui,
                                         avatar.rect,
@@ -462,8 +461,8 @@ impl MessagingUi {
                                     );
                                     ui.add(
                                         egui::Label::new(
-                                            RichText::new(subtitle.unwrap_or({
-                                                match member.status.as_deref() {
+                                            RichText::new(subtitle.as_deref().unwrap_or({
+                                                match status {
                                                     Some("online") => "Online",
                                                     Some("idle") => "Away",
                                                     Some("dnd") => "Do not disturb",
@@ -522,7 +521,8 @@ impl MessagingUi {
         egui::Panel::bottom("account-footer")
             .show_separator_line(false)
             .frame(egui::Frame::new().inner_margin(8))
-            .show(ui, |ui| self.account_card(ui, state));
+            .show(ui, |ui| self.account_card(ui, state, commands));
+        self.voice_connection_panel(ui, state, commands);
         egui::Frame::new()
             .inner_margin(egui::Margin {
                 left: 8,
@@ -584,7 +584,7 @@ impl MessagingUi {
                 }
             });
     }
-    fn account_card(&mut self, ui: &mut egui::Ui, state: &State) {
+    fn account_card(&mut self, ui: &mut egui::Ui, state: &mut State, commands: &mut Vec<Command>) {
         let colors = design::palette(ui);
         egui::Frame::new()
             .fill(colors.raised)
@@ -605,6 +605,8 @@ impl MessagingUi {
                         ui.spacing_mut().item_spacing.x = 2.0;
                         let settings = icons::button(ui, icons::Icon::Gear, 32.0, "User settings");
                         egui::Popup::menu(&settings).show(|ui| self.settings_menu(ui, state));
+                        self.mute_toggle(ui, state, commands, true, 32.0);
+                        self.mute_toggle(ui, state, commands, false, 32.0);
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 0.0;
@@ -819,6 +821,16 @@ impl MessagingUi {
                         Some(c) if c.guild.is_none() => {
                             if let Some(user) = c.recipients.first() {
                                 let avatar = self.avatars.show(ui, user, 24.0, state.demo);
+                                if dm
+                                    && let Some(status) = profiles::presence(state, user.id, None).0
+                                {
+                                    design::presence_dot(
+                                        ui,
+                                        avatar.rect,
+                                        profiles::presence_color(status),
+                                        colors.sidebar,
+                                    );
+                                }
                                 if avatar.clicked() {
                                     self.profile = Some(user.clone());
                                 }
@@ -950,19 +962,58 @@ impl MessagingUi {
                             self.call_button(ui, state, channel, commands);
                         }
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            ui.add(
-                                egui::Label::new(
-                                    design::semibold(
-                                        ui,
-                                        channel
-                                            .as_ref()
-                                            .map_or("Direct Messages", |c| c.name.as_str()),
-                                        16.0,
+                            ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y = 1.0;
+                                ui.add(
+                                    egui::Label::new(
+                                        design::semibold(
+                                            ui,
+                                            channel
+                                                .as_ref()
+                                                .map_or("Direct Messages", |c| c.name.as_str()),
+                                            16.0,
+                                        )
+                                        .color(colors.text_strong),
                                     )
-                                    .color(colors.text_strong),
-                                )
-                                .truncate(),
-                            );
+                                    .truncate(),
+                                );
+                                if let Some(user) = channel
+                                    .as_ref()
+                                    .filter(|_| dm)
+                                    .and_then(|c| c.recipients.first())
+                                {
+                                    let (_, custom, activities) =
+                                        profiles::presence(state, user.id, None);
+                                    if let Some(text) = profiles::subtitle(custom, activities) {
+                                        ui.add(
+                                            egui::Label::new(
+                                                RichText::new(&text).size(12.0).color(colors.muted),
+                                            )
+                                            .truncate(),
+                                        )
+                                        .on_hover_text(text);
+                                    }
+                                }
+                            });
+                            let in_call = state.voice.active.as_ref().is_some_and(|call| {
+                                Some(call.channel) == state.selected
+                                    && matches!(
+                                        call.phase,
+                                        client_core::voice::Phase::Connected
+                                            | client_core::voice::Phase::Waiting
+                                    )
+                            });
+                            if in_call {
+                                ui.add_space(4.0);
+                                icons::inline(ui, icons::Icon::InCall, 16.0, colors.positive);
+                                ui.add(
+                                    egui::Label::new(
+                                        design::medium(ui, "In a call", 14.0)
+                                            .color(colors.positive),
+                                    )
+                                    .selectable(false),
+                                );
+                            }
                         });
                     });
                 });
@@ -3292,6 +3343,7 @@ mod composer_tests {
                             }
                             .map(str::to_owned),
                             custom_status: None,
+                            activities: vec![],
                         })
                     })
                     .collect(),
@@ -3408,6 +3460,7 @@ mod composer_tests {
                 roles: vec![],
                 status: Some("online".into()),
                 custom_status: Some("Initial synthetic status".into()),
+                activities: vec![],
             })],
         });
         state.profile = Some(client_core::profile::ProfileView {
@@ -3477,6 +3530,7 @@ mod composer_tests {
                         user: user.id,
                         status: Some("online".into()),
                         custom_status: custom_status.map(str::to_owned),
+                        activities: vec![],
                     }],
                 },
             });
@@ -3496,6 +3550,133 @@ mod composer_tests {
             assert_eq!(messaging.profile.as_ref().unwrap().id, user.id);
             assert_eq!(state.drafts[&channel], "Keep this unsent draft");
             assert!(messaging.draft_changes.is_empty());
+        }
+    }
+
+    #[test]
+    fn rich_presence_reaches_lists_dm_header_and_profile_then_clears() {
+        fn collect(shape: &egui::Shape, output: &mut String) {
+            match shape {
+                egui::Shape::Text(text) => {
+                    output.push_str(&text.galley.job.text);
+                    output.push('\n');
+                }
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        collect(shape, output);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for dm in [false, true] {
+            let mut state = test_support::demo_state();
+            let user = test_support::message(1, Id(22)).author;
+            let channel = if dm { Id(22) } else { state.selected.unwrap() };
+            let _ = state.select(channel);
+            state.timeline.clear();
+            state.history_pending = false;
+            let guild = state
+                .channels
+                .iter()
+                .find(|c| c.id == channel)
+                .unwrap()
+                .guild;
+            let _ = state.request_members();
+            state.members = Some(model::MemberList {
+                guild,
+                channel,
+                request: 7,
+                total: 1,
+                freshness: Freshness::Fresh,
+                rows: vec![Some(model::Member {
+                    roles: vec![],
+                    user: user.clone(),
+                    nick: None,
+                    status: Some("online".into()),
+                    custom_status: None,
+                    activities: vec![],
+                })],
+            });
+            let mut messaging = MessagingUi {
+                navigation_channel: Some(channel),
+                guild,
+                profile: Some(user.clone()),
+                profile_anchor: Some((user.id, egui::pos2(420.0, 150.0))),
+                ..Default::default()
+            };
+            let ctx = egui::Context::default();
+            design::apply(&ctx);
+            for clear in [false, true] {
+                let activities = if clear {
+                    vec![]
+                } else {
+                    vec![model::RichActivity {
+                        kind: 0,
+                        name: "Stardew Valley".into(),
+                        details: Some("Tending the farm".into()),
+                        state: Some("Spring Day 12".into()),
+                    }]
+                };
+                let event = if let Some(guild) = guild {
+                    client_core::Event::MemberPresence {
+                        guild,
+                        channel,
+                        request: 7,
+                        updates: vec![model::MemberPresence {
+                            user: user.id,
+                            status: Some("online".into()),
+                            custom_status: None,
+                            activities,
+                        }],
+                    }
+                } else {
+                    client_core::Event::DirectPresence(vec![client_core::presence::Update {
+                        user: user.id,
+                        status: model::Patch::Value("online".into()),
+                        activities: model::Patch::Value(activities),
+                        custom_status: model::Patch::Absent,
+                    }])
+                };
+                state.apply(client_core::Envelope {
+                    generation: state.generation,
+                    event,
+                });
+                let mut painted = String::new();
+                for _ in 0..3 {
+                    painted.clear();
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(1280.0, 900.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            messaging.show(ui, &mut state);
+                        },
+                    );
+                    assert!(output.platform_output.commands.is_empty());
+                    for shape in &output.shapes {
+                        collect(&shape.shape, &mut painted);
+                    }
+                    output.drop_without_applying_deltas();
+                }
+                assert_eq!(
+                    painted.matches("Playing Stardew Valley").count(),
+                    if clear {
+                        0
+                    } else if dm {
+                        4
+                    } else {
+                        2
+                    },
+                    "{painted}"
+                );
+                assert_eq!(painted.contains("Tending the farm"), !clear);
+                assert_eq!(painted.contains("Spring Day 12"), !clear);
+            }
         }
     }
 

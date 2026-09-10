@@ -1636,3 +1636,82 @@ budget (checked between executions), five-second case timeout, one-million execu
 512 MiB RSS limits. Baseline had no fuzz target, so there is no before/after speed comparison.
 No crash was found in these runs. Coverage growth proves feedback-guided mutation occurred;
 it does not prove all inputs are safe. Generated corpora were removed after completion.
+
+## Rich presence - September 10, 2026
+
+Baseline `5f11cb92644d06e2302678211ac21d9445fad692`, clean disposable worktree;
+after `feat/rich-presence`, same pinned Rust1.98.1 / x86_64-pc-windows-msvc,
+release thin LTO / one codegen unit. Windows11 Home10.0.26200, Ryzen7 7800X3D,
+16 logical CPUs, 31.1GiB visible RAM. Text uses no default features; voice enables `voice`.
+Both `cargo xtask package` variants passed. Baseline and after dist outputs are separate.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable bytes | 50,833,408 | 50,919,424 | +86,016 (0.169%) |
+| Text installed bytes | 51,440,341 | 51,532,519 | +92,178 (0.179%) |
+| Text ZIP DEFLATE9 bytes | 31,765,742 | 31,801,677 | +35,935 (0.113%) |
+| Voice executable bytes | 54,187,520 | 54,272,512 | +84,992 (0.157%) |
+| Voice installed bytes | 55,017,226 | 55,108,428 | +91,202 (0.166%) |
+| Voice ZIP DEFLATE9 bytes | 33,138,688 | 33,179,757 | +41,069 (0.124%) |
+| Replay median ms (paired) | 37.6737 | 37.5833 | -0.0904 (-0.240%) |
+| Retained timeline estimated bytes | 228,992..229,477 | 228,992..229,477 | 0 |
+| Native idle CPU / working set | 0% median / 163,385,344 bytes settled | Blocked by owner UI stop | Unmeasured |
+
+Installed files include build-time docs (before final performance addenda); text excludes nested
+voice, both exclude PR evidence. ZIP uses Python zipfile DEFLATE9. Package size deltas include
+documentation changes. No new dependency or native library.
+
+Replay uses the existing100,000-message reducer and500-row retained timeline. Each revision
+was built once, then one direct warmup and five measured runs. Initial sequential medians were
+36.5291ms baseline /45.9004ms after, with after samples40.7552..58.1348ms. Because of this
+variance, one justified paired rerun alternated baseline and after in the same period (one warmup
+each, five pairs). The table reports those paired medians; it does not establish a speedup or a
+rich-activity throughput result. Background desktop work and build/cache relocation are noise
+sources. Raw initial and paired results and package hashes are in the evidence measurements file.
+
+Baseline native sample: Wgpu, default1120x760 client, dark `--demo --demo-profile`,10-second
+warmup plus ten approximately1-second Process.WorkingSet64/PrivateMemorySize64/CPU samples.
+CPU is delta TotalProcessorTime / wall interval, one core=100%. Peak/settled working set
+163,385,344 bytes; peak/settled private394,592,256 bytes; no child processes. GPU adapter/API,
+exact pixels-per-point, GPU allocations and startup/frame p95 were not instrumented. Screenshot
+size1122x791 is consistent with100% scale. Owner Escape stopped Computer Use before after UI
+capture/sampling; no comparable after native CPU/RAM, keyboard/scroll, light/narrow or live claim.
+
+Activity fields/caches are explicitly bounded; see storage-policy.md. Full check passed327 tests,
+strict all-feature Clippy, text-only compilation and policy. C: exhaustion was recovered by
+moving this task's temporary cache and using an isolated E: build cache. A stale copied no-feature
+model artifact affected the first replay build; cleaning only that task cache's release model
+artifacts and rebuilding replay resolved it. Packaged variants compiled the new activity model.
+
+
+Rich-presence integration with main `dc49d64`: rebuilt text/voice executables are respectively
+50,987,520 / 54,337,024 bytes. One replay smoke run passed at 39.4606 ms and retained
+236,992..237,477 estimated bytes / 500 records. These include main's new message/role metadata;
+they are not a controlled feature delta against the earlier 5f11cb9 baseline. The original
+paired measurements above remain historical pre-integration evidence. Native after sampling
+remains owner-stopped; 351 integrated tests and both packages passed before the authorized merge.
+
+## Discord-style voice UI and Phosphor icon atlas - September 10, 2026
+
+| Metric / method | Main c4ae54d | Voice UI + icons | Delta |
+| --- | ---: | ---: | ---: |
+| text executable, bytes | 47,434,160 | 47,544,112 | +109,952 (+0.232%) |
+| text installed, bytes | 48,034,667 | 48,147,235 | +112,568 (+0.234%) |
+| text zip, bytes | 30,645,493 | 30,700,479 | +54,986 (+0.179%) |
+| voice executable, bytes | 50,270,384 | 50,363,856 | +93,472 (+0.186%) |
+| voice installed, bytes | 51,101,102 | 51,197,190 | +96,088 (+0.188%) |
+| voice zip, bytes | 31,998,719 | 32,048,840 | +50,121 (+0.157%) |
+| `--demo --demo-voice` settled resident memory, MiB | 117 | 119 | +2 (+1.7%; single run) |
+| `--demo --demo-voice` peak resident memory, MiB | 118 | 120 | +2 |
+| `--demo --demo-voice` idle CPU, % | 0.0 | 0.0 | 0 |
+
+macOS 27.0, Apple M1 Pro, 16 GiB RAM, Rust 1.98.1, release thin LTO/one codegen unit, wgpu Metal
+renderer at 2× display scale, 1120×760 window. Both ad-hoc-signed macOS packages were built
+from a disposable baseline worktree at `c4ae54d` and this branch with separate target
+directories; installed sums cover `Serein.app`, ZIPs are `zip -9` of the bundle; text excludes
+the nested voice package. The executable growth is the 38,534-byte icon atlas plus its index
+and the new voice views. Process figures are `top -l 1` resident memory and CPU sampled once per
+second for 20 s after an 8 s launch and 4 s activation warmup, one run per build, with the
+window frontmost and the fixture's one-second elapsed-time repaint active. They are not p95
+frame or startup latency, which remain unmeasured. The atlas texture is 655,360 decoded bytes.
+Replay, mixer and codec workloads are unchanged and were not rerun; no dependency changed.

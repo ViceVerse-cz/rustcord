@@ -1647,3 +1647,87 @@ tests, `cargo xtask check`, and `cargo build --locked -p serein` passed against 
 - Remaining spec implementation candidates include Linux distribution packaging and bounded
   unknown-event diagnostics. Native accessibility/resource/storage tracing and owner-controlled
   live text/voice interoperability remain separate, incomplete gates.
+
+## Rich presence in members, DMs and profiles (September 10, 2026)
+
+Implemented from clean main `5f11cb92644d06e2302678211ac21d9445fad692` on
+`feat/rich-presence`. The original checkout was clean and safely fast-forwarded after fetching
+origin; default branch remains main. Member rows and DM sidebar/header display a received
+activity summary. Profiles keep custom status and show activity names, details and states even
+if profile metadata is loading/unavailable. All activity content is synthetic in default tests
+and `--demo --demo-profile`. No dependency, live account action or persistence was added.
+
+The shared parser bounds rich activity count and field sizes. Guild snapshot/delta propagation
+uses the existing member subscription and 128 KiB pane. Known DM recipients receive a bounded
+RAM cache and coalesced global updates plus unofficial READY/SUPPLEMENTAL friend snapshots.
+Offline/null/empty changes clear correctly; omitted fields remain unchanged. Disconnect hides
+DM data; successful resume applies replayed updates while preserving unchanged activity. Fresh
+READY/resync/logout discard it. Unknown/removed recipients and stale account generations do not
+populate the cache. Profile changes do not refetch metadata or churn timeline revisions.
+
+Verification: `cargo xtask check` passed (formatting, strict all-feature Clippy, all-feature
+workspace tests: 327 passed, text-only compilation, policy checks). The first full attempt exhausted C:
+space; this task's temporary cache was moved to E: and the check passed using
+`CARGO_TARGET_DIR=E:/codex-builds/rustcord-rich-target`. A policy block prevented deleting that
+temporary cache; the safe move preserved it instead. Existing unrelated files/caches were kept.
+Focused UI tests include render-and-clear on member/profile and all four DM surfaces, separate
+server/global presence, and no external platform commands. Core/Gateway regressions include
+bounded batching, omission/clearing, rejected unknown users, stable no-op allocation, cache
+budgets, recipient removal and presence replay before RESUMED.
+
+Baseline native dark screenshots were captured and inspected using the unchanged release
+`--demo --demo-profile` process. Computer Use then reported owner physical Escape and was
+stopped. After screenshots, native light/narrow/long-content/keyboard/scroll inspection, and
+comparable after native memory/CPU measurement are blocked by that owner stop. No further
+Computer Use or after executable launch was attempted. Keep the PR draft until this evidence is
+completed. See `docs/pr-evidence/rich-presence/README.md` and the dated performance entry.
+
+Text-only scope: artwork, elapsed/progress timers, party counters and activity actions are not
+implemented. No Windows after-render, macOS/Linux native or live Discord interoperability claim.
+
+Both release package variants and `cargo replay` passed. Text executable +86,016 bytes; voice
++84,992 bytes. Paired replay medians37.6737 ->37.5833ms with unchanged retained range; no speedup
+claim. Exact installed/ZIP sizes, raw samples and method are recorded in performance.md.
+
+
+### Owner-authorized merge of rich presence
+
+The owner explicitly requested merging PR #48 after the draft handoff. Reconciled with main
+`dc49d640302c5244c84953dfc8345396e82ce971`, preserving new role metadata/grouping, computed member-list
+subscription IDs, notification changes and guild deletion authorization. Rich activity and role
+fields coexist with both admission limits. Boxed member payloads in the wire member variant and
+voice state event keep the combined enums compact without suppressing Clippy.
+
+The integrated tree passed `cargo xtask check` (351 tests), `node tests/license-policy.cjs`
+(six offline fixtures), and `cargo xtask licenses` with pinned cargo-deny 0.20.2. Missing platform
+crate sources were fetched with `cargo fetch --locked` before the offline license rerun passed.
+Both release packages passed: text 50,987,520 bytes and voice 54,337,024 bytes. `cargo replay`
+passed: 100,000 events in 39.4606 ms, 500 rows, 236,992..237,477 estimated bytes. This is a single
+integration smoke run, not a performance comparison with the original PR baseline; main changed
+message metadata in the meantime. Native after evidence remains unavailable following owner
+Escape. The owner approved merging with this known limitation and pending remote CI; no branch
+protection bypass or renewed Computer Use was requested.
+
+## Discord-style voice UI and Phosphor icon atlas (September 10, 2026)
+
+- Baseline: main `c4ae54d`, clean tree; branch `t3code/improve-voice-chat-ui`.
+- Owner rejected the primitive-painted glyphs. `crates/ui/src/icons.rs` now draws Phosphor
+  Icons 2.1.1 (MIT) from one bundled 512×320 atlas (`assets/icons/`), tinted at draw time and
+  uploaded once at startup; the `Icon` API is unchanged and gains slashed mic/headphones, camera,
+  screen share, activities, soundboard, hang-up, in-call, add-people and profile glyphs.
+  `tools/generate-icons.py` pins every upstream SVG hash and rasterizes with `resvg` 0.45.1.
+  License staged as `licenses/Phosphor-Icons-MIT.txt`; notices, asset README and design doc updated.
+- Voice views follow Discord: DM calls show a black stage above the conversation with 80px
+  participant avatars and mute/deafen badges; guild voice channels show 16:9 participant tiles
+  with name badges in a virtualized grid and a green Join Voice button when not connected. The
+  bottom control bar is Discord's pill layout (mute + settings chevron, camera, screen share,
+  activities, soundboard, more, red hang-up). Unsupported controls are disabled with hints.
+  Header shows a green "In a call" badge; the account card gains mute/deafen toggles; a
+  "Voice Connected" panel with disconnect sits above it while a call is active; incoming calls
+  use a compact banner with round answer/decline actions.
+- New offline fixture `--demo --demo-call` (synthetic DM call, one muted peer) for screenshots.
+- `cargo xtask check` passed: 304 offline tests, formatting, strict all-feature Clippy, text-only
+  compile and policy. Both macOS packages built; sizes and single-run demo memory/CPU samples are
+  in docs/performance.md. Native `--demo-call`/`--demo-voice` captures (dark and light) inspected;
+  evidence in docs/pr-evidence/voice-call-ui. No live call, microphone or account action occurred;
+  Windows/Linux rendering and real call behaviour with the new controls remain unverified.

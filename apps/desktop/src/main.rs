@@ -191,6 +191,7 @@ fn demo_members(guild: Option<model::Id>, channel: model::Id, request: u64) -> m
             },
             status: Some("idle".into()),
             custom_status: None,
+            activities: vec![],
         },
         model::Member {
             user: test_support::message(1, channel).author,
@@ -202,6 +203,12 @@ fn demo_members(guild: Option<model::Id>, channel: model::Id, request: u64) -> m
             },
             status: Some("online".into()),
             custom_status: Some("🌙 semifluent in synthetic data".into()),
+            activities: vec![model::RichActivity {
+                kind: 0,
+                name: "Stardew Valley".into(),
+                details: Some("Tending the synthetic farm".into()),
+                state: Some("Spring - Day 12".into()),
+            }],
         },
     ];
     if guild.is_some() {
@@ -234,6 +241,7 @@ impl Desktop {
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         ui::fonts::install(&cc.egui_ctx);
         ui::emoji::install(&cc.egui_ctx)?;
+        ui::icons::install(&cc.egui_ctx);
         if demo {
             // Fixture-only preset preview, e.g. `--demo --demo-theme=onyx --demo-light`.
             if let Some(variant) = std::env::args()
@@ -264,6 +272,8 @@ impl Desktop {
                 test_support::notification_demo_state()
             } else if std::env::args().any(|arg| arg == "--demo-voice") {
                 test_support::voice_demo_state()
+            } else if std::env::args().any(|arg| arg == "--demo-call") {
+                test_support::call_demo_state()
             } else if std::env::args().any(|arg| arg == "--demo-chat") {
                 test_support::chat_demo_state()
             } else {
@@ -273,6 +283,19 @@ impl Desktop {
             State::default()
         };
         if demo {
+            let fixture = demo_members(None, model::Id(22), 0);
+            state.direct_presences = fixture
+                .rows
+                .into_iter()
+                .flatten()
+                .filter(|member| member.user.id != model::Id(1))
+                .map(|member| model::MemberPresence {
+                    user: member.user.id,
+                    status: member.status,
+                    custom_status: member.custom_status,
+                    activities: member.activities,
+                })
+                .collect();
             // Synthetic role metadata exercises the same bounded permission mirror as live events.
             for guild in state.permissions.guilds.values_mut() {
                 if let Some(roles) = &mut guild.roles {

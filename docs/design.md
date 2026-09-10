@@ -58,8 +58,17 @@ reference an unknown family.
 - Member list (240px): ONLINE/OFFLINE eyebrows with counts (DMs show MEMBERS), 42px rows with
   presence dots, custom status and hover fill; opens a Members window on narrow layouts.
 
-Icons are painted from egui primitives in `crates/ui/src/icons.rs`; no icon font or bitmap
-assets are bundled. The profile popout keeps its 300px Discord-style card.
+Icons are [Phosphor Icons](https://phosphoricons.com) 2.1.1 (MIT) in the fill/bold weights,
+rasterized once into `assets/icons/atlas.png` (37 white glyphs in 64px cells) and tinted at
+draw time by `crates/ui/src/icons.rs`; there is no icon font. Provenance and the regeneration
+command are in `assets/icons/README.md`. The profile popout keeps its 300px Discord-style card.
+
+Voice follows Discord's call screens: a black stage with 80px participant avatars (DM calls,
+above the conversation) or 16:9 tiles with name badges (guild channels), a bottom control bar
+of dark pills (mute with settings chevron, camera, screen share, activities, soundboard, more)
+and a red hang-up button, a green "In a call" badge in the header, mute/deafen toggles in the
+account card, and a "Voice Connected" panel above it while connected. Camera, screen share,
+activities and soundboard are shown disabled: Serein has no such features.
 
 ## Verification notes
 

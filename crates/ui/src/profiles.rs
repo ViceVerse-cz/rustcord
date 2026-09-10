@@ -38,6 +38,50 @@ pub(crate) fn presence_color(status: &str) -> Color32 {
         _ => Color32::from_rgb(128, 132, 142),
     }
 }
+/// Prefer the fresh visible member snapshot; DMs use the bounded session presence cache.
+pub(crate) fn presence(
+    state: &State,
+    user: Id,
+    guild: Option<Id>,
+) -> (Option<&str>, Option<&str>, &[model::RichActivity]) {
+    if let Some(member) = state
+        .members
+        .as_ref()
+        .filter(|list| {
+            guild.is_some() && list.guild == guild && list.freshness == model::Freshness::Fresh
+        })
+        .and_then(|list| {
+            list.rows
+                .iter()
+                .flatten()
+                .find(|member| member.user.id == user)
+        })
+        .filter(|_| state.demo || state.gateway_connected)
+    {
+        return (
+            member.status.as_deref(),
+            member.custom_status.as_deref(),
+            &member.activities,
+        );
+    }
+    state
+        .presence_for(user)
+        .map_or((None, None, &[]), |presence| {
+            (
+                presence.status.as_deref(),
+                presence.custom_status.as_deref(),
+                presence.activities.as_slice(),
+            )
+        })
+}
+
+pub(crate) fn subtitle(custom: Option<&str>, activities: &[model::RichActivity]) -> Option<String> {
+    activities
+        .first()
+        .map(model::RichActivity::summary)
+        .or_else(|| custom.map(str::to_owned))
+}
+
 fn rgb(value: u32) -> Color32 {
     Color32::from_rgb((value >> 16) as u8, (value >> 8) as u8, value as u8)
 }
@@ -166,11 +210,11 @@ pub fn show(
     let bounds = viewport.shrink(8.0);
     let data = view.and_then(|v| v.data.as_ref());
     let theme = Theme::new(&colors, data.and_then(|d| d.theme_colors));
-    let member = state
-        .members
-        .as_ref()
-        .and_then(|m| m.rows.iter().flatten().find(|m| m.user.id == user.id));
-    let status = member.and_then(|m| m.status.as_deref());
+    let guild = state
+        .selected
+        .and_then(|id| state.channels.iter().find(|c| c.id == id))
+        .and_then(|c| c.guild);
+    let (status, custom, activities) = presence(state, user.id, guild);
     let mut action = None;
     let x = if anchor.x + 12.0 + WIDTH <= bounds.right() {
         anchor.x + 12.0
@@ -239,7 +283,7 @@ pub fn show(
                 .on_hover_text(presence_label(status));
             }
             let mut header_bottom = avatar_rect.bottom();
-            if let Some(custom) = member.and_then(|m| m.custom_status.as_deref()) {
+            if let Some(custom) = custom {
                 let bubble = Rect::from_min_max(
                     pos2(avatar_rect.right() + 12.0, banner.bottom() - 26.0),
                     pos2(banner.right() - PAD, banner.bottom() + 60.0),
@@ -369,7 +413,7 @@ pub fn show(
                             action = Some(Action::Retry);
                         }
                     }
-                    if let Some(data) = data {
+                    if data.is_some() || !activities.is_empty() {
                         ui.add_space(4.0);
                         let used = ui.cursor().top() - banner.top();
                         let max_height = (bounds.height() - used - 96.0).max(72.0);
@@ -384,122 +428,159 @@ pub fn show(
                                     .max_height(max_height)
                                     .show(ui, |ui| {
                                         ui.spacing_mut().item_spacing.y = 4.0;
-                                        let bio = data
-                                            .guild
-                                            .as_ref()
-                                            .map(|g| g.bio.as_str())
-                                            .filter(|s| !s.is_empty())
-                                            .unwrap_or(&data.bio);
-                                        if !bio.is_empty() {
-                                            heading(ui, &theme, "ABOUT ME");
-                                            let mut linked_user = None;
-                                            Formatted::parse(bio).show_with_images(
-                                                ui,
-                                                opening,
-                                                &[],
-                                                &mut linked_user,
-                                                avatars,
-                                                state.demo,
-                                            );
-                                            if let Some(user) = linked_user {
-                                                action = Some(Action::Profile(user));
+                                        if !activities.is_empty() {
+                                            heading(ui, &theme, "ACTIVITY");
+                                            for activity in activities {
+                                                ui.add(
+                                                    egui::Label::new(
+                                                        RichText::new(activity.summary())
+                                                            .strong()
+                                                            .size(14.0),
+                                                    )
+                                                    .wrap(),
+                                                );
+                                                for text in [
+                                                    activity.details.as_deref(),
+                                                    activity.state.as_deref(),
+                                                ]
+                                                .into_iter()
+                                                .flatten()
+                                                {
+                                                    ui.add(
+                                                        egui::Label::new(
+                                                            RichText::new(text)
+                                                                .size(13.0)
+                                                                .color(theme.muted),
+                                                        )
+                                                        .wrap(),
+                                                    );
+                                                }
+                                                ui.add_space(8.0);
                                             }
-                                            ui.add_space(8.0);
                                         }
-                                        heading(ui, &theme, "MEMBER SINCE");
-                                        ui.horizontal_wrapped(|ui| {
-                                            ui.spacing_mut().item_spacing.x = 6.0;
-                                            if let Some(date) = creation_date(user.id) {
-                                                ui.label(RichText::new(date).size(13.0));
-                                            }
-                                            if let Some(joined) = data
+                                        if let Some(data) = data {
+                                            let bio = data
                                                 .guild
                                                 .as_ref()
-                                                .and_then(|g| g.joined_at.as_deref())
-                                            {
-                                                let server = data
+                                                .map(|g| g.bio.as_str())
+                                                .filter(|s| !s.is_empty())
+                                                .unwrap_or(&data.bio);
+                                            if !bio.is_empty() {
+                                                heading(ui, &theme, "ABOUT ME");
+                                                let mut linked_user = None;
+                                                Formatted::parse(bio).show_with_images(
+                                                    ui,
+                                                    opening,
+                                                    &[],
+                                                    &mut linked_user,
+                                                    avatars,
+                                                    state.demo,
+                                                );
+                                                if let Some(user) = linked_user {
+                                                    action = Some(Action::Profile(user));
+                                                }
+                                                ui.add_space(8.0);
+                                            }
+                                            heading(ui, &theme, "MEMBER SINCE");
+                                            ui.horizontal_wrapped(|ui| {
+                                                ui.spacing_mut().item_spacing.x = 6.0;
+                                                if let Some(date) = creation_date(user.id) {
+                                                    ui.label(RichText::new(date).size(13.0));
+                                                }
+                                                if let Some(joined) = data
                                                     .guild
                                                     .as_ref()
-                                                    .and_then(|g| {
+                                                    .and_then(|g| g.joined_at.as_deref())
+                                                {
+                                                    let server =
+                                                        data.guild
+                                                            .as_ref()
+                                                            .and_then(|g| {
+                                                                state.guilds.iter().find(|known| {
+                                                                    known.id == g.guild
+                                                                })
+                                                            })
+                                                            .map_or("Server", |g| g.name.as_str());
+                                                    ui.label(
+                                                        RichText::new("•")
+                                                            .size(13.0)
+                                                            .color(theme.muted),
+                                                    );
+                                                    ui.label(
+                                                        RichText::new(format!(
+                                                            "{server} {}",
+                                                            joined
+                                                                .split('T')
+                                                                .next()
+                                                                .unwrap_or(joined)
+                                                        ))
+                                                        .size(13.0),
+                                                    );
+                                                }
+                                            });
+                                            if !data.connections.is_empty() {
+                                                ui.add_space(8.0);
+                                                heading(ui, &theme, "CONNECTIONS");
+                                                for connection in &data.connections {
+                                                    ui.horizontal_wrapped(|ui| {
+                                                        ui.spacing_mut().item_spacing.x = 6.0;
+                                                        ui.label(
+                                                            RichText::new(&connection.kind)
+                                                                .size(13.0)
+                                                                .strong(),
+                                                        );
+                                                        ui.label(
+                                                            RichText::new(&connection.name)
+                                                                .size(13.0),
+                                                        );
+                                                        if connection.verified {
+                                                            ui.label(
+                                                                RichText::new("✓")
+                                                                    .size(12.0)
+                                                                    .color(theme.muted),
+                                                            )
+                                                            .on_hover_text("Verified connection");
+                                                        }
+                                                    });
+                                                }
+                                            }
+                                            if !data.mutual_guilds.is_empty() {
+                                                ui.add_space(8.0);
+                                                let names: Vec<String> = data
+                                                    .mutual_guilds
+                                                    .iter()
+                                                    .map(|guild| {
                                                         state
                                                             .guilds
                                                             .iter()
-                                                            .find(|known| known.id == g.guild)
+                                                            .find(|g| g.id == guild.id)
+                                                            .map_or_else(
+                                                                || format!("Server {}", guild.id),
+                                                                |g| g.name.clone(),
+                                                            )
                                                     })
-                                                    .map_or("Server", |g| g.name.as_str());
-                                                ui.label(
-                                                    RichText::new("•")
-                                                        .size(13.0)
-                                                        .color(theme.muted),
-                                                );
+                                                    .collect();
                                                 ui.label(
                                                     RichText::new(format!(
-                                                        "{server} {}",
-                                                        joined.split('T').next().unwrap_or(joined)
+                                                        "{} Mutual Server{}",
+                                                        names.len(),
+                                                        if names.len() == 1 { "" } else { "s" }
                                                     ))
-                                                    .size(13.0),
-                                                );
+                                                    .size(13.0)
+                                                    .strong(),
+                                                )
+                                                .on_hover_text(names.join("\n"));
                                             }
-                                        });
-                                        if !data.connections.is_empty() {
-                                            ui.add_space(8.0);
-                                            heading(ui, &theme, "CONNECTIONS");
-                                            for connection in &data.connections {
-                                                ui.horizontal_wrapped(|ui| {
-                                                    ui.spacing_mut().item_spacing.x = 6.0;
-                                                    ui.label(
-                                                        RichText::new(&connection.kind)
-                                                            .size(13.0)
-                                                            .strong(),
-                                                    );
-                                                    ui.label(
-                                                        RichText::new(&connection.name).size(13.0),
-                                                    );
-                                                    if connection.verified {
-                                                        ui.label(
-                                                            RichText::new("✓")
-                                                                .size(12.0)
-                                                                .color(theme.muted),
-                                                        )
-                                                        .on_hover_text("Verified connection");
-                                                    }
-                                                });
-                                            }
-                                        }
-                                        if !data.mutual_guilds.is_empty() {
-                                            ui.add_space(8.0);
-                                            let names: Vec<String> = data
-                                                .mutual_guilds
-                                                .iter()
-                                                .map(|guild| {
-                                                    state
-                                                        .guilds
-                                                        .iter()
-                                                        .find(|g| g.id == guild.id)
-                                                        .map_or_else(
-                                                            || format!("Server {}", guild.id),
-                                                            |g| g.name.clone(),
-                                                        )
-                                                })
-                                                .collect();
-                                            ui.label(
-                                                RichText::new(format!(
-                                                    "{} Mutual Server{}",
-                                                    names.len(),
-                                                    if names.len() == 1 { "" } else { "s" }
-                                                ))
-                                                .size(13.0)
-                                                .strong(),
-                                            )
-                                            .on_hover_text(names.join("\n"));
-                                        }
-                                        if data.limited {
-                                            ui.add_space(6.0);
-                                            ui.label(
-                                                RichText::new("Some profile details were limited")
+                                            if data.limited {
+                                                ui.add_space(6.0);
+                                                ui.label(
+                                                    RichText::new(
+                                                        "Some profile details were limited",
+                                                    )
                                                     .size(11.0)
                                                     .color(theme.muted),
-                                            );
+                                                );
+                                            }
                                         }
                                     });
                             });
@@ -651,6 +732,45 @@ mod tests {
             ..Default::default()
         }
     }
+    #[test]
+    fn dm_presence_does_not_use_a_visible_guild_snapshot() {
+        let mut state = test_support::demo_state();
+        let user = test_support::message(1, Id(22)).author;
+        state.members = Some(model::MemberList {
+            guild: Some(Id(10)),
+            channel: Id(20),
+            request: 1,
+            total: 1,
+            freshness: model::Freshness::Fresh,
+            rows: vec![Some(model::Member {
+                roles: vec![],
+                user: user.clone(),
+                nick: None,
+                status: Some("idle".into()),
+                custom_status: Some("Server status".into()),
+                activities: vec![],
+            })],
+        });
+        state.direct_presences.push(model::MemberPresence {
+            user: user.id,
+            status: Some("online".into()),
+            custom_status: Some("Direct status".into()),
+            activities: vec![],
+        });
+        assert_eq!(
+            presence(&state, user.id, Some(Id(10))).1,
+            Some("Server status")
+        );
+        assert_eq!(presence(&state, user.id, None).1, Some("Direct status"));
+        state.gateway_connected = false;
+        state.demo = false;
+        assert_eq!(presence(&state, user.id, None), (None, None, [].as_slice()));
+        assert_eq!(
+            presence(&state, user.id, Some(Id(10))),
+            (None, None, [].as_slice())
+        );
+    }
+
     #[test]
     fn popout_shows_selected_data_beside_anchor_and_closes_with_escape() {
         let user = User {

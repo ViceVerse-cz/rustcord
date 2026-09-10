@@ -256,3 +256,16 @@ notification fields; reading history never generates an alert. No schema change 
 Queued notifications retain role IDs and direct/everyone provenance to recheck delivery, within
 the existing 32-item/16-KiB ceiling including unused deque slots. Observed badge records remain
 4096 fixed entries/128 KiB, without retaining role arrays. No additional cache or queue exists.
+
+
+### Received activity metadata (September 10, 2026)
+
+Rich presence stays in RAM: up to four activities per user, each name/details/state field
+128 characters / 512 bytes. Custom status retains its separate 128-character / 512-byte limit.
+Active member rows share the existing 128 KiB pane budget. Known DM recipients additionally
+use a FIFO cache of at most 256 records / 512 KiB including vector storage and owned strings.
+Gateway updates coalesce for 100 ms, at most 100 users / 128 KiB per batch. Initial friends are
+filtered to the first 256 known DM recipient IDs and emitted in bounded batches. Unknown users
+are never retained in the core cache. Disconnect hides cached DM presence until successful
+resume; fresh READY, resync, failure and logout discard it. Removed recipients are pruned.
+No activity assets, URLs, secrets, buttons or raw event payloads are persisted or retained.

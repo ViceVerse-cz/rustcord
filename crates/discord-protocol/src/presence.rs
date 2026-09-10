@@ -1,6 +1,6 @@
-//! Only identity, scope and bounded status text survive presence decoding.
+//! Only identity, scope and bounded status/activity text survive presence decoding.
 use crate::DecodeError;
-use model::{Id, Patch};
+use model::{Id, MAX_RICH_ACTIVITIES, Patch, RichActivity};
 use serde::{
     Deserialize, Deserializer,
     de::{MapAccess, SeqAccess, Visitor},
@@ -12,11 +12,12 @@ pub struct PresenceUpdate {
     pub user: Id,
     pub status: Patch<String>,
     pub custom_status: Patch<String>,
+    pub activities: Patch<Vec<RichActivity>>,
 }
 
-/// Activity payloads are consumed one at a time; only normalized custom text survives.
+/// Activity payloads are consumed one at a time; only bounded normalized text survives.
 #[derive(Default)]
-pub struct Activities(pub(crate) Option<String>);
+pub struct Activities(pub(crate) Option<String>, pub Vec<RichActivity>);
 
 // Derived structs also accept positional arrays; wire activities and emoji must be objects.
 struct Object<T>(T);
@@ -61,6 +62,10 @@ struct Activity {
     #[serde(rename = "type")]
     kind: u8,
     #[serde(default)]
+    name: Option<Text<4096>>,
+    #[serde(default)]
+    details: Option<Text<4096>>,
+    #[serde(default)]
     state: Option<Text<4096>>,
     #[serde(default)]
     emoji: Option<Object<Emoji>>,
@@ -73,6 +78,28 @@ struct Emoji {
     id: Option<Id>,
 }
 impl Activity {
+    fn rich_activity(&self) -> Option<RichActivity> {
+        if !matches!(self.kind, 0..=3 | 5) {
+            return None;
+        }
+        let normalize = |text: &Text<4096>| {
+            let text: String = text
+                .0
+                .trim()
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(128)
+                .collect();
+            let text = text.trim();
+            (!text.is_empty()).then(|| text.to_owned())
+        };
+        Some(RichActivity {
+            kind: self.kind,
+            name: self.name.as_ref().and_then(normalize)?,
+            details: self.details.as_ref().and_then(normalize),
+            state: self.state.as_ref().and_then(normalize),
+        })
+    }
     fn custom_status(&self) -> Option<String> {
         let emoji = self
             .emoji
@@ -105,6 +132,7 @@ impl<'de> Deserialize<'de> for Activities {
             }
             fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Activities, A::Error> {
                 let mut custom = None;
+                let mut rich = Vec::new();
                 let mut found = false;
                 let mut count = 0;
                 while let Some(Object(activity)) = seq.next_element::<Object<Activity>>()? {
@@ -115,9 +143,13 @@ impl<'de> Deserialize<'de> for Activities {
                     if activity.kind == 4 && !found {
                         custom = activity.custom_status();
                         found = true;
+                    } else if rich.len() < MAX_RICH_ACTIVITIES
+                        && let Some(activity) = activity.rich_activity()
+                    {
+                        rich.push(activity);
                     }
                 }
-                Ok(Activities(custom))
+                Ok(Activities(custom, rich))
             }
         }
         d.deserialize_seq(Bounded)
@@ -151,15 +183,19 @@ pub fn decode(bytes: &[u8]) -> Result<PresenceUpdate, DecodeError> {
         Patch::Absent => Patch::Absent,
         _ => Patch::Null,
     };
+    let (custom_status, activities) = match presence.activities {
+        Patch::Absent => (Patch::Absent, Patch::Absent),
+        Patch::Null => (Patch::Null, Patch::Null),
+        Patch::Value(Activities(custom, rich)) => {
+            (custom.map_or(Patch::Null, Patch::Value), Patch::Value(rich))
+        }
+    };
     Ok(PresenceUpdate {
         guild: presence.guild_id,
         user: presence.user.id,
         status,
-        custom_status: match presence.activities {
-            Patch::Absent => Patch::Absent,
-            Patch::Null => Patch::Null,
-            Patch::Value(Activities(custom)) => custom.map_or(Patch::Null, Patch::Value),
-        },
+        custom_status,
+        activities,
     })
 }
 
@@ -169,6 +205,98 @@ mod tests {
 
     fn update(activities: &str) -> Result<PresenceUpdate, DecodeError> {
         decode(format!(r#"{{"user":{{"id":"2"}},"activities":{activities}}}"#).as_bytes())
+    }
+
+    #[test]
+    fn rich_activities_share_snapshot_normalization_types_and_patch_semantics() {
+        assert_eq!(
+            decode(br#"{"user":{"id":"2"}}"#).unwrap().activities,
+            Patch::Absent
+        );
+        assert_eq!(update("null").unwrap().activities, Patch::Null);
+        assert_eq!(update("[]").unwrap().activities, Patch::Value(vec![]));
+        for (kind, summary) in [
+            (0, "Playing Synthetic"),
+            (1, "Streaming Synthetic"),
+            (2, "Listening to Synthetic"),
+            (3, "Watching Synthetic"),
+            (5, "Competing in Synthetic"),
+        ] {
+            let wire = format!(
+                r#"[{{"type":{kind},"name":" \nSynthetic\t ","details":" Level\n 2 ","state":" \u0000 "}},{{"type":4,"state":"Custom"}}]"#
+            );
+            let Patch::Value(activities) = update(&wire).unwrap().activities else {
+                panic!()
+            };
+            assert_eq!(
+                activities,
+                vec![RichActivity {
+                    kind,
+                    name: "Synthetic".into(),
+                    details: Some("Level 2".into()),
+                    state: None,
+                }]
+            );
+            assert!(activities[0].valid());
+            assert_eq!(activities[0].summary(), summary);
+            let snapshot: crate::MemberItem = crate::decode(format!(r#"{{"member":{{"user":{{"id":"2","username":"Synthetic"}},"presence":{{"status":"online","activities":{wire}}}}}}}"#).as_bytes()).unwrap();
+            let member = snapshot.into_model().unwrap();
+            assert_eq!(member.activities, activities);
+            assert_eq!(member.custom_status.as_deref(), Some("Custom"));
+            assert!(member.valid());
+        }
+        for wire in [
+            r#"[{"type":6,"name":"Future"}]"#,
+            r#"[{"type":0,"name":" \n "}]"#,
+            r#"[{"type":0}]"#,
+        ] {
+            assert_eq!(update(wire).unwrap().activities, Patch::Value(vec![]));
+        }
+    }
+
+    #[test]
+    fn rich_activity_retention_and_wire_fields_are_bounded() {
+        let text = "🌙".repeat(1024);
+        let wire = format!(r#"[{{"type":0,"name":"{text}","details":"{text}","state":"{text}"}}]"#);
+        let Patch::Value(activities) = update(&wire).unwrap().activities else {
+            panic!()
+        };
+        let activity = &activities[0];
+        for text in [
+            &activity.name,
+            activity.details.as_ref().unwrap(),
+            activity.state.as_ref().unwrap(),
+        ] {
+            assert_eq!(text.len(), 512);
+            assert_eq!(text.chars().count(), 128);
+        }
+        assert!(activity.valid());
+        for field in ["name", "details", "state"] {
+            let wire = format!(r#"[{{"type":0,"{field}":"{}"}}]"#, "x".repeat(4097));
+            assert!(update(&wire).is_err());
+            assert!(update(&format!(r#"[{{"type":0,"{field}":42}}]"#)).is_err());
+        }
+        let wire = format!(
+            "[{}]",
+            (0..16)
+                .map(|index| format!(r#"{{"type":0,"name":"Game {index}"}}"#))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let Patch::Value(activities) = update(&wire).unwrap().activities else {
+            panic!()
+        };
+        assert_eq!(activities.len(), MAX_RICH_ACTIVITIES);
+        assert_eq!(activities.last().unwrap().name, "Game 3");
+    }
+
+    #[test]
+    fn offline_member_snapshot_cannot_retain_activity_or_custom_status() {
+        let snapshot: crate::MemberItem = crate::decode(br#"{"member":{"user":{"id":"2","username":"Synthetic"},"presence":{"status":"offline","activities":[{"type":0,"name":"Old game"},{"type":4,"state":"Old custom status"}]}}}"#).unwrap();
+        let member = snapshot.into_model().unwrap();
+        assert_eq!(member.status.as_deref(), Some("offline"));
+        assert!(member.custom_status.is_none());
+        assert!(member.activities.is_empty());
     }
 
     #[test]
@@ -283,6 +411,7 @@ mod tests {
                     user: Id(2),
                     status: None,
                     custom_status: snapshot.custom_status(),
+                    activities: snapshot.activities.1,
                 }
                 .valid()
             );

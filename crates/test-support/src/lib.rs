@@ -370,6 +370,7 @@ pub fn voice_demo_state() -> State {
             nick: None,
             status: None,
             custom_status: None,
+            activities: vec![],
         }),
     })
     .collect();
@@ -393,6 +394,36 @@ pub fn voice_demo_state() -> State {
     });
     state.select(Id(25));
     state.status = "Offline voice fixture · no microphone or network access";
+    state
+}
+/// Synthetic direct-message call: two participants, connected for a while. Never live audio.
+pub fn call_demo_state() -> State {
+    use client_core::voice::{Call, Participant, Phase};
+    use std::time::{Duration, Instant};
+    let mut state = demo_state();
+    let _ = state.select(Id(22));
+    load_page(&mut state, None);
+    let participant = |user, muted| Participant {
+        user: Id(user),
+        muted,
+        deafened: false,
+        server_muted: false,
+        server_deafened: false,
+    };
+    state.voice.active = Some(Call {
+        channel: Id(22),
+        guild: None,
+        request: 0,
+        phase: Phase::Connected,
+        connected_at: Some(Instant::now() - Duration::from_secs(754)),
+        muted: false,
+        deafened: false,
+        server_muted: false,
+        server_deafened: false,
+        participants: vec![participant(1, false), participant(2, true)],
+        error: None,
+    });
+    state.status = "Offline call fixture · no microphone or network access";
     state
 }
 pub fn load_page(state: &mut State, before: Option<Id>) {
