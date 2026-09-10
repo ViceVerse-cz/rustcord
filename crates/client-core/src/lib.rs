@@ -10,6 +10,8 @@ mod presence;
 pub mod profile;
 pub mod reactions;
 pub mod read_state;
+mod replies;
+pub use replies::ReplyDeletions;
 pub mod resident;
 pub mod search;
 mod threads;
@@ -202,6 +204,9 @@ pub struct State {
     pub search: Option<search::SearchView>,
     pub search_request: u64,
     pub search_target: Option<Id>,
+    /// The active range was fetched around a target, independently of its consumed scroll cue.
+    pub history_targeted: bool,
+    pub reply_deletions: ReplyDeletions,
     pub read_state: read_state::ReadState,
     pub notification_preferences: notifications::Preferences,
     pub reactions: reactions::Reactions,
@@ -242,6 +247,8 @@ impl Default for State {
             search: None,
             search_request: 0,
             search_target: None,
+            history_targeted: false,
+            reply_deletions: ReplyDeletions::default(),
             read_state: read_state::ReadState::default(),
             notification_preferences: notifications::Preferences::default(),
             reactions: reactions::Reactions::default(),
@@ -318,6 +325,7 @@ impl State {
         }
         self.retire_archived_thread(Some(channel));
         self.select_resident(channel);
+        self.history_targeted = false;
         self.members = None;
         self.selected = Some(channel);
         self.clear_search();
@@ -401,6 +409,9 @@ impl State {
         }
     }
     pub fn history(&mut self, before: Option<Id>) -> Command {
+        if before.is_none() {
+            self.history_targeted = false;
+        }
         let Some(channel) = self.selected.filter(|id| {
             self.channels
                 .iter()
@@ -637,6 +648,7 @@ impl State {
         self.freshness = Freshness::Stale;
     }
     pub fn apply(&mut self, envelope: Envelope) {
+        self.reply_deletions.0.clear();
         if envelope.generation != self.generation {
             return;
         }
@@ -1114,10 +1126,12 @@ impl State {
                     return;
                 }
                 let mut ids = BTreeSet::new();
+                let has_deleted_reference = messages.iter().any(|message| message.reply_deleted);
                 if older != self.history_before.is_some()
                     || messages.len() > 50
                     || messages.iter().any(|message| {
                         message.channel != channel
+                            || (has_deleted_reference && !Timeline::valid_message(message))
                             || self
                                 .history_before
                                 .is_some_and(|before| message.id >= before)
@@ -1127,6 +1141,9 @@ impl State {
                     self.cancel_history();
                     self.fail(auth::Failure::Protocol);
                     return;
+                }
+                for message in &messages {
+                    self.record_reply_deletion(message);
                 }
                 self.history_pending = false;
                 if !older && let Some(latest) = messages.iter().map(|m| m.id).max() {
@@ -1167,6 +1184,9 @@ impl State {
                 Ok(())
             }
             Event::Message(mut m) => {
+                if m.reply_deleted && self.accepts_reply_source(&m) {
+                    self.record_reply_deletion(&m);
+                }
                 self.observe_notification(&m);
                 self.observe_last_message(m.channel, m.id);
                 if self.selected == Some(m.channel)
@@ -1250,20 +1270,43 @@ impl State {
                 }
             }
             Event::SendResult { nonce, result } => {
+                let mut reconciliation = Ok(());
                 match result {
                     Ok(m) => {
+                        let correlated = self
+                            .user
+                            .as_ref()
+                            .is_some_and(|user| user.id == m.author.id)
+                            && (self.pending.iter().any(|pending| {
+                                pending.nonce == nonce && pending.channel == m.channel
+                            }) || self.timeline.get(m.id).is_some_and(|known| {
+                                known.channel == m.channel
+                                    && known.author.id == m.author.id
+                                    && known.nonce.as_deref() == Some(nonce.as_str())
+                            }));
+                        let accepted_reference = correlated && self.accepts_reply_source(&m);
+                        if accepted_reference {
+                            self.record_reply_deletion(&m);
+                        }
                         if let Some(p) = self.pending.iter_mut().find(|p| p.nonce == nonce) {
                             p.delivery = Delivery::Confirmed;
                             p.confirmed = Some(m.id);
                         }
-                        if self.selected == Some(m.channel)
+                        if accepted_reference
+                            && self.selected == Some(m.channel)
+                            && let Err(status) = self.timeline.observe_deleted_reference(&m)
+                        {
+                            reconciliation = Err(status);
+                        }
+                        if reconciliation.is_ok()
+                            && self.selected == Some(m.channel)
                             && self.can_view(m.channel)
                             && self.freshness != Freshness::Unavailable
                             && self.timeline.get(m.id).is_none()
+                            && (!m.reply_deleted || accepted_reference)
                             && self.timeline.insert(m, false, false).is_err()
                         {
-                            self.freshness = Freshness::Stale;
-                            self.status = "Message exceeds safe capacity";
+                            reconciliation = Err("Message exceeds safe capacity");
                         }
                     }
                     Err(f) => {
@@ -1286,7 +1329,7 @@ impl State {
                     }
                 }
                 self.pending.retain(|p| p.delivery != Delivery::Confirmed);
-                Ok(())
+                reconciliation
             }
             Event::Failure(f) => {
                 self.fail(f);
@@ -1345,6 +1388,12 @@ impl State {
             self.freshness = Freshness::Stale;
             self.timeline.clear();
             self.cancel_history();
+        }
+        if self
+            .reply
+            .is_some_and(|target| self.timeline.is_deleted(target))
+        {
+            self.reply = None;
         }
         if access_changed {
             self.reconcile_permissions(previous_access);
@@ -1441,6 +1490,7 @@ impl State {
     }
     fn cancel_history(&mut self) {
         self.reactions.reset();
+        self.search_target = None;
         self.request += 1;
         self.history_pending = false;
         self.timeline.cancel_page();
@@ -2266,6 +2316,7 @@ mod tests {
             nonce: None,
             reply_to: None,
             kind: 0,
+            reply_deleted: false,
             unsupported: false,
             extra_content: Default::default(),
             embeds: vec![],

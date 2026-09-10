@@ -11,6 +11,8 @@ use std::{
 pub struct TimelineView {
     pub(super) edit_started: bool,
     pub(super) channel_reference: Option<Id>,
+    pub(super) reply_target: Option<Id>,
+    target_browsing: bool,
     channel_labels: u64,
     pub(super) mark_read: Option<Id>,
     auto_read_attempt: Option<Id>,
@@ -80,6 +82,7 @@ fn layout_key(message: &Message) -> u64 {
     message.author.name.hash(&mut key);
     message.edited.hash(&mut key);
     message.reply_to.hash(&mut key);
+    message.reply_deleted.hash(&mut key);
     message.unsupported.hash(&mut key);
     message.extra_content.hash(&mut key);
     message.kind.hash(&mut key);
@@ -254,6 +257,7 @@ impl TimelineView {
         self.channel == Some(channel) && self.following && self.at_current_latest
     }
     pub(super) fn follow_latest(&mut self) {
+        self.target_browsing = false;
         self.following = true;
         self.jump = true;
         self.anchor = None;
@@ -398,16 +402,22 @@ impl TimelineView {
                 model::Freshness::Fresh => "No messages yet. Start the conversation below.",
             });
         }
-        if !state.history_pending
+        if state.freshness == model::Freshness::Fresh
+            && !state.history_pending
             && let Some(target) = state.search_target.take()
         {
+            // Target browsing is deliberate reading, even when the service omits the target.
+            // A short result page must not acknowledge unrelated newer messages automatically.
+            self.target_browsing = true;
+            self.mark_read = None;
             if state.timeline.get(target).is_some() {
                 self.following = false;
                 self.jump = false;
                 self.anchor = Some((target, 0.0));
                 offset = Some(anchor_offset(&self.rows, target, 0.0));
             } else {
-                state.status = "Search message was not returned; it may have been removed";
+                state.status =
+                    "Message was not returned; it may have been removed or become unavailable";
             }
         }
         let mut scroll = egui::ScrollArea::vertical()
@@ -486,11 +496,21 @@ impl TimelineView {
                                     }
                                     if let Some(reply) = message.reply_to {
                                         // Reuse only loaded content; never fetch a thread while painting.
+                                        if message.reply_deleted || state.timeline.is_deleted(reply) {
+                                            ui.add(egui::Label::new(RichText::new("↳ Message deleted").small().color(colors.muted)).truncate());
+                                        } else {
                                         let preview = state.timeline.get(reply).map_or_else(
-                                            || "↳ Earlier message · outside loaded history".into(),
+                                            || "↳ Earlier message · View original".into(),
                                             |m| if crate::embeds::has_spoilers(m) { format!("↳ {} · Spoiler", m.author.name) } else { format!("↳ {}: {}", m.author.name, m.display_text().chars().take(120).collect::<String>().replace('\n', " ")) },
                                         );
-                                        ui.add(egui::Label::new(RichText::new(preview).small().color(colors.muted)).truncate());
+                                            if ui.add_enabled(state.can_open_reply_target(reply),
+                                                egui::Button::new(RichText::new(preview).small().color(colors.muted)).frame(false).truncate())
+                                                .on_hover_text("View original message")
+                                                .on_disabled_hover_text("Wait for readable, current message history")
+                                                .clicked() {
+                                                self.reply_target = Some(reply);
+                                            }
+                                        }
                                     }
                                     if let Some(summary) = message.system_summary() {
                                         ui.label(RichText::new(summary).color(colors.muted));
@@ -581,8 +601,24 @@ impl TimelineView {
             ui.add_space((total - used).max(0.0));
         });
         state.reply = selected_reply;
-        self.following =
+        let at_bottom =
             output.state.offset.y + output.inner_rect.height() >= output.content_size.y - 3.0;
+        if at_bottom
+            && ui.input(|input| {
+                input.smooth_scroll_delta().y < 0.0
+                    && input
+                        .pointer
+                        .hover_pos()
+                        .is_some_and(|pos| output.inner_rect.contains(pos))
+            })
+        {
+            self.target_browsing = false;
+        }
+        if self.reply_target.is_some() {
+            self.target_browsing = true;
+            self.mark_read = None;
+        }
+        self.following = at_bottom && !self.target_browsing;
         self.at_current_latest = state.timeline.iter().last().is_some_and(|message| {
             state.channels.iter().any(|channel| {
                 Some(channel.id) == state.selected && channel.last_message == Some(message.id)
@@ -692,6 +728,7 @@ mod tests {
             nonce: None,
             reply_to: None,
             kind: 0,
+            reply_deleted: false,
             unsupported: false,
             extra_content: Default::default(),
             embeds: vec![],
@@ -1190,6 +1227,129 @@ mod tests {
         }
     }
     #[test]
+    fn reply_target_browsing_waits_for_success_and_explicit_latest_before_acknowledging() {
+        fn collect(shape: &egui::Shape, labels: &mut Vec<(String, egui::Rect)>) {
+            match shape {
+                egui::Shape::Text(text) => labels.push((
+                    text.galley.job.text.clone(),
+                    text.galley.rect.translate(text.pos.to_vec2()),
+                )),
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        collect(shape, labels);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for (found, width) in [(true, 900.0), (false, 360.0)] {
+            let ctx = egui::Context::default();
+            let mut state = State {
+                auth: client_core::auth::AuthState::Authenticated,
+                gateway_connected: true,
+                freshness: model::Freshness::Loading,
+                history_pending: true,
+                selected: Some(Id(20)),
+                search_target: Some(Id(19)),
+                channels: vec![model::Channel {
+                    id: Id(20),
+                    guild: None,
+                    parent_id: None,
+                    position: 0,
+                    name: "Synthetic reply conversation".into(),
+                    kind: 1,
+                    recipients: vec![],
+                    member_list_id: None,
+                    last_message: Some(Id(20)),
+                }],
+                ..Default::default()
+            };
+            state
+                .timeline
+                .insert(text_message(20), false, false)
+                .unwrap();
+            if found {
+                state
+                    .timeline
+                    .insert(text_message(19), false, false)
+                    .unwrap();
+            }
+            let mut view = TimelineView::default();
+            let mut avatars = crate::avatars::Avatars::default();
+            let mut frame = |view: &mut TimelineView, state: &mut State, events| {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        focused: true,
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 600.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| view.show(ui, state, &mut None, &mut None, &mut avatars, &mut None),
+                );
+                assert!(output.platform_output.commands.is_empty());
+                let mut labels = vec![];
+                for shape in &output.shapes {
+                    collect(&shape.shape, &mut labels);
+                }
+                output.drop_without_applying_deltas();
+                labels
+            };
+            for _ in 0..3 {
+                frame(&mut view, &mut state, vec![]);
+            }
+            assert_eq!(state.search_target, Some(Id(19)));
+            assert!(view.mark_read.is_none());
+            state.freshness = model::Freshness::Stale;
+            state.history_pending = false;
+            state.status = "Synthetic history failure";
+            frame(&mut view, &mut state, vec![]);
+            assert_eq!(state.status, "Synthetic history failure");
+            assert_eq!(state.search_target, Some(Id(19)));
+            assert!(view.mark_read.is_none());
+            state.freshness = model::Freshness::Fresh;
+            state.revision += 1;
+            for _ in 0..3 {
+                frame(&mut view, &mut state, vec![]);
+            }
+            assert!(state.search_target.is_none());
+            assert!(view.target_browsing && !view.following);
+            assert!(view.mark_read.is_none());
+            if !found {
+                assert!(state.status.starts_with("Message was not returned"));
+            }
+            // The whole page fits onscreen, but only an explicit latest action resumes auto-read.
+            let labels = frame(&mut view, &mut state, vec![]);
+            let pos = labels
+                .iter()
+                .find(|(text, _)| text.contains("Jump to latest"))
+                .unwrap()
+                .1
+                .center();
+            for pressed in [true, false] {
+                frame(
+                    &mut view,
+                    &mut state,
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+            frame(&mut view, &mut state, vec![]);
+            assert!(!view.target_browsing);
+            assert_eq!(view.mark_read.take(), Some(Id(20)));
+        }
+    }
+
+    #[test]
     fn auto_read_requires_focused_latest_and_does_not_retry_failed_marker() {
         let mut state = State {
             auth: client_core::auth::AuthState::Authenticated,
@@ -1642,6 +1802,7 @@ mod tests {
             nonce: None,
             reply_to: None,
             kind: 0,
+            reply_deleted: false,
             unsupported: false,
             extra_content: Default::default(),
             embeds: vec![],
@@ -1779,6 +1940,7 @@ mod tests {
             nonce: None,
             reply_to: None,
             kind: 0,
+            reply_deleted: false,
             unsupported: false,
             extra_content: Default::default(),
             embeds: vec![],
@@ -1866,6 +2028,7 @@ mod tests {
             nonce: None,
             reply_to: None,
             kind: 0,
+            reply_deleted: false,
             unsupported: false,
             extra_content: Default::default(),
             attachments: vec![],

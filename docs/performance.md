@@ -1159,3 +1159,30 @@ Native automation remains owner-paused, so those metrics and new screenshots are
 ZIPs use Python DEFLATE level 9; text excludes nested voice, both exclude PR screenshots.
 Installed packages contain the documentation snapshot staged during packaging, before
 this final measurement addendum. No live Discord, microphone or account test was run.
+
+
+## Reply-target navigation (2026-09-10)
+
+| Metric / method | Main 33181a0 baseline | Reply targets | Delta |
+| --- | ---: | ---: | ---: |
+| text executable, bytes | 49,938,944 | 49,956,352 | +17,408 (+0.03%) |
+| text installed, bytes | 50,481,170 | 50,502,356 | +21,186 (+0.04%) |
+| text zip, bytes | 31,245,568 | 31,255,214 | +9,646 (+0.03%) |
+| voice executable, bytes | 53,297,152 | 53,314,560 | +17,408 (+0.03%) |
+| voice installed, bytes | 54,059,969 | 54,083,337 | +23,368 (+0.04%) |
+| voice zip, bytes | 32,615,326 | 32,627,919 | +12,593 (+0.04%) |
+| 100,000-event replay median, ms | 36.6917 | 36.9486 | +0.2569 (+0.70%; noise) |
+| Retained 500-message timeline, estimated bytes | 228,992..229,477 | 228,992..229,477 | 0 |
+
+Baseline executables copied and hash-verified from the merged integration packages;
+source tree equals main 33181a0. Text uses no default features; voice enables voice explicitly.
+Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical CPUs), approximately 31 GiB RAM,
+Rust 1.98.1, release thin LTO/one codegen unit, wgpu. Replay: one warmup and five direct
+executable runs on each build, 100,000 synthetic events per run. Before samples:
+36.4011, 36.769, 36.6917, 37.293, 36.3099 ms; after: 36.2521, 36.2958, 36.9971, 36.9486, 36.9554 ms.
+This is reducer time, not native frame/startup latency or process RSS; the small timing
+difference is noise. Native desktop automation remains paused, so screenshots, idle CPU,
+process/GPU memory and screen-reader/IME checks were not measured for this change.
+Package ZIPs use Python DEFLATE 9. Text excludes nested voice; all packages exclude PR
+screenshots. Packaged docs are the snapshot copied during packaging, before this final
+measurement addendum. No live Discord, microphone or account action was performed.

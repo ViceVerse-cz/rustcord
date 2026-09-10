@@ -519,6 +519,15 @@ impl Desktop {
             }
             _ => return,
         };
+        self.delete_cached_ids(channel, ids);
+    }
+    fn delete_cached_ids(&mut self, channel: model::Id, ids: Vec<model::Id>) {
+        if self.state.demo || self.fixture_only || ids.is_empty() {
+            return;
+        }
+        let Some(account) = self.state.user.as_ref().map(|user| user.id) else {
+            return;
+        };
         let Some(cache) = &self.cache else {
             return;
         };
@@ -1349,6 +1358,14 @@ impl Desktop {
                 self.notifications.dismiss();
             }
             self.state.apply(event);
+            // Only admitted service messages can establish a deleted reply target.
+            // Fence pending disk writes before the post-drain timeline snapshot is saved.
+            let deleted_replies = self.state.take_reply_deletions();
+            if let Some(&(channel, _)) = deleted_replies.first() {
+                let ids: Vec<_> = deleted_replies.into_iter().map(|(_, id)| id).collect();
+                self.messaging.messages_deleted(ctx, channel, &ids);
+                self.delete_cached_ids(channel, ids);
+            }
             if !removed_channels.is_empty() {
                 for channel in self
                     .state

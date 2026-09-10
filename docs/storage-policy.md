@@ -1,5 +1,15 @@
 # Local storage policy and audit
 
+Current reply metadata schema is 10. It adds one constrained reply_deleted boolean to each
+bounded message row; legacy rows default to unknown (false). Only an explicit service-null
+reference on a valid same-channel reply/context-menu message establishes deletion. Nested
+referenced bodies are discarded. The migration retains schema-9 message kinds/content markers,
+reading preferences and drafts in the existing transaction. Saved/loaded markers require a
+positive earlier target and message kind 19 or 23; malformed cache markers are rejected.
+Accepted deletion effects use the existing cache epoch and deletion queue, so pre-deletion
+loads/saves cannot restore the body. Queue saturation falls back to existing history clearing,
+preserving drafts. Older binaries limited to schema 9 cannot reopen the upgraded cache.
+
 The September 10 PR integration uses schema 9 to combine system-message `message_kind`,
 unsupported-content `extra_content` and the reading/layout singleton. Both independent
 schema-7 layouts and schema 8 are migrated by detecting the actual message columns. Existing

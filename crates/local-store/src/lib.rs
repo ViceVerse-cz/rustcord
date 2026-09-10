@@ -79,7 +79,7 @@ impl LocalStore {
     fn initialize(mut connection: Connection) -> Result<Self> {
         connection.busy_timeout(std::time::Duration::from_secs(2))?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > 9 {
+        if version > 10 {
             return Err(StoreError::Incompatible);
         }
         connection.execute_batch("PRAGMA page_size=4096; PRAGMA max_page_count=16384; PRAGMA cache_size=-2048; PRAGMA temp_store=MEMORY; PRAGMA journal_mode=DELETE; PRAGMA secure_delete=ON; PRAGMA auto_vacuum=FULL;
@@ -136,7 +136,15 @@ impl LocalStore {
             [],
             |row| row.get(0),
         )?;
+        let has_reply_deleted: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('messages') WHERE name='reply_deleted')",
+            [],
+            |row| row.get(0),
+        )?;
         let transaction = connection.transaction()?;
+        if !has_reply_deleted {
+            transaction.execute_batch("ALTER TABLE messages ADD COLUMN reply_deleted INTEGER NOT NULL DEFAULT 0 CHECK(typeof(reply_deleted)='integer' AND reply_deleted IN (0,1));")?;
+        }
         if !has_extra_content {
             transaction.execute_batch("ALTER TABLE messages ADD COLUMN extra_content INTEGER NOT NULL DEFAULT 0 CHECK(typeof(extra_content)='integer' AND extra_content BETWEEN 0 AND 31);")?;
         }
@@ -148,7 +156,7 @@ impl LocalStore {
                 zoom_percent INTEGER NOT NULL CHECK(typeof(zoom_percent)='integer' AND zoom_percent BETWEEN 80 AND 150),
                 sidebar_width INTEGER NOT NULL CHECK(typeof(sidebar_width)='integer' AND sidebar_width BETWEEN 190 AND 360),
                 show_members INTEGER NOT NULL CHECK(typeof(show_members)='integer' AND show_members IN (0,1))
-            ); PRAGMA user_version=9;")?;
+            ); PRAGMA user_version=10;")?;
         transaction.commit()?;
         Ok(Self(connection))
     }
@@ -228,6 +236,9 @@ impl LocalStore {
             || messages.iter().map(Message::bytes).sum::<usize>() > MAX_WINDOW_BYTES
             || messages.iter().any(|m| {
                 m.channel != channel
+                    || (m.reply_deleted
+                        && (!matches!(m.kind, 19 | 23)
+                            || !m.reply_to.is_some_and(|id| id.0 > 0 && id < m.id)))
                     || !model::valid_mentions(&m.mentions)
                     || !model::valid_embeds(&m.embeds)
                     || !model::valid_attachments(&m.attachments)
@@ -257,7 +268,7 @@ impl LocalStore {
                 return Err(StoreError::Capacity);
             }
             transaction.execute(
-                "INSERT INTO messages(account,channel,id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions,extra_content,message_kind) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+                "INSERT INTO messages(account,channel,id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions,extra_content,message_kind,reply_deleted) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
                 params![
                     account,
                     channel,
@@ -275,7 +286,8 @@ impl LocalStore {
                     attachments,
                     mentions,
                     message.extra_content.bits(),
-                    message.kind
+                    message.kind,
+                    message.reply_deleted
                 ],
             )?;
         }
@@ -304,11 +316,16 @@ impl LocalStore {
         Ok(())
     }
     pub fn load_channel(&self, account: Id, channel: Id) -> Result<Vec<Message>> {
-        let mut query = self.0.prepare("SELECT id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions,extra_content,message_kind FROM messages WHERE account=?1 AND channel=?2 ORDER BY length(id),id LIMIT 500")?;
+        let mut query = self.0.prepare("SELECT id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions,extra_content,message_kind,reply_deleted FROM messages WHERE account=?1 AND channel=?2 ORDER BY length(id),id LIMIT 500")?;
         let mut rows = query.query(params![account.to_string(), channel.to_string()])?;
         let mut messages = Vec::new();
         let mut bytes = 0;
         while let Some(row) = rows.next()? {
+            let reply_deleted = match row.get_ref(15)? {
+                rusqlite::types::ValueRef::Integer(0) => false,
+                rusqlite::types::ValueRef::Integer(1) => true,
+                _ => return Err(StoreError::Incompatible),
+            };
             let extra_content = row
                 .get_ref(13)?
                 .as_i64()
@@ -393,6 +410,7 @@ impl LocalStore {
                 unsupported: row.get(6)?,
                 extra_content,
                 kind: row.get(14)?,
+                reply_deleted,
                 nonce: None,
                 revision: 0,
                 embeds,
@@ -400,6 +418,14 @@ impl LocalStore {
                 embeds_suppressed: row.get(10)?,
                 attachments,
             };
+            if message.reply_deleted
+                && (!matches!(message.kind, 19 | 23)
+                    || !message
+                        .reply_to
+                        .is_some_and(|id| id.0 > 0 && id < message.id))
+            {
+                return Err(StoreError::Incompatible);
+            }
             bytes += message.bytes();
             if bytes > MAX_WINDOW_BYTES {
                 return Err(StoreError::Capacity);
@@ -501,6 +527,85 @@ impl LocalStore {
 mod tests {
     use super::*;
     #[test]
+    fn reply_deletion_schema_migrates_reopens_and_rejects_invalid_markers() {
+        let root = std::env::temp_dir().join(format!(
+            "serein-synthetic-reply-schema-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("test.sqlite3");
+        let mut store = LocalStore::open(&path).unwrap();
+        store.save_draft(Id(1), Id(2), "preserved draft").unwrap();
+        let prefs = ReadingPreferences {
+            zoom_percent: 125,
+            ..Default::default()
+        };
+        store.save_reading_preferences(prefs).unwrap();
+        store.0.execute("INSERT INTO messages(account,channel,id,author,name,content,edited,unsupported,message_kind,extra_content,reply) VALUES('1','2','100','4','Synthetic','reply body',0,0,19,31,'50')", []).unwrap();
+        store
+            .0
+            .execute_batch("ALTER TABLE messages DROP COLUMN reply_deleted; PRAGMA user_version=9;")
+            .unwrap();
+        drop(store);
+        let mut store = LocalStore::open(&path).unwrap();
+        let mut messages = store.load_channel(Id(1), Id(2)).unwrap();
+        assert!(!messages[0].reply_deleted);
+        assert_eq!(messages[0].reply_to, Some(Id(50)));
+        assert_eq!(messages[0].kind, 19);
+        assert_eq!(messages[0].extra_content.bits(), 31);
+        assert_eq!(store.reading_preferences().unwrap(), prefs);
+        assert_eq!(store.load_drafts(Id(1)).unwrap()[&Id(2)], "preserved draft");
+        messages[0].reply_deleted = true;
+        store.save_channel(Id(1), Id(2), &messages).unwrap();
+        for target in [None, Some(Id(0)), Some(Id(100)), Some(Id(101))] {
+            messages[0].reply_to = target;
+            assert_eq!(
+                store.save_channel(Id(1), Id(2), &messages),
+                Err(StoreError::Capacity)
+            );
+        }
+        drop(store);
+        let store = LocalStore::open(&path).unwrap();
+        let messages = store.load_channel(Id(1), Id(2)).unwrap();
+        assert!(messages[0].reply_deleted);
+        assert_eq!(messages[0].reply_to, Some(Id(50)));
+        assert_eq!(messages[0].content, "reply body");
+        let version: u32 = store
+            .0
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 10);
+        for invalid in ["-1", "2", "1.5", "'bad'"] {
+            assert!(
+                store
+                    .0
+                    .execute(&format!("UPDATE messages SET reply_deleted={invalid}"), [])
+                    .is_err()
+            );
+        }
+        // SQLite files remain untrusted even if constraints were deliberately disabled.
+        store
+            .0
+            .execute_batch(
+                "PRAGMA ignore_check_constraints=ON; UPDATE messages SET reply_deleted=2;",
+            )
+            .unwrap();
+        assert!(matches!(
+            store.load_channel(Id(1), Id(2)),
+            Err(StoreError::Incompatible)
+        ));
+        store
+            .0
+            .execute_batch("UPDATE messages SET reply_deleted=1,reply='100';")
+            .unwrap();
+        assert!(matches!(
+            store.load_channel(Id(1), Id(2)),
+            Err(StoreError::Incompatible)
+        ));
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn divergent_schema_seven_and_eight_preserve_union_after_reopen() {
         let root = std::env::temp_dir().join(format!(
             "serein-synthetic-union-schema-{}",
@@ -549,7 +654,7 @@ mod tests {
                 .0
                 .pragma_query_value(None, "user_version", |row| row.get(0))
                 .unwrap();
-            assert_eq!(version, 9);
+            assert_eq!(version, 10);
             let mut messages = store.load_channel(Id(1), Id(2)).unwrap();
             assert_eq!(messages[0].kind, expected_kind);
             assert_eq!(messages[0].extra_content.bits(), expected_markers);
@@ -670,7 +775,7 @@ mod tests {
             .0
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 9);
+        assert_eq!(version, 10);
         assert_eq!(
             store.reading_preferences().unwrap(),
             ReadingPreferences::default()
@@ -903,7 +1008,7 @@ mod tests {
             .0
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 9);
+        assert_eq!(version, 10);
         let messages: Vec<_> = (0..32_u8)
             .map(|bits| {
                 let mut message = legacy[0].clone();
@@ -1091,7 +1196,7 @@ mod tests {
             .0
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 9);
+        assert_eq!(version, 10);
         for (json, error) in [
             ("broken JSON".to_owned(), StoreError::Incompatible),
             (
@@ -1191,6 +1296,7 @@ mod tests {
                 unsupported: false,
                 extra_content: model::ExtraContent::default(),
                 kind: 0,
+                reply_deleted: false,
                 embeds: vec![model::Embed {
                     title: Some("Cached synthetic embed".into()),
                     ..Default::default()

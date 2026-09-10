@@ -24,6 +24,9 @@ impl Timeline {
     pub fn get(&self, id: Id) -> Option<&Message> {
         self.messages.get(&id).and_then(Option::as_ref)
     }
+    pub fn is_deleted(&self, id: Id) -> bool {
+        self.deleted.contains(&id)
+    }
     pub fn len(&self) -> usize {
         self.live_count
     }
@@ -88,25 +91,18 @@ impl Timeline {
         live: bool,
         older: bool,
     ) -> Result<(), &'static str> {
+        self.observe_deleted_reference(&message)?;
         if self.deleted.contains(&message.id) {
             return Ok(());
-        }
-        if message.bytes() > MAX_BYTES
-            || message.content.len() > 64 * 1024
-            || !model::valid_mentions(&message.mentions)
-            || !model::valid_embeds(&message.embeds)
-            || !model::valid_attachments(&message.attachments)
-            || message
-                .reactions
-                .as_ref()
-                .is_some_and(|r| !model::valid_reactions(r))
-        {
-            return Err("Message exceeds safe capacity");
         }
         if live {
             self.remember(message.id)?;
         }
         let mut message = message;
+        message.reply_deleted |= matches!(message.kind, 19 | 23)
+            && message.reply_to.is_some_and(|target| {
+                target.0 != 0 && target < message.id && self.is_deleted(target)
+            });
         if let Some(patch) = self.patches.get(&message.id) {
             apply_patch(&mut message, patch);
         } else if !live && self.changed.contains(&message.id) {
@@ -126,6 +122,8 @@ impl Timeline {
                         || previous.reactions != message.reactions
                         || previous.edited != message.edited
                         || previous.unsupported != message.unsupported
+                        || previous.kind != message.kind
+                        || previous.reply_deleted != message.reply_deleted
                         || previous.extra_content != message.extra_content
                         || previous.embeds != message.embeds
                         || previous.attachments != message.attachments
@@ -146,6 +144,45 @@ impl Timeline {
             if let Some((_, Some(old))) = item {
                 self.bytes -= old.bytes();
                 self.live_count -= 1;
+            }
+        }
+        Ok(())
+    }
+    /// Shared admission check for an atomic history page and a single message.
+    pub fn valid_message(message: &Message) -> bool {
+        message.bytes() <= MAX_BYTES
+            && (!message.reply_deleted
+                || (matches!(message.kind, 19 | 23)
+                    && message
+                        .reply_to
+                        .is_some_and(|target| target.0 != 0 && target < message.id)))
+            && message.content.len() <= 64 * 1024
+            && model::valid_mentions(&message.mentions)
+            && model::valid_embeds(&message.embeds)
+            && model::valid_attachments(&message.attachments)
+            && message
+                .reactions
+                .as_ref()
+                .is_none_or(|r| model::valid_reactions(r))
+    }
+    /// Preserve explicit deletion knowledge even when a correlated response must
+    /// not replace the source's newer loaded body.
+    pub fn observe_deleted_reference(&mut self, message: &Message) -> Result<(), &'static str> {
+        if !Self::valid_message(message) {
+            return Err("Message exceeds safe capacity");
+        }
+        if message.reply_deleted
+            && let Some(target) = message.reply_to
+        {
+            self.delete(target)?;
+            if let Some(source) = self.messages.get_mut(&message.id).and_then(Option::as_mut)
+                && source.channel == message.channel
+                && source.reply_to == Some(target)
+                && matches!(source.kind, 19 | 23)
+                && !source.reply_deleted
+            {
+                source.reply_deleted = true;
+                source.revision += 1;
             }
         }
         Ok(())
@@ -250,6 +287,15 @@ impl Timeline {
     }
     pub fn clear(&mut self) {
         *self = Self::default();
+    }
+    /// Change the reading range within the same channel without forgetting known
+    /// deletions. Use `clear` when changing channel/session ownership instead.
+    pub fn clear_window_preserving_deletions(&mut self) {
+        let deleted = std::mem::take(&mut self.deleted);
+        *self = Self {
+            deleted,
+            ..Self::default()
+        };
     }
     pub fn set_reactions(
         &mut self,
@@ -378,6 +424,102 @@ fn apply_patch(message: &mut Message, patch: &MessagePatch) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn deleted_reference_inference_preserves_kind_and_rejects_invalid_legacy_markers() {
+        let mut timeline = Timeline::default();
+        timeline.delete(Id(50)).unwrap();
+        for (id, kind, target, expected) in [
+            (100, 0, 50, false),
+            (101, 19, 50, true),
+            (102, 23, 50, true),
+            (40, 19, 50, false),
+        ] {
+            let mut source = message(id);
+            source.kind = kind;
+            source.reply_to = Some(Id(target));
+            timeline.insert(source, false, false).unwrap();
+            let loaded = timeline.get(Id(id)).unwrap();
+            assert_eq!(loaded.kind, kind);
+            assert_eq!(loaded.reply_deleted, expected);
+            assert!(Timeline::valid_message(loaded));
+        }
+        let mut source = message(200);
+        source.kind = 23;
+        source.reply_to = Some(Id(60));
+        timeline.insert(source.clone(), false, false).unwrap();
+        source.reply_deleted = true;
+        timeline.observe_deleted_reference(&source).unwrap();
+        assert_eq!(timeline.get(Id(200)).unwrap().kind, 23);
+        assert!(timeline.get(Id(200)).unwrap().reply_deleted);
+        assert!(timeline.is_deleted(Id(60)));
+    }
+
+    #[test]
+    fn explicit_deleted_references_remove_targets_in_both_arrival_orders() {
+        for source_first in [false, true] {
+            let mut timeline = Timeline::default();
+            let mut source = message(100);
+            source.reply_to = Some(Id(50));
+            source.kind = 19;
+            source.reply_deleted = true;
+            if !source_first {
+                timeline.insert(message(50), false, false).unwrap();
+            }
+            timeline.insert(source.clone(), false, false).unwrap();
+            if source_first {
+                timeline.insert(message(50), false, false).unwrap();
+            }
+            assert!(timeline.is_deleted(Id(50)));
+            assert!(timeline.get(Id(50)).is_none());
+            assert!(timeline.get(Id(100)).unwrap().reply_deleted);
+            source.reply_deleted = false; // Older/partial service knowledge cannot undo deletion.
+            timeline.insert(source, false, false).unwrap();
+            assert!(timeline.get(Id(100)).unwrap().reply_deleted);
+            timeline.clear_window_preserving_deletions();
+            timeline.insert(message(50), false, false).unwrap();
+            assert!(timeline.get(Id(50)).is_none());
+        }
+        let mut timeline = Timeline::default();
+        let mut source = message(100);
+        source.reply_to = Some(Id(50));
+        timeline.insert(source.clone(), false, false).unwrap();
+        let revision = timeline.get(Id(100)).unwrap().revision;
+        source.kind = 19;
+        source.reply_deleted = true;
+        timeline.insert(source, false, false).unwrap();
+        assert_eq!(timeline.get(Id(100)).unwrap().revision, revision + 1);
+        for target in [None, Some(Id(0)), Some(Id(100)), Some(Id(101))] {
+            let mut invalid = message(100);
+            invalid.kind = 19;
+            invalid.reply_deleted = true;
+            invalid.reply_to = target;
+            assert!(Timeline::default().insert(invalid, false, false).is_err());
+        }
+    }
+    #[test]
+    fn same_channel_range_reset_keeps_only_bounded_deletion_guards() {
+        let mut timeline = Timeline::default();
+        timeline.insert(message(100), false, false).unwrap();
+        timeline.begin_page(false);
+        for id in 1..=MAX_MUTATIONS as u64 {
+            timeline.delete(Id(id)).unwrap();
+        }
+        let retained = timeline.retained_bytes();
+        timeline.clear_window_preserving_deletions();
+        assert_eq!(timeline.row_count(), 0);
+        assert_eq!(timeline.bytes(), 0);
+        assert!(timeline.retained_bytes() < retained);
+        assert!(timeline.is_deleted(Id(100)));
+        assert!(!timeline.is_deleted(Id(2000)));
+        timeline.begin_page(true);
+        timeline.finish_page(vec![message(100)], true).unwrap();
+        assert_eq!(timeline.row_count(), 0);
+        assert!(timeline.delete(Id(2000)).is_err()); // Reset does not defeat guard cap.
+        timeline.clear();
+        assert!(!timeline.is_deleted(Id(100)));
+        timeline.insert(message(100), false, false).unwrap();
+        assert_eq!(timeline.row_count(), 1);
+    }
     #[test]
     fn retained_estimate_charges_rows_mutation_guards_and_pending_patch_capacity() {
         let mut timeline = Timeline::default();
@@ -697,6 +839,7 @@ mod tests {
             nonce: None,
             reply_to: None,
             kind: 0,
+            reply_deleted: false,
             unsupported: false,
             extra_content: Default::default(),
             attachments: Vec::new(),

@@ -440,12 +440,23 @@ impl MessagingUi {
                 .timeline
                 .get(reply)
                 .map_or("an earlier message", |message| message.author.name.as_str());
+            let label = format!("Replying to {author}");
             ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(format!("Replying to {author}"))
-                        .small()
-                        .color(colors.accent),
-                );
+                ui.label(RichText::new(label).small().color(colors.accent));
+                if ui
+                    .add_enabled(
+                        state.can_open_reply_target(reply),
+                        egui::Button::new("View original").small(),
+                    )
+                    .on_disabled_hover_text(if state.timeline.is_deleted(reply) {
+                        "The original message was deleted"
+                    } else {
+                        "Wait for readable, current message history"
+                    })
+                    .clicked()
+                {
+                    self.timeline.reply_target = Some(reply);
+                }
                 if ui.small_button("Cancel reply").clicked() {
                     state.reply = None;
                 }
@@ -1334,7 +1345,12 @@ impl MessagingUi {
                             self.composer_edit = None;
                             self.edit_sent = false;
                         }
-                        if std::mem::take(&mut self.timeline.latest) {
+                        if let Some(target) = self.timeline.reply_target.take() {
+                            if let Some(command) = state.open_reply_target(target) {
+                                commands.push(command);
+                            }
+                            ctx.request_repaint();
+                        } else if std::mem::take(&mut self.timeline.latest) {
                             commands.push(state.history(None));
                         } else if std::mem::take(&mut self.timeline.load_older)
                             && let Some(command) = state.older_history()
@@ -1364,6 +1380,8 @@ impl MessagingUi {
             }
         }
         if let Some(message) = self.timeline.mark_read.take()
+            && state.search_target.is_none()
+            && !state.history_targeted
             && let Some(command) = state.prepare_mark_read(message)
         {
             commands.push(command);
@@ -1541,6 +1559,7 @@ mod composer_tests {
                     nonce: None,
                     reply_to: None,
                     kind: 0,
+                    reply_deleted: false,
                     unsupported: false,
                     extra_content: Default::default(),
                     embeds: vec![],
@@ -2020,6 +2039,364 @@ mod composer_tests {
         assert!(!view.has_edit());
         assert_eq!(state.drafts[&Id(10)], "Unsent draft 👋");
         assert!(view.draft_changes.is_empty());
+    }
+
+    #[test]
+    fn reply_controls_are_inert_when_deleted_loading_stale_or_unavailable() {
+        fn collect(shape: &egui::Shape, labels: &mut Vec<(String, egui::Rect)>) {
+            match shape {
+                egui::Shape::Text(text) => labels.push((
+                    text.galley.job.text.clone(),
+                    text.galley.rect.translate(text.pos.to_vec2()),
+                )),
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        collect(shape, labels);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for blocked in 0..5 {
+            let ctx = egui::Context::default();
+            let mut view = MessagingUi::default();
+            let mut state = edit_state();
+            let mut source = state.timeline.get(Id(20)).unwrap().clone();
+            source.reply_to = Some(Id(19));
+            source.reply_deleted = blocked == 0;
+            source.kind = 19;
+            state.timeline.insert(source.clone(), true, false).unwrap();
+            state.reply = Some(Id(19));
+            match blocked {
+                0 => {}
+                1 => {
+                    state.timeline.delete(Id(19)).unwrap();
+                }
+                2 => {
+                    state.freshness = Freshness::Loading;
+                    state.history_pending = true;
+                }
+                3 => {
+                    state.freshness = Freshness::Stale;
+                }
+                4 => {
+                    state.channels.clear();
+                    state.freshness = Freshness::Unavailable;
+                }
+                _ => unreachable!(),
+            }
+            let draft = state.drafts.clone();
+            let request = state.request;
+            let frame = |view: &mut MessagingUi, state: &mut State, events| {
+                let mut commands = vec![];
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(760.0, 650.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| commands = view.show(ui, state),
+                );
+                assert!(output.platform_output.commands.is_empty());
+                assert!(!commands.iter().any(|command| matches!(
+                    command,
+                    Command::History { .. }
+                        | Command::Send { .. }
+                        | Command::Edit { .. }
+                        | Command::Delete { .. }
+                        | Command::MarkRead { .. }
+                )));
+                let mut labels = vec![];
+                for shape in &output.shapes {
+                    collect(&shape.shape, &mut labels);
+                }
+                output.drop_without_applying_deltas();
+                labels
+            };
+            for _ in 0..3 {
+                frame(&mut view, &mut state, vec![]);
+            }
+            let labels = frame(&mut view, &mut state, vec![]);
+            if blocked < 2 {
+                assert!(
+                    labels
+                        .iter()
+                        .any(|(text, _)| text == "\u{21b3} Message deleted")
+                );
+            }
+            // Activate the visible disabled controls (and the inert deleted label) with real input.
+            for (_, rect) in labels
+                .iter()
+                .filter(|(text, _)| text == "View original" || text.starts_with('\u{21b3}'))
+            {
+                let pos = rect.center();
+                for pressed in [true, false] {
+                    frame(
+                        &mut view,
+                        &mut state,
+                        vec![
+                            egui::Event::PointerMoved(pos),
+                            egui::Event::PointerButton {
+                                pos,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                    );
+                }
+            }
+            assert_eq!(state.request, request);
+            assert!(state.search_target.is_none());
+            assert_eq!(state.drafts, draft);
+            assert_eq!(state.reply, Some(Id(19)));
+        }
+    }
+
+    #[test]
+    fn reply_original_buttons_navigate_locally_or_request_one_page_without_sending() {
+        fn collect(shape: &egui::Shape, labels: &mut Vec<(String, egui::Rect)>) {
+            match shape {
+                egui::Shape::Text(text) => labels.push((
+                    text.galley.job.text.clone(),
+                    text.galley.rect.translate(text.pos.to_vec2()),
+                )),
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        collect(shape, labels);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for (loaded, composer, keyboard, width) in [
+            (true, false, false, 900.0),
+            (false, false, true, 760.0),
+            (true, true, true, 900.0),
+            (false, true, false, 760.0),
+        ] {
+            let ctx = egui::Context::default();
+            let mut view = MessagingUi::default();
+            let mut state = edit_state();
+            let mut source = state.timeline.get(Id(20)).unwrap().clone();
+            source.content = "Reply source".into();
+            source.reply_to = Some(Id(19));
+            state.timeline.insert(source.clone(), true, false).unwrap();
+            if loaded {
+                source.id = Id(19);
+                source.reply_to = None;
+                source.content = "||Hidden original||".into();
+                state.timeline.insert(source, false, false).unwrap();
+            }
+            state.reply = Some(Id(19));
+            let draft = state.drafts.clone();
+            let frame = |view: &mut MessagingUi, state: &mut State, events| {
+                let mut commands = vec![];
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 650.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| commands = view.show(ui, state),
+                );
+                assert!(output.platform_output.commands.is_empty());
+                assert!(!commands.iter().any(|command| matches!(
+                    command,
+                    Command::Send { .. }
+                        | Command::Edit { .. }
+                        | Command::Delete { .. }
+                        | Command::MarkRead { .. }
+                )));
+                let mut labels = vec![];
+                for shape in &output.shapes {
+                    collect(&shape.shape, &mut labels);
+                }
+                output.drop_without_applying_deltas();
+                (labels, commands)
+            };
+            for _ in 0..3 {
+                frame(&mut view, &mut state, vec![]);
+            }
+            let label_matches = |text: &str| {
+                if composer {
+                    text == "View original"
+                } else {
+                    text.starts_with("↳")
+                }
+            };
+            let (labels, _) = frame(&mut view, &mut state, vec![]);
+            assert!(
+                !labels
+                    .iter()
+                    .any(|(text, _)| text.contains("Hidden original"))
+            );
+            let request = state.request;
+            let commands = if keyboard {
+                ctx.memory_mut(|memory| {
+                    if let Some(id) = memory.focused() {
+                        memory.surrender_focus(id);
+                    }
+                });
+                frame(&mut view, &mut state, vec![egui::Event::PointerGone]);
+                let key = |key| egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                };
+                let mut activated = None;
+                for _ in 0..60 {
+                    let (labels, _) = frame(&mut view, &mut state, vec![key(egui::Key::Tab)]);
+                    if ctx
+                        .memory(|memory| memory.focused())
+                        .and_then(|id| ctx.read_response(id))
+                        .is_some_and(|response| {
+                            response.rect.height() < 36.0
+                                && labels.iter().any(|(text, rect)| {
+                                    label_matches(text) && response.rect.contains(rect.center())
+                                })
+                        })
+                    {
+                        activated =
+                            Some(frame(&mut view, &mut state, vec![key(egui::Key::Enter)]).1);
+                        break;
+                    }
+                }
+                activated.expect("Tab must reach the original-message button")
+            } else {
+                let point = labels
+                    .iter()
+                    .find(|(text, _)| label_matches(text))
+                    .unwrap()
+                    .1
+                    .center();
+                let mut activated = vec![];
+                for pressed in [true, false] {
+                    activated.extend(
+                        frame(
+                            &mut view,
+                            &mut state,
+                            vec![
+                                egui::Event::PointerMoved(point),
+                                egui::Event::PointerButton {
+                                    pos: point,
+                                    button: egui::PointerButton::Primary,
+                                    pressed,
+                                    modifiers: egui::Modifiers::NONE,
+                                },
+                            ],
+                        )
+                        .1,
+                    );
+                }
+                activated
+            };
+            assert_eq!(state.reply, Some(Id(19)));
+            assert_eq!(state.drafts, draft);
+            assert!(view.draft_changes.is_empty());
+            assert_eq!(state.search_target, Some(Id(19)));
+            if loaded {
+                assert_eq!(state.request, request);
+                assert!(
+                    !commands
+                        .iter()
+                        .any(|command| matches!(command, Command::History { .. }))
+                );
+                for _ in 0..3 {
+                    frame(&mut view, &mut state, vec![]);
+                }
+                assert!(state.search_target.is_none());
+            } else {
+                assert_eq!(
+                    commands
+                        .iter()
+                        .filter(|command| matches!(
+                            command,
+                            Command::History {
+                                channel: Id(10),
+                                before: Some(Id(20)),
+                                ..
+                            }
+                        ))
+                        .count(),
+                    1
+                );
+                assert!(state.history_pending);
+                assert_eq!(state.freshness, Freshness::Loading);
+                for _ in 0..3 {
+                    let (_, commands) = frame(&mut view, &mut state, vec![]);
+                    assert!(
+                        !commands
+                            .iter()
+                            .any(|command| matches!(command, Command::History { .. }))
+                    );
+                }
+                state.apply(client_core::Envelope {
+                    generation: state.generation,
+                    event: client_core::Event::HistoryFailed {
+                        channel: Id(10),
+                        request: state.request,
+                        failure: client_core::auth::Failure::Network,
+                    },
+                });
+                let failure = state.status;
+                let (labels, commands) = frame(&mut view, &mut state, vec![]);
+                assert_eq!(
+                    state.status, failure,
+                    "Rendering must preserve the actual request error"
+                );
+                assert!(
+                    !commands
+                        .iter()
+                        .any(|command| matches!(command, Command::History { .. }))
+                );
+                assert_eq!(state.drafts, draft);
+                let pos = labels
+                    .iter()
+                    .find(|(text, _)| text == "Reload")
+                    .unwrap()
+                    .1
+                    .center();
+                let mut reloads = 0;
+                for pressed in [true, false] {
+                    let (_, commands) = frame(
+                        &mut view,
+                        &mut state,
+                        vec![
+                            egui::Event::PointerMoved(pos),
+                            egui::Event::PointerButton {
+                                pos,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                    );
+                    reloads += commands
+                        .iter()
+                        .filter(|command| {
+                            matches!(
+                                command,
+                                Command::History {
+                                    channel: Id(10),
+                                    before: None,
+                                    ..
+                                }
+                            )
+                        })
+                        .count();
+                }
+                assert_eq!(reloads, 1, "Explicit Reload returns to recent history");
+            }
+        }
     }
 
     #[test]
