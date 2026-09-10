@@ -1,9 +1,9 @@
 use crate::{MessagingUi, design};
 use client_core::{Command, State};
-use egui::{Align2, Color32, FontId, RichText};
+use egui::{Align2, Color32, FontId};
 use model::Id;
 
-pub(super) fn badge(ui: &egui::Ui, center: egui::Pos2, count: u32) {
+pub(super) fn badge(ui: &egui::Ui, center: egui::Pos2, count: u32, ring: Color32) {
     let label = if count > 99 {
         "99+".into()
     } else {
@@ -17,28 +17,44 @@ pub(super) fn badge(ui: &egui::Ui, center: egui::Pos2, count: u32) {
         19.0
     };
     let rect = egui::Rect::from_center_size(center, egui::vec2(width, 19.0));
-    ui.painter()
-        .rect_filled(rect.expand(2.0), 12, design::palette(ui).canvas);
-    ui.painter()
-        .rect_filled(rect, 10, Color32::from_rgb(196, 42, 65));
+    let colors = design::palette(ui);
+    ui.painter().rect_filled(rect.expand(3.0), 12, ring);
+    ui.painter().rect_filled(rect, 10, colors.danger);
     ui.painter().text(
         center,
         Align2::CENTER_CENTER,
         label,
-        FontId::proportional(12.0),
+        FontId::new(12.0, crate::design::semibold_family(ui.ctx())),
         Color32::WHITE,
     );
 }
+/// Discord's rail pill on the window edge: short for unread, taller on hover, full when selected.
+fn rail_pill(ui: &egui::Ui, rect: egui::Rect, selected: bool, hovered: bool, unread: bool) {
+    let height = if selected {
+        40.0
+    } else if hovered {
+        20.0
+    } else if unread {
+        8.0
+    } else {
+        return;
+    };
+    let pill = egui::Rect::from_center_size(
+        egui::pos2(rect.left() - 10.0, rect.center().y),
+        egui::vec2(8.0, height),
+    );
+    ui.painter()
+        .rect_filled(pill, 4, design::palette(ui).text_strong);
+}
 fn indicator(ui: &egui::Ui, rect: egui::Rect, unread: bool, count: u32) {
-    if unread {
-        ui.painter().circle_filled(
-            egui::pos2(rect.left() - 5.0, rect.center().y),
-            3.0,
-            design::palette(ui).text,
-        );
-    }
+    rail_pill(ui, rect, false, false, unread);
     if count > 0 {
-        badge(ui, rect.right_bottom() - egui::vec2(5.0, 5.0), count);
+        badge(
+            ui,
+            rect.right_bottom() - egui::vec2(8.0, 8.0),
+            count,
+            design::palette(ui).base,
+        );
     }
 }
 impl MessagingUi {
@@ -64,31 +80,53 @@ impl MessagingUi {
         }
         egui::Panel::left("guilds")
             .resizable(false)
-            .exact_size(64.0)
-            .frame(egui::Frame::new().fill(colors.canvas).inner_margin(8))
+            .exact_size(72.0)
+            .show_separator_line(false)
+            .frame(egui::Frame::new().fill(colors.base).inner_margin(egui::Margin {
+                left: 12,
+                right: 12,
+                top: 4,
+                bottom: 8,
+            }))
             .show(ui, |ui| {
-                ui.add_space(8.0);
-                if ui
-                    .add_sized(
-                        [48.0, 44.0],
-                        egui::Button::selectable(
-                            self.guild.is_none(),
-                            RichText::new("S").size(22.0).strong(),
-                        )
-                        .corner_radius(15),
+                ui.spacing_mut().item_spacing.y = 8.0;
+                let home = self.guild.is_none();
+                let (rect, response) =
+                    ui.allocate_exact_size(egui::Vec2::splat(48.0), egui::Sense::click());
+                let hovered = response.hovered() || response.has_focus();
+                let fill = if home || hovered { colors.accent } else { colors.raised };
+                let radius = if home || hovered { 16 } else { 24 };
+                ui.painter().rect_filled(rect, radius, fill);
+                ui.painter().text(
+                    rect.center(),
+                    Align2::CENTER_CENTER,
+                    "S",
+                    FontId::new(22.0, crate::design::semibold_family(ui.ctx())),
+                    if home || hovered { colors.accent_text } else { colors.text },
+                );
+                rail_pill(ui, rect, home, hovered, false);
+                response.widget_info(|| {
+                    egui::WidgetInfo::selected(
+                        egui::WidgetType::SelectableLabel,
+                        true,
+                        home,
+                        "Direct messages",
                     )
-                    .on_hover_text("Direct messages")
-                    .clicked()
-                {
+                });
+                if response.on_hover_text("Direct Messages").clicked() {
                     self.guild = None;
                 }
-                ui.add_space(8.0);
-                ui.separator();
-                ui.add_space(8.0);
+                let (line, _) = ui.allocate_exact_size(egui::vec2(48.0, 2.0), egui::Sense::hover());
+                ui.painter().rect_filled(
+                    egui::Rect::from_center_size(line.center(), egui::vec2(32.0, 2.0)),
+                    1,
+                    colors.raised,
+                );
                 egui::ScrollArea::vertical()
                     .id_salt("guild-list")
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                     .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing.y = 10.0;
+                        ui.spacing_mut().item_spacing.y = 8.0;
                         // Existing channel metadata bounds this list; only visible avatar rows request images.
                         for channel in state.channels.iter().filter(|c| {
                             c.guild.is_none()
@@ -97,12 +135,9 @@ impl MessagingUi {
                                     || state.unread_count(c.id) > 0)
                         }) {
                             let response = if let Some(user) = channel.recipients.first() {
-                                self.avatars.show(ui, user, 44.0, state.demo)
+                                self.avatars.show(ui, user, 48.0, state.demo)
                             } else {
-                                ui.add_sized(
-                                    [44.0, 44.0],
-                                    egui::Button::new("DM").corner_radius(22),
-                                )
+                                design::avatar(ui, &channel.name, 48.0)
                             };
                             let count = state.unread_count(channel.id);
                             indicator(ui, response.rect, true, count);
@@ -133,7 +168,16 @@ impl MessagingUi {
                                 self.guild == Some(guild.id),
                                 state.demo,
                             );
-                            indicator(ui, response.rect, unread, count);
+                            rail_pill(
+                                ui,
+                                response.rect,
+                                self.guild == Some(guild.id),
+                                response.hovered() || response.has_focus(),
+                                unread,
+                            );
+                            if count > 0 {
+                                badge(ui, response.rect.right_bottom() - egui::vec2(8.0, 8.0), count, colors.base);
+                            }
                             response.widget_info(|| {
                                 egui::WidgetInfo::labeled(
                                     egui::WidgetType::Button,
@@ -146,7 +190,7 @@ impl MessagingUi {
                                     ),
                                 )
                             });
-                            if response.on_hover_text("Red badges count mentions; dots indicate unread activity. Session-observed counts may be a lower bound.").clicked() {
+                            if response.on_hover_text("Red badges count mentions; the side pill marks unread activity. Session-observed counts may be a lower bound.").clicked() {
                                 self.guild = Some(guild.id);
                             }
                         }

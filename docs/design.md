@@ -1,14 +1,73 @@
 # Serein interface direction
 
-A quiet native home for existing Discord conversations. Graphite surfaces, a restrained teal accent, and warm off-white in light mode. The conversation and the next action have priority over diagnostics.
+Serein mirrors the real Discord desktop client's layout and density (the 2025 refresh) while
+remaining a native egui application. The palette, typography and spacing live in
+`crates/ui/src/design.rs`; every view resolves colours through `design::palette(ui)`.
 
-- Shared palette/type/spacing live in `crates/ui/src/design.rs`; installed for both egui themes and restored after logout resets egui memory. Body 15px, small 12px, headings 22px; clear accent focus borders and 32px normal interaction height.
-- Sign-in: clear main action and owner acknowledgement, optional interface preview explicitly labeled synthetic, secondary compatibility/storage details. Two columns on wide windows; one column below 900px available width, scrollable on short screens.
-- Messaging: 64px guild rail, resizable channel sidebar, selected-channel accent, compact conversation header, account/settings footer, and framed multiline composer. Appearance, cache clear and logout are grouped in Settings. Offline/experimental state stays visible.
-- Rows: circular profile pictures with initials while loading/unavailable, author/body hierarchy, whitespace instead of row dividers, one accessible message menu. Existing virtualization, anchors, spoiler consent, safe links and pending-delivery behavior are retained.
+## Theme tokens and presets
 
-An optional People pane shows the active conversation’s members or DM participants, with presence or custom status under each name. Narrow windows use a compact People window. Clicking a user opens a 300-point profile popout beside the click (banner or accent strip, overlapping avatar with presence dot, custom status bubble, display name with server tag, username and pronouns, badge artwork, bio/membership/connections/mutual servers panel and a Message action); it uses the account's two theme colors as a gradient when set, otherwise the shared palette, and closes on Escape or an outside click. Member data is bounded and never represented as a complete guild directory when only a partial window is known.
+The `Palette` carries Discord-style roles: `base` (title strip and server rail), `sidebar`
+(channel and member lists), `chat`, `raised` (composer, cards, search field, popovers), `hover`,
+`selected`, `border`, `text_strong`/`text`/`muted`, `link`, `accent` (blurple), presence
+colours, mention colours and an optional two-stop `backdrop` gradient. `canvas` and `surface`
+remain as aliases of `chat` and `sidebar` for older call sites.
 
-Native macOS previews were inspected at about 1088px and 786px widths in dark/light modes. Settings/theme changes and a visible message menu/Reply action were exercised with synthetic data. Sign-in was viewed in isolated offline mode with authentication disabled; the real login window was left undisturbed. The attempted short-height resize did not change the window, so minimum-height visual behavior remains unverified. Actual screen-reader/IME and Windows/Linux visual checks remain open.
+A process-wide `Variant` recolours the whole application on top of egui's light/dark preference:
 
-Measured palette contrasts: muted text/canvas 7.22:1 dark, 5.48:1 light; primary-button text/fill 8.19:1 dark, 6.45:1 light. These are solid-color calculations, not certification of every state or rendered pixel.
+| Preset | Surfaces |
+|---|---|
+| Default | Discord refresh dark (`#121214` / `#1a1a1e` / `#222327`) or light (`#e3e5e8` / `#f2f3f5` / white), following System/Light/Dark |
+| Onyx | Deep black surfaces for OLED displays |
+| Ash | Classic grey Discord surfaces (`#1e1f22` / `#2b2d31` / `#313338`) |
+| Midnight Blurple, Crimson Moon, Forest, Sunset | Gradient backdrop painted under translucent dark surfaces |
+
+Gradient presets paint a full-window mesh in the background layer each frame and use
+translucent panel fills; they always use dark text. Presets are chosen from the account card's
+settings menu (swatch row) and persist in the application-wide SQLite `theme_variant` row next
+to the light/dark appearance; unknown keys fall back to Default. `--demo --demo-theme=<key>` and
+`--demo-light` open fixtures in a preset for screenshots.
+
+## Typography
+
+Inter (Regular, Medium, SemiBold; SIL OFL 1.1) leads proportional text; egui's default faces and
+the bundled Noto CJK/Arabic fallbacks follow in every family. egui has no synthetic bold, so
+`design::semibold`/`design::medium` select the heavier families for author names, headings,
+channel names and uppercase 12px eyebrows. Body is 15px, small 12px. Until `fonts::install`
+marks a context, the weight families resolve to the default face so headless tests never
+reference an unknown family.
+
+## Layout
+
+- 36px title strip (`base`): hidden native title bar on macOS with traffic lights inline, centred
+  context title, session status text and an OFFLINE PREVIEW / EXPERIMENTAL pill.
+- 72px server rail (`base`): 48px home button and server icons (circle, rounded square when
+  hovered/selected), white edge pill (8px unread, 20px hover, 40px selected), red mention badges.
+- The lists and conversation share one rounded surface beside the rail. Channel sidebar
+  (240px default, resizable): 48px header with the server name, category eyebrows with chevrons,
+  32px rows with `#`/speaker/forum/thread glyphs, `selected`/`hover` fills, unread edge pill,
+  mention badge; DM rows are 44px with 32px avatars. Forum rows open their post archive.
+  Account card at the bottom (`raised`, avatar with presence dot, name, status, settings gear).
+- Conversation header (48px): channel glyph or DM avatar, semibold name, then icon buttons
+  (reload, threads/archive, pins, member list toggle), a 144px search field and DM call/voice
+  controls. A thin notice strip appears only for loading/stale/archive/history states.
+- Timeline: 16px gutters, 40px avatars, content at 72px, medium-weight author names, 12px muted
+  timestamps, `hover` row highlight, date dividers with a centred label, red "New messages"
+  divider, floating hover toolbar (react, reply, edit, more) overlapping the row above.
+- Composer: rounded `raised` bar with attach (+), placeholder `Message #channel`, emoji picker
+  and send icons; a character counter appears within 200 characters of the limit.
+- Member list (240px): ONLINE/OFFLINE eyebrows with counts (DMs show MEMBERS), 42px rows with
+  presence dots, custom status and hover fill; opens a Members window on narrow layouts.
+
+Icons are painted from egui primitives in `crates/ui/src/icons.rs`; no icon font or bitmap
+assets are bundled. The profile popout keeps its 300px Discord-style card.
+
+## Verification notes
+
+Native macOS captures at 1120×760 in Default dark, Onyx, Ash, Midnight Blurple and light were
+inspected on September 10, 2026 with the offline fixtures (`--demo`, `--demo-chat`,
+`--demo-notifications`, `--demo-voice`). Keyboard reachability of channel rows, the forum row,
+toolbar actions and members is covered by headless egui tests. Screen-reader/IME behaviour and
+Windows/Linux rendering (including the inline title bar, which is macOS-only) remain unverified.
+Palette contrast is asserted by a unit test for every opaque preset: body text ≥ 7:1 on `chat`,
+muted text ≥ 4.5:1 on `sidebar`, accent text ≥ 4.5:1 on `accent`. Gradient presets are not
+contrast-certified because their surfaces are translucent.

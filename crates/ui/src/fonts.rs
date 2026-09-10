@@ -3,19 +3,53 @@ use egui::{Context, FontData, FontDefinitions, FontFamily};
 
 const CJK: &[u8] = include_bytes!("../../../assets/fonts/NotoSansCJKjp-Regular.otf");
 const ARABIC: &[u8] = include_bytes!("../../../assets/fonts/NotoSansArabic.ttf");
+const INTER: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.otf");
+const INTER_MEDIUM: &[u8] = include_bytes!("../../../assets/fonts/Inter-Medium.otf");
+const INTER_SEMIBOLD: &[u8] = include_bytes!("../../../assets/fonts/Inter-SemiBold.otf");
 
 /// Install once during application creation, before the first UI pass.
 pub fn install(ctx: &Context) {
     ctx.set_fonts(definitions());
+    crate::design::weights_installed(ctx);
 }
 
 fn definitions() -> FontDefinitions {
     let mut definitions = FontDefinitions::default();
+    // Inter leads proportional text; two heavier faces provide Discord-style emphasis
+    // (egui has no synthetic bold). Each weight family falls back to egui's defaults.
+    let weights = [
+        (FontFamily::Proportional, "Inter", INTER),
+        (
+            FontFamily::Name(crate::design::MEDIUM.into()),
+            "Inter Medium",
+            INTER_MEDIUM,
+        ),
+        (
+            FontFamily::Name(crate::design::SEMIBOLD.into()),
+            "Inter SemiBold",
+            INTER_SEMIBOLD,
+        ),
+    ];
+    let defaults = definitions.families[&FontFamily::Proportional].clone();
+    for (family, name, data) in weights {
+        definitions
+            .font_data
+            .insert(name.into(), FontData::from_static(data).into());
+        let list = definitions.families.entry(family).or_default();
+        list.retain(|existing| !defaults.contains(existing));
+        list.insert(0, name.into());
+        list.extend(defaults.iter().cloned());
+    }
     for (name, data) in [("Noto Sans CJK JP", CJK), ("Noto Sans Arabic", ARABIC)] {
         definitions
             .font_data
             .insert(name.into(), FontData::from_static(data).into());
-        for family in [FontFamily::Proportional, FontFamily::Monospace] {
+        for family in [
+            FontFamily::Proportional,
+            FontFamily::Monospace,
+            FontFamily::Name(crate::design::MEDIUM.into()),
+            FontFamily::Name(crate::design::SEMIBOLD.into()),
+        ] {
             definitions
                 .families
                 .entry(family)
@@ -36,7 +70,10 @@ mod tests {
 
     #[test]
     fn bundled_fallbacks_cover_multilingual_text_with_a_fixed_asset_budget() {
-        assert!(CJK.len() + ARABIC.len() <= 17 * 1024 * 1024);
+        assert!(
+            CJK.len() + ARABIC.len() + INTER.len() + INTER_MEDIUM.len() + INTER_SEMIBOLD.len()
+                <= 18 * 1024 * 1024
+        );
         let definitions = definitions();
         for family in [FontFamily::Proportional, FontFamily::Monospace] {
             let faces: Vec<_> = definitions.families[&family]

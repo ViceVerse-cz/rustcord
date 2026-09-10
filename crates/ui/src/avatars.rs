@@ -293,38 +293,52 @@ impl Avatars {
             .filter_map(|word| word.chars().next())
             .take(2)
             .collect();
-        let response = ui.add_sized(
-            [44.0, 44.0],
-            egui::Button::selectable(selected, egui::RichText::new(short).strong())
-                .corner_radius(15),
-        );
-        if ui.is_rect_visible(response.rect)
+        let colors = crate::design::palette(ui);
+        let (rect, response) =
+            ui.allocate_exact_size(egui::Vec2::splat(48.0), egui::Sense::click());
+        let rounded = selected || response.hovered() || response.has_focus();
+        let radius: u8 = if rounded { 16 } else { 24 };
+        let mut painted = false;
+        if ui.is_rect_visible(rect)
             && let Some(key) = guild.icon_key()
         {
             if demo && !self.textures.iter().any(|(stored, _)| stored == &key) {
-                let mut image = ColorImage::filled([32, 32], egui::Color32::from_rgb(49, 112, 111));
+                let mut image = ColorImage::filled([32, 32], egui::Color32::from_rgb(88, 101, 242));
                 for row in [8, 14, 20] {
                     for y in row..row + 3 {
                         for x in 7..25 {
-                            image.pixels[y * 32 + x] = egui::Color32::from_rgb(227, 244, 237);
+                            image.pixels[y * 32 + x] = egui::Color32::WHITE;
                         }
                     }
                 }
                 self.attempts.insert(key.clone(), (Instant::now(), false));
                 self.accept(ui.ctx(), key.clone(), Some(image));
             }
-            let icon_rect =
-                egui::Rect::from_center_size(response.rect.center(), egui::Vec2::splat(38.0));
-            if !self.paint(ui, &key, icon_rect, 12) && !demo {
+            painted = self.paint(ui, &key, rect, radius);
+            if !painted && !demo {
                 self.request(key);
             }
         }
-        if selected || response.has_focus() {
-            ui.painter().rect_stroke(
-                response.rect,
-                15,
-                egui::Stroke::new(2.0, crate::design::palette(ui).accent),
-                egui::StrokeKind::Inside,
+        if !painted {
+            ui.painter().rect_filled(
+                rect,
+                radius,
+                if rounded {
+                    colors.accent
+                } else {
+                    colors.raised
+                },
+            );
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                short,
+                egui::FontId::new(16.0, crate::design::medium_family(ui.ctx())),
+                if rounded {
+                    colors.accent_text
+                } else {
+                    colors.text
+                },
             );
         }
         response.widget_info(|| {

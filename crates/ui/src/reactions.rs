@@ -45,12 +45,8 @@ pub fn add_button(
 ) -> Option<Option<ReactionEmoji>> {
     let mut action = None;
     ui.add_enabled_ui(enabled && !writing, |ui| {
-        let (response, _) = egui::containers::menu::MenuButton::from_button(
-            egui::Button::new(egui::RichText::new("☺").size(18.0))
-                .frame(false)
-                .min_size(egui::vec2(28.0, 28.0)),
-        )
-        .ui(ui, |ui| {
+        let response = crate::icons::button(ui, crate::icons::Icon::Smile, 28.0, "Add reaction");
+        egui::Popup::menu(&response).show(|ui| {
             for (name, label) in [
                 ("👍", "Like"),
                 ("❤️", "Love"),
@@ -80,7 +76,6 @@ pub fn add_button(
         response.widget_info(|| {
             egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), "Add reaction")
         });
-        response.on_hover_text("Add reaction");
     });
     action
 }

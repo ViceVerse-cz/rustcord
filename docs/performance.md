@@ -1227,3 +1227,16 @@ process/GPU memory and screen-reader/IME checks were not measured for this chang
 Package ZIPs use Python DEFLATE 9. Text excludes nested voice; all packages exclude PR
 screenshots. Packaged docs are the snapshot copied during packaging, before this final
 measurement addendum. No live Discord, microphone or account action was performed.
+
+## Discord-style theme shell — September 10, 2026
+
+Baseline `85fde15` (`main`) versus branch `feat/discord-theme-shell`, same macOS 27.0 arm64 host (Apple M1 Pro, 16 GiB), pinned Rust 1.98.1, release thin-LTO profile, `cargo build --locked --release -p serein` in separate target directories.
+
+| Metric / method | Baseline | After | Delta |
+| --- | --- | --- | --- |
+| Text executable, bytes | 46,429,696 | 47,260,928 | +831,232 (+1.79%) |
+| Native RSS median KiB (`--demo --demo-chat`, 10 samples) | 153,488 | 151,280 | -2,208 |
+| Native RSS sample peak KiB | 153,488 | 151,280 | -2,208 |
+| Native CPU median % | 0.0 | 0.0 | +0 |
+
+The size increase is the three embedded Inter faces (799,444 bytes of OFL font data) plus the new vector icon and theme code; no dependency changed (lockfile untouched). Native samples: fresh release process per revision, default 1120×760 viewport, dark system appearance, Default preset, 10-second warmup, ten `ps -p PID -o %cpu=,rss=` samples at one-second intervals. Every sample was identical within each run, so the RSS difference is a single-process comparison, not a distribution; it does not establish memory behaviour for gradient presets (which add one full-window mesh per frame), long sessions or live channels. Reducer replay was not rerun: no reducer, cache or protocol code changed. p95 frame/startup latency, GPU allocation and Windows/Linux were not measured.

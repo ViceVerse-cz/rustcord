@@ -12,6 +12,7 @@ use std::{
 pub enum Operation {
     LoadAppearance,
     SaveAppearance(Appearance),
+    SaveThemeVariant(Option<String>),
     LoadReadingPreferences,
     SaveReadingPreferences(model::ReadingPreferences),
     LoadDrafts,
@@ -23,7 +24,8 @@ pub enum Operation {
     Forget,
 }
 pub enum Outcome {
-    Appearance(Appearance),
+    /// Saved appearance plus the saved theme preset key, if any.
+    Appearance(Appearance, Option<String>),
     ReadingPreferences(Result<model::ReadingPreferences, StoreError>),
     ReadingPreferencesSaved(Result<(), StoreError>),
     Drafts(BTreeMap<Id, String>),
@@ -204,7 +206,7 @@ fn execute(
     );
     let failure_message = match &operation {
         Operation::LoadAppearance => "Could not load saved appearance; using system theme",
-        Operation::SaveAppearance(_) => {
+        Operation::SaveAppearance(_) | Operation::SaveThemeVariant(_) => {
             "Could not save appearance; change exists only in this session"
         }
         Operation::Forget => {
@@ -229,10 +231,15 @@ fn execute(
             Operation::LoadReadingPreferences | Operation::SaveReadingPreferences(_) => {
                 unreachable!()
             }
-            Operation::LoadAppearance => store.appearance().map(Outcome::Appearance),
+            Operation::LoadAppearance => store
+                .appearance()
+                .and_then(|appearance| Ok(Outcome::Appearance(appearance, store.theme_variant()?))),
             Operation::SaveAppearance(appearance) => {
                 store.save_appearance(appearance).map(|_| Outcome::Saved)
             }
+            Operation::SaveThemeVariant(variant) => store
+                .save_theme_variant(variant.as_deref())
+                .map(|_| Outcome::Saved),
             Operation::LoadDrafts => store.load_drafts(account).map(Outcome::Drafts),
             Operation::LoadChannel { channel, request } => store
                 .load_channel(account, channel)
