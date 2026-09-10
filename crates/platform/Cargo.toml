@@ -15,7 +15,7 @@ getrandom.workspace = true
 rfd = { version = "=0.17.2", default-features = false, features = ["xdg-portal", "wayland"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-gtk4 = "=0.11.4"
+gtk4 = { version = "=0.11.4", features = ["v4_10"] }
 webkit6 = "=0.6.1"
 
 [lints]

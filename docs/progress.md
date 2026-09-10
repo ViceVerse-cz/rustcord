@@ -2,6 +2,11 @@
 
 ## Current scope and gates
 
+Linux CI follow-up: both initial builds failed in WebKit6 because GTK4 0.11.4 exports
+Accessible only with its v4_10 feature. Enabled that feature and documented GTK >=4.10;
+the CI apt log confirms GTK 4.14.5. No source API workaround or dependency version changed.
+The repaired Linux compilation/test result remains pending. Both security jobs passed.
+
 Latest slice: Linux GTK4/WebKit6 authentication migration from 512b5e7 (PR #23), in a new
 isolated worktree with separately copied/hash-verified text and voice package baselines.
 The temporary Linux login window uses an ephemeral NetworkSession and normal TLS. A protected
