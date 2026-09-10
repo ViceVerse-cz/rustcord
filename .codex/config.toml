@@ -1,9 +1,0 @@
-# Project defaults; explicit launch/app choices and account policy may override them.
-model = "gpt-6-astra"
-model_reasoning_effort = "high"
-
-[agents]
-enabled = true
-max_concurrent_threads_per_session = 3
-default_subagent_model = "gpt-5.6-sol"
-default_subagent_reasoning_effort = "medium"
