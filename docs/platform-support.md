@@ -6,7 +6,7 @@ Target platforms are Windows, macOS and Linux. **macOS arm64 and Windows x64 hav
 |---|---|---|
 | macOS | Rust 1.98.1, Xcode command-line tools; Metal/wgpu, system WKWebView, Keychain | Local arm64 build and native synthetic window tested on macOS 27.0 beta, Apple M1 Pro / 16 GiB |
 | Windows | Rust MSVC toolchain, Visual Studio C++ build tools, system graphics drivers, WebView2 Runtime 101+ (current supported runtime recommended), Credential Manager | Local x64 checks and unsigned release packaging on Windows 11 build 26200; synthetic process/window startup passed. Visual interaction, InPrivate behavior, IME and accessibility unverified |
-| Linux | Rust, C compiler, pkg-config, GTK4, WebKitGTK 6.0, libxkbcommon, X11/Wayland development packages, Vulkan-compatible GPU/driver, Secret Service session bus/keyring | GTK4/WebKit6 migration; X11/Wayland rendering and login window unverified |
+| Linux | Rust, C compiler, pkg-config, GTK >=4.10, WebKitGTK 6.0, libxkbcommon, X11/Wayland development packages, Vulkan-compatible GPU/driver, Secret Service session bus/keyring | GTK4/WebKit6 migration; X11/Wayland rendering and login window unverified |
 
 Debian/Ubuntu development packages typically include `build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libxrandr-dev libxcursor-dev libvulkan-dev`. Package names vary by distribution. SQLite is bundled through rusqlite; it is an embedded client cache, with no database service.
 
