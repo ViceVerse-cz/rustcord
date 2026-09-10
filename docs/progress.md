@@ -455,3 +455,11 @@ voice gate. Current normal-user roster/signaling behavior remains unofficial/liv
 Stage/group DMs/video/screensharing, acoustic echo cancellation, automatic region/move
 rejoin and global push-to-talk are not implemented. Live validation procedure is in
 `docs/voice.md`; implementation, fixtures and a connected label do not pass milestone 4.
+
+
+Delivery: [PR #14](https://github.com/ViceVerse-cz/rustcord/pull/14), draft. Implementation
+and inspected native evidence are committed at `0a07e38`; all four commit-pinned screenshot
+paths and the PR body were verified on origin. macOS, Windows, Linux and security CI are
+pending at handoff. Local checks passed; remote CI success and live audio compatibility
+are not claimed. The inherited strict audit failure and owner-operated live voice gate
+remain the draft blockers described above.
