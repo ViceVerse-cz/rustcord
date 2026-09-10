@@ -32,6 +32,7 @@ sha2 = "=0.10.9"
 cpal = { version = "=0.18.2", default-features = false }
 symphonia = { version = "=0.6.1", default-features = false, features = ["mp3", "pcm", "wav"] }
 image = { version = "=0.25.10", default-features = false, features = ["png"] }
+arboard = "=3.6.1"
 
 [lints]
 workspace = true

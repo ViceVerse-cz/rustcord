@@ -2,6 +2,7 @@
 mod audio;
 mod avatars;
 mod cache;
+mod clipboard;
 mod connection;
 mod credentials;
 mod downloads;
@@ -59,6 +60,7 @@ struct Desktop {
 	audio: audio::Audio,
 	notifications: platform::notifications::Notifications,
 	uploads: uploads::Uploads,
+	clipboard: Option<clipboard::Paste>,
 	download_close_pending: bool,
 	window: Arc<winit::window::Window>,
 	avatars: Option<avatars::AvatarWorker>,
@@ -373,6 +375,17 @@ impl Desktop {
 			messaging.preview_profile(test_support::message(1, model::Id(20)).author);
 			state.status = "Offline fixture · synthetic profile card opened at startup";
 		}
+		if demo && std::env::args().any(|arg| arg == "--demo-emoji") {
+			messaging.preview_emoji_picker();
+			state.status = "Offline fixture · emoji popout opened at startup";
+		}
+		if demo
+			&& let Some(query) = std::env::args()
+				.find_map(|arg| arg.strip_prefix("--demo-search=").map(str::to_owned))
+		{
+			messaging.preview_search(&query);
+			state.status = "Offline fixture · synthetic search opened at startup";
+		}
 		Ok(Self {
 			login: None,
 			connection: None,
@@ -385,6 +398,7 @@ impl Desktop {
 				platform::notifications::Notifications::new(move || wake.request_repaint())
 			},
 			uploads: uploads::Uploads::default(),
+			clipboard: None,
 			download_close_pending: false,
 			window: cc
 				.winit_window()
@@ -1754,6 +1768,34 @@ impl eframe::App for Desktop {
 			.state
 			.selected
 			.is_some_and(|channel| self.state.can_attach(channel));
+		if let Some(paste) = &self.clipboard
+			&& let Some(result) = paste.poll()
+		{
+			if paste.generation == self.state.generation
+				&& Some(paste.channel) == self.state.selected
+				&& self.state.user.is_some()
+				&& !self.messaging.has_edit()
+			{
+				match result {
+					Ok(clipboard::Content::Text(text)) => {
+						self.messaging.pasted_text = Some((paste.channel, paste.target, text));
+					}
+					Ok(clipboard::Content::File(source)) if upload_allowed && can_attach => {
+						if let Err(error) =
+							self.uploads
+								.select_pasted(paste.generation, paste.channel, source)
+						{
+							self.state.status = error;
+						}
+					}
+					Ok(clipboard::Content::File(_)) => {
+						self.state.status = "Attaching files is unavailable here"
+					}
+					Err(error) => self.state.status = error,
+				}
+			}
+			self.clipboard = None;
+		}
 		if !can_attach {
 			self.uploads.cancel();
 		}
@@ -1793,7 +1835,7 @@ impl eframe::App for Desktop {
 			.uploads
 			.selection()
 			.map(|(name, size)| (name.to_owned(), size));
-		self.messaging.upload_busy = self.uploads.busy();
+		self.messaging.upload_busy = self.uploads.busy() || self.clipboard.is_some();
 		self.messaging.upload_status = self.uploads.status();
 		if self.state.user.is_none() {
 			self.downloads.cancel();
@@ -1916,6 +1958,21 @@ impl eframe::App for Desktop {
 			}
 			if std::mem::take(&mut self.messaging.cancel_upload_requested) {
 				self.uploads.cancel();
+			}
+			if let Some(request) = self.messaging.attachment_paste_requested.take()
+				&& let Some(channel) = self.state.selected
+			{
+				if self.clipboard.is_none() {
+					self.clipboard = Some(clipboard::Paste::start(
+						self.state.generation,
+						channel,
+						request,
+						self.runtime.handle(),
+						&ctx,
+					));
+				} else {
+					self.state.status = "Wait for the current paste to finish";
+				}
 			}
 			if std::mem::take(&mut self.messaging.attach_requested)
 				&& let Some(channel) = self.state.selected

@@ -35,6 +35,20 @@ pub struct Uploads {
 	last: Option<Status>,
 }
 impl Uploads {
+	pub fn select_pasted(
+		&mut self,
+		generation: u64,
+		channel: Id,
+		source: Source,
+	) -> Result<(), &'static str> {
+		if self.busy() || self.selected.is_some() {
+			return Err("Remove the current attachment or wait for its operation to finish");
+		}
+		self.scope = Some((generation, channel));
+		self.last = None;
+		self.selected = Some(source);
+		Ok(())
+	}
 	pub fn start_choose(
 		&mut self,
 		generation: u64,

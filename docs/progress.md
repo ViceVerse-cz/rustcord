@@ -10,6 +10,27 @@ Independent reviews covered transport/Gateway/UI/desktop and native capture/enco
 
 Performance measurements and package deltas are recorded in `docs/performance.md`. `cargo audit --deny warnings` could not run locally because cargo-audit is not installed; repository CI remains the audit/license/platform gate. This delivery remains a draft while those gates and live interoperability are unverified. The first sender excludes system audio, receiving streams, camera, RTCP feedback/RTX and congestion adaptation; target quality is not a measured sustained-throughput guarantee. Dependency licenses and the known incomplete binding redistribution notice are recorded in the voice provenance file.
 
+## Image clipping investigation — 2026-09-11
+
+The owner reports cropped inline images while the enlarged viewer is correct. The
+root cause remains unresolved. Offline demo media now uses a bounded 320×180 grid
+texture with a white border through the existing image cache and painting path,
+so missing edges can be observed instead of being hidden by vector placeholders.
+This is a diagnostic fixture, not a clipping fix; real-account rendering is unchanged.
+
+The text-only release package built successfully on Windows/Rust 1.98.1 at baseline
+d8e3bd6 plus the fixture. Its executable grew from 51,709,440 to 51,714,048 bytes
+(+4,608 bytes). Native inspection of the textured fixture was interrupted by the
+owner's physical Escape stop; no verified before/after pair, runtime performance
+comparison, voice package or live validation is claimed. The owner subsequently
+requested a direct push to main; only the fixture and this status note are included.
+
+After fast-forwarding to main 609f8bf, `cargo test --locked -p ui` passed all 95
+tests. `cargo xtask check` passed formatting but stopped at pre-existing strict
+Clippy errors in `crates/discord-voice/src/audio/echo.rs:39,48`
+(`chunks_exact_to_as_chunks`). That unrelated voice code was left unchanged;
+the full workspace check is not green. `git diff --check` passed.
+
 ## Current scope and gates
 
 Current slice: bounded Gateway compatibility diagnostics from main 31bf546. Full SPEC
@@ -2069,3 +2090,57 @@ rerun. Native playback/screenshots and final release measurements remain unverif
 the owner paused native automation and explicitly requested merging their PRs.
 
 September 11 owner-requested PR47 integration: preserved current main fast-local policy and all runtime changes. Four TOML files, settings JSON, three Claude frontmatters and both skills validated; no hooks or permission bypasses added. Runtime unchanged by this PR; no new native run needed.
+### Audio player styling — September 11, 2026
+
+The inline MP3/WAV card now uses shared theme colors and icons, a circular
+play/pause control, visible progress tracks, compact timestamps and speaker-volume
+controls. Small painted slider thumbs retain the shared 32-point interaction
+targets. Playback, download, classification and decoder behavior are unchanged.
+
+On baseline `d8e3bd6`, `cargo xtask check`, `cargo xtask package` and
+`cargo xtask package-voice` passed for the final styling. The UI keyboard regression
+exercises Play/Pause/seek/volume at 220/380-point widths in both dark and light
+themes using the actual design styles. Independent read-only review returned ship.
+The branch was then rebased without conflicts onto `7ce5c55`.
+`cargo test --locked -p ui` passed on the integrated branch. The integrated
+`cargo xtask check` stops on two pre-existing `chunks_exact_to_as_chunks` Clippy
+errors at `crates/discord-voice/src/audio/echo.rs:39,48`; that file is identical to
+origin/main and outside this styling change. Package deltas are in `docs/performance.md`.
+
+Reproduce with `cargo run --locked -p serein -- --demo --demo-audio`.
+The reviewed baseline screenshot is `docs/pr-evidence/audio-player-design/before.png`.
+An intermediate native dark preview was inspected. The owner stopped Computer Use
+with physical Escape before the final capture, then explicitly requested merging
+to main. Final native after/light/narrow captures, native process measurements,
+live account playback and other OS verification remain unverified; no substitute
+image or live-compatibility claim is made. No account or microphone action occurred.
+
+### Missing audio player with conflicting metadata — September 11, 2026
+
+The owner reports only Download/Open original when launching with
+`cargo run --features voice`. The player and styling commits remain on main.
+On baseline `2b75ba3`, a supported `.mp3`/`.wav` filename was rejected when its
+non-generic MIME type was unexpected. Preview eligibility now accepts either
+supported hint, and audio takes precedence over image grouping in the shared model.
+Actual byte validation, explicit playback, URL admission and payload limits remain
+unchanged. The owner's raw attachment metadata was not inspected.
+
+Both the model regression and the existing keyboard UI test failed before the fix.
+The UI test now routes a synthetic MP3 labeled `text/plain` through the real
+attachment renderer at 220/380 points in dark/light themes, exercising explicit
+Play/Pause/seek/volume. `cargo test --locked -p model -p ui -p discord-protocol`
+passed 151 tests; `cargo test --locked -p serein --features voice audio::tests`
+passed three decoder/callback/transfer tests. Independent read-only review: ship.
+Both `cargo xtask package` and `cargo xtask package-voice` passed.
+
+The all-feature workspace run encountered a 10-second timeout in
+`local_guild_voice_waiting_mixed_audio_and_resume` at `transport.rs:794`; that test
+passed its isolated retry (0.57 seconds). The remaining workspace passed 347 tests
+with `cargo test --workspace --all-features --locked --exclude discord-voice`.
+Strict Clippy for model/UI passed. This is not a clean full-workspace run.
+
+`cargo xtask check` remains blocked by two baseline `chunks_exact_to_as_chunks`
+Clippy errors in unchanged `crates/discord-voice/src/audio/echo.rs:39,48`.
+Package measurements are in `docs/performance.md`. Native before/after screenshots,
+process CPU/RSS/frame timing and live attachment playback remain unverified because
+the owner stopped Computer Use with Escape; automation was not resumed.

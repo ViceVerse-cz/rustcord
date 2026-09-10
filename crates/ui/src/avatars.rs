@@ -401,6 +401,25 @@ impl Avatars {
 			let key = source
 				.filter(|source| source.len() <= 2048)
 				.map(|source| format!("embed:{source}"));
+			if demo
+				&& let Some(key) = &key
+				&& !self.textures.iter().any(|(stored, _)| stored == key)
+			{
+				let mut image = ColorImage::filled([320, 180], egui::Color32::from_rgb(40, 50, 70));
+				for y in 0..180 {
+					for x in 0..320 {
+						image.pixels[y * 320 + x] = if x < 8 || y < 8 || x >= 312 || y >= 172 {
+							egui::Color32::WHITE
+						} else if x % 40 < 4 || y % 40 < 4 {
+							egui::Color32::from_rgb(80, 180, 160)
+						} else {
+							egui::Color32::from_rgb(40, 50, 70)
+						};
+					}
+				}
+				self.attempts.insert(key.clone(), (Instant::now(), false));
+				self.accept(ui.ctx(), key.clone(), Some(image));
+			}
 			let painted = key
 				.as_deref()
 				.is_some_and(|key| self.paint(ui, key, rect, 5));

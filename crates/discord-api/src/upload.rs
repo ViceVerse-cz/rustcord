@@ -18,6 +18,7 @@ const CHANGED: &str = "Selected file changed or disappeared; select it again";
 // Deliberately neither Debug nor Serialize: local paths must not enter logs or session caches.
 pub struct Source {
 	path: PathBuf,
+	bytes: Option<std::sync::Arc<[u8]>>,
 	filename: String,
 	size: u64,
 	modified: SystemTime,
@@ -50,12 +51,26 @@ impl Source {
 			return Err("Choose a nonempty file up to 20 MB");
 		}
 		Ok(Self {
+			bytes: None,
 			filename: filename.into(),
 			path,
 			size: metadata.len(),
 			modified: metadata
 				.modified()
 				.map_err(|_| "File modification time is unavailable")?,
+		})
+	}
+	/// A pasted PNG stays in bounded session memory, never in a temporary file.
+	pub fn pasted_png(bytes: Vec<u8>) -> Result<Self, &'static str> {
+		if bytes.is_empty() || bytes.len() as u64 > MAX_BYTES {
+			return Err("Choose a nonempty image up to 20 MB");
+		}
+		Ok(Self {
+			path: PathBuf::new(),
+			filename: "pasted-image.png".into(),
+			size: bytes.len() as u64,
+			modified: SystemTime::UNIX_EPOCH,
+			bytes: Some(bytes.into()),
 		})
 	}
 	pub fn filename(&self) -> &str {
@@ -71,6 +86,9 @@ impl Source {
 			&& metadata.modified().ok() == Some(self.modified)
 	}
 	async fn validate(&self) -> Result<(), Failure> {
+		if self.bytes.is_some() {
+			return Ok(());
+		}
 		let metadata = tokio::fs::symlink_metadata(&self.path)
 			.await
 			.map_err(|_| Failure::ProtocolAt(CHANGED))?;
@@ -168,21 +186,27 @@ impl DiscordApi {
 		progress: &watch::Sender<Status>,
 	) -> Result<serde_json::Value, Failure> {
 		source.validate().await?;
-		let file = File::open(&source.path)
-			.await
-			.map_err(|_| Failure::ProtocolAt(CHANGED))?;
-		if !source.matches(
-			&file
-				.metadata()
-				.await
-				.map_err(|_| Failure::ProtocolAt(CHANGED))?,
-		) {
-			return Err(Failure::ProtocolAt(CHANGED));
-		}
-		let original = file
-			.try_clone()
-			.await
-			.map_err(|_| Failure::ProtocolAt(CHANGED))?;
+		let (file, original): (Box<dyn tokio::io::AsyncRead + Send + Unpin>, Option<File>) =
+			if let Some(bytes) = &source.bytes {
+				(Box::new(std::io::Cursor::new(bytes.clone())), None)
+			} else {
+				let file = File::open(&source.path)
+					.await
+					.map_err(|_| Failure::ProtocolAt(CHANGED))?;
+				if !source.matches(
+					&file
+						.metadata()
+						.await
+						.map_err(|_| Failure::ProtocolAt(CHANGED))?,
+				) {
+					return Err(Failure::ProtocolAt(CHANGED));
+				}
+				let original = file
+					.try_clone()
+					.await
+					.map_err(|_| Failure::ProtocolAt(CHANGED))?;
+				(Box::new(file), Some(original))
+			};
 		let body = serde_json::json!({"files":[{"id":"0","filename":source.filename(),"file_size":source.size()}]});
 		let response = self
 			.request_limited(
@@ -222,6 +246,7 @@ impl DiscordApi {
 		}
 		let client = reqwest::Client::builder()
 			.redirect(reqwest::redirect::Policy::none())
+			.retry(reqwest::retry::never())
 			.no_proxy()
 			.connect_timeout(Duration::from_secs(10))
 			.read_timeout(Duration::from_secs(30))
@@ -278,12 +303,13 @@ impl DiscordApi {
 			}
 		}
 		source.validate().await?;
-		if !source.matches(
-			&original
-				.metadata()
-				.await
-				.map_err(|_| Failure::ProtocolAt(CHANGED))?,
-		) {
+		if let Some(original) = original
+			&& !source.matches(
+				&original
+					.metadata()
+					.await
+					.map_err(|_| Failure::ProtocolAt(CHANGED))?,
+			) {
 			return Err(Failure::ProtocolAt(CHANGED));
 		}
 		if self.stopped() {

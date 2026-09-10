@@ -5549,6 +5549,7 @@ dependencies = [
 name = "serein"
 version = "0.1.0"
 dependencies = [
+ "arboard",
  "client-core",
  "cpal",
  "dirs",

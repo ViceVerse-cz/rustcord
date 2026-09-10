@@ -42,6 +42,12 @@ impl Default for VoiceGain {
 	}
 }
 
+pub struct AttachmentPaste {
+	pub target: egui::Id,
+	pub text: Option<String>,
+	pub image: Option<std::sync::Arc<egui::ColorImage>>,
+}
+
 #[derive(Default)]
 pub struct MessagingUi {
 	search: search::SearchUi,
@@ -77,6 +83,10 @@ pub struct MessagingUi {
 	pub draft_restore_pending: bool,
 	pub attachment: Option<(String, u64)>,
 	pub attach_requested: bool,
+	pub attachment_paste_requested: Option<AttachmentPaste>,
+	pub pasted_text: Option<(Id, egui::Id, String)>,
+	paste_key_handled: bool,
+	pasted_text_frame: Option<u64>,
 	pub remove_attachment_requested: bool,
 	pub cancel_upload_requested: bool,
 	pub upload_busy: bool,
@@ -118,6 +128,14 @@ impl MessagingUi {
 	pub fn preview_profile(&mut self, user: model::User) {
 		self.members_narrow_open = true;
 		self.profile = Some(user);
+	}
+	/// Fixture-only entry point: opens the emoji popout as if the composer button was clicked.
+	pub fn preview_emoji_picker(&mut self) {
+		self.emoji_picker.preview();
+	}
+	/// Fixture-only entry point: opens the search pane and submits `query` on the first frame.
+	pub fn preview_search(&mut self, query: &str) {
+		self.search.preview(query);
 	}
 	pub fn downloads(&mut self) -> &mut DownloadUi {
 		&mut self.timeline.download
@@ -862,46 +880,59 @@ impl MessagingUi {
 					ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 						ui.spacing_mut().item_spacing.x = 4.0;
 						if state.selected.is_some() && !selected_voice {
-							// Search pill.
-							let (pill, response) = ui
-								.allocate_exact_size(egui::vec2(144.0, 28.0), egui::Sense::click());
-							let enabled = state.can_search();
-							response.widget_info(|| {
-								egui::WidgetInfo::labeled(
-									egui::WidgetType::Button,
-									enabled,
-									"Search",
-								)
-							});
-							ui.painter().rect_filled(pill, 6, colors.raised);
-							let pill_text = if enabled {
-								colors.muted
+							if self.search.open && !self.search.pins() {
+								ui.allocate_ui_with_layout(
+									egui::vec2(
+										240.0_f32.min(ui.available_width() * 0.5).max(120.0),
+										28.0,
+									),
+									egui::Layout::left_to_right(egui::Align::Center),
+									|ui| self.search.header_input(ui, state, commands),
+								);
 							} else {
-								colors.muted.gamma_multiply(0.5)
-							};
-							ui.painter().text(
-								pill.left_center() + egui::vec2(10.0, 0.0),
-								egui::Align2::LEFT_CENTER,
-								"Search",
-								egui::FontId::proportional(13.0),
-								pill_text,
-							);
-							icons::paint(
-								ui.painter(),
-								icons::Icon::Search,
-								egui::Rect::from_center_size(
-									pill.right_center() - egui::vec2(14.0, 0.0),
-									egui::Vec2::splat(16.0),
-								),
-								pill_text,
-							);
-							if enabled
-								&& response.on_hover_text("Search this conversation").clicked()
-							{
-								if state.archives.is_some() {
-									commands.push(state.clear_archives());
+								// Search pill.
+								let (pill, response) = ui.allocate_exact_size(
+									egui::vec2(144.0, 28.0),
+									egui::Sense::click(),
+								);
+								let enabled = state.can_search();
+								response.widget_info(|| {
+									egui::WidgetInfo::labeled(
+										egui::WidgetType::Button,
+										enabled,
+										"Search",
+									)
+								});
+								ui.painter().rect_filled(pill, 6, colors.raised);
+								let pill_text = if enabled {
+									colors.muted
+								} else {
+									colors.muted.gamma_multiply(0.5)
+								};
+								ui.painter().text(
+									pill.left_center() + egui::vec2(10.0, 0.0),
+									egui::Align2::LEFT_CENTER,
+									"Search",
+									egui::FontId::proportional(13.0),
+									pill_text,
+								);
+								icons::paint(
+									ui.painter(),
+									icons::Icon::Search,
+									egui::Rect::from_center_size(
+										pill.right_center() - egui::vec2(14.0, 0.0),
+										egui::Vec2::splat(16.0),
+									),
+									pill_text,
+								);
+								if enabled
+									&& response.on_hover_text("Search this conversation").clicked()
+								{
+									if state.archives.is_some() {
+										commands.push(state.clear_archives());
+									}
+									self.search.toggle(false);
 								}
-								self.search.toggle(false);
 							}
 							ui.add_space(4.0);
 							if icons::toggle(
@@ -1212,6 +1243,8 @@ impl MessagingUi {
 		if !editing_here && let Some((filename, bytes)) = &self.attachment {
 			if state.demo {
 				ui.label("Uploads are disabled in offline preview");
+			} else {
+				ui.weak("Not uploaded · Send uploads this file");
 			}
 			ui.horizontal_wrapped(|ui| {
 				ui.label(format!("{filename} · {bytes} bytes"));
@@ -1285,6 +1318,93 @@ impl MessagingUi {
 				)));
 			edit_state.store(ctx, composer_id);
 		}
+		let pasted_text = self.pasted_text.take();
+		let paste_key_released = ctx.input(|input| {
+			input.events.iter().any(|event| {
+				matches!(
+					event,
+					egui::Event::Key {
+						key: egui::Key::V,
+						pressed: false,
+						..
+					}
+				)
+			})
+		});
+		let paste_enabled = keyboard_enabled
+			&& !editing_here
+			&& !self.ime_active
+			&& !ime_this_frame
+			&& ctx.memory(|m| m.has_focus(composer_id));
+		if let Some((paste_channel, target, text)) = pasted_text {
+			if paste_enabled && paste_channel == channel && target == composer_id {
+				ctx.input_mut(|i| i.events.push(egui::Event::Paste(text)));
+				self.pasted_text_frame = Some(ctx.cumulative_frame_nr());
+			} else {
+				state.status = "Paste cancelled; focus the message and paste again";
+			}
+		} else if paste_enabled && self.pasted_text_frame != Some(ctx.cumulative_frame_nr()) {
+			let mut request = AttachmentPaste {
+				target: composer_id,
+				text: None,
+				image: None,
+			};
+			let mut requested = false;
+			ctx.input_mut(|input| {
+				// eframe consumes native paste key-down. File-only clipboards can emit
+				// no Paste event, so the matching key-up is also a paste trigger.
+				let shortcut = input.events.iter().any(|event| {
+					matches!(event,
+					egui::Event::Key { key: egui::Key::V, pressed, repeat: false, modifiers, .. }
+					if !modifiers.shift && (modifiers.ctrl || modifiers.command || modifiers.alt)
+						&& (*pressed || !self.paste_key_handled))
+				});
+				let has_paste = input.events.iter().any(|event| {
+					matches!(event, egui::Event::Paste(_) | egui::Event::PasteImage(_))
+				});
+				if has_paste || shortcut {
+					requested = true;
+					self.paste_key_handled = true;
+					input.events.retain_mut(|event| match event {
+						egui::Event::Paste(text) => {
+							request.text = Some(std::mem::take(text));
+							false
+						}
+						egui::Event::PasteImage(image) => {
+							request.image = Some(image.clone());
+							false
+						}
+						egui::Event::Key {
+							key: egui::Key::V, ..
+						} => false,
+						// Option+V can also produce a platform text character.
+						egui::Event::Text(_) if shortcut => false,
+						_ => true,
+					});
+				}
+			});
+			if requested {
+				if request
+					.text
+					.as_ref()
+					.is_some_and(|text| text.len() > MAX_DRAFT_BYTES)
+				{
+					state.status = "Pasted text exceeds the draft limit";
+				} else if request
+					.image
+					.as_ref()
+					.is_some_and(|image| image.pixels.len() > 4 * 1024 * 1024)
+				{
+					state.status = "Paste an image with at most 4 million pixels";
+				} else {
+					self.attachment_paste_requested = Some(request);
+					self.upload_busy = true;
+				}
+			}
+		}
+		if paste_key_released {
+			self.paste_key_handled = false;
+		}
 		let composer_content = if editing_here {
 			self.editing
 				.as_ref()
@@ -1328,7 +1448,15 @@ impl MessagingUi {
 			&& !self.ime_active
 			&& !ime_this_frame
 			&& ctx.memory(|m| m.has_focus(composer_id))
-			&& ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+			&& ctx.input_mut(|i| {
+				// consume_key matches Shift/Alt too; only a deliberate plain Enter sends.
+				let send = i.events.iter().any(|event| {
+					matches!(event, egui::Event::Key {
+						key: egui::Key::Enter, pressed: true, repeat: false, modifiers, ..
+					} if *modifiers == egui::Modifiers::NONE)
+				});
+				send && i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+			});
 		let placeholder = state.channels.iter().find(|c| c.id == channel).map_or_else(
 			|| "Message".to_owned(),
 			|c| {
@@ -1366,7 +1494,7 @@ impl MessagingUi {
                             icons::button(ui, icons::Icon::Attach, 28.0, "Attach a file")
                         })
                         .inner
-                        .on_hover_text("Choose or drop one file up to 20 MB. Upload starts only when you press Send.");
+                        .on_hover_text("Choose, drop, or paste one file (Ctrl/Cmd/Option+V) up to 20 MB. Send starts the upload.");
                     if attach.clicked() {
                         self.attach_requested = true;
                     }
@@ -1540,6 +1668,11 @@ impl MessagingUi {
                                 }
                             } else if !self.upload_busy && !(state.demo && self.attachment.is_some())
                                 && let Some(command) = state.prepare_send_with_attachment(self.attachment.as_ref().map(|(name, _)| name.as_str())) {
+                                // Consume the selection in this UI pass, before desktop dispatch.
+                                // A second render or Send gesture must not enqueue it again.
+                                if self.attachment.take().is_some() {
+                                    self.upload_busy = true;
+                                }
                                 commands.push(command);
                             }
                             edit.request_focus();
@@ -1641,13 +1774,34 @@ impl MessagingUi {
 			.iter()
 			.any(|c| Some(c.id) == state.selected && c.kind == 2);
 		let wide_members = ui.available_width() >= 720.0;
+		self.search.sync(&ctx, state, &mut commands);
+		let search_open = self.search.open && state.selected.is_some() && !selected_voice;
 		let show_members = !selected_voice
+			&& !search_open
 			&& state.selected.is_some()
 			&& if wide_members {
 				self.reading_preferences.show_members
 			} else {
 				self.members_narrow_open
 			};
+		if search_open {
+			let width = if wide_members {
+				search::PANE_WIDTH.min(ui.available_width() * 0.45)
+			} else {
+				(ui.available_width() * 0.6).max(240.0)
+			};
+			egui::Panel::right("search-pane")
+				.resizable(false)
+				.exact_size(width)
+				.frame(
+					egui::Frame::new()
+						.fill(colors.sidebar)
+						.inner_margin(egui::Margin::same(12)),
+				)
+				.show(ui, |ui| {
+					self.search.pane(ui, state, &mut commands);
+				});
+		}
 		if show_members {
 			if state
 				.members
@@ -1845,7 +1999,6 @@ impl MessagingUi {
 		{
 			commands.push(state.clear_archives());
 		}
-		self.search.show(&ctx, state, &mut commands);
 		self.archives.show(&ctx, state, &mut commands);
 		self.screen.show(&ctx, state);
 		if let Some(id) = self.timeline.channel_reference.take()
@@ -2096,6 +2249,8 @@ mod composer_tests {
 			},
 		);
 		output.drop_without_applying_deltas();
+		// This helper simulates key taps; raw-input tests explicitly model held keys.
+		ctx.input_mut(|i| i.keys_down.clear());
 		commands
 	}
 
@@ -3798,7 +3953,14 @@ mod composer_tests {
 
 	#[test]
 	fn attachment_only_enter_sends_once_and_busy_upload_blocks_resending() {
-		for (busy, allowed) in [(true, true), (false, true), (false, false)] {
+		for (busy, allowed, modifiers, repeat) in [
+			(true, true, egui::Modifiers::NONE, false),
+			(false, true, egui::Modifiers::NONE, false),
+			(false, false, egui::Modifiers::NONE, false),
+			(false, true, egui::Modifiers::SHIFT, false),
+			(false, true, egui::Modifiers::ALT, false),
+			(false, true, egui::Modifiers::NONE, true),
+		] {
 			let ctx = egui::Context::default();
 			let mut state = test_support::demo_state();
 			state.demo = false;
@@ -3819,29 +3981,54 @@ mod composer_tests {
 				messaging.composer(ui, &mut state, channel, &ctx, &mut commands);
 			})
 			.drop_without_applying_deltas();
+			assert!(commands.is_empty(), "Selecting a file must not send it");
 			ctx.memory_mut(|m| m.request_focus(editor));
+			if repeat {
+				// egui derives repeat from held keys, overriding the raw event flag.
+				ctx.input_mut(|i| i.keys_down.insert(egui::Key::Enter));
+			}
 			ctx.run_ui(
 				egui::RawInput {
 					events: vec![egui::Event::Key {
 						key: egui::Key::Enter,
 						physical_key: None,
 						pressed: true,
-						repeat: false,
-						modifiers: egui::Modifiers::NONE,
+						repeat,
+						modifiers,
 					}],
 					..Default::default()
 				},
 				|ui| messaging.composer(ui, &mut state, channel, &ctx, &mut commands),
 			)
 			.drop_without_applying_deltas();
-			assert_eq!(commands.len(), usize::from(!busy && allowed));
-			if !busy && allowed {
+			let sends = !busy && allowed && modifiers == egui::Modifiers::NONE && !repeat;
+			assert_eq!(commands.len(), usize::from(sends));
+			if modifiers == egui::Modifiers::SHIFT {
+				assert_eq!(state.drafts[&channel], "\n");
+			}
+			if sends {
 				assert!(
 					matches!(&commands[0], Command::Send { content, .. } if content.is_empty())
 				);
 				assert_eq!(
 					state.pending[0].attachment.as_deref(),
 					Some("synthetic.txt")
+				);
+				assert!(messaging.attachment.is_none());
+				assert!(messaging.upload_busy);
+				let mut release = edit_key(egui::Key::Enter);
+				if let egui::Event::Key { pressed, .. } = &mut release {
+					*pressed = false;
+				}
+				assert!(
+					edit_frame(
+						&ctx,
+						&mut messaging,
+						&mut state,
+						vec![release, edit_key(egui::Key::Enter)],
+					)
+					.is_empty(),
+					"Another Send before desktop dispatch must not enqueue the attachment again"
 				);
 			} else {
 				assert!(

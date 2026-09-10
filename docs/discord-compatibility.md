@@ -464,6 +464,9 @@ new artwork has not been tested against the owner's live session.
 ### Inline audio attachments (September 11, 2026)
 
 MP3 and PCM WAV attachments have local Play/Pause, seek, time and volume controls.
+Preview eligibility accepts a supported filename extension or MIME type, even when
+the other metadata disagrees. Audio hints take precedence over image grouping;
+the decoder still validates the bytes before playback.
 The existing restricted Discord CDN attachment URL validator is reused; signed URLs
 are neither logged nor sent with account authorization. Download/Open original remain
 available for unsupported formats and clips exceeding preview limits. There is no
