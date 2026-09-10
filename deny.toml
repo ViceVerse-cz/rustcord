@@ -69,3 +69,9 @@ allow = ["MPL-2.0"]
 name = "epaint_default_fonts"
 version = "=0.36.2"
 allow = ["MIT", "Apache-2.0", "OFL-1.1", "Ubuntu-font-1.0"]
+
+# Development-only LLVM libFuzzer runtime; never part of an application package.
+[[licenses.exceptions]]
+name = "libfuzzer-sys"
+version = "=0.4.13"
+allow = ["MIT", "Apache-2.0", "NCSA"]

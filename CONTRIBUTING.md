@@ -8,11 +8,16 @@ Keep UI, model, protocol, storage and transport boundaries clear. Bound item cou
 
 For dependency changes, install `cargo-deny` with
 `cargo install cargo-deny --version 0.20.2 --locked`, fetch sources with `cargo fetch --locked`,
+also run `cargo fetch --locked --manifest-path fuzz/Cargo.toml`,
 then run `cargo xtask licenses` and `node tests/license-policy.cjs`. CI runs these separately
 from native builds. The offline check covers all features and platforms in the locked graph,
 including development and vendored dependencies. Unapproved licenses fail; version-specific
 exceptions in `deny.toml` require source/notice review when upgraded. This checks declared license
 policy, not complete per-artifact license-text assembly or external system-library obligations.
+
+Run `cargo xtask fuzz` for bounded, offline, coverage-guided decoder/state smoke tests after
+installing the pinned development tools described in [fuzz/README.md](fuzz/README.md).
+Fuzzing uses its own lockfile and nightly toolchain; normal application builds remain stable.
 
 Agent implementation requests follow the [idea-to-PR contract](AGENTS.md) and the
 [delivery skill](.agents/skills/serein-delivery/SKILL.md). Native UI changes include synthetic

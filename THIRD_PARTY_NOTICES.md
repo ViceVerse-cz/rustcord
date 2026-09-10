@@ -16,6 +16,14 @@ exceptions; they retain their original obligations. This automated check does no
 complete license-text/notice coverage, source delivery compliance or native-system-library
 redistribution clearance. See CONTRIBUTING.md for installation and fixture checks.
 
+Development-only fuzzing uses cargo-fuzz 0.13.2 (MIT OR Apache-2.0) and
+libfuzzer-sys 0.4.13 ((MIT OR Apache-2.0) AND NCSA), from the Rust Fuzz project.
+The isolated `fuzz/Cargo.lock` is checked separately by `cargo xtask licenses`; its exact-version
+NCSA exception does not apply to application dependencies. These tools and LLVM libFuzzer are
+not included in text or voice packages. The registry wrapper retains MIT/Apache license texts
+and upstream LLVM attribution in its bundled libFuzzer sources. This declaration is not a
+redistribution review of independently distributed fuzz executables.
+
 Core components include egui/eframe/wgpu (MIT OR Apache-2.0), Tokio (MIT), serde (MIT OR Apache-2.0), reqwest (MIT OR Apache-2.0), tokio-tungstenite/tungstenite (MIT OR Apache-2.0 / MIT), rustls and its crypto/provider dependencies, Wry (MIT OR Apache-2.0), keyring (MIT OR Apache-2.0), and rusqlite (MIT) with SQLite (public domain). Consult the resolved inventory for precise expressions and native transitive dependencies, including AWS-LC/BoringSSL notices, ring, Unicode data, and egui’s font licenses.
 
 System frameworks and runtimes (Metal, WebKit/WKWebView, WebView2, GTK/WebKitGTK, OS credential stores) are supplied under their vendors’ terms and are not relicensed here. Text-mode packages contain no libdave, Opus, camera, or microphone implementation. No Discord logos, proprietary fonts, official client binaries/source, or emoji collection are redistributed. Abaddon and Discord Userdoccers were consulted as protocol evidence; no implementation source was copied.

@@ -2,8 +2,8 @@
 
 ## Current scope and gates
 
-Current slice: authorized single-message deletion after license checks PR #46,
-from main 899fca7. Full SPEC completion remains active; native automation and live-account
+Current slice: bounded offline fuzzing after authorized deletion PR #49,
+from main dc49d64. Full SPEC completion remains active; native automation and live-account
 validation remain owner-controlled. See the final dated entry for verification.
 
 ## Inline message spoilers (merged PR #36)
@@ -1617,3 +1617,33 @@ tests, `cargo xtask check`, and `cargo build --locked -p serein` passed against 
   UI resource measurements and screen-reader checks remain unavailable while desktop automation
   is owner-paused. No live account, deletion, microphone, speaker or call action was performed.
   Official bot-facing message documentation supplies protocol evidence, not normal-user proof.
+
+
+## Bounded protocol and state-transition fuzzing (September 10, 2026)
+
+- Baseline main `dc49d640302c5244c84953dfc8345396e82ce971`; isolated branch
+  `test/bounded-protocol-fuzzing`. SPEC14.1 now has two real coverage-guided libFuzzer targets
+  with AddressSanitizer: decoder/conversion boundaries and state-transition invariants.
+- The separate fuzz workspace has a committed lockfile, cargo-fuzz 0.13.2, libfuzzer-sys 0.4.13
+  and nightly-2026-09-09 (Rust 1.100.0-nightly). Shared dependency identities/checksums match
+  the application lock; no application dependencies or production APIs changed. Both graphs
+  are covered by offline license checks; the development-only NCSA exception is exact-version.
+- `cargo xtask fuzz` uses fresh copies of 26 small synthetic seeds, one worker per target,
+  30-second/one-million-run budgets, five-second input timeouts and a 512 MiB RSS ceiling.
+  Decoder inputs reach the 4 MiB wire boundary; state inputs are capped at 16 KiB/256 operations
+  and 24 MiB cumulative generated payload. Invocation corpora are cleaned; latest failure
+  artifacts are bounded by input size. CI has a separate Linux smoke job and seven-day artifact
+  retention. Normal native CI stays on Rust 1.98.1; no live/account/audio operation is involved.
+- Windows MSVC/ASAN runs passed: decoder 158,424 executions, coverage counters 2,469 to 5,486,
+  reported RSS 297 MiB; state 8,842 executions, coverage 2,436 to 3,339, reported RSS 382 MiB.
+  Each reported 31 seconds for its 30-second budget. Seeds were replayed during initialization,
+  corpora were removed and lockfiles stayed unchanged. These are tool-process observations,
+  not client memory measurements, coverage percentages or proof of absent bugs.
+- `cargo xtask check` passed 340 offline Rust tests, doctests, formatting, strict all-feature
+  Clippy, text-only compilation and policy checks on the original task baseline. The separate
+  fuzz formatter, both license graphs and all six license fixtures passed. Independent review
+  found no blockers. Native application builds were not repeated for this tooling-only change.
+  Linux/macOS fuzz execution and remote CI remain unverified until their checks finish.
+- Remaining spec implementation candidates include Linux distribution packaging and bounded
+  unknown-event diagnostics. Native accessibility/resource/storage tracing and owner-controlled
+  live text/voice interoperability remain separate, incomplete gates.
