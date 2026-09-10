@@ -87,6 +87,7 @@ impl LocalStore {
             CREATE TABLE IF NOT EXISTS channels(account TEXT NOT NULL,channel TEXT NOT NULL,touched INTEGER NOT NULL,PRIMARY KEY(account,channel));
             CREATE TABLE IF NOT EXISTS drafts(account TEXT NOT NULL,channel TEXT NOT NULL,content TEXT NOT NULL,PRIMARY KEY(account,channel));
             CREATE TABLE IF NOT EXISTS appearance(singleton INTEGER PRIMARY KEY CHECK(singleton=1),theme TEXT NOT NULL CHECK(theme IN ('light','dark')));
+            CREATE TABLE IF NOT EXISTS theme_variant(singleton INTEGER PRIMARY KEY CHECK(singleton=1),variant TEXT NOT NULL CHECK(length(variant) BETWEEN 1 AND 32));
             ")?;
         let has_avatar: bool = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_table_info('messages') WHERE name='avatar')",
@@ -165,6 +166,29 @@ impl LocalStore {
                 };
                 self.0.execute("INSERT INTO appearance VALUES(1,?1) ON CONFLICT(singleton) DO UPDATE SET theme=excluded.theme", [theme])?;
             }
+        }
+        Ok(())
+    }
+    /// Recolour preset key (see the UI crate's theme variants); `None` means the default.
+    pub fn theme_variant(&self) -> Result<Option<String>> {
+        Ok(self
+            .0
+            .query_row(
+                "SELECT variant FROM theme_variant WHERE singleton=1",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?)
+    }
+    pub fn save_theme_variant(&self, variant: Option<&str>) -> Result<()> {
+        match variant {
+            None => {
+                self.0.execute("DELETE FROM theme_variant", [])?;
+            }
+            Some(variant) if (1..=32).contains(&variant.len()) => {
+                self.0.execute("INSERT INTO theme_variant VALUES(1,?1) ON CONFLICT(singleton) DO UPDATE SET variant=excluded.variant", [variant])?;
+            }
+            Some(_) => return Err(StoreError::Capacity),
         }
         Ok(())
     }
@@ -714,6 +738,17 @@ mod tests {
         assert!(store.load_drafts(Id(1)).unwrap().is_empty());
         assert!(store.load_channel(Id(1), Id(30)).unwrap().is_empty());
         assert_eq!(store.appearance().unwrap(), Appearance::Dark);
+        assert_eq!(store.theme_variant().unwrap(), None);
+        store.save_theme_variant(Some("onyx")).unwrap();
+        assert_eq!(store.theme_variant().unwrap().as_deref(), Some("onyx"));
+        store.save_theme_variant(Some("sunset")).unwrap();
+        assert_eq!(store.theme_variant().unwrap().as_deref(), Some("sunset"));
+        assert_eq!(
+            store.save_theme_variant(Some(&"x".repeat(40))),
+            Err(StoreError::Capacity)
+        );
+        store.save_theme_variant(None).unwrap();
+        assert_eq!(store.theme_variant().unwrap(), None);
         store.save_appearance(Appearance::System).unwrap();
         drop(store);
         let store = LocalStore::open(&path).unwrap();

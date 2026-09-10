@@ -114,13 +114,16 @@ fn row_key(message: &Message, previous: Option<&Message>, boundary: Option<Id>) 
 }
 fn divider(ui: &mut egui::Ui, label: String, unread: bool) {
     let colors = crate::design::palette(ui);
-    let color = if unread { colors.accent } else { colors.muted };
-    ui.add_space(12.0);
+    let color = if unread { colors.danger } else { colors.muted };
+    ui.add_space(16.0);
     ui.horizontal(|ui| {
-        let font = egui::TextStyle::Small.resolve(ui.style());
+        ui.add_space(16.0);
+        let font = egui::FontId::new(12.0, crate::design::semibold_family(ui.ctx()));
         let text = ui.painter().layout_no_wrap(label.clone(), font, color);
-        let (rect, response) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), egui::Sense::hover());
+        let (rect, response) = ui.allocate_exact_size(
+            egui::vec2((ui.available_width() - 16.0).max(0.0), 20.0),
+            egui::Sense::hover(),
+        );
         response.widget_info(|| {
             egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), &label)
         });
@@ -146,33 +149,10 @@ fn divider(ui: &mut egui::Ui, label: String, unread: bool) {
             color,
         );
     });
-    ui.add_space(8.0);
+    ui.add_space(4.0);
 }
-fn action_button(ui: &mut egui::Ui, icon: &str, label: &str) -> egui::Response {
-    let response = ui.add(
-        egui::Button::new(RichText::new(if icon == "✎" { "" } else { icon }).size(18.0))
-            .frame(false)
-            .min_size(egui::vec2(28.0, 28.0)),
-    );
-    if icon == "✎" {
-        let center = response.rect.center();
-        ui.painter().add(egui::Shape::closed_line(
-            [
-                (-6.0, 6.0),
-                (-5.0, 1.0),
-                (3.0, -7.0),
-                (7.0, -3.0),
-                (-1.0, 5.0),
-            ]
-            .map(|(x, y)| center + egui::vec2(x, y))
-            .to_vec(),
-            ui.style().interact(&response).fg_stroke,
-        ));
-    }
-    response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), label)
-    });
-    response.on_hover_text(label)
+fn action_button(ui: &mut egui::Ui, icon: crate::icons::Icon, label: &str) -> egui::Response {
+    crate::icons::button(ui, icon, 28.0, label)
 }
 fn message_actions(
     ui: &mut egui::Ui,
@@ -183,14 +163,9 @@ fn message_actions(
     editing: &mut Option<(Id, Id, String)>,
     deleting: &mut Option<(Id, Id)>,
 ) {
-    let (menu, _) = egui::containers::menu::MenuButton::from_button(
-        egui::Button::new(RichText::new("…").color(crate::design::palette(ui).muted))
-            .frame(false)
-            .small()
-            .min_size(egui::vec2(28.0, 28.0)),
-    )
-    .ui(ui, |ui| {
-        ui.set_min_width(140.0);
+    let menu = crate::icons::button(ui, crate::icons::Icon::More, 28.0, "More");
+    egui::Popup::menu(&menu).show(|ui| {
+        ui.set_min_width(160.0);
         if ui.button("Copy message").clicked() {
             ui.ctx().copy_text(message.display_text().into_owned());
             ui.close();
@@ -233,7 +208,6 @@ fn message_actions(
             format!("Message actions for {}", message.author.name),
         )
     });
-    menu.on_hover_text("Message actions");
 }
 impl TimelineView {
     pub(super) fn viewing_latest(&self, channel: Id) -> bool {
@@ -426,20 +400,22 @@ impl TimelineView {
                     let background = ui.painter().add(egui::Shape::Noop);
                     let mut time_rect = None;
                     let row = egui::Frame::NONE
-                        .inner_margin(egui::Margin { left: 8, right: 8, top: if compact { 2 } else { 12 }, bottom: 2 })
+                        .inner_margin(egui::Margin { left: 16, right: 16, top: if compact { 1 } else { 14 }, bottom: 1 })
                         .show(ui, |ui| {
-                            ui.spacing_mut().item_spacing = egui::vec2(12.0, 4.0);
+                            ui.spacing_mut().item_spacing = egui::vec2(16.0, 4.0);
                             ui.horizontal_top(|ui| {
                                 if compact {
-                                    time_rect = Some(ui.allocate_exact_size(egui::vec2(36.0, 24.0), egui::Sense::hover()).0);
-                                } else if avatars.show(ui, &message.author, 36.0, state.demo).clicked() { *profile = Some(message.author.clone()); }
+                                    time_rect = Some(ui.allocate_exact_size(egui::vec2(40.0, 22.0), egui::Sense::hover()).0);
+                                } else if avatars.show(ui, &message.author, 40.0, state.demo).clicked() { *profile = Some(message.author.clone()); }
                                 ui.vertical(|ui| {
                                     ui.set_width(ui.available_width());
                                     if !compact {
-                                        ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 20.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                                            ui.add(egui::Label::new(RichText::new(&message.author.name).strong().color(colors.text)).truncate());
+                                        ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 22.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                            ui.spacing_mut().item_spacing.x = 8.0;
+                                            let author = ui.add(egui::Label::new(crate::design::medium(ui, &message.author.name, 15.5).color(colors.text_strong)).truncate().sense(egui::Sense::click()));
+                                            if author.clicked() { *profile = Some(message.author.clone()); }
                                             let time = timestamp(*id);
-                                            ui.label(RichText::new(format!("{:02}:{:02}", time.hour(), time.minute())).size(11.0).color(colors.muted)).on_hover_text(format!("{} UTC", time));
+                                            ui.label(RichText::new(format!("{:02}:{:02}", time.hour(), time.minute())).size(12.0).color(colors.muted)).on_hover_text(format!("{} UTC", time));
                                         });
                                     }
                                     if let Some(reply) = message.reply_to {
@@ -448,7 +424,7 @@ impl TimelineView {
                                             || "↳ Earlier message · outside loaded history".into(),
                                             |m| if crate::embeds::has_spoilers(m) { format!("↳ {} · Spoiler", m.author.name) } else { format!("↳ {}: {}", m.author.name, m.display_text().chars().take(120).collect::<String>().replace('\n', " ")) },
                                         );
-                                        ui.add(egui::Label::new(RichText::new(preview).small().color(colors.muted)).truncate());
+                                        ui.add(egui::Label::new(RichText::new(preview).size(13.0).color(colors.muted)).truncate());
                                     }
                                     if let Some(summary) = message.system_summary() {
                                         ui.label(RichText::new(summary).color(colors.muted));
@@ -490,27 +466,31 @@ impl TimelineView {
                     let focus = ui.interact(rect, ui.id().with("message-focus"), egui::Sense::focusable_noninteractive());
                     focus.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, format!("Message by {}. Tab for actions.", message.author.name)));
                     let retained = retained_toolbar.is_some_and(|(active, _)| active == *id);
-                    let hovered = ui.rect_contains_pointer(rect) && !egui::Popup::is_any_open(ui.ctx()) && retained_toolbar.is_none_or(|(active, _)| active == *id);
+                    // The floating toolbar overlaps the row above; pointer inside it keeps this row active.
+                    let toolbar_hover = self.toolbar.filter(|(active, toolbar)| *active == *id && ui.rect_contains_pointer(*toolbar)).is_some();
+                    let other_toolbar_hover = self.toolbar.filter(|(active, toolbar)| *active != *id && ui.rect_contains_pointer(*toolbar)).is_some();
+                    let hovered = (ui.rect_contains_pointer(rect) || toolbar_hover) && !other_toolbar_hover && !egui::Popup::is_any_open(ui.ctx()) && retained_toolbar.is_none_or(|(active, _)| active == *id);
                     if hovered || focus.has_focus() || keyboard_focus.as_ref().is_some_and(|r| r.id == focus.id) || retained {
-                        ui.painter().set(background, egui::Shape::rect_filled(rect, 0.0, colors.surface));
+                        ui.painter().set(background, egui::Shape::rect_filled(rect, 0.0, colors.hover.gamma_multiply(0.7)));
                         if let Some(rect) = time_rect {
                             let time = timestamp(*id);
-                            ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, format!("{:02}:{:02}", time.hour(), time.minute()), egui::FontId::proportional(10.0), colors.muted);
+                            ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, format!("{:02}:{:02}", time.hour(), time.minute()), egui::FontId::proportional(11.0), colors.muted);
                             ui.interact(rect, ui.id().with("timestamp"), egui::Sense::hover()).on_hover_text(format!("{} UTC", time));
                         }
                         let own = state.user.as_ref().is_some_and(|u| u.id == message.author.id);
-                        let toolbar_rect = egui::Rect::from_min_size(egui::pos2(rect.right() - if own { 128.0 } else { 98.0 }, rect.top()), egui::vec2(if own { 120.0 } else { 90.0 }, 28.0));
+                        let toolbar_rect = egui::Rect::from_min_size(egui::pos2(rect.right() - if own { 136.0 } else { 106.0 }, rect.top() - 10.0), egui::vec2(if own { 120.0 } else { 90.0 }, 28.0));
                         // A child overlay keeps hover from changing wrapping or cached row heights.
                         let mut toolbar = ui.new_child(egui::UiBuilder::new().id_salt("hover-actions").max_rect(toolbar_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
                         toolbar.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
                         toolbar.spacing_mut().button_padding = egui::vec2(4.0, 2.0);
                         toolbar.spacing_mut().interact_size.y = 28.0;
-                        toolbar.painter().rect_filled(toolbar_rect, 5.0, colors.raised);
+                        toolbar.painter().rect_filled(toolbar_rect, 6.0, colors.raised);
+                        toolbar.painter().rect_stroke(toolbar_rect, 6.0, egui::Stroke::new(1.0, colors.border), egui::StrokeKind::Inside);
                         if let Some(action) = crate::reactions::add_button(&mut toolbar, state.gateway_connected && state.freshness == model::Freshness::Fresh, state.reactions.writing.is_some()) {
                             self.reaction = Some((*id, action));
                         }
-                        if action_button(&mut toolbar, "↩", "Reply").clicked() { state.reply = Some(*id); }
-                        if own && !message.unsupported && action_button(&mut toolbar, "✎", "Edit message").clicked() { *editing = Some((message.channel, *id, message.content.clone())); }
+                        if action_button(&mut toolbar, crate::icons::Icon::Reply, "Reply").clicked() { state.reply = Some(*id); }
+                        if own && !message.unsupported && action_button(&mut toolbar, crate::icons::Icon::Pencil, "Edit message").clicked() { *editing = Some((message.channel, *id, message.content.clone())); }
                         message_actions(&mut toolbar, message, own, can_mark_read.then_some(&mut self.mark_read), &mut state.reply, editing, deleting);
                         self.toolbar = Some((*id, toolbar_rect));
                     }
@@ -565,15 +545,24 @@ impl TimelineView {
             && state.can_load_older();
         if (!self.following || state.history_before.is_some())
             && ui
-                .button(
-                    if state
-                        .selected
-                        .is_some_and(|channel| state.unread(channel) == Some(true))
-                    {
-                        "↓ New messages · Jump to latest"
-                    } else {
-                        "↓ Jump to latest"
-                    },
+                .add(
+                    egui::Button::new(
+                        crate::design::medium(
+                            ui,
+                            if state
+                                .selected
+                                .is_some_and(|channel| state.unread(channel) == Some(true))
+                            {
+                                "New messages · Jump to present"
+                            } else {
+                                "Jump to present"
+                            },
+                            13.0,
+                        )
+                        .color(crate::design::palette(ui).accent_text),
+                    )
+                    .fill(crate::design::palette(ui).accent)
+                    .corner_radius(6),
                 )
                 .clicked()
         {
@@ -855,7 +844,6 @@ mod tests {
                 vec![egui::Event::PointerMoved(row.center())],
             );
             assert!(hovered.iter().any(|(t, _)| t == "00:01"));
-            assert!(hovered.iter().any(|(t, _)| t == "↩"));
             assert_eq!(view.toolbar.unwrap().1.width(), 120.0);
             assert_eq!(view.heights, heights);
             let point = view.toolbar.unwrap().1.left_top() + egui::vec2(44.0, 14.0);
@@ -890,13 +878,16 @@ mod tests {
                 modifiers: egui::Modifiers::NONE,
             };
             for _ in 0..12 {
-                let painted = render(&mut view, &mut state, vec![key(egui::Key::Tab)]);
+                render(&mut view, &mut state, vec![key(egui::Key::Tab)]);
                 let focused = ctx
                     .memory(|m| m.focused())
                     .and_then(|id| ctx.read_response(id));
+                // Reply is the second 28px icon in the retained toolbar.
                 if focused.is_some_and(|r| {
-                    painted.iter().any(|(text, rect)| {
-                        text == "↩" && r.rect.width() < 40.0 && r.rect.contains_rect(*rect)
+                    view.toolbar.is_some_and(|(_, toolbar)| {
+                        toolbar.contains_rect(r.rect)
+                            && r.rect.width() < 40.0
+                            && (r.rect.left() - (toolbar.left() + 30.0)).abs() < 3.0
                     })
                 }) {
                     render(&mut view, &mut state, vec![key(egui::Key::Enter)]);

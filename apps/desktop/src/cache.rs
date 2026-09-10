@@ -8,6 +8,7 @@ use std::{
 pub enum Operation {
     LoadAppearance,
     SaveAppearance(Appearance),
+    SaveThemeVariant(Option<String>),
     LoadDrafts,
     LoadChannel { channel: Id, request: u64 },
     SaveDraft { channel: Id, content: String },
@@ -16,7 +17,7 @@ pub enum Operation {
     Forget,
 }
 pub enum Outcome {
-    Appearance(Appearance),
+    Appearance(Appearance, Option<String>),
     Drafts(BTreeMap<Id, String>),
     Channel {
         channel: Id,
@@ -46,7 +47,7 @@ impl Cache {
                     Operation::LoadAppearance => {
                         "Could not load saved appearance; using system theme"
                     }
-                    Operation::SaveAppearance(_) => {
+                    Operation::SaveAppearance(_) | Operation::SaveThemeVariant(_) => {
                         "Could not save appearance; change exists only in this session"
                     }
                     Operation::Forget => {
@@ -64,10 +65,15 @@ impl Cache {
                 };
                 let result = match &mut store {
                     Ok(store) => match operation {
-                        Operation::LoadAppearance => store.appearance().map(Outcome::Appearance),
+                        Operation::LoadAppearance => store.appearance().and_then(|appearance| {
+                            Ok(Outcome::Appearance(appearance, store.theme_variant()?))
+                        }),
                         Operation::SaveAppearance(appearance) => {
                             store.save_appearance(appearance).map(|_| Outcome::Saved)
                         }
+                        Operation::SaveThemeVariant(variant) => store
+                            .save_theme_variant(variant.as_deref())
+                            .map(|_| Outcome::Saved),
                         Operation::LoadDrafts => store.load_drafts(account).map(Outcome::Drafts),
                         Operation::LoadChannel { channel, request } => store
                             .load_channel(account, channel)

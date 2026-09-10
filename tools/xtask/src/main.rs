@@ -170,7 +170,11 @@ fn package(voice: bool) -> Result<(), String> {
     };
     std::fs::create_dir_all(resources.join("docs")).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(resources.join("licenses")).map_err(|e| e.to_string())?;
-    for file in ["NotoSansCJK-LICENSE.txt", "NotoSansArabic-OFL.txt"] {
+    for file in [
+        "NotoSansCJK-LICENSE.txt",
+        "NotoSansArabic-OFL.txt",
+        "Inter-OFL.txt",
+    ] {
         std::fs::copy(
             PathBuf::from("assets/fonts").join(file),
             resources.join("licenses").join(file),

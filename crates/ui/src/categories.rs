@@ -136,10 +136,13 @@ impl MessagingUi {
         if rows.is_empty() {
             ui.label(RichText::new("No conversations available here.").color(colors.muted));
         }
+        let dm_list = self.guild.is_none();
+        let row_height = if dm_list { 44.0 } else { 34.0 };
         egui::ScrollArea::vertical()
             .id_salt(("channel-list", self.guild))
-            .show_rows(ui, 36.0, rows.len(), |ui, range| {
-                ui.spacing_mut().item_spacing.y = 4.0;
+            .auto_shrink([false, false])
+            .show_rows(ui, row_height, rows.len(), |ui, range| {
+                ui.spacing_mut().item_spacing.y = 0.0;
                 for index in range {
                     match rows[index] {
                         Row::Participant(entry) => {
@@ -150,30 +153,56 @@ impl MessagingUi {
                         }
                         Row::Category(category, count) => {
                             let collapsed = self.collapsed_categories.contains(&category.id);
-                            let label =
-                                format!("{}  {}", if collapsed { ">" } else { "v" }, category.name);
-                            let response = ui
+                            let (rect, response) = ui
                                 .push_id(category.id, |ui| {
-                                    ui.add(
-                                        egui::Button::new(
-                                            RichText::new(label)
-                                                .size(11.0)
-                                                .strong()
-                                                .color(colors.muted),
-                                        )
-                                        .frame(false)
-                                        .right_text(count.to_string())
-                                        .min_size(egui::vec2(ui.available_width(), 36.0))
-                                        .truncate(),
+                                    ui.allocate_exact_size(
+                                        egui::vec2(ui.available_width(), row_height),
+                                        egui::Sense::click(),
                                     )
                                 })
-                                .inner
-                                .on_hover_text(format!(
-                                    "{} category · {} channels · {}",
-                                    category.name,
-                                    count,
-                                    if collapsed { "Expand" } else { "Collapse" }
-                                ));
+                                .inner;
+                            let color = if response.hovered() || response.has_focus() {
+                                colors.text_strong
+                            } else {
+                                colors.muted
+                            };
+                            crate::icons::paint(
+                                ui.painter(),
+                                if collapsed {
+                                    crate::icons::Icon::ChevronRight
+                                } else {
+                                    crate::icons::Icon::ChevronDown
+                                },
+                                egui::Rect::from_center_size(
+                                    egui::pos2(rect.left() + 7.0, rect.bottom() - 13.0),
+                                    egui::Vec2::splat(12.0),
+                                ),
+                                color,
+                            );
+                            let label = ui.painter().layout(
+                                category.name.to_uppercase(),
+                                egui::FontId::new(12.0, crate::design::semibold_family(ui.ctx())),
+                                color,
+                                (rect.width() - 24.0).max(10.0),
+                            );
+                            let label_rect = egui::Rect::from_min_size(
+                                egui::pos2(
+                                    rect.left() + 16.0,
+                                    rect.bottom() - 6.0 - label.size().y,
+                                ),
+                                egui::vec2(rect.width() - 24.0, label.size().y),
+                            );
+                            ui.painter().with_clip_rect(label_rect).galley(
+                                label_rect.min,
+                                label,
+                                color,
+                            );
+                            let response = response.on_hover_text(format!(
+                                "{} category · {} channels · {}",
+                                category.name,
+                                count,
+                                if collapsed { "Expand" } else { "Collapse" }
+                            ));
                             response.widget_info(|| {
                                 egui::WidgetInfo::labeled(
                                     egui::WidgetType::Button,
@@ -211,105 +240,145 @@ impl MessagingUi {
                             } else {
                                 state.unread_count(channel.id)
                             };
-                            let symbol = match channel.kind {
-                                1 | 3 => "@",
-                                2 | 13 => "♫",
-                                15 | 16 => "▤",
-                                10..=12 => "↳",
-                                _ => "#",
-                            };
-                            let name = if matches!(channel.kind, 15 | 16) {
-                                format!(
-                                    "{symbol}   {} · {}",
-                                    channel.name,
-                                    kind_label(channel.kind)
-                                )
-                            } else if channel.supports_text() {
-                                format!("{symbol}   {}", channel.name)
-                            } else {
-                                format!("{symbol}   {} · unavailable", channel.name)
-                            };
-                            let response = ui
+                            // Forum containers open their post archive; Discord lists them as browsable rows.
+                            let forum = channel.guild.is_some() && matches!(channel.kind, 15 | 16);
+                            let enabled = channel.supports_text() || forum;
+                            let (rect, response) = ui
                                 .push_id(channel.id, |ui| {
-                                    ui.horizontal(|ui| {
-                                        if nested {
-                                            ui.add_space(12.0);
-                                        }
-                                        if channel.guild.is_none()
-                                            && let Some(user) = channel.recipients.first()
-                                            && self
-                                                .avatars
-                                                .show(ui, user, 32.0, state.demo)
-                                                .clicked()
-                                        {
-                                            self.profile = Some(user.clone());
-                                        }
-                                        let archives = channel.guild.is_some() && matches!(channel.kind, 0 | 5 | 15 | 16);
-                                        let width = (ui.available_width() - if archives { 68.0 } else { 0.0 }).max(0.0);
-                                        let response = ui.allocate_ui(egui::vec2(width, 36.0), |ui| ui.add_enabled(
-                                            channel.supports_text(),
-                                            egui::Button::selectable(
-                                                active,
-                                                RichText::new(name).color(if active {
-                                                    colors.accent
-                                                } else {
-                                                    if unread { colors.text } else { colors.muted }
-                                                }),
-                                            )
-                                            .right_text(if count > 0 {
-                                                "        "
-                                            } else if unread {
-                                                "●"
-                                            } else {
-                                                ""
-                                            })
-                                            .min_size(egui::vec2(width, 36.0))
-                                            .corner_radius(7)
-                                            .truncate(),
-                                        )).inner;
-                                        if archives {
-                                            let allowed = state.can_archive(channel.id, model::archives::Kind::Public);
-                                            let archive = ui.add_enabled(
-                                                allowed,
-                                                egui::Button::new("Archive").min_size(egui::vec2(60.0, 32.0)),
-                                            ).on_hover_text("Browse archived threads; opening only loads their messages");
-                                            archive.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button,
-                                                allowed && ui.is_enabled(), format!("Archive for {}", channel.name)));
-                                            if archive.clicked() { self.archive_parent = Some(channel.id); }
-                                        }
-                                        response
-                                    })
-                                    .inner
+                                    ui.allocate_exact_size(
+                                        egui::vec2(ui.available_width(), row_height),
+                                        if enabled {
+                                            egui::Sense::click()
+                                        } else {
+                                            egui::Sense::hover()
+                                        },
+                                    )
                                 })
-                                .inner
-                                .on_hover_text(format!(
-                                    "{} · {}{}",
-                                    channel.name,
-                                    kind_label(channel.kind),
-                                    if unread && state.channel_unread(channel).is_none() {
-                                        " · Session activity; read sync unavailable"
-                                    } else if count > 0 {
-                                        " · Notification count may be a lower bound"
-                                    } else {
-                                        ""
+                                .inner;
+                            let row = rect.shrink2(egui::vec2(0.0, 1.0));
+                            let hovered = enabled && (response.hovered() || response.has_focus());
+                            if active {
+                                ui.painter().rect_filled(row, 8, colors.selected);
+                            } else if hovered {
+                                ui.painter().rect_filled(row, 8, colors.hover);
+                            }
+                            if unread && !active {
+                                ui.painter().rect_filled(
+                                    egui::Rect::from_center_size(
+                                        egui::pos2(row.left() - 6.0, row.center().y),
+                                        egui::vec2(4.0, 8.0),
+                                    ),
+                                    2,
+                                    colors.text_strong,
+                                );
+                            }
+                            let name_color = if !enabled {
+                                colors.muted.gamma_multiply(0.6)
+                            } else if active || hovered || unread {
+                                colors.text_strong
+                            } else {
+                                colors.muted
+                            };
+                            let badge_width = if count > 0 { 34.0 } else { 0.0 };
+                            let content = egui::Rect::from_min_max(
+                                egui::pos2(
+                                    row.left() + 8.0 + if nested { 14.0 } else { 0.0 },
+                                    row.top(),
+                                ),
+                                egui::pos2(row.right() - 8.0 - badge_width, row.bottom()),
+                            );
+                            let mut inner = ui.new_child(
+                                egui::UiBuilder::new()
+                                    .max_rect(content)
+                                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                            );
+                            inner.spacing_mut().item_spacing.x = if dm_list { 12.0 } else { 6.0 };
+                            if channel.guild.is_none() {
+                                if let Some(user) = channel.recipients.first() {
+                                    if self
+                                        .avatars
+                                        .show(&mut inner, user, 32.0, state.demo)
+                                        .clicked()
+                                    {
+                                        self.profile = Some(user.clone());
                                     }
-                                ))
-                                .on_disabled_hover_text(format!(
-                                    "{} · {}",
-                                    channel.name,
-                                    kind_label(channel.kind)
-                                ));
+                                } else {
+                                    design::avatar(&mut inner, &channel.name, 32.0);
+                                }
+                            } else {
+                                let icon = match channel.kind {
+                                    13 => crate::icons::Icon::Speaker,
+                                    15 | 16 => crate::icons::Icon::Forum,
+                                    10..=12 => crate::icons::Icon::Threads,
+                                    _ => crate::icons::Icon::Hash,
+                                };
+                                crate::icons::inline(
+                                    &mut inner,
+                                    icon,
+                                    20.0,
+                                    name_color.gamma_multiply(if active || hovered {
+                                        1.0
+                                    } else {
+                                        0.85
+                                    }),
+                                );
+                            }
+                            let mut label = String::from(channel.name.as_str());
+                            if !enabled {
+                                label.push_str(" · unavailable");
+                            }
+                            let subtitle = (dm_list && channel.kind == 3)
+                                .then(|| format!("{} Members", channel.recipients.len().max(1)));
+                            let name =
+                                egui::Label::new(design::medium(ui, label, 15.0).color(name_color))
+                                    .truncate()
+                                    .selectable(false);
+                            if let Some(subtitle) = subtitle {
+                                inner.vertical(|ui| {
+                                    ui.spacing_mut().item_spacing.y = 0.0;
+                                    ui.add_space(((row.height() - 34.0) * 0.5).max(0.0));
+                                    ui.add(name);
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(subtitle).size(12.0).color(colors.muted),
+                                        )
+                                        .truncate()
+                                        .selectable(false),
+                                    );
+                                });
+                            } else {
+                                inner.add(name);
+                            }
                             if count > 0 {
                                 crate::notifications::badge(
                                     ui,
-                                    response.rect.right_center() - egui::vec2(19.0, 0.0),
+                                    row.right_center() - egui::vec2(20.0, 0.0),
                                     count,
+                                    if active {
+                                        colors.selected
+                                    } else if hovered {
+                                        colors.hover
+                                    } else {
+                                        colors.sidebar
+                                    },
                                 );
                             }
+                            let response = response.on_hover_text(format!(
+                                "{} · {}{}",
+                                channel.name,
+                                kind_label(channel.kind),
+                                if unread && state.channel_unread(channel).is_none() {
+                                    " · Session activity; read sync unavailable"
+                                } else if count > 0 {
+                                    " · Notification count may be a lower bound"
+                                } else {
+                                    ""
+                                }
+                            ));
                             response.widget_info(|| {
                                 egui::WidgetInfo::labeled(
                                     egui::WidgetType::Button,
-                                    channel.supports_text(),
+                                    enabled,
                                     format!(
                                         "{}{}; {} notifications",
                                         channel.name,
@@ -318,18 +387,12 @@ impl MessagingUi {
                                     ),
                                 )
                             });
-                            if active {
-                                ui.painter().rect_filled(
-                                    egui::Rect::from_min_size(
-                                        response.rect.left_top() + egui::vec2(0.0, 9.0),
-                                        egui::vec2(3.0, 18.0),
-                                    ),
-                                    2,
-                                    colors.accent,
-                                );
-                            }
-                            if response.clicked() {
-                                selected = Some(channel.id);
+                            if enabled && response.clicked() {
+                                if forum {
+                                    self.archive_parent = Some(channel.id);
+                                } else {
+                                    selected = Some(channel.id);
+                                }
                             }
                         }
                     }
@@ -470,7 +533,8 @@ mod tests {
         assert!(state.select(Id(7)).is_none());
         let ctx = egui::Context::default();
         let mut picked = None;
-        for key in [egui::Key::Tab, egui::Key::Enter] {
+        // The forum row itself opens its archive; the second Tab reaches the loaded post.
+        for key in [egui::Key::Tab, egui::Key::Tab, egui::Key::Enter] {
             ctx.run_ui(
                 egui::RawInput {
                     events: vec![egui::Event::Key {
@@ -489,5 +553,6 @@ mod tests {
             .drop_without_applying_deltas();
         }
         assert_eq!(picked, Some(Id(8)));
+        assert!(view.archive_parent.is_none());
     }
 }

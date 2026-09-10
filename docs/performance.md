@@ -609,3 +609,17 @@ Native samples use the same existing `--demo --demo-chat` fixture, default viewp
 Replay: `cargo replay`, then one warmup and five direct `replay-bench` runs per revision. Baseline measured runs: 29.622583, 29.331958, 29.198583, 29.183917, 29.527458 ms. After: 29.256916, 29.038542, 28.407292, 28.603875, 28.687209 ms. Both retain 500 records / 220,992–221,477 estimated bytes. These timings overlap; no speed improvement is claimed. Replay measures the existing 100,000 ordinary synthetic reducer events, not system-message rendering or SQLite migration. A stale cross-worktree Cargo artifact initially failed the changed replay compile; rebuilding the model resolved it before these measured runs.
 
 The screenshot pair uses an identical new eight-event synthetic fixture (`--demo --demo-system-messages`) and scroll-to-top at the same viewport/appearance. Baseline screenshot was rebuilt at `6053299` with only the fixture and demo selector backported; it still discards kinds and renders the old placeholder. Package size and CPU/RSS baseline use the unmodified baseline. Dark native rendering/scrolling inspected; light/narrow rendering checked with headless egui at 280px, wide/dark at 900px. Native light-theme selection did not visibly change via automation, so native light/keyboard, display scale, p95 startup/frame latency, GPU allocation and other platforms remain unverified. No live Discord compatibility claim.
+
+
+## Discord-style theme shell — September 10, 2026
+
+Baseline `85fde15` (`main`) versus branch `feat/discord-theme-shell`, same macOS 27.0 arm64 host (Apple M1 Pro, 16 GiB), pinned Rust 1.98.1, release thin-LTO profile, `cargo build --locked --release -p serein` in separate target directories.
+
+| Metric / method | Baseline | After | Delta |
+| --- | --- | --- | --- |
+| Text executable, bytes | 46,429,696 | 47,260,928 | +831,232 (+1.79%) |
+| Native RSS median KiB (`--demo --demo-chat`, 10 samples) | 153,488 | 151,280 | -2,208 |
+| Native RSS sample peak KiB | 153,488 | 151,280 | -2,208 |
+| Native CPU median % | 0.0 | 0.0 | +0 |
+
+The size increase is the three embedded Inter faces (799,444 bytes of OFL font data) plus the new vector icon and theme code; no dependency changed (lockfile untouched). Native samples: fresh release process per revision, default 1120×760 viewport, dark system appearance, Default preset, 10-second warmup, ten `ps -p PID -o %cpu=,rss=` samples at one-second intervals. Every sample was identical within each run, so the RSS difference is a single-process comparison, not a distribution; it does not establish memory behaviour for gradient presets (which add one full-window mesh per frame), long sessions or live channels. Reducer replay was not rerun: no reducer, cache or protocol code changed. p95 frame/startup latency, GPU allocation and Windows/Linux were not measured.
