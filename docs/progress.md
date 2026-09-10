@@ -2,7 +2,13 @@
 
 ## Current scope and gates
 
-Current work: inline message spoilers (SPEC 9.3), based on merged main b92a082 / typing PR #35.
+Current slice: unread navigation and bounded forward history after custom-status PR #40, from
+main c4ae54d. Full SPEC completion remains active; native automation and live-account validation
+remain owner-controlled. See the final dated entry for this slice and its verification.
+
+## Inline message spoilers (merged PR #36)
+
+Historical slice: inline message spoilers (SPEC 9.3), based on merged main b92a082 / typing PR #35.
 Only marked text regions are concealed; normal surrounding text and ordinary media remain
 visible. Up to 32 regions have separate reveal bits, and spoiler-marked media has an independent
 explicit reveal. Hidden text is skipped before links, references, emoji and selection rendering.
@@ -1373,3 +1379,166 @@ contrast checks pass. Live role behavior remains owner-unverified. Release text/
 executables grew 40,720/40,592 bytes; reducer median 37.213→38.166 ms. Higher noisy native
 RSS samples are disclosed in docs/performance.md. The debug binary includes both the member
 loading repairs and role display. Only agent-owned offline preview processes were closed.
+
+## Voice completion and recovery fixes - September 10, 2026
+
+Baseline main `9fcce51`, isolated branch `fix/voice-completion`, Windows Rust 1.98.1.
+The original dirty checkout and the unfinished custom-status worktree remain separate.
+
+Implemented bounded resumption for voice-server close 4015 (terminal 4014 still ends the call),
+and ignored bounded pre-group DAVE proposals according to the initial-group procedure.
+Device readiness now acknowledges the current device/security revision, preventing rapid
+pause/resume or late callbacks from leaving the UI stuck or accepting obsolete readiness.
+Denied SPEAK opens playback without selecting/opening a microphone; mute/PTT remains independent
+of device configuration. Revoked VIEW_CHANNEL removes stored voice rosters and prevents late
+updates or sidebar/central rendering from exposing inaccessible participants.
+
+The mixer now fills each 20 ms playback tick from short Opus packets, starts a full eight-packet
+jitter queue before it can repeatedly reset, and preserves 5/60/120 ms lost-packet timing within
+the existing 5,760-sample per-speaker PCM bound. At most eight packets are decoded per tick and
+three consecutive missing packets are concealed; no encoded/PCM queue or dependency grew.
+
+Validation: final `cargo xtask check` passed all 296 offline tests, strict all-feature Clippy,
+formatting, text-only compilation and policy checks. Tests use synthetic MLS keys, localhost
+WebSocket/UDP, device-free callbacks and independent Opus decoding. Independent review found
+and resolved long-packet concealment timing and stale device-error handling issues. Native
+automation remains owner-paused; no new screenshots, microphone/speaker access, Discord calls,
+or account actions were performed. Live two-way audio, physical device loss/switching, echo,
+real-time callback behavior and cleanup on each OS remain unverified; milestone 4 has NOT passed.
+Both `cargo xtask package` and `cargo xtask package-voice` passed. The voice executable stayed
+at 54,142,464 bytes; text grew 2,560 bytes. Release replay and 1/8/63-speaker mixer workloads
+passed with no measured slowdown; results and limits are in docs/performance.md.
+
+
+## Voice stuck during connection - September 10, 2026
+
+The owner reported that the voice-enabled build starts a call but neither direction has audio
+and the call remains in a connection state. Baseline main `b72b3b1`; work is isolated in
+`fix/voice-negotiation`, preserving the running owner process and unrelated custom-status work.
+
+The outgoing key package contained an extra four-byte MLSMessage header compared with libdave
+and the inspected reference client's actual send chain. Removed that header and replaced the
+fixture's matching assumption with exact raw-KeyPackage parsing and cryptographic validation.
+The source/whitepaper discrepancy is documented in the voice adapter README. This is a strong
+candidate for the reported negotiation failure; the owner's live result has not been reverified.
+
+Connection progress now distinguishes transport, UDP, encryption and native-device opening;
+static negotiation timeout messages identify the missing stage. Device opening now has a
+20-second Desktop watchdog. CPAL's synchronous default-device format lookup can wait without a
+bound; the watchdog disables audio and requests departure while retaining the retiring worker,
+preventing repeated stuck workers. It cannot forcibly release an OS call that never returns.
+
+`cargo xtask check` passes: 298 offline tests, format, strict all-feature Clippy, text-only compile
+and policy. Synthetic tests cover raw key-package validation, localhost encrypted DM/guild
+negotiation and resume, status order, missing group versus pending transition, and the device
+watchdog boundary/reset. Independent source review found no remaining blocker in this diff.
+No live call, microphone, speaker, native automation or account action was performed by the
+agent. The previous native pause remains respected; screenshots and physical audio remain
+unverified. Milestone 4 remains open. Both unsigned Windows packages pass; text executable size is
+unchanged and voice grows 4,096 bytes. Package/replay measurements are in docs/performance.md.
+
+
+After implementation, the owner explicitly requested running the build. Launched the new voice
+release executable from the isolated negotiation package; process 28944 exposed a responding
+Serein window. This confirms launch only. No call controls, microphone, account contents or
+native screenshots were accessed; the owner performs the live retry.
+
+
+## Incoming custom-status updates (September 10, 2026)
+
+- Baseline: main `5b2cc9e873f0040c9fdf85c37a456872b685000e`; resumed six paused task files
+  on `fix/custom-status-updates` and fast-forwarded without changing their hashes.
+- Complete presence values now carry custom text through protocol, the loaded Gateway mirror,
+  bounded event admission and reducer to People and an open profile. Status and custom-text
+  patches resolve independently; bursts retain the latest complete values at a fixed 100-ms
+  deadline. No additional profile requests, subscriptions, persistence or dependencies.
+- Shared snapshot/update activity parsing caps count/input strings and normalizes only first
+  custom activity text. Atomic member admission retains the existing 100-row/128-KiB ceiling;
+  compact events allow 64 KiB including vector/string capacities.
+- Native automation remains owner-paused; before/after screenshots, native resource sampling
+  and live account delivery are not verified. Headless synthetic UI assertions exercise both
+  displayed copies without a refetch, and localhost Gateway tests exercise wire/coalescing.
+- `cargo xtask check` passed: 304 offline Rust tests, doctests, formatting, strict all-feature
+  Clippy, text-only compilation and policy checks. The first focused run caught serde structs
+  accepting positional emoji arrays; a map-only visitor and update/snapshot regressions fixed
+  that shape validation. Independent code review found no remaining blocker.
+- `cargo xtask package` and `cargo xtask package-voice` passed. Text/voice executables grow
+  13,824/13,312 bytes; installed packages and ZIPs are measured in docs/performance.md.
+  `cargo replay` plus one warmup/five direct runs passed, retaining 500 messages within the
+  unchanged estimated 228,992..229,477-byte range. Timings are noisy; no speedup claim.
+
+## September 10, 2026 — message images and continuation spacing
+
+Implemented responsive rows for adjacent image attachments (two columns, one below 280 pt),
+with aspect-preserving previews and individually accessible viewer actions. Image filenames
+are no longer captions in chat; file attachment names/downloads and viewer metadata remain.
+Removed final Markdown block newlines that created a blank line after normal messages,
+preserving internal breaks and existing author/reply/date/unread grouping boundaries.
+Updated width-aware timeline estimates and added a second synthetic image to the default demo.
+No network, credential, storage, decoder, dependency or cache-limit change.
+
+Baseline: clean task branch `t3code/improve-message-images-spacing`, commit `c4ae54d`, equal
+to fetched `origin/main`; Rust 1.98.1, macOS 27.0 / Apple M1 Pro / 16 GiB. Reused this task's
+branch. Baseline and changed release packages are kept separately under ignored `target/`.
+`cargo test --locked -p ui`: 85 passed. `cargo xtask check`: passed strict all-feature Clippy,
+307 workspace/doc tests, text-only check and repository policy checks. Regression coverage
+checks image wrapping/click targets/hidden captions and compact rows with internal newlines;
+the existing short-viewport embed assertion now accounts for removal of its blank text line.
+Native screenshots, release package measurements and remaining platform limits are recorded
+in `docs/pr-evidence/message-images-spacing/` and `docs/performance.md`.
+
+`cargo xtask package` and `cargo xtask package-voice` passed; host packages were ad-hoc
+signed/verified, not notarized. Native dark/light gallery screenshots and unchanged chat-fixture
+before/after screenshots were inspected. The second image opened via its accessible action;
+Escape closed the viewer. Narrow layout was checked headlessly because native resize automation
+did not resize the window. Native control reconnection after relaunch required unique local
+bundle IDs (evidence copies only). Executable deltas: text +16,960 bytes (0.036%), voice +544
+bytes (0.001%). Idle CPU median 0.0% in both matched runs; RSS varied with desktop conditions,
+so there is no established memory improvement. See the full measurements and target miss.
+Windows/Linux visual checks, live Discord behavior, screen readers and latency remain unverified.
+
+Conflict refresh: merged `origin/main` at `9ce22a9`, preserving its unread-navigation and
+forward-history implementation alongside the gallery/spacing changes. Conflicts were limited
+to this append-only progress log and `docs/performance.md`; both sets of records were retained.
+`cargo xtask check` passed after the merge, including formatting, strict all-feature Clippy,
+workspace tests, the text-only build and policy checks.
+
+## Unread navigation and forward history (September 10, 2026)
+
+- Baseline: clean main `c4ae54def29b3cb87984a59d171b47f0a483283a`; isolated worktree/branch
+  `feat/unread-navigation`. SPEC8.2/9.4 requires preserving reading position and deliberate read
+  state. Jump to unread now starts after the service read boundary and Next messages walks
+  forward in bounded replacement pages. Existing older history and explicit present navigation
+  remain available, with drafts/reply context preserved.
+- A known unread gap does not auto-ack just because the first recent page opens at its bottom.
+  UI actions suppress automatic ACKs while browsing, including short pages and empty results.
+- History requests retain existing permissions, cancellation, request/session generations and
+  response limits; after pages validate every returned ID above the cursor. Latest-page SQLite
+  hydration never substitutes for a forward request. Demo pages follow the same cursor shape.
+- Review found and fixed distant Gateway/HTTP-confirmed messages splicing a live tail into old
+  history, deletion knowledge lost while suppressing a distant source, and progress lost when
+  every page message/newest navigation message was deleted. Bounded accepted cursors/full-page
+  state preserve forward progress without treating an after-page maximum as the channel latest.
+- Native automation remains owner-paused. Native before/after screenshots, frame/resource
+  measurements, screen-reader inspection and live account delivery are unverified. No account,
+  message or audio-device actions were performed.
+- `cargo xtask check` passed 313 offline Rust tests, doctests, formatting, strict all-feature
+  Clippy, text-only compilation and policy checks. Synthetic tests cover local HTTP cursor
+  queries/exclusivity/capacity, demo after-pages, deleted/empty pages, stale requests, old-window
+  sends in either arrival order, cursor replacement, and keyboard/pointer UI navigation.
+  A UI test initially clicked the explanatory history notice; targeting the actual button
+  fixed the test without weakening assertions. Independent review findings are resolved.
+- Both unsigned Windows packages passed. Text/voice executables grow 8,704/10,752 bytes.
+  Package/ZIP deltas and one-warmup/five-run replay results are in docs/performance.md;
+  retained 500-message data remains 228,992..229,477 estimated bytes. No speedup claim.
+
+## Server member sync main refresh — September 10, 2026
+
+Fast-forwarded `fix/server-member-sync` to its published head `71ee144`, then merged
+`origin/main` at `5f11cb9` without rewriting branch history. The Gateway test conflict keeps
+the member diagnostic cap and role-membership coverage alongside main's newer partial-presence
+coalescing regression. Append-only performance, progress and storage records from both branches
+were retained. No feature behavior or resource limit was intentionally changed by the merge.
+The focused Gateway member suite passed 9 tests. `cargo xtask check` and
+`cargo build --locked -p serein` passed after adding neutral display metadata to two new
+main-branch test fixtures that construct the extended role/member models.

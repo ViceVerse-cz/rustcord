@@ -75,34 +75,52 @@ impl Mixer {
         let mut active = false;
         let mut heard = false;
         for speaker in &mut self.speakers {
-            if speaker.offset == speaker.length {
-                let Some(opus) = speaker.jitter.pop() else {
-                    continue;
-                };
-                let limit = if opus.is_empty() {
-                    960
-                } else {
-                    speaker.pcm.len()
-                };
-                let Ok(length) =
-                    speaker
-                        .decoder
-                        .decode_float(&opus, &mut speaker.pcm[..limit], false)
-                else {
-                    continue;
-                };
-                speaker.offset = 0;
-                speaker.length = length;
-                heard |= !opus.is_empty() && opus != davey::OPUS_SILENCE_PACKET;
-            }
-            let end = (speaker.offset + 960).min(speaker.length);
-            for (mixed, sample) in output.iter_mut().zip(&speaker.pcm[speaker.offset..end]) {
-                if sample.is_finite() {
-                    *mixed += sample;
+            let mut filled = 0;
+            let mut decoded = 0;
+            while filled < output.len() {
+                if speaker.offset == speaker.length {
+                    // The shortest supported packet is 2.5ms: at most eight decodes per tick.
+                    if decoded == 8 {
+                        break;
+                    }
+                    let Some(opus) = speaker.jitter.pop() else {
+                        break;
+                    };
+                    decoded += 1;
+                    let limit = if opus.is_empty() {
+                        // Preserve the lost packet duration; long concealment drains over 20ms ticks.
+                        speaker
+                            .decoder
+                            .get_last_packet_duration()
+                            .unwrap_or(960)
+                            .clamp(120, 5760) as usize
+                    } else {
+                        speaker.pcm.len()
+                    };
+                    let Ok(length) =
+                        speaker
+                            .decoder
+                            .decode_float(&opus, &mut speaker.pcm[..limit], false)
+                    else {
+                        continue;
+                    };
+                    speaker.offset = 0;
+                    speaker.length = length;
+                    heard |= !opus.is_empty() && opus != davey::OPUS_SILENCE_PACKET;
                 }
+                let count = (output.len() - filled).min(speaker.length - speaker.offset);
+                for (mixed, sample) in output[filled..filled + count]
+                    .iter_mut()
+                    .zip(&speaker.pcm[speaker.offset..speaker.offset + count])
+                {
+                    if sample.is_finite() {
+                        *mixed += sample;
+                    }
+                }
+                speaker.offset += count;
+                filled += count;
+                active |= count != 0;
             }
-            speaker.offset = end;
-            active = true;
         }
         // ponytail: hard limiting bounds simultaneous speakers; add a soft limiter if clipping is audible.
         output
@@ -161,6 +179,111 @@ mod tests {
         assert!(together.announce(65, 165).is_err());
         assert_eq!(together.speakers.len(), 63);
     }
+    #[test]
+    fn short_packets_fill_realtime_ticks_without_silence_or_reorder_starvation() {
+        for samples in [120, 240, 480, 960, 2880] {
+            let mut mixer = Mixer::default();
+            mixer.announce(1, 11).unwrap();
+            let mut encoder = Encoder::new(48_000, Channels::Mono, Application::Audio).unwrap();
+            let mut reference = Decoder::new(48_000, Channels::Mono).unwrap();
+            let mut expected = std::collections::VecDeque::new();
+            let mut sequence = 0;
+            let mut played = 0;
+            for tick in 0..18 {
+                // Packets arrive at their actual duration, before the shared 20ms playout tick.
+                let packets = if samples <= 960 {
+                    960 / samples
+                } else {
+                    usize::from(tick % 3 == 0)
+                };
+                for _ in 0..packets {
+                    let pcm: Vec<_> = (0..samples)
+                        .map(|index| {
+                            ((usize::from(sequence) * samples + index) as f32 * 0.037).sin() * 0.2
+                        })
+                        .collect();
+                    let mut encoded = [0; 1275];
+                    let len = encoder.encode_float(&pcm, &mut encoded).unwrap();
+                    let packet = &encoded[..len];
+                    let mut decoded = [0.0; 5760];
+                    let length = reference.decode_float(packet, &mut decoded, false).unwrap();
+                    assert_eq!(length, samples);
+                    expected.extend(decoded[..length].iter().copied());
+                    mixer.push(11, sequence, packet.to_vec());
+                    sequence = sequence.wrapping_add(1);
+                }
+                if let Some(frame) = mixer.pop().0 {
+                    played += 1;
+                    for actual in frame {
+                        let expected = expected
+                            .pop_front()
+                            .expect("playout cannot outrun received PCM");
+                        assert!(
+                            (actual - expected).abs() < 0.0001,
+                            "duration={samples} tick={tick}"
+                        );
+                    }
+                }
+            }
+            assert!(
+                played >= 16,
+                "duration={samples}: short packets must not starve"
+            );
+        }
+    }
+
+    #[test]
+    fn packet_loss_preserves_short_and_long_packet_timing() {
+        for samples in [240, 2880, 5760] {
+            let mut mixer = Mixer::default();
+            mixer.announce(1, 11).unwrap();
+            let mut encoder = Encoder::new(48_000, Channels::Mono, Application::Audio).unwrap();
+            encoder.set_bitrate(opus2::Bitrate::Bits(32_000)).unwrap();
+            let mut reference = Decoder::new(48_000, Channels::Mono).unwrap();
+            let mut expected = Vec::new();
+            for sequence in 0..4 {
+                let mut encoded = [0; 1275];
+                let input: Vec<f32> = (0..samples.min(2880))
+                    .map(|i| (i as f32 * 0.037).sin() * 0.2)
+                    .collect();
+                let mut len = encoder.encode_float(&input, &mut encoded).unwrap();
+                if samples == 5760 {
+                    // A valid 120ms Opus packet can aggregate two matching 60ms packets.
+                    let packet = encoded[..len].to_vec();
+                    len = opus2::Repacketizer::new()
+                        .unwrap()
+                        .combine(&[&packet, &packet], &mut encoded)
+                        .unwrap();
+                }
+                let mut decoded = vec![0.0; samples];
+                let packet = if sequence == 1 {
+                    &[][..]
+                } else {
+                    &encoded[..len]
+                };
+                assert_eq!(
+                    reference.decode_float(packet, &mut decoded, false).unwrap(),
+                    samples
+                );
+                expected.extend(decoded);
+                if sequence != 1 {
+                    mixer.push(11, sequence, packet.to_vec());
+                }
+            }
+            assert!(mixer.pop().0.is_none());
+            assert!(mixer.pop().0.is_none());
+            for expected in expected.as_chunks::<960>().0 {
+                let frame = mixer.pop().0.expect("one 20ms frame per playout tick");
+                for (actual, expected) in frame.iter().zip(expected) {
+                    assert!(
+                        (actual - expected).abs() < 0.0001,
+                        "packet duration={samples}"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     #[ignore = "synthetic release workload; run with --release --ignored --nocapture"]
     fn synthetic_mix_workload() {

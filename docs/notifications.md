@@ -79,3 +79,24 @@ The integrated Windows adapter was compiled against notify-rust 4.18: its Window
 not publicly exported, so the worker retains a success marker and drops the unused response
 receiver; dismissal still uses Serein's own registered app ID. Windows builds and synthetic
 queue checks are evidence of compilation/state handling, not observed native toast delivery.
+
+
+## Reading from an unread boundary
+
+Jump to unread requests one 50-message page after the service read marker; a known empty marker
+uses the implementation-supported zero cursor. Unknown remote read state does not invent an
+unread start. Next messages replaces the active window with the next bounded page; older history
+and Jump to present remain available. No request automatically advances a read marker. A first
+fresh view whose known unread marker is outside the loaded window stays in browsing mode until
+the owner deliberately returns to present or uses the existing explicit mark-read action.
+
+Incoming messages and successful sends continue to update delivery/navigation state while
+browsing, but do not append a disconnected latest tail to that old page. Known deletions still
+invalidate displayed bodies. Accepted page cursors allow forward progress even if every returned
+message was deleted while the request ran. Drafts and reply context survive navigation.
+
+[Get Channel Messages](https://docs.discord.com/developers/resources/message#get-channel-messages)
+documents exclusive before/after cursors. Normal-user after paging and zero as the oldest cursor
+are evidenced by the primary [history implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/abc.py)
+and [oldest object](https://github.com/dolfies/discord.py-self/blob/master/discord/object.py).
+These references and local socket fixtures do not prove this client's live account delivery.

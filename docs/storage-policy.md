@@ -190,10 +190,11 @@ text, with no extra rendered-token storage.
 
 
 Loaded People presence is session-only within the existing 100-row / 128-KiB member mirror.
-The Gateway additionally holds at most 100 pending IDs and normalized optional status strings
-(each at most seven bytes), plus bounded BTreeMap node overhead. An emitted compact batch is
-limited to 100 entries / 8 KiB including allocated vector/string capacity and uses the existing
-bounded event queue. Wire decoding keeps the existing 4-MiB cap and drops unrelated fields.
+The Gateway additionally holds at most 100 pending IDs and complete normalized presence values
+(each at most seven status bytes plus 128 characters / 512 bytes of custom text), plus bounded
+BTreeMap node overhead. An emitted compact batch is limited to 100 entries / 64 KiB including allocated vector/string capacity and uses the existing
+bounded event queue. Wire decoding keeps the existing 4-MiB cap, consumes at most 16 activities
+one at a time (state <=4096 bytes, emoji name <=128 bytes), and drops unrelated fields.
 Presence growth is checked against the member budget before mutation. Full snapshots and
 subscription/session invalidation clear pending status batches. No presence, activity or client
 device history is saved to SQLite, logs or diagnostics; status-only changes do not persist chat
@@ -238,3 +239,11 @@ non-control characters; owned string capacities count toward both event and mirr
 Member rows retain at most 512 role IDs, bounded while decoding and checked at state admission;
 their vector capacities count toward the existing active-pane byte bound. No role directory,
 new cache, persistent schema, or network endpoint is introduced.
+
+Unread/forward navigation reuses the cancellable history worker, 50-message response limit,
+500-row/4-MiB active timeline and existing global resident budget. It replaces the selected
+window, preserving bounded deletion/reconciliation metadata and drafts. Three fixed-size
+cursor fields and a full-page flag are session-only. Forward-target pages are not restored
+from the SQLite latest-page cache or parked in the resident recent-window cache. Accepted
+message metadata remains subject to ordinary account history persistence; no new cache,
+queue, directory fetch or background pagination is introduced.

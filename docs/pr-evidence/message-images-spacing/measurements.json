@@ -1,0 +1,118 @@
+{
+  "packages": {
+    "baseline": {
+      "exe_bytes": 47434160,
+      "installed_bytes": 48060349,
+      "archive_bytes": 30648320
+    },
+    "baseline-voice": {
+      "exe_bytes": 50270384,
+      "installed_bytes": 51126784,
+      "archive_bytes": 31969280
+    },
+    "after": {
+      "exe_bytes": 47451120,
+      "installed_bytes": 48079527,
+      "archive_bytes": 30658560
+    },
+    "after-voice": {
+      "exe_bytes": 50270928,
+      "installed_bytes": 51129546,
+      "archive_bytes": 31969280
+    }
+  },
+  "idle_before": {
+    "samples": [
+      {
+        "cpu_percent": 0.0,
+        "rss_kib": 154016.0
+      },
+      {
+        "cpu_percent": 0.0,
+        "rss_kib": 154016.0
+      },
+      {
+        "cpu_percent": 0.0,
+        "rss_kib": 154000.0
+      },
+      {
+        "cpu_percent": 0.0,
+        "rss_kib": 154000.0
+      },
+      {
+        "cpu_percent": 0.0,
+        "rss_kib": 154000.0
+      },
+      {
+        "cpu_percent": 0.0,
+        "rss_kib": 154000.0
+      },
+      {
+        "cpu_percent": 0.0,
+        "rss_kib": 154000.0
+      },
+      {
+        "cpu_percent": 0.1,
+        "rss_kib": 154128.0
+      },
+      {
+        "cpu_percent": 0.0,
+        "rss_kib": 154128.0
+      },
+      {
+        "cpu_percent": 0.0,
+        "rss_kib": 154128.0
+      }
+    ],
+    "median_cpu_percent": 0.0,
+    "peak_rss_kib": 154128.0,
+    "settled_rss_kib": 154128.0
+  },
+  "idle_after": {
+    "samples": [
+      {
+        "cpu_percent": 0.0,
+        "rss_kib": 134688.0
+      },
+      {
+        "cpu_percent": 0.0,
+        "rss_kib": 134656.0
+      },
+      {
+        "cpu_percent": 0.0,
+        "rss_kib": 131696.0
+      },
+      {
+        "cpu_percent": 0.0,
+        "rss_kib": 131840.0
+      },
+      {
+        "cpu_percent": 0.0,
+        "rss_kib": 131840.0
+      },
+      {
+        "cpu_percent": 0.0,
+        "rss_kib": 131856.0
+      },
+      {
+        "cpu_percent": 0.0,
+        "rss_kib": 131536.0
+      },
+      {
+        "cpu_percent": 0.0,
+        "rss_kib": 128080.0
+      },
+      {
+        "cpu_percent": 0.0,
+        "rss_kib": 128080.0
+      },
+      {
+        "cpu_percent": 0.0,
+        "rss_kib": 127312.0
+      }
+    ],
+    "median_cpu_percent": 0.0,
+    "peak_rss_kib": 134688.0,
+    "settled_rss_kib": 127312.0
+  }
+}

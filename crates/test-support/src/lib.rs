@@ -72,6 +72,20 @@ pub fn message(id: u64, channel: Id) -> Message {
                     },
                 },
                 Attachment {
+                    id: Id(702),
+                    filename: "synthetic-second-landscape.png".into(),
+                    description: Some("Second original landscape · offline gallery preview".into()),
+                    content_type: Some("image/png".into()),
+                    size: 2048,
+                    spoiler: false,
+                    media: EmbedMedia {
+                        url: Some("https://cdn.discordapp.com/attachments/1/702/synthetic-second-landscape.png".into()),
+                        proxy_url: None,
+                        width: 480,
+                        height: 320,
+                    },
+                },
+                Attachment {
                     id: Id(701),
                     filename: "synthetic-notes.txt".into(),
                     description: None,
@@ -379,6 +393,10 @@ pub fn voice_demo_state() -> State {
     state
 }
 pub fn load_page(state: &mut State, before: Option<Id>) {
+    load_page_with_cursors(state, before, None);
+}
+pub fn load_page_with_cursors(state: &mut State, before: Option<Id>, after: Option<Id>) {
+    assert!(before.is_none() || after.is_none());
     let channel = state.selected.unwrap();
     let latest = state
         .channels
@@ -386,8 +404,16 @@ pub fn load_page(state: &mut State, before: Option<Id>) {
         .find(|c| c.id == channel)
         .and_then(|c| c.last_message)
         .map_or(500, |id| id.0.max(500));
-    let end = before.map_or_else(|| latest.saturating_add(1), |id| id.0);
-    let start = end.saturating_sub(50).max(1);
+    let (start, end) = if let Some(after) = after {
+        let start = after.0.saturating_add(1);
+        (
+            start,
+            start.saturating_add(50).min(latest.saturating_add(1)),
+        )
+    } else {
+        let end = before.map_or_else(|| latest.saturating_add(1), |id| id.0);
+        (end.saturating_sub(50).max(1), end)
+    };
     state.apply(Envelope {
         generation: state.generation,
         event: Event::History {
@@ -531,6 +557,45 @@ pub fn system_demo_state() -> State {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unread_demo_pages_start_after_marker_and_advance_without_latest_substitution() {
+        use client_core::Command;
+        for (marker, first, last) in [
+            (None, 1, 50),
+            (Some(Id(10)), 11, 60),
+            (Some(Id(490)), 491, 500),
+        ] {
+            let mut state = demo_state();
+            state
+                .apply_read_state(client_core::read_state::Event::Snapshot {
+                    entries: Some(vec![(Id(20), marker, 0)]),
+                    partial: false,
+                    version: Some(2),
+                })
+                .unwrap();
+            let Some(Command::History { before, after, .. }) = state.open_unread() else {
+                panic!()
+            };
+            assert_eq!(before, None);
+            assert_eq!(after, Some(marker.unwrap_or(Id(0))));
+            load_page_with_cursors(&mut state, before, after);
+            assert_eq!(state.timeline.row_ids().next(), Some(Id(first)));
+            assert_eq!(state.timeline.row_ids().last(), Some(Id(last)));
+            assert_eq!(state.search_target, Some(Id(first)));
+            assert_eq!(state.read_marker(Id(20)), Some(marker));
+            if last < 500 {
+                let Some(Command::History { before, after, .. }) = state.newer_history() else {
+                    panic!()
+                };
+                assert_eq!(after, Some(Id(last)));
+                load_page_with_cursors(&mut state, before, after);
+                assert_eq!(state.timeline.row_ids().next(), Some(Id(last + 1)));
+                assert_eq!(state.timeline.row_ids().last(), Some(Id(last + 50)));
+            } else {
+                assert!(state.newer_history().is_none());
+            }
+        }
+    }
     #[test]
     fn notification_preview_history_reaches_latest_and_clears_viewed_badge() {
         let mut state = notification_demo_state();

@@ -114,6 +114,9 @@ impl MessagingUi {
         state: &State,
         entry: &RosterEntry,
     ) {
+        if !state.can_view(entry.channel) {
+            return;
+        }
         let colors = design::palette(ui);
         let member = entry.member.as_ref().or_else(|| {
             state
@@ -241,6 +244,13 @@ impl MessagingUi {
                     RichText::new("Join when you’re ready. You can keep browsing while connected.")
                         .color(colors.muted),
                 );
+            }
+            if !state.can_view(channel) {
+                ui.label(
+                    RichText::new("Participant list unavailable with the current access.")
+                        .color(colors.muted),
+                );
+                return;
             }
             let entries: Vec<_> = state
                 .voice

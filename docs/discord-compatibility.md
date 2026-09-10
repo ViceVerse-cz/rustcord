@@ -295,8 +295,12 @@ not proof that a normal-user account receives these updates through this client'
 
 Absent status preserves the known value; explicit null or unknown strings clear it to
 Presence unavailable. Online, Away, Do not disturb and Offline are service-reported labels;
-Offline does not distinguish an invisible user. Partial profiles, activities and device status
-are discarded. Bursts coalesce within a fixed 100-ms window; stale request/session/access
+Offline does not distinguish an invisible user. Custom activity type 4 is normalized using the
+same parser as member snapshots: at most 128 characters / 512 UTF-8 bytes, with optional Unicode
+emoji and no controls. Omitted activities preserve known custom text; null, empty or no custom
+activity clears it. These absent/null choices are defensive client policy, not a documented
+normal-user delivery guarantee. Other activities, partial profiles and device status are
+discarded; the existing subscription still sends activities=false. Bursts coalesce within a fixed 100-ms window; stale request/session/access
 updates cannot modify the pane. Self-session DND notification suppression keeps its separate
 existing path. Synthetic localhost Gateway, reducer and headless UI tests supply local evidence;
 normal-account delivery and native screenshots remain owner-controlled validation gates.

@@ -552,6 +552,10 @@ impl State {
             };
             self.revision += 1;
         }
+        // Roster access is independent of whether this account has joined a call.
+        let mut roster = std::mem::take(&mut self.voice.roster);
+        roster.retain(|entry| self.can_view(entry.channel));
+        self.voice.roster = roster;
         if let Some(channel) = self.voice.active.as_ref().map(|call| call.channel)
             && !self.has_voice_access(channel)
         {

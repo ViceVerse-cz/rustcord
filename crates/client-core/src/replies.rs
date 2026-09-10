@@ -105,6 +105,8 @@ impl State {
         }
         let before = Id(target.0.checked_add(1)?);
         self.timeline.clear_window_preserving_deletions();
+        self.newer_cursor = None;
+        self.newer_may_have_more = false;
         self.history_targeted = true;
         self.revision += 1;
         self.search_target = Some(target);
@@ -413,6 +415,7 @@ mod tests {
             channel,
             before,
             request,
+            ..
         } = command
         else {
             panic!()

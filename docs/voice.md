@@ -72,3 +72,45 @@ requires enabled, focused, held push-to-talk. A listen-only join stays muted. Lo
 ends the active call; merely regaining access never rejoins. The failed-call state remains
 visible after Gateway disconnect. These gates are covered by offline permission and
 device-free capture tests; owner-operated live permission changes/audio remain unverified.
+
+
+## Connection and playback recovery
+
+A voice-server crash (WebSocket close 4015) uses the existing two-attempt resume budget,
+retaining the UDP connection, acknowledged signaling cursor and encrypted group. Terminal
+closes, including 4014, still require an explicit new call. Bounded proposals arriving before
+DAVE has a local group are ignored as required by its initial-group procedure; established
+groups retain strict proposal validation and no early proposal enables audio.
+
+Device readiness belongs to the current device/security configuration. A rapid encryption
+pause and restart invalidates old readiness even when both events reach one UI frame;
+late readiness from an earlier configuration cannot mark the call connected.
+
+Received short Opus packets are combined into the normal 20 ms playback frame. The encoded
+reorder queue remains bounded to eight packets per speaker; a full queue starts playout early
+instead of overflowing while waiting for its usual two-tick startup delay.
+
+These behaviors have synthetic regression coverage. Physical devices and Discord calls still
+require the owner-operated live gate above.
+
+Denied SPEAK now opens playback without selecting or initializing a microphone. Regaining
+SPEAK prepares input under the current encryption and mute/PTT gates; mute/PTT alone does not
+reopen devices. Lost VIEW_CHANNEL drops the stored roster and hides participant rows, including
+when no call is active; late updates cannot repopulate an inaccessible channel.
+
+
+## Diagnosing a call that never opens audio
+
+Call progress distinguishes requesting allocation, connecting to the voice server, checking the
+UDP network path, securing audio, and opening audio devices. Negotiation errors identify the
+missing server Hello/Ready, transport key, DAVE group or transition execution. These are bounded,
+static status messages; no identifiers, tokens, audio or raw signaling are logged.
+
+Audio-device opening has a 20-second deadline after encrypted readiness, including device changes.
+If a system device API stalls, local audio is disabled and departure is requested. The existing
+worker must retire before another call can open devices; a driver that never returns can require
+restarting Serein. The watchdog cannot forcibly cancel an operating-system driver call.
+
+The outgoing DAVE key-package encoding was corrected to match reference implementations; see
+[the adapter's source comparison](../crates/discord-voice/README.md#key-package-interoperability-correction).
+Actual two-way audio still requires the owner-operated test above.

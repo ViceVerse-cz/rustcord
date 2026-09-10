@@ -256,6 +256,35 @@ pub enum Delivery {
     Ambiguous,
 }
 
+/// Complete, bounded presence values for one already-loaded member row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MemberPresence {
+    pub user: Id,
+    pub status: Option<String>,
+    pub custom_status: Option<String>,
+}
+
+impl MemberPresence {
+    pub fn valid(&self) -> bool {
+        self.user.0 != 0
+            && self
+                .status
+                .as_deref()
+                .is_none_or(|status| matches!(status, "online" | "idle" | "dnd" | "offline"))
+            && self.custom_status.as_deref().is_none_or(|text| {
+                !text.is_empty()
+                    && text.len() <= 512
+                    && text.chars().count() <= 128
+                    && text.trim() == text
+                    && !text.chars().any(char::is_control)
+            })
+    }
+    pub fn heap_bytes(&self) -> usize {
+        self.status.as_ref().map_or(0, String::capacity)
+            + self.custom_status.as_ref().map_or(0, String::capacity)
+    }
+}
+
 /// Only the active member pane is retained; group rows and unloaded slots remain None.
 #[derive(Clone)]
 pub struct Member {

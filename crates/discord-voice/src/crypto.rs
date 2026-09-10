@@ -214,8 +214,9 @@ impl Dave {
             .map_err(|_| "DAVE reset failed")
     }
     pub fn key_package(&mut self) -> Result<Vec<u8>, &'static str> {
-        // Davey returns a TLS KeyPackage, while opcode 26 requires MLSMessage(version, wire format, body).
-        let mut out = vec![26, 0, 1, 0, 5];
+        // Match libdave and discord.py-self: opcode followed by the raw TLS KeyPackage.
+        // The whitepaper's MLSMessage wrapper differs from these reference send paths.
+        let mut out = vec![26];
         out.extend(
             self.session
                 .create_key_package()
@@ -226,6 +227,11 @@ impl Dave {
     pub fn proposals(&mut self, payload: &[u8]) -> Result<Option<Vec<u8>>, &'static str> {
         if payload.len() > MAX_SIGNAL {
             return Err("DAVE proposals exceed the signaling budget");
+        }
+        // DAVE initial group creation ignores proposals until the external sender
+        // and protocol context have established our local group.
+        if self.session.group().is_none() {
+            return Ok(None);
         }
         let (&operation, data) = payload.split_first().ok_or("Truncated DAVE proposal")?;
         let operation = match operation {
@@ -374,6 +380,33 @@ impl Drop for Dave {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openmls::prelude::{OpenMlsProvider, ProtocolVersion};
+    #[test]
+    fn proposals_before_local_group_are_ignored_without_weakening_later_validation() {
+        let server = crate::test_mls::Delivery::new();
+        let mut alice = Dave::new(1, Some(2), 3).unwrap();
+        let mut bob = Dave::new(2, Some(1), 3).unwrap();
+        bob.session.set_external_sender(&server.external).unwrap();
+        let early = server.add_proposal(&bob, &alice.key_package().unwrap());
+        assert!(alice.session.group().is_none());
+        assert!(alice.proposals(&early).unwrap().is_none());
+        assert!(alice.pending_commit.is_none());
+        assert!(!alice.ready);
+        assert!(alice.proposals(&vec![0; MAX_SIGNAL + 1]).is_err());
+        alice.session.set_external_sender(&server.external).unwrap();
+        assert!(alice.proposals(&[2]).is_err()); // Established context still validates the operation.
+        let (commit, welcome) = server.add(&mut bob, &alice.key_package().unwrap());
+        bob.group_changed(29, &[&[0, 0], commit.as_slice()].concat())
+            .unwrap();
+        alice
+            .group_changed(30, &[&[0, 0], welcome.as_slice()].concat())
+            .unwrap();
+        assert!(alice.ready);
+        assert_eq!(
+            alice.session.voice_privacy_code(),
+            bob.session.voice_privacy_code()
+        );
+    }
     #[test]
     fn rtp_authentication_bounds_and_nonce_exhaustion() {
         assert_eq!(
@@ -421,7 +454,14 @@ mod tests {
         let mut dave = Dave::new(1, Some(2), 3).unwrap();
         assert!(!dave.ready);
         assert!(dave.execute(0).is_err());
-        assert_eq!(&dave.key_package().unwrap()[..5], &[26, 0, 1, 0, 5]);
+        let package = dave.key_package().unwrap();
+        assert_eq!(&package[..5], &[26, 0, 1, 0, 2]);
+        let package =
+            openmls::prelude::KeyPackageIn::tls_deserialize_exact_bytes(&package[1..]).unwrap();
+        let provider = openmls_rust_crypto::OpenMlsRustCrypto::default();
+        package
+            .validate(provider.crypto(), ProtocolVersion::Mls10)
+            .unwrap();
         assert!(dave.group_changed(30, &[0, 0, 0]).is_err());
         assert!(!dave.ready);
     }

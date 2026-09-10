@@ -45,6 +45,9 @@ pub struct VoiceConnection {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
     Connecting,
+    ConnectingTransport,
+    Discovering,
+    OpeningAudio,
     Ringing,
     Securing,
     Connected,
@@ -54,6 +57,9 @@ pub enum Phase {
 impl Phase {
     pub fn label(self) -> &'static str {
         match self {
+            Self::ConnectingTransport => "Connecting to voice server...",
+            Self::Discovering => "Checking voice network...",
+            Self::OpeningAudio => "Opening audio devices...",
             Self::Connecting => "Connecting call…",
             Self::Ringing => "Ringing…",
             Self::Securing => "Securing audio…",
@@ -470,10 +476,11 @@ impl ClientState {
         }
     }
     fn update_roster(&mut self, entry: RosterEntry) -> bool {
-        if !self
-            .channels
-            .iter()
-            .any(|c| c.id == entry.channel && c.guild == Some(entry.guild) && c.kind == 2)
+        if !self.can_view(entry.channel)
+            || !self
+                .channels
+                .iter()
+                .any(|c| c.id == entry.channel && c.guild == Some(entry.guild) && c.kind == 2)
         {
             return true;
         }
@@ -772,6 +779,149 @@ mod tests {
         assert!(state.set_call_mute(false, false).is_none());
         state.leave_call();
         assert!(state.start_call(Id(21), false).is_none());
+    }
+
+    #[test]
+    fn revoked_view_releases_idle_roster_and_rejects_late_voice_updates() {
+        use model::permissions as p;
+        let mut state = ClientState {
+            auth: AuthState::Authenticated,
+            gateway_connected: true,
+            user: Some(User {
+                id: Id(1),
+                name: "Owner".into(),
+                avatar: None,
+                discriminator: 0,
+            }),
+            guilds: vec![model::Guild {
+                id: Id(10),
+                name: "Synthetic".into(),
+                icon: None,
+                emojis: None,
+            }],
+            channels: [20, 21]
+                .into_iter()
+                .map(|id| Channel {
+                    id: Id(id),
+                    guild: Some(Id(10)),
+                    kind: 2,
+                    name: "Room".into(),
+                    last_message: None,
+                    parent_id: None,
+                    position: 0,
+                    recipients: vec![],
+                    member_list_id: None,
+                })
+                .collect(),
+            ..ClientState::default()
+        };
+        state
+            .permissions
+            .replace(p::Snapshot {
+                guilds: vec![p::Guild {
+                    id: Id(10),
+                    owner: Some(Id(99)),
+                    roles: Some(vec![p::Role {
+                        id: Id(10),
+                        bits: p::VIEW_CHANNEL | p::CONNECT,
+                        name: String::new(),
+                        color: 0,
+                        position: 0,
+                        hoist: false,
+                    }]),
+                    member: Some(p::Member {
+                        roles: vec![],
+                        timeout_until: None,
+                    }),
+                }],
+                channels: [20, 21]
+                    .into_iter()
+                    .map(|id| p::Channel {
+                        id: Id(id),
+                        guild: Id(10),
+                        overwrites: Some(vec![]),
+                    })
+                    .collect(),
+            })
+            .unwrap();
+        let entry = |channel| RosterEntry {
+            guild: Id(10),
+            channel: Id(channel),
+            participant: Participant {
+                user: Id(channel + 100),
+                muted: false,
+                deafened: false,
+                server_muted: false,
+                server_deafened: false,
+            },
+            member: None,
+        };
+        state.apply_voice(Event::Snapshot {
+            guild: None,
+            partial: false,
+            participants: vec![entry(20), entry(21)],
+        });
+        assert_eq!(state.voice.roster.len(), 2);
+        assert!(state.voice.active.is_none());
+        let access = |bits| {
+            CoreEvent::Permissions(crate::permissions::Event::Channel {
+                channel: Id(20),
+                guild: Some(Id(10)),
+                overwrites: model::Patch::Value(vec![p::Overwrite {
+                    id: Id(10),
+                    kind: 0,
+                    allow: 0,
+                    deny: bits,
+                }]),
+            })
+        };
+        // Losing CONNECT does not hide a roster that the account may still view.
+        state.apply(Envelope {
+            generation: state.generation,
+            event: access(p::CONNECT),
+        });
+        assert_eq!(state.voice.roster.len(), 2);
+        state.apply(Envelope {
+            generation: state.generation,
+            event: access(p::VIEW_CHANNEL),
+        });
+        assert!(!state.can_view(Id(20)));
+        assert_eq!(state.voice.roster.len(), 1);
+        assert_eq!(state.voice.roster[0].channel, Id(21));
+        state.apply_voice(Event::Snapshot {
+            guild: None,
+            partial: true,
+            participants: vec![entry(20)],
+        });
+        state.apply_voice(Event::State {
+            guild: Some(Id(10)),
+            channel: Some(Id(20)),
+            user: Id(120),
+            request: None,
+            session: None,
+            member: None,
+            muted: false,
+            deafened: false,
+            server_muted: false,
+            server_deafened: false,
+        });
+        assert_eq!(state.voice.roster.len(), 1);
+        state.apply(Envelope {
+            generation: state.generation,
+            event: access(0),
+        });
+        assert!(state.can_view(Id(20)));
+        assert_eq!(
+            state.voice.roster.len(),
+            1,
+            "Restoring access cannot restore discarded participants"
+        );
+        state.apply_voice(Event::Snapshot {
+            guild: None,
+            partial: true,
+            participants: vec![entry(20)],
+        });
+        assert_eq!(state.voice.roster.len(), 2);
     }
 
     #[test]

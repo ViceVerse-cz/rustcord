@@ -49,3 +49,12 @@ the earlier computer-use capture blocker. See `docs/performance.md` for the meas
 Windows/Linux presentation, actual screen-reader/IME behavior and live Discord exchange remain
 unverified for this slice. The previously recorded owner report that reacting can lose chat
 messages has not been reproduced or resolved by this timeline change.
+
+September 10 image/spacing update: adjacent image attachments share two-column rows, falling
+back to one column below 280 points of content width. Previews preserve aspect ratios and
+open the existing viewer individually; image filenames appear in accessibility labels and
+the viewer, not as chat captions. Non-image files retain their names and download controls.
+The gallery reuses the bounded media cache and the existing spoiler reveal boundary.
+Markdown's final block newline no longer creates an empty line beneath messages; internal
+line breaks and the existing author/date/reply/unread grouping boundaries remain intact.
+The default offline fixture now includes a second image to demonstrate the gallery.

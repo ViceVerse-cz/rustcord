@@ -1,4 +1,4 @@
-//! Small fixed 40ms reorder window for one peer's 20ms Opus packets.
+//! Fixed 40ms startup with a bounded reorder window for 2.5?120ms Opus packets.
 const SLOTS: usize = 8;
 #[derive(Default)]
 pub(crate) struct Jitter {
@@ -32,11 +32,16 @@ impl Jitter {
             self.packets.push((sequence, opus));
         }
     }
-    /// An empty packet requests Opus packet-loss concealment, at most three consecutive frames.
+    /// An empty packet requests Opus packet-loss concealment, at most three consecutive packets.
     pub fn pop(&mut self) -> Option<Vec<u8>> {
         if self.wait > 0 {
-            self.wait -= 1;
-            return None;
+            // Short packets can fill the fixed window before 40ms. Start before
+            // the next arrival would repeatedly reset a full window.
+            if self.packets.len() < SLOTS {
+                self.wait -= 1;
+                return None;
+            }
+            self.wait = 0;
         }
         let next = self.next?;
         self.next = Some(next.wrapping_add(1));
@@ -74,9 +79,9 @@ mod tests {
         assert!(jitter.pop().is_none());
         for sequence in 0..1000 {
             jitter.push(sequence, vec![1; 1275]);
-            assert!(jitter.packets.len() <= 8);
+            assert!(jitter.packets.len() <= SLOTS);
         }
         jitter.push(1000, vec![0; 1276]);
-        assert!(jitter.packets.len() <= 8);
+        assert!(jitter.packets.len() <= SLOTS);
     }
 }

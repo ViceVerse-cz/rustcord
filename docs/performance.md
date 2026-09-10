@@ -1376,3 +1376,170 @@ fell sharply during sampling while the changed build stayed higher. Other worktr
 compiling on this shared host, so memory pressure and fixture differences prevent attributing
 this RSS increase solely to role code. The measured increase is material; no memory improvement
 or isolated regression estimate is claimed. Startup and p95 frame latency are unmeasured.
+
+## Voice recovery and playback completion - September 10, 2026
+
+| Metric / method | Main 9fcce51 | Voice fixes | Delta |
+| --- | ---: | ---: | ---: |
+| text executable, bytes | 50,789,376 | 50,791,936 | +2,560 (+0.005%) |
+| text installed, bytes | 51,365,836 | 51,371,937 | +6,101 (+0.012%) |
+| text ZIP, bytes | 31,740,225 | 31,742,889 | +2,664 (+0.008%) |
+| voice executable, bytes | 54,142,464 | 54,142,464 | +0 (+0.000%) |
+| voice installed, bytes | 54,941,697 | 54,945,238 | +3,541 (+0.006%) |
+| voice ZIP, bytes | 33,116,953 | 33,122,262 | +5,309 (+0.016%) |
+| 100,000-event replay median, ms | 36.7943 | 36.6734 | -0.1209 (-0.33%; noise) |
+| Retained 500-message timeline, estimated bytes | 228,992..229,477 | 228,992..229,477 | 0 |
+| 1-speaker mixer, median us / 1,000 ticks | 42,850 | 41,672 | -1,178 (-2.75%; noise) |
+| 8-speaker mixer, median us / 1,000 ticks | 336,640 | 333,531 | -3,109 (-0.92%; noise) |
+| 63-speaker mixer, median us / 1,000 ticks | 2,758,741 | 2,661,914 | -96,827 (-3.51%; noise) |
+
+Windows 11 Home 10.0.26200, AMD Ryzen 7 7800X3D (16 logical CPUs), approximately 31 GiB RAM,
+Rust 1.98.1, release thin LTO/one codegen unit. Both unsigned Windows packages built successfully;
+text uses no default features and voice explicitly enables voice. No dependency/lockfile changed;
+package policy/license collection passed. Separate clean baseline and changed package directories
+prevent artifact overwrite. Installed sizes sum package files, ZIPs use Python DEFLATE 9; text
+excludes nested voice and both exclude PR screenshots. Packaged docs are the snapshot copied
+during packaging, before this final measurement addendum.
+
+Replay: one warmup and five direct executable runs per build. Baseline samples 36.7943,36.1554,
+36.4590,39.0662,39.1083ms; after 36.6734,36.2471,37.0721,36.2804,36.8797ms. These are synthetic
+reducer timings, not process RSS or UI latency. Mixer uses the existing ignored release workload:
+one warmup and five 1,000-tick runs at each participant count, 20 ms Opus packets and device-free
+mono 48 kHz decoding/mixing. The small decreases are not a performance improvement claim; this
+shared-host run does not measure microphone/speaker callback latency, network jitter or live audio.
+
+Encoded reorder storage remains at most 10,200 bytes per remote speaker; PCM remains 23,040 bytes
+per speaker, at most 63 remote speakers. Each 20 ms mixer tick decodes at most 8 short packets per
+speaker; loss concealment follows the last packet duration (up to 120 ms), at most 3 consecutive
+missing packets, streamed through the existing buffer. Physical call RSS/CPU, p95 latency,
+device teardown and native screenshots remain unmeasured because the owner's native/live gate
+is still closed. No audio devices or live accounts were accessed.
+
+
+## Voice key-package framing and startup diagnostics - September 10, 2026
+
+| Metric / method | Main b72b3b1 | Negotiation fix | Delta |
+| --- | ---: | ---: | ---: |
+| text executable, bytes | 50,791,936 | 50,791,936 | +0 (+0.000%) |
+| text installed, bytes | 51,371,937 | 51,377,982 | +6,045 (+0.012%) |
+| text zip, bytes | 31,742,889 | 31,744,858 | +1,969 (+0.006%) |
+| voice executable, bytes | 54,142,464 | 54,146,560 | +4,096 (+0.008%) |
+| voice installed, bytes | 54,945,238 | 54,955,379 | +10,141 (+0.018%) |
+| voice zip, bytes | 33,122,262 | 33,124,934 | +2,672 (+0.008%) |
+| 100,000-event replay median, ms | 36.6734 | 36.1368 | -0.5366 (-1.46%; noise) |
+| Retained 500-message timeline, estimated bytes | 228,992..229,477 | 228,992..229,477 | 0 |
+
+Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical CPUs), approximately 31 GiB RAM,
+Rust 1.98.1, release thin LTO/one codegen unit. Both unsigned Windows packages passed; no
+dependency or lockfile changed, and existing policy/notices collection passed. Baseline
+executables were reused and SHA256-verified from the previous voice-completion worktree,
+whose implementation is the merged b72b3b1 source. Text uses no default features; voice
+explicitly enables voice. Installed sums and DEFLATE 9 ZIPs exclude PR screenshots; text
+excludes nested voice. Each package contains its build-time documentation snapshot, before
+its final measurement addendum; installed deltas include documentation updates.
+
+Replay uses one warmup and five direct executable runs per revision. Baseline measured samples
+36.6734,36.2471,37.0721,36.2804,36.8797ms; new 37.9821,35.9626,36.8517,36.1368,35.8853ms.
+These shared-host synthetic reducer timings are not a speedup claim or measurements of native
+startup/frame latency, call CPU/RSS, network negotiation latency or physical audio quality.
+Mixer/codec/queue implementations are unchanged, so their workload was not rerun. Startup
+adds only bounded stage notices and a 20-second device-opening deadline. Native automation
+remains owner-paused; no screenshots, microphone/speaker access or live call test was run.
+
+
+## Incoming custom-status updates - September 10, 2026
+
+| Metric / method | Main 5b2cc9e | Custom-status updates | Delta |
+| --- | ---: | ---: | ---: |
+| text executable, bytes | 50,791,936 | 50,805,760 | +13,824 (+0.027%) |
+| text installed, bytes | 51,377,982 | 51,397,479 | +19,497 (+0.038%) |
+| text zip, bytes | 31,744,858 | 31,751,925 | +7,067 (+0.022%) |
+| voice executable, bytes | 54,146,560 | 54,159,872 | +13,312 (+0.025%) |
+| voice installed, bytes | 54,955,379 | 54,974,364 | +18,985 (+0.035%) |
+| voice zip, bytes | 33,124,934 | 33,129,218 | +4,284 (+0.013%) |
+| 100,000-event replay median, ms | 36.1368 | 37.6836 | +1.5468 (+4.28%; noise) |
+| Retained 500-message timeline, estimated bytes | 228,992..229,477 | 228,992..229,477 | 0 |
+
+Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical CPUs), approximately 31 GiB RAM,
+Rust 1.98.1, release thin LTO/one codegen unit. Both unsigned Windows packages passed.
+Baseline text/voice SHA256 hashes were rechecked against the PR #39 build whose source tree
+matches main 5b2cc9e. Text uses no default features; voice explicitly enables voice. Installed
+sums and DEFLATE 9 ZIPs exclude PR screenshots; text excludes nested voice. Package documentation
+is its build-time snapshot before this final measurement addendum; installed deltas include docs.
+
+Replay uses one warmup and five direct executable runs per revision. Baseline samples:
+37.9821,35.9626,36.8517,36.1368,35.8853ms. New samples: 37.0051,37.6836,38.9883,37.3383,38.0065ms.
+These noisy shared-host reducer timings are not a speedup claim or a direct custom-status
+throughput benchmark. Native RSS, idle CPU, frame/startup latency and screenshots remain
+unmeasured because desktop automation is owner-paused. No live account/audio actions occurred.
+
+Member storage remains 100 rows/128 KiB. Pending presence is at most 100 complete values with
+7 status bytes and 128 characters/512 custom-text bytes each plus bounded map overhead; emitted
+batches admit 64 KiB including allocated vector/string capacity. The existing global event queue
+budget is unchanged. There is no new dependency, cache, persistence or subscription flag.
+
+## Message images and continuation spacing — September 10, 2026
+
+Baseline `c4ae54d` versus this task's changes, same Rust 1.98.1 lockfile, macOS 27.0
+(26A428), Apple M1 Pro / 16 GiB, wgpu/Metal on the built-in 3024×1964 Retina display.
+Release packages built with `cargo xtask package` and `cargo xtask package-voice` on both
+revisions. Sizes include the locally ad-hoc signed executable, the complete package's file
+bytes (text package excludes its sibling voice package), and `tar -czf` distribution.
+Package snapshots precede the final evidence documentation; no dependencies were changed.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable, bytes | 47,434,160 | 47,451,120 | +16,960 (+0.036%) |
+| Text installed files, bytes | 48,060,349 | 48,079,527 | +19,178 (+0.040%) |
+| Text tar.gz, bytes | 30,648,320 | 30,658,560 | +10,240 (+0.033%) |
+| Voice executable, bytes | 50,270,384 | 50,270,928 | +544 (+0.001%) |
+| Voice installed files, bytes | 51,126,784 | 51,129,546 | +2,762 (+0.005%) |
+| Voice tar.gz, bytes | 31,969,280 | 31,969,280 | +0 (+0.000%) |
+| Peak sampled RSS, MiB | 150.52 | 131.53 | -18.98 (-12.6%) |
+| Final sampled RSS, MiB | 150.52 | 124.33 | -26.19 (-17.4%) |
+| Median sampled idle CPU | 0.0% | 0.0% | 0.0 percentage points |
+
+Idle method: fresh native text-only `--demo --demo-chat` processes, default 1120×760 window,
+10-second launch warmup, then ten `ps -p PID -o %cpu=,rss=` samples one second apart.
+No interaction during the matched sampling window; separate native screenshot runs exercised
+scrolling and the image viewer. No helper process was observed in the text demo. Exact egui
+display scale, GPU memory, physical footprint, voice-call memory and p95 latency were not
+instrumented. RSS is resident process memory, not a heap-retention or GPU measure.
+
+These are single-run samples on a shared desktop, not proof of a memory improvement. An
+earlier scroll/screenshot run under concurrent compilation ranged from 73.58 MiB final RSS
+on baseline to 118.66 MiB after; the matched idle rerun above reversed that ordering. OS
+compression, process age and desktop load make the observed RSS delta inconclusive. Both
+matched samples exceed the 80 MiB idle target; no claim is made that this change meets it.
+The two variants' executable deltas are below 0.04%. No frame-latency or live-media claim.
+Raw samples and package counts: `docs/pr-evidence/message-images-spacing/measurements.json`.
+
+## Unread navigation and forward history - September 10, 2026
+
+| Metric / method | Main c4ae54d | Unread navigation | Delta |
+| --- | ---: | ---: | ---: |
+| text executable, bytes | 50,805,760 | 50,814,464 | +8,704 (+0.017%) |
+| text installed, bytes | 51,397,479 | 51,413,035 | +15,556 (+0.030%) |
+| text zip, bytes | 31,751,925 | 31,758,083 | +6,158 (+0.019%) |
+| voice executable, bytes | 54,159,872 | 54,170,624 | +10,752 (+0.020%) |
+| voice installed, bytes | 54,974,364 | 54,991,968 | +17,604 (+0.032%) |
+| voice zip, bytes | 33,129,218 | 33,134,023 | +4,805 (+0.015%) |
+| 100,000-event replay median, ms | 37.6836 | 36.6610 | -1.0226 (-2.71%; noise) |
+| Retained 500-message timeline, estimated bytes | 228,992..229,477 | 228,992..229,477 | 0 |
+
+Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical CPUs), approximately 31 GiB RAM,
+Rust 1.98.1, release thin LTO/one codegen unit. Both unsigned Windows packages passed.
+Baseline executables from PR #40 were SHA256-verified; its source tree matches main c4ae54d.
+Text uses no default features; voice explicitly enables voice. Installed sums and DEFLATE 9 ZIPs
+exclude PR screenshots; text excludes nested voice. Package documentation is its build-time
+snapshot before final measurement addenda; installed deltas include documentation updates.
+
+One warmup and five direct replay runs per revision. Baseline samples: 37.0051,37.6836,38.9883,37.3383,38.0065ms.
+New samples: 36.0087,36.8362,36.0801,37.7125,36.661ms. This shared-host reducer workload checks the common
+message path, not forward-page network latency or native rendering. Timing differences are noisy;
+no speedup claim. Native RSS/CPU, startup/frame timing and screenshots remain unmeasured because
+desktop automation is owner-paused. No live account or audio-device interaction occurred.
+
+Forward history adds fixed-size cursor/flag state and reuses the 50-message response limit,
+500-row/4-MiB active window, global resident ceiling and existing cancellable request worker.
+Pages replace the active window. No added dependency, migration, cache or queue.
