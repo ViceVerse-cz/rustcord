@@ -26,6 +26,12 @@ pub fn user_mention_prefix(text: &str) -> Option<(Id, usize)> {
         text.len() - digits.len() + end + 1,
     ))
 }
+/// Return one exact channel reference prefix, using the same nonzero snowflake bounds.
+pub fn channel_mention_prefix(text: &str) -> Option<(Id, usize)> {
+    let rest = text.strip_prefix("<#")?;
+    let end = rest.find('>')?;
+    Some((rest[..end].parse().ok()?, end + 3))
+}
 pub fn mentioned_user_ids(content: &str) -> Vec<Id> {
     let mut ids = Vec::new();
     for (start, _) in content.match_indices("<@") {
@@ -75,6 +81,25 @@ mod tests {
     use super::*;
     #[test]
     fn exact_user_mentions_are_bounded_and_never_roles_or_everyone() {
+        assert_eq!(
+            channel_mention_prefix("<#18446744073709551615> suffix"),
+            Some((Id(u64::MAX), 23))
+        );
+        for text in [
+            "<#0>",
+            "<#>",
+            "<#-1>",
+            "<#+2>",
+            "<# 2>",
+            "<#18446744073709551616>",
+            "<#000000000000000000001>",
+            "<#2",
+            "<@2>",
+            "<#٢>",
+        ] {
+            assert_eq!(channel_mention_prefix(text), None);
+        }
+        assert!(mentioned_user_ids("<#42> <#9>").is_empty());
         assert_eq!(
             mentioned_user_ids("<@42> <@!42> <@9> <@&5> @everyone @here <@0> <@+2> <@ 2>"),
             vec![Id(42), Id(9)]

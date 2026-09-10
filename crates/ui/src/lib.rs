@@ -1,4 +1,5 @@
 //! Native egui views; emits commands without owning transports or session credentials.
+mod archives;
 mod attachments;
 pub use attachments::DownloadUi;
 mod avatars;
@@ -20,6 +21,8 @@ use model::{Delivery, Freshness, Id};
 #[derive(Default)]
 pub struct MessagingUi {
     search: search::SearchUi,
+    archives: archives::ArchivesUi,
+    archive_parent: Option<Id>,
     timeline: timeline::TimelineView,
     avatars: avatars::Avatars,
     profile: Option<model::User>,
@@ -329,6 +332,7 @@ impl MessagingUi {
             state.drafts.get(&channel).map_or("", String::as_str),
             cursor.filter(|_| mention_enabled),
             &mention_users,
+            &state.channels,
         );
         let mention_pick = if mention_enabled {
             self.mention_menu.keys(ctx)
@@ -367,7 +371,7 @@ impl MessagingUi {
                     .desired_rows(2)
                     .desired_width(f32::INFINITY)
                     .frame(egui::Frame::NONE)
-                    .hint_text("Write a message… @ to mention")
+                    .hint_text("Write a message… @ person or # channel")
                     .show(ui);
                 let mention_cursor = output
                     .cursor_range
@@ -375,7 +379,7 @@ impl MessagingUi {
                     .map(|r| r.primary.index.0)
                     .filter(|_| mention_enabled);
                 self.mention_menu
-                    .refresh(channel, draft, mention_cursor, &mention_users);
+                    .refresh(channel, draft, mention_cursor, &mention_users, &state.channels);
                 if let Some(pick) = self.mention_menu.show(ui)
                     && let Some(cursor) = mentions::insert(draft, pick)
                 {
@@ -645,6 +649,14 @@ impl MessagingUi {
                 {
                     commands.push(command);
                 }
+                if let Some(parent) = self.archive_parent.take()
+                    && let Some(command) =
+                        state.request_archives(parent, model::archives::Kind::Public, None)
+                {
+                    self.search.open = false;
+                    self.archives.focus = true;
+                    commands.push(command);
+                }
             });
         let wide_members = ui.available_width() >= 720.0;
         let show_members = state.selected.is_some()
@@ -799,6 +811,7 @@ impl MessagingUi {
                                 self.reconnect_requested = true;
                             }
                         });
+                        self.timeline.download.show_status(ui);
                     });
                 self.call_bar(ui, state, &mut commands);
                 let Some(channel) = state.selected else {
@@ -857,6 +870,9 @@ impl MessagingUi {
                                         )
                                         .clicked()
                                     {
+                                        if state.archives.is_some() {
+                                            commands.push(state.clear_archives());
+                                        }
                                         self.search.toggle(false);
                                     }
                                     if ui
@@ -898,6 +914,15 @@ impl MessagingUi {
                         if let Some(status) = state.read_state.status {
                             ui.label(RichText::new(status).small().color(colors.muted));
                         }
+                        if state.archived_thread.is_some()
+                            && state.archived_thread == state.selected
+                        {
+                            ui.label(
+                                RichText::new("Opened from archive")
+                                    .small()
+                                    .color(colors.muted),
+                            );
+                        }
                         if state.history_before.is_some() {
                             ui.label(
                                 RichText::new("Browsing older history · Reload returns to latest")
@@ -919,7 +944,26 @@ impl MessagingUi {
                         );
                     });
             });
+        if state
+            .archives
+            .as_ref()
+            .is_some_and(|view| self.guild != Some(view.guild))
+        {
+            commands.push(state.clear_archives());
+        }
         self.search.show(&ctx, state, &mut commands);
+        self.archives.show(&ctx, state, &mut commands);
+        if let Some(id) = self.timeline.channel_reference.take()
+            && let Some(target) = state
+                .channels
+                .iter()
+                .find(|c| c.id == id && c.guild.is_some() && c.supports_text())
+        {
+            self.guild = target.guild;
+            if let Some(command) = state.select(id) {
+                commands.push(command);
+            }
+        }
         if let Some(message) = self.timeline.mark_read.take()
             && let Some(command) = state.prepare_mark_read(message)
         {

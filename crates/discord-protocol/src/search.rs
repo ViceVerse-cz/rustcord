@@ -75,6 +75,7 @@ impl Reply {
             hits,
             total,
             partial: self.doing_deep_historical_index,
+            pin_cursor: None,
         };
         if !page.valid(channel, before) {
             return Err("Invalid search results");

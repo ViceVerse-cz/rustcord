@@ -18,6 +18,8 @@ pub struct SearchPage {
     pub hits: Vec<SearchHit>,
     pub total: u64,
     pub partial: bool,
+    /// Oldest pin timestamp in nanoseconds, only when more pins are available.
+    pub pin_cursor: Option<i128>,
 }
 impl SearchPage {
     pub fn bytes(&self) -> usize {
@@ -30,6 +32,7 @@ impl SearchPage {
     }
     pub fn valid(&self, channel: Id, before: Option<Id>) -> bool {
         self.valid_pins(channel)
+            && self.pin_cursor.is_none()
             && self.hits.iter().all(|h| before.is_none_or(|b| h.id < b))
             && self.hits.windows(2).all(|w| w[0].id > w[1].id)
     }

@@ -1,4 +1,5 @@
 //! Discord wire DTOs. JSON values never become application state.
+pub mod archives;
 mod attachments;
 mod embeds;
 pub mod pins;
@@ -6,6 +7,7 @@ pub mod profile;
 mod reactions;
 pub mod read_state;
 pub mod search;
+pub mod threads;
 use attachments::AttachmentList;
 use embeds::EmbedList;
 use model::{Channel, Guild, Id, Message, MessagePatch, Patch, User};
@@ -190,6 +192,8 @@ pub struct GuildDto {
     pub name: String,
     #[serde(default)]
     pub channels: Vec<ChannelDto>,
+    #[serde(default, deserialize_with = "threads::list")]
+    pub threads: Vec<ChannelDto>,
     #[serde(default)]
     pub roles: Vec<RoleDto>,
 }
@@ -228,7 +232,7 @@ pub struct Ready {
     pub private_channels: Vec<ChannelDto>,
 }
 impl Ready {
-    pub fn navigation(&mut self) -> (Vec<Guild>, Vec<Channel>) {
+    pub fn navigation(&mut self) -> Result<(Vec<Guild>, Vec<Channel>), DecodeError> {
         let mut channels: Vec<_> = std::mem::take(&mut self.private_channels)
             .into_iter()
             .map(ChannelDto::into_model)
@@ -266,14 +270,33 @@ impl Ready {
                     channel.member_list_id = list_id;
                     channel
                 }));
-                Guild {
+                for thread in g.threads {
+                    channels.push(threads::into_thread(thread, g.id)?);
+                }
+                Ok(Guild {
                     id: g.id,
                     name: g.name.chars().take(128).collect(),
                     icon: g.icon.filter(|hash| model::valid_avatar_hash(hash)),
-                }
+                })
             })
-            .collect();
-        (guilds, channels)
+            .collect::<Result<Vec<_>, DecodeError>>()?;
+        let unique: std::collections::BTreeSet<_> = channels.iter().map(|c| c.id).collect();
+        let bytes = channels.iter().map(Channel::bytes).sum::<usize>()
+            + guilds
+                .iter()
+                .map(|g| {
+                    size_of::<Guild>()
+                        + g.name.capacity()
+                        + g.icon.as_ref().map_or(0, String::capacity)
+                })
+                .sum::<usize>();
+        if channels.len() + guilds.len() > threads::MAX_ITEMS
+            || bytes > MAX_WIRE
+            || unique.len() != channels.len()
+        {
+            return Err(DecodeError);
+        }
+        Ok((guilds, channels))
     }
 }
 #[derive(Deserialize, Default)]
@@ -623,7 +646,7 @@ mod member_tests {
     #[test]
     fn avatars_recipients_and_permission_scoped_list_ids() {
         let mut nested: Ready = decode(br#"{"user":{"id":"1","username":"Synthetic"},"session_id":"synthetic","resume_gateway_url":"wss://gateway.discord.gg","guilds":[{"id":"2","properties":{"name":"Nested","icon":"0123456789abcdef0123456789abcdef"}},{"id":"3","name":"Flat fallback","icon":"0123456789abcdef0123456789abcdef","properties":{"icon":null}}]}"#).unwrap();
-        let (nested_guilds, _) = nested.navigation();
+        let (nested_guilds, _) = nested.navigation().unwrap();
         assert_eq!(nested_guilds[0].name, "Nested");
         assert!(nested_guilds[0].icon_key().is_some());
         assert_eq!(nested_guilds[1].name, "Flat fallback");
@@ -639,7 +662,7 @@ mod member_tests {
         assert_eq!(patch.name, Patch::Value("Renamed".into()));
         assert_eq!(patch.icon, Patch::Absent);
         let mut ready: Ready = decode(br#"{"user":{"id":"1","username":"Synthetic"},"session_id":"synthetic","resume_gateway_url":"wss://gateway.discord.gg","guilds":[{"id":"2","name":"Server","icon":"a_0123456789abcdef0123456789abcdef"},{"id":"3","name":"Missing icon","icon":"../../invalid"}]}"#).unwrap();
-        let (guilds, _) = ready.navigation();
+        let (guilds, _) = ready.navigation().unwrap();
         assert_eq!(
             guilds[0].icon_key().as_deref(),
             Some("guild-2-a_0123456789abcdef0123456789abcdef")
