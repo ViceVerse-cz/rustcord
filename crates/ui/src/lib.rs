@@ -178,19 +178,17 @@ impl MessagingUi {
                                 {
                                     self.profile = Some(member.user.clone());
                                 }
-                                if let Some(status) = member.status.as_deref() {
-                                    ui.label(
-                                        RichText::new(match status {
-                                            "online" => "Online",
-                                            "idle" => "Away",
-                                            "dnd" => "Do not disturb",
-                                            "offline" => "Offline",
-                                            _ => "Presence unavailable",
-                                        })
-                                        .size(10.0)
-                                        .color(colors.muted),
-                                    );
-                                }
+                                ui.label(
+                                    RichText::new(match member.status.as_deref() {
+                                        Some("online") => "Online",
+                                        Some("idle") => "Away",
+                                        Some("dnd") => "Do not disturb",
+                                        Some("offline") => "Offline",
+                                        _ => "Presence unavailable",
+                                    })
+                                    .size(10.0)
+                                    .color(colors.muted),
+                                );
                             });
                         });
                     });
@@ -1535,6 +1533,18 @@ mod composer_tests {
 
     #[test]
     fn member_pane_virtualizes_and_preview_never_requests_network() {
+        fn collect_text(shape: &egui::Shape, text: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(shape) => text.push(shape.galley.job.text.clone()),
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        collect_text(shape, text);
+                    }
+                }
+                _ => {}
+            }
+        }
+
         let mut state = State {
             demo: true,
             selected: Some(Id(1)),
@@ -1565,7 +1575,15 @@ mod composer_tests {
                                 discriminator: 0,
                             },
                             nick: None,
-                            status: None,
+                            status: match id {
+                                1 => Some("online"),
+                                2 => Some("idle"),
+                                3 => Some("dnd"),
+                                4 => Some("offline"),
+                                5 => Some("unknown"),
+                                _ => None,
+                            }
+                            .map(str::to_owned),
                         })
                     })
                     .collect(),
@@ -1587,6 +1605,20 @@ mod composer_tests {
             },
         );
         assert!(messaging.take_avatar_requests().is_empty());
+        let mut text = Vec::new();
+        for shape in &output.shapes {
+            collect_text(&shape.shape, &mut text);
+        }
+        for status in ["Online", "Away", "Do not disturb", "Offline"] {
+            assert!(text.iter().any(|label| label == status), "Missing {status}");
+        }
+        assert!(
+            text.iter()
+                .filter(|label| label.as_str() == "Presence unavailable")
+                .count()
+                >= 2,
+            "Both unknown and absent presence must remain explicit"
+        );
         assert!(
             !output.textures_delta.set.is_empty(),
             "Preview must exercise actual image uploads"

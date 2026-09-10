@@ -6,6 +6,7 @@ pub mod permissions;
 mod permissions_tests;
 
 pub mod notifications;
+mod presence;
 pub mod profile;
 pub mod reactions;
 pub mod read_state;
@@ -128,6 +129,12 @@ pub enum Event {
         emojis: Vec<CustomEmoji>,
     },
     Members(MemberList),
+    MemberPresence {
+        guild: Id,
+        channel: Id,
+        request: u64,
+        updates: Vec<(Id, Option<String>)>,
+    },
     RecipientAdded {
         channel: Id,
         user: User,
@@ -623,6 +630,18 @@ impl State {
         if envelope.generation != self.generation {
             return;
         }
+        if let Event::MemberPresence {
+            guild,
+            channel,
+            request,
+            updates,
+        } = &envelope.event
+        {
+            if envelope.event.bytes() <= 8 * 1024 {
+                self.apply_member_presence(*guild, *channel, *request, updates);
+            }
+            return;
+        }
         let access_changed = envelope.event.changes_access();
         let previous_access = access_changed.then(|| self.permission_access()).flatten();
         if let Event::ChannelRestored(channel) = &envelope.event
@@ -952,9 +971,13 @@ impl State {
                 }
                 Ok(())
             }
+            Event::MemberPresence { .. } => {
+                unreachable!("presence handled before timeline revision")
+            }
             Event::Members(list) => {
                 if !self.gateway_connected
                     || self.freshness == Freshness::Unavailable
+                    || !self.can_view(list.channel)
                     || self.selected != Some(list.channel)
                     || self
                         .members
@@ -1475,6 +1498,13 @@ impl Event {
                         + user.heap_bytes()
                         + guilds.iter().map(Guild::bytes).sum::<usize>()
                         + channels.iter().map(Channel::bytes).sum::<usize>()
+                }
+                Self::MemberPresence { updates, .. } => {
+                    updates.capacity() * size_of::<(Id, Option<String>)>()
+                        + updates
+                            .iter()
+                            .map(|(_, status)| status.as_ref().map_or(0, String::capacity))
+                            .sum::<usize>()
                 }
                 Self::Members(list) => {
                     list.rows.capacity() * size_of::<Option<Member>>()

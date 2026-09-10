@@ -107,3 +107,14 @@ Logout invalidates queued work and requests dismissal; this does not erase OS re
 See [notification limits and platform behavior](notifications.md). Composer artwork uses
 the existing Twemoji atlas and custom-image cache; saved drafts keep their original wire
 text, with no extra rendered-token storage.
+
+
+Loaded People presence is session-only within the existing 100-row / 128-KiB member mirror.
+The Gateway additionally holds at most 100 pending IDs and normalized optional status strings
+(each at most seven bytes), plus bounded BTreeMap node overhead. An emitted compact batch is
+limited to 100 entries / 8 KiB including allocated vector/string capacity and uses the existing
+bounded event queue. Wire decoding keeps the existing 4-MiB cap and drops unrelated fields.
+Presence growth is checked against the member budget before mutation. Full snapshots and
+subscription/session invalidation clear pending status batches. No presence, activity or client
+device history is saved to SQLite, logs or diagnostics; status-only changes do not persist chat
+history or invalidate timeline layout. These are component bounds, not process RSS measurements.

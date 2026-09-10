@@ -799,3 +799,50 @@ Next concrete SPEC 9.2 implementation: consume bounded PRESENCE_UPDATE events fo
 loaded in the open guild People pane. Existing member-list snapshots display presence, but
 standalone live status transitions currently have no dispatcher. Keep that work scoped to the
 existing subscription and reject late navigation/generation updates; no full directory fetch.
+
+
+## Loaded People presence updates - September 10, 2026
+
+This SPEC 9.2 slice starts at f20042a73ca101c377a4c96734aa9f0d833d6fa4 (draft PR #19),
+with separate, hash-verified text/voice package baselines. A new isolated worktree preserves
+the original checkout's unrelated changes. The existing open guild People subscription now
+consumes PRESENCE_UPDATE for already loaded users. Partial user identities are sufficient;
+only online, idle, dnd and offline survive decoding. Missing status preserves the previous
+value; null/unknown status clears it and the pane says Presence unavailable. Activities,
+client device status, profile patches and guildless/global presence are not retained.
+
+The Gateway coalesces each loaded user's latest status until 100 ms after the first change,
+without postponing the deadline on each packet. At most 100 users and an 8-KiB compact event
+are admitted. Presence cannot grow the existing 128-KiB member-row budget. Full snapshots
+supersede pending deltas; subscription cancellation/replacement, invalidation, timeout and
+READY/reconnect discard them. Core checks generation, active channel/guild/request, VIEW
+access, loaded rows and fresh member state. Status-only events leave timeline revision and
+history persistence unchanged. No new dependency, subscription, directory fetch or stored
+presence table was added. This does not implement friends presence or role display.
+
+Synthetic coverage exercises wire partial identities/status patches, coalescing and a
+1,000-user flood, local WebSocket dispatch/unsubscription, stale scope/access/generation,
+atomic byte/item admission and rendered status labels. Native desktop automation remains
+paused following the owner's Escape stops, so screenshots and process RSS/idle CPU are
+unmeasured. No Discord account, OS notification or microphone was used. Real normal-user
+presence delivery through the existing subscription remains unverified; all remaining SPEC
+and live/platform gates stay open.
+
+cargo xtask check passed 186 offline Rust tests plus doctests, formatting, strict all-feature
+Clippy, text-only compilation and runtime policy. The first full test run hit the existing
+Windows terminal-close race in the synthetic reconnect fixture; an unchanged isolated retry
+passed. The fixture now keeps its final socket alive until the client observes termination,
+using the neighboring test's existing oneshot pattern. The timeout was not increased and
+runtime reconnect behavior was unchanged. The subsequent complete check passed. Independent
+review found no remaining actionable issue after guild-scope and byte-budget fixes.
+
+This branch remains stacked on draft PR #19. Main separately advanced to 74709e2 (image
+aspect-ratio PR #20); those unrelated changes are not included in this measured baseline.
+Native evidence remains unavailable, and the base branch security job has failed; neither
+gate is waived. Package sizes and replay measurements are recorded in performance.md.
+
+
+Both Windows package commands passed. Text/voice executables grew by 13,824 / 13,312 bytes;
+installed and ZIP totals are in performance.md. Five-run reducer median was 37.4956 ms versus
+37.5618 ms at baseline, retaining the same 500 records / 220,992-221,477 estimated bytes; the
+small difference is noise. Original seven dirty-source hashes were rechecked unchanged.

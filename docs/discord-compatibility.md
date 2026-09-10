@@ -235,3 +235,22 @@ view ACKs, session-only native opt-in and fail-closed mute/DND handling. READY r
 counts, settings and session presence use isolated unofficial normal-user wire shapes.
 Synthetic protocol/UI tests are not live Discord validation. Role/everyone mention events,
 blocked relationships and complete protobuf notification preferences remain unsupported.
+
+
+### Loaded People presence (September 10, 2026)
+
+The open guild People pane consumes standalone PRESENCE_UPDATE for users in its current
+100-row subscription mirror. [Discord's presence event](https://docs.discord.com/developers/events/gateway-events#presence-update)
+documents partial user objects and online/idle/dnd/offline status. The pinned normal-user
+[dispatcher](https://github.com/dolfies/discord.py-self/blob/2ba64a9a997e151a9c259984e0a179b1fdf4aff4/discord/state.py#L2040)
+allows an optional guild scope. Serein ignores guildless updates and does not request a
+friends/global directory or additional subscription flags. These are primary wire references,
+not proof that a normal-user account receives these updates through this client's subscription.
+
+Absent status preserves the known value; explicit null or unknown strings clear it to
+Presence unavailable. Online, Away, Do not disturb and Offline are service-reported labels;
+Offline does not distinguish an invisible user. Partial profiles, activities and device status
+are discarded. Bursts coalesce within a fixed 100-ms window; stale request/session/access
+updates cannot modify the pane. Self-session DND notification suppression keeps its separate
+existing path. Synthetic localhost Gateway, reducer and headless UI tests supply local evidence;
+normal-account delivery and native screenshots remain owner-controlled validation gates.

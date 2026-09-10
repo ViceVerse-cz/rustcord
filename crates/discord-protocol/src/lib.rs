@@ -5,6 +5,7 @@ mod embeds;
 pub mod notifications;
 pub mod permissions;
 pub mod pins;
+pub mod presence;
 pub mod profile;
 mod reactions;
 pub mod read_state;

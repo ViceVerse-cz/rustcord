@@ -676,3 +676,45 @@ this integrated Windows executable.
 Integrated executable SHA256:
 - text: 0020AF6225691A06B5C45E47B4F85F7061FFBD046C92B779EFB5F8D1EE15B4E4
 - voice: EAD41DAC6D98F404881987517E83FCC8E3CADBD9BCFC9514985EAD3D853DF145
+
+
+## Loaded People presence - September 10, 2026
+
+Baseline f20042a73ca101c377a4c96734aa9f0d833d6fa4 is the integrated permission/editor/notification
+PR #19. Its preceding measured executable SHA256 values were verified before copying separate
+text and voice distribution baselines. This branch is stacked on #19; main's later image
+aspect-ratio PR #20 is outside this comparison. Same Windows 11 Home 10.0.26200 / Ryzen 7
+7800X3D / 16 logical CPUs / about 31 GiB RAM / Rust 1.98.1 release/wgpu host. Both unsigned
+Windows packaging commands passed; text uses no-default-features, voice adds voice.
+ZIP uses Python DEFLATE level 9; text excludes the voice sibling and both exclude PR evidence.
+
+| Metric / method | Baseline f20042a | Presence | Delta |
+| --- | ---: | ---: | ---: |
+| text executable bytes | 49,610,752 | 49,624,576 | +13,824 (+0.028%) |
+| text installed bytes | 50,033,083 | 50,055,923 | +22,840 (+0.046%) |
+| text zip bytes | 31,080,883 | 31,088,897 | +8,014 (+0.026%) |
+| voice executable bytes | 52,943,872 | 52,957,184 | +13,312 (+0.025%) |
+| voice installed bytes | 53,589,761 | 53,612,089 | +22,328 (+0.042%) |
+| voice zip bytes | 32,444,614 | 32,455,653 | +11,039 (+0.034%) |
+| Reducer median ms / 100,000 events | 37.5618 | 37.4956 | -0.0662 (-0.176%) |
+
+Installed file counts remain 42 text / 88 voice. Totals include the actual packaged documentation
+snapshots before this measurement addendum. Executable hashes below identify the measured builds;
+no package was launched, signed or published. No new external dependency or media codec was added.
+
+Reducer workload: one direct release warmup plus five measured runs per revision, using the
+existing cargo replay executable. Baseline samples: 37.5618, 36.5306, 37.2953, 38.116, 37.8277 ms.
+Presence samples: 37.4956, 38.6994, 36.2119, 36.4057, 37.8734 ms. Both retain 500 records and
+220,992-221,477 estimated timeline bytes. The 0.0662-ms median difference is noise, not a speed
+improvement. This message-reducer workload checks for unrelated timeline regression; it does
+not measure presence-event throughput, process RSS or UI frame latency. Synthetic Gateway tests
+separately verify 1,000 incoming users retain at most 100 pending loaded users and an 8-KiB event,
+with no deadline extension. Those assertions are component bounds, not measured load performance.
+
+Native screenshots, display/GPU parameters, idle CPU and process RSS remain unmeasured because
+native automation is paused after owner Escape stops. Presence-only events leave timeline revision
+unchanged, but no native repaint-rate or physical account delivery claim is made.
+
+Measured executable SHA256:
+- text: BB8FA32318B2FC16CBBA41FD46124C499363DDF8EEFA70BF7DB24D0C11DF8AE0
+- voice: E403D2AFA448FDC8B78327FACFC3B87F4AEE99D26AC53A25FC10951B658E6AC9
