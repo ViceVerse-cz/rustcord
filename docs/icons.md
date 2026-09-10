@@ -13,3 +13,10 @@ The shared disk directory retains its existing name: `serein/avatars/{account_id
 The worker admits 128 request keys, each at most 2,054 bytes, has two decoded-result slots, and decodes one image at a time. Downloads stop at 2 MiB; avatars/icons additionally reject encoded images over 512 KiB. PNG input dimensions are capped at 256 per axis for icons/avatars and 1,024 for embeds; decoder allocation limits are 1 MiB and 8 MiB respectively. Output is at most 128 square or 512 square. The shared texture LRU retains at most 64 entries and 16 MiB of RGBA texture payload, releasing handles on eviction. These component ceilings exclude allocator, decoder intermediates, HTTP/TLS, renderer and GPU-driver overhead; they are not process-memory measurements.
 
 Offline checks cover nested/flat metadata, absent/null/changed/hostile icon patches, stale-session rejection, URL restrictions, redirects, body/dimension limits, cache reopen/isolation/eviction/cancellation, texture eviction, and request-free synthetic icons. The native demo's three-stripe icon is generated from original pixels; its embed landscape is generated from native drawing primitives. Real account image delivery and Windows/Linux presentation remain unverified.
+
+Activity cards reuse this loader for static application assets and Discord media-proxy images.
+An activity with only an application ID performs one bounded, credential-free public application
+metadata lookup before loading its Discord CDN icon. Metadata is never cached; the PNG shares
+normal cache/clear/logout limits. The card reserves a 64px slot during loading and retains the
+text if artwork is missing, unsupported, or fails. Source and compatibility notes are in
+[discord-compatibility.md](discord-compatibility.md#received-rich-presence-september-10-2026).

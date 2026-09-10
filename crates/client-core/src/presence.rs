@@ -102,6 +102,10 @@ pub fn projected_row_bytes(row: &model::Member, update: &MemberPresence) -> usiz
                 a.name.len()
                     + a.details.as_ref().map_or(0, String::len)
                     + a.state.as_ref().map_or(0, String::len)
+                    + a.image.as_ref().map_or(0, |image| match image {
+                        model::ActivityImage::Proxy(path) => path.len(),
+                        _ => 0,
+                    })
             })
             .sum::<usize>()
 }
@@ -617,7 +621,26 @@ mod tests {
             name: "Synthetic game".into(),
             details: Some("In a match".into()),
             state: None,
+            image: None,
         }
+    }
+    #[test]
+    fn activity_artwork_is_included_in_projected_member_bytes() {
+        let mut state = state();
+        let row = state.members.as_mut().unwrap().rows[0].as_mut().unwrap();
+        let mut activity = activity();
+        let mut path = String::from("external/synthetic-hash-01/https/example.com/art.png");
+        path.reserve(2048);
+        activity.image = Some(model::ActivityImage::Proxy(path));
+        let update = MemberPresence {
+            user: row.user.id,
+            status: row.status.clone(),
+            custom_status: row.custom_status.clone(),
+            activities: vec![activity],
+        };
+        let projected = projected_row_bytes(row, &update);
+        row.activities = update.activities.clone();
+        assert_eq!(projected, row.bytes());
     }
     #[test]
     fn direct_activity_patches_are_scoped_clearable_and_do_not_churn_timeline() {

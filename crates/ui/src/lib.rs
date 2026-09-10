@@ -3616,6 +3616,10 @@ mod composer_tests {
                         name: "Stardew Valley".into(),
                         details: Some("Tending the farm".into()),
                         state: Some("Spring Day 12".into()),
+                        image: Some(model::ActivityImage::Asset {
+                            application: Id(9001),
+                            asset: Id(9002),
+                        }),
                     }]
                 };
                 let event = if let Some(guild) = guild {
@@ -3643,8 +3647,10 @@ mod composer_tests {
                     event,
                 });
                 let mut painted = String::new();
+                let mut artwork = Vec::new();
                 for _ in 0..3 {
                     painted.clear();
+                    artwork.clear();
                     let output = ctx.run_ui(
                         egui::RawInput {
                             screen_rect: Some(egui::Rect::from_min_size(
@@ -3661,6 +3667,20 @@ mod composer_tests {
                     for shape in &output.shapes {
                         collect(&shape.shape, &mut painted);
                     }
+                    artwork = ctx
+                        .tessellate(output.shapes.clone(), output.pixels_per_point)
+                        .iter()
+                        .filter_map(|shape| match &shape.primitive {
+                            egui::epaint::Primitive::Mesh(mesh)
+                                if (mesh.calc_bounds().size() - egui::vec2(64.0, 64.0))
+                                    .length()
+                                    < 2.0 =>
+                            {
+                                Some(mesh.calc_bounds())
+                            }
+                            _ => None,
+                        })
+                        .collect();
                     output.drop_without_applying_deltas();
                 }
                 assert_eq!(
@@ -3676,6 +3696,11 @@ mod composer_tests {
                 );
                 assert_eq!(painted.contains("Tending the farm"), !clear);
                 assert_eq!(painted.contains("Spring Day 12"), !clear);
+                assert_eq!(
+                    artwork.len(),
+                    usize::from(!clear),
+                    "Activity image appears and clears with its presence"
+                );
             }
         }
     }

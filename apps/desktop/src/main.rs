@@ -208,6 +208,10 @@ fn demo_members(guild: Option<model::Id>, channel: model::Id, request: u64) -> m
                 name: "Stardew Valley".into(),
                 details: Some("Tending the synthetic farm".into()),
                 state: Some("Spring - Day 12".into()),
+                image: Some(model::ActivityImage::Asset {
+                    application: model::Id(9001),
+                    asset: model::Id(9002),
+                }),
             }],
         },
     ];
