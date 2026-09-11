@@ -189,7 +189,17 @@ impl<'de> Deserialize<'de> for Activities {
 			}
 			fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Activities, A::Error> {
 				let mut custom = None;
-				let mut rich = Vec::new();
+				let mut rich: Vec<RichActivity> = Vec::new();
+				let richness = |activity: &RichActivity| {
+					(
+						u8::from(activity.details.is_some()) + u8::from(activity.state.is_some()),
+						match &activity.image {
+							Some(ActivityImage::Asset { .. } | ActivityImage::Proxy(_)) => 2,
+							Some(ActivityImage::Application(_)) => 1,
+							None => 0,
+						},
+					)
+				};
 				let mut found = false;
 				let mut count = 0;
 				while let Some(Object(activity)) = seq.next_element::<Object<Activity>>()? {
@@ -200,10 +210,20 @@ impl<'de> Deserialize<'de> for Activities {
 					if activity.kind == 4 && !found {
 						custom = activity.custom_status();
 						found = true;
-					} else if rich.len() < MAX_RICH_ACTIVITIES
-						&& let Some(activity) = activity.rich_activity()
-					{
-						rich.push(activity);
+					} else if let Some(activity) = activity.rich_activity() {
+						// ponytail: match display names; retain application identity if same-name games need separating.
+						if let Some(existing) = rich.iter_mut().find(|existing| {
+							activity.kind == 0
+								&& existing.kind == 0 && existing
+								.name
+								.eq_ignore_ascii_case(&activity.name)
+						}) {
+							if richness(&activity) > richness(existing) {
+								*existing = activity;
+							}
+						} else if rich.len() < MAX_RICH_ACTIVITIES {
+							rich.push(activity);
+						}
 					}
 				}
 				Ok(Activities(custom, rich))
@@ -419,6 +439,52 @@ mod tests {
 		] {
 			assert_eq!(update(wire).unwrap().activities, Patch::Value(vec![]));
 		}
+	}
+
+	#[test]
+	fn matching_games_keep_the_richer_entry_in_snapshots_and_updates() {
+		let basic = serde_json::json!({"type":0,"name":" osu! ","application_id":"10"});
+		let detailed = serde_json::json!({"type":0,"name":"OSU!","state":"Idle","application_id":"20","assets":{"large_image":"30"}});
+		for pair in [
+			[basic.clone(), detailed.clone()],
+			[detailed.clone(), basic.clone()],
+		] {
+			let wire = serde_json::json!([
+				pair[0], {"type":0,"name":"Terraria"},
+				{"type":2,"name":"osu!"}, {"type":0,"name":"Dota 2"}, pair[1]
+			])
+			.to_string();
+			let Patch::Value(activities) = update(&wire).unwrap().activities else {
+				panic!()
+			};
+			assert_eq!(activities.len(), MAX_RICH_ACTIVITIES);
+			assert_eq!(activities[0].state.as_deref(), Some("Idle"));
+			assert_eq!(
+				activities[0].image,
+				Some(ActivityImage::Asset {
+					application: Id(20),
+					asset: Id(30)
+				})
+			);
+			assert_eq!(activities[1].name, "Terraria");
+			assert_eq!(activities[2].kind, 2);
+			let snapshot: crate::MemberItem = crate::decode(format!(r#"{{"member":{{"user":{{"id":"2","username":"Synthetic"}},"presence":{{"status":"online","activities":{wire}}}}}}}"#).as_bytes()).unwrap();
+			assert_eq!(snapshot.into_model().unwrap().activities, activities);
+		}
+		let mut artwork_only = detailed;
+		artwork_only.as_object_mut().unwrap().remove("state");
+		let Patch::Value(activities) =
+			update(&serde_json::json!([basic, artwork_only]).to_string())
+				.unwrap()
+				.activities
+		else {
+			panic!()
+		};
+		assert_eq!(activities.len(), 1);
+		assert!(matches!(
+			activities[0].image,
+			Some(ActivityImage::Asset { .. })
+		));
 	}
 
 	#[test]
