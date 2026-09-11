@@ -335,19 +335,30 @@ is created even for existing schema-10/12 databases, requires no message migrati
 account logout like appearance. A failed load stays off; failed writes are visible in settings.
 Preview controls never load or save this preference.
 
-While enabled in an authenticated connection, one worker checks executable basenames every
-15 seconds. The exact allowlist recognizes osu!, Counter-Strike 2, Dota 2, Terraria and
-Stardew Valley; renamed or unknown executables are ignored. Multiple matches choose the
-alphabetically first game title. Windows holds one ToolHelp snapshot and one fixed-size
-PROCESSENTRY32W, visiting at most 4096 processes; Linux streams at most 4096 /proc entries
-and reads at most 128 bytes from each comm file. No process paths, command lines, windows,
-process memory, credentials or process-name history are read or retained. A snapshot itself
-is allocated by Windows; its kernel memory is OS-managed, outside the Rust entry buffer.
+While enabled in an authenticated connection, Serein owns one standard Discord IPC endpoint
+and at most eight connected game workers. Windows uses a current-user-only pipe DACL and
+rejects remote connections; Unix uses a 0600 socket and checks peer UID. Occupied paths are
+never replaced or unlinked. Unix removes only its own device/inode on teardown; Windows
+explicitly disconnects clients, including blocked writers. No process enumeration remains.
+The handshake returns only the current user ID/name and empty legacy avatar/discriminator
+fields; no token, chat, account-read, authentication, call or microphone API is exposed.
 
-Only one static recognized title leaves the scanner. Watch channels retain one latest toggle,
-one result and one bounded game name; the Gateway retains current/last names of at most
-128 UTF-8 bytes each. Detection failure clears the outgoing activity. Disable wakes a sleeping
-worker immediately; a running bounded scan finishes before clearing. Gateway clears remain
-subject to the same five-second update interval.
-Teardown aborts the connection worker; an already-started bounded blocking scan may finish,
-but cannot publish after its async owner is aborted. No activity history or telemetry is stored.
+Each client frame is capped at 16 KiB before allocation; handshake timeout is 10 seconds,
+partial-frame and write deadlines are five seconds. Idle clients do not poll. At most one
+new client is admitted per five seconds; each client processes at most ten frames per second.
+A 16-item update queue carries activities bounded to 1,152 string bytes plus fixed fields;
+eight latest per-client activities and the Gateway current/last values have the same bound.
+The latest updated connected game wins; clearing/disconnecting it restores another active game.
+
+Each connection lazily requests public application metadata and registered assets once, using
+credential-free HTTPS with redirects/proxies disabled and ten-second request deadlines.
+A shared lookup mutex serializes requests and preserves Retry-After cooldowns across clients.
+Responses are capped at 256 KiB, asset lists at 1,024 entries with 256-byte names. These are
+session RAM only (up to eight lists), not disk caches. Missing artwork is omitted; name lookup
+failure clears that connection and reports an error. Game-supplied URLs, secrets, buttons and
+join/party actions are never forwarded. There is no activity history or telemetry.
+
+Disabling sharing cancels the listener, clients and metadata work and queues an empty Gateway
+activity; publication including clears remains subject to the existing five-second interval.
+Connection teardown cancels IPC with the authenticated session. Demo mode never binds IPC or
+looks up metadata. The saved boolean and database schema are unchanged.

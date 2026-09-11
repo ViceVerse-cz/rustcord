@@ -1,5 +1,59 @@
 # Initial performance evidence
 
+
+## Game IPC Rich Presence - September 11, 2026
+
+Baseline `9d4b222` and final runtime sources on `fix/game-presence-ipc`; isolated source
+worktrees and separate `dist` package directories. Both `cargo xtask package` (text-only)
+and `cargo xtask package-voice` passed with the locked Rust 1.98.1 toolchain, release/thin LTO,
+one codegen unit. No new crate versions; platform now uses the existing Tokio dependency
+and Windows security features instead of process enumeration. Packages remain unsigned.
+The existing upstream realfft license-evidence warning is unchanged.
+
+| Metric / method | Baseline | After | Delta |
+| --- | --- | --- | --- |
+| Text executable (bytes) | 54,588,416 | 54,823,424 | +235,008 (+0.43%) |
+| Text installed package (bytes) | 59,454,084 | 59,694,309 | +240,225 (+0.40%) |
+| Text ZIP level 9 (bytes) | 35,184,437 | 35,272,127 | +87,690 (+0.25%) |
+| Voice executable (bytes) | 59,689,984 | 59,923,456 | +233,472 (+0.39%) |
+| Voice installed package (bytes) | 65,875,376 | 66,114,065 | +238,689 (+0.36%) |
+| Voice ZIP level 9 (bytes) | 37,800,226 | 37,887,362 | +87,136 (+0.23%) |
+| Demo median working set (bytes) | 167,661,568 | 166,600,704 | -1,060,864 (-0.63%) |
+| Demo median private bytes (bytes) | 396,267,520 | 396,058,624 | -208,896 (-0.05%) |
+| Demo idle CPU, one logical core (percent) | 0.172 | 0 | -0.172 (-100.00%) |
+| 100k-event reducer replay median (ms) | 42.885 | 42.087 | -0.799 (-1.86%) |
+
+Environment: Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical CPUs),
+33,410,678,784 bytes usable RAM; wgpu renderer, actual adapter/GPU allocation unmeasured.
+Native fixture: `--demo --demo-settings=activity --demo-game-activity`, default 1120x760
+logical viewport, captured at 1400x950 pixels / 125% display scale. Each final build had a
+fresh process, ten-second warmup, then ten `Get-Process` WorkingSet64/PrivateMemorySize64/
+TotalProcessorTime samples at one-second intervals. CPU is elapsed process time divided
+by elapsed wall time, expressed as a percentage of one logical core. No helper children
+were observed. Screenshots capture the actual application with Win32 PrintWindow because
+the supplied native computer-use pipe was unavailable. Images were inspected; no clipping
+in the changed card. Headless egui tests cover dark/light and 760/1120 logical widths.
+Native keyboard/accessibility and narrow/light screenshots were not exercised.
+
+Package totals include all installed docs/licenses (670 text / 912 voice files) at package
+creation, before this final measurement addendum; PR evidence is excluded by packaging.
+ZIPs use Python zipfile, DEFLATE level 9 and sorted relative file paths. Executable sizes
+are exact; do not treat small noisy memory/CPU/reducer differences as an improvement.
+
+For each revision, `cargo replay` built the release benchmark, then the produced executable
+ran once for warmup and five times for the reported median. Both retained 500 records and
+236,992..237,477 estimated timeline bytes. The reducer fixture does not exercise game IPC,
+process scanning or live Discord. Demo mode also never binds IPC. These samples establish
+package cost and unchanged synthetic workload bounds, not live IPC/Gateway latency, p95
+startup/frame time, microphone/voice performance or universal game compatibility.
+
+[Raw samples](pr-evidence/game-presence-ipc/measurements.json) accompany the screenshot pair.
+Runtime IPC limits: eight clients, 16 KiB frames, 16 pending typed updates, five-second
+partial-frame/write deadlines and existing five-second Gateway update spacing. Native Windows
+tests prove roundtrip, contention and release with blocked writers; Unix implementation
+is unverified on this host. Full verification remains blocked by the inherited formatting/
+Clippy findings and baseline-reproduced UI test crash described in `docs/progress.md`.
+
 ## Emoji size and loading flicker - September 11, 2026
 
 Baseline `bd7d26ae0a4332a78617e2a6a6d8402b0a81cfd2`, compared with

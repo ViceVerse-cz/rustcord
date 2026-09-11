@@ -578,31 +578,32 @@ impl MessagingUi {
 		design::card(ui, |ui| {
 			design::switch(
 				ui,
-				"Share detected games",
+				"Share game activity",
 				Some("Display your current game as activity on Discord."),
 				&mut self.share_game_activity,
 			);
 			ui.separator();
-			let game = self.own_game.filter(|_| self.share_game_activity);
+			let game = self
+				.own_game
+				.as_deref()
+				.filter(|_| self.share_game_activity);
 			ui.label(
 				design::medium(
 					ui,
 					game.map_or_else(
 						|| {
 							if self.share_game_activity {
-								"No supported game detected".into()
+								"Waiting for a game to connect".into()
 							} else {
 								"Activity sharing is off".into()
 							}
 						},
-						|name| format!("Playing {name}"),
+						str::to_owned,
 					),
 					16.0,
 				)
 				.color(colors.text_strong),
 			);
-			ui.label("Detects osu!, Counter-Strike 2, Dota 2, Terraria and Stardew Valley on Windows and Linux. Checks every 15 seconds while enabled. Only the game name is shared; window titles and process paths are never read.");
-			ui.label("Turning this off clears activity sent by Serein. Activity from other Discord sessions is managed there. macOS detection is not available yet.");
 			ui.label(
 				egui::RichText::new(if state.demo {
 					"Offline preview: synthetic activity, never shared or saved."

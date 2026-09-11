@@ -89,7 +89,7 @@ pub struct MessagingUi {
 	pub reading_status: &'static str,
 	pub reading_save_requested: bool,
 	pub share_game_activity: bool,
-	pub own_game: Option<&'static str>,
+	pub own_game: Option<String>,
 	pub game_activity_status: &'static str,
 	reading_sidebar_applied: Option<u16>,
 	reading_sidebar_constrained: bool,
@@ -809,10 +809,12 @@ impl MessagingUi {
 								ui.add(
 									egui::Label::new(
 										RichText::new(
-											if let Some(game) =
-												self.own_game.filter(|_| self.share_game_activity)
+											if let Some(game) = self
+												.own_game
+												.as_deref()
+												.filter(|_| self.share_game_activity)
 											{
-												format!("Playing {game}")
+												game.to_owned()
 											} else if state.demo {
 												"Offline preview".to_owned()
 											} else if state.gateway_connected {

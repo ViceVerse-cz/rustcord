@@ -490,27 +490,44 @@ diagnostics. This changes observability, not the supported service contract. Off
 checks cover continued message delivery and heartbeat cursor advancement; normal-user service
 behavior remains unverified. See storage-policy.md for exact per-run limits and stderr handling.
 
-### Outgoing detected game activity (September 11, 2026)
+### Outgoing game IPC Rich Presence (September 11, 2026)
 
-An optional saved Game Activity setting publishes a detected game through the existing
-authenticated Gateway connection. It uses opcode 3 with `since: null`, `status: online`,
-`afk: false`, and either one `{name, type: 0}` activity or an empty array. Activity waits
-for READY/RESUMED, coalesces changes, and replays the latest choice after reconnect.
-Attempts, including clears, are spaced at least five seconds apart across reconnects.
-This is below the documented five updates per twenty seconds limit. Other Discord
-sessions may still publish their own activity; this setting only controls Serein.
+The saved, off-by-default Game Activity setting now hosts a local activity-only IPC endpoint
+instead of polling an executable allowlist. It tries `discord-ipc-0` through `discord-ipc-9`
+without replacing an occupied endpoint. Windows named pipes and Unix runtime/temp sockets
+follow [Discord's RPC transport](https://docs.discord.com/developers/topics/rpc).
+Games must connect to Serein; IPC is point-to-point, not an eavesdropping/subscription feed
+from an already-running Discord instance. Enable sharing before launching the game; another
+Discord client may win the game's connection. Games without IPC integration remain unsupported.
 
-Primary protocol evidence checked: [Discord Update Presence](https://docs.discord.com/developers/events/gateway-events#update-presence)
-and [Activity Object](https://docs.discord.com/developers/events/gateway-events#activity-object).
-These document the app/bot Gateway shape, not authorization or guaranteed normal-user
-interoperability. The normal-user path remains unofficial and live-unverified. Offline
-WebSocket tests cover readiness, coalescing, clear, rate spacing and resumed-session clear.
-No Discord account, message, call, microphone, or live activity publication was used in validation.
+Supported: v1 handshake/READY, SET_ACTIVITY, null or omitted clear, PING/PONG, disconnect cleanup,
+name/application ID, activity type, details/state, timestamps and registered large/small artwork.
+The newest active game's update wins, with fallback to another connected game when it clears.
+Other RPC commands return correlated errors without disconnecting games that subscribe to join
+events. Join/spectate actions, secrets, buttons, party actions and game-provided URLs are omitted.
+Legacy omitted clears and callback subscriptions are verified against Discord's original
+[SDK serializer](https://github.com/discord/discord-rpc/blob/master/src/serialization.cpp) and
+[SDK runtime](https://github.com/discord/discord-rpc/blob/master/src/discord_rpc.cpp).
+Timestamps accept legacy seconds and modern milliseconds (as emitted by
+[discordjs/RPC](https://github.com/discordjs/RPC/blob/master/src/client.js)); values below 10^10
+are interpreted as seconds. This threshold is our contemporary-date heuristic, not a documented
+universal conversion rule.
 
-Windows and Linux have bounded exact-executable detectors; macOS reports unsupported.
-This slice sends the game name only, without a local Discord RPC server, game-supplied
-rich presence details, artwork, elapsed game time, or a remote game catalogue. Linux/macOS
-native execution has not been verified in this Windows run.
+Public `/applications/{id}/rpc` resolves the application name; the unofficial
+`/oauth2/applications/{id}/assets` route resolves registered asset keys to IDs, following the
+[public HTTP implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/http.py). Both are
+credential-free and bounded, with no redirects or automatic retries; Retry-After cooldowns
+are shared across the session's metadata lookups. Unresolved artwork is
+omitted and application-name lookup failures are visible. These routes and normal-user Gateway
+publication remain unofficial/unstable. The existing [Update Presence](https://docs.discord.com/developers/events/gateway-events#update-presence)
+path waits for READY/RESUMED, coalesces updates and limits attempts (including clears) to one
+per five seconds. The Gateway payload retains the existing online/afk/since behavior.
+
+Offline tests cover native Windows IPC, malformed/oversized frames, handshake/update/clear,
+unsupported subscriptions, shutdown, rich Gateway fields, rate spacing and reconnect.
+Native screenshots use only `--demo`; they demonstrate settings, not IPC or Discord publication.
+No live account/game compatibility was tested. Linux/macOS native execution remains unverified
+on this Windows host; builds/tests or fixtures do not establish normal-user service compatibility.
 
 ### Server folders (September 11, 2026)
 
