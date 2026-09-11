@@ -294,7 +294,7 @@ Update remote read state only through verified APIs and deliberate viewing/mark-
 
 Track whether the user is following the latest messages. Only autoscroll for incoming content while following the bottom; otherwise preserve their reading position and show an indicator. Replay/reload must not cause duplicate notification storms.
 
-Use in-app notifications by default. Native OS notifications require a session-level opt-in that explains OS notification history can persist outside the client. Hide message bodies by default, honor verified mute/DND settings, and clear outstanding notifications on logout where the platform permits. Never claim clearing them erases OS records.
+Use in-app notifications by default. Native OS notifications require a saved device-local opt-in that explains OS notification history can persist outside the client. Hide message bodies by default, honor verified mute/DND settings, and clear outstanding notifications on logout where the platform permits. Never claim clearing them erases OS records.
 
 ### 9.5 Accessibility and integration
 

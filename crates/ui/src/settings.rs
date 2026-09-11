@@ -57,7 +57,7 @@ impl Page {
 			Self::Account => "The Discord account signed in on this device.",
 			Self::Profile => "Choose how you appear across Discord.",
 			Self::Appearance => "Theme, colour preset, zoom and layout.",
-			Self::Notifications => "Desktop alerts for this session.",
+			Self::Notifications => "Desktop alerts saved on this device.",
 			Self::Activity => "Show others what you are playing.",
 			Self::Voice => "Microphone, speakers and voice processing.",
 			Self::Storage => "What Serein keeps on this device.",
@@ -698,7 +698,7 @@ impl MessagingUi {
 			ui.separator();
 			ui.label(
 				RichText::new(
-					"Message previews are hidden. OS notification history may remain after logout. Applies to this session; turn it on again after restarting Serein.",
+					"Message previews are hidden. OS notification history may remain after logout. Your choice is saved on this device.",
 				)
 				.size(12.0)
 				.color(colors.muted),

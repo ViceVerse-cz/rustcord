@@ -1,4 +1,5 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+mod app_settings;
 mod audio;
 mod avatars;
 mod cache;
@@ -137,6 +138,7 @@ struct Desktop {
 	appearance: egui::ThemePreference,
 	appearance_changed: bool,
 	reading: reading_settings::ReadingSettings,
+	app_settings: app_settings::Settings,
 	game_activity: toggle_setting::Settings,
 	tray_setting: toggle_setting::Settings,
 	tray: Option<platform::tray::Tray>,
@@ -458,6 +460,18 @@ impl Desktop {
 				cache::Operation::LoadAppearance,
 			)
 		}));
+		let mut app_settings = app_settings::Settings::default();
+		if cache.as_ref().is_some_and(|cache| {
+			cache.queue(
+				state.generation,
+				model::Id(0),
+				cache::Operation::LoadAppPreferences,
+			)
+		}) {
+			cache_pending += 1;
+		} else if !demo {
+			app_settings.state.failed = true;
+		}
 		let mut reading = reading_settings::ReadingSettings::default();
 		let mut game_activity = toggle_setting::Settings::default();
 		let mut tray_setting = toggle_setting::Settings::default();
@@ -691,6 +705,7 @@ impl Desktop {
 			appearance: egui::ThemePreference::System,
 			appearance_changed: false,
 			reading,
+			app_settings,
 			game_activity,
 			tray_setting,
 			tray: None,
@@ -773,6 +788,7 @@ impl Desktop {
 			}
 		}
 		self.messaging.clear();
+		self.app_settings.apply(&mut self.messaging);
 		self.messaging.share_game_activity = self.game_activity.enabled;
 		ctx.memory_mut(|m| *m = egui::Memory::default());
 		ui::design::apply(ctx);
@@ -834,6 +850,25 @@ impl Desktop {
 			}
 		}
 		false
+	}
+	fn save_app_preferences(&mut self) {
+		if self.fixture_only || self.state.demo {
+			return;
+		}
+		self.app_settings.observe(&self.messaging);
+		if self.app_settings.state.dirty && !self.app_settings.state.saving {
+			let accepted = self.cache.as_ref().is_some_and(|cache| {
+				cache.queue(
+					self.state.generation,
+					model::Id(0),
+					cache::Operation::SaveAppPreferences(self.app_settings.current.clone()),
+				)
+			});
+			self.app_settings.state.dirty = false;
+			self.app_settings.state.saving = accepted;
+			self.app_settings.state.failed = !accepted;
+			self.cache_pending += usize::from(accepted);
+		}
 	}
 	fn save_reading_preferences(&mut self, ctx: &egui::Context) {
 		if self.fixture_only {
@@ -1972,6 +2007,23 @@ impl Desktop {
 			self.cache_pending = self.cache_pending.saturating_sub(1);
 			// Settings are global; account removal/write failures still matter after logout.
 			match &outcome {
+				cache::Outcome::AppPreferences(result) => {
+					if !self.app_settings.state.touched {
+						match result {
+							Ok(value) => self.app_settings.current = value.clone(),
+							Err(_) => self.app_settings.state.failed = true,
+						}
+						if !self.state.demo && !self.fixture_only {
+							self.app_settings.apply(&mut self.messaging);
+						}
+					}
+					continue;
+				}
+				cache::Outcome::AppPreferencesSaved(result) => {
+					self.app_settings.state.saving = false;
+					self.app_settings.state.failed = result.is_err();
+					continue;
+				}
 				cache::Outcome::MinimizeToTray(result) => {
 					self.tray_setting.restore(*result);
 					if !self.fixture_only {
@@ -2097,6 +2149,8 @@ impl Desktop {
 					}
 				}
 				cache::Outcome::Appearance(..)
+				| cache::Outcome::AppPreferences(_)
+				| cache::Outcome::AppPreferencesSaved(_)
 				| cache::Outcome::MinimizeToTray(_)
 				| cache::Outcome::MinimizeToTraySaved(_)
 				| cache::Outcome::GameActivity(_)
@@ -2456,7 +2510,6 @@ impl eframe::App for Desktop {
 		};
 		if self.state.auth != AuthState::Authenticated && !self.state.demo {
 			self.notifications.clear();
-			self.messaging.notifications_enabled = false;
 		}
 		while let Some(notification) = self.state.take_notification() {
 			if !self.fixture_only
@@ -2607,6 +2660,7 @@ impl eframe::App for Desktop {
 				|| self.avatar_cleanup.is_some()
 				|| self.cache_pending > 0
 				|| self.cache_clears.pending()
+				|| (!self.fixture_only && self.app_settings.state.needs_attention())
 				|| (!self.fixture_only && self.reading.needs_attention())
 				|| (!self.fixture_only && self.game_activity.needs_attention())
 				|| (!self.fixture_only && self.tray_setting.needs_attention())
@@ -2847,6 +2901,7 @@ impl eframe::App for Desktop {
 			self.sign_in_screen(ui);
 		}
 		let appearance = ctx.options(|options| options.theme_preference);
+		self.save_app_preferences();
 		self.save_reading_preferences(&ctx);
 		self.sync_game_activity(&ctx);
 		self.sync_tray(&ctx);
@@ -2874,6 +2929,7 @@ impl eframe::App for Desktop {
                 ui.label("Saved text drafts survive exit; selected files must be reselected. Logout removes local account data. Edits and uncertain sends need your attention.");
                 if self.forgetting{ui.label("Wait for saved-login removal to finish.");}
                 if self.cache_clears.pending(){ui.label("Cached history cleanup is pending; closing now may leave deleted messages on disk.");}
+                if !self.fixture_only && self.app_settings.state.needs_attention(){ui.label(self.app_settings.state.status());}
                 if !self.fixture_only && self.reading.needs_attention(){ui.label(self.reading.status());}
 				if !self.fixture_only && self.game_activity.needs_attention(){ui.label(self.game_activity.status());}
                 if !self.fixture_only && self.tray_setting.needs_attention(){ui.label(self.tray_setting.status());}

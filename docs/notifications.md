@@ -15,7 +15,7 @@ message/view; the existing manual Mark read action can retry. A newer service AC
 against an older HTTP response. Self messages, history loads and duplicate/replayed
 messages do not produce notification storms. Opening a DM shortcut selects that conversation.
 
-Settings → System notifications enables generic OS alerts for the current session.
+Settings → Desktop notifications enables generic OS alerts and saves the choice on this device.
 The default is off; no notification thread or OS call starts before opt-in. Alert text
 contains only “Serein” and “You have a new message.” It includes no names, message bodies,
 channel identifiers, avatars or attachments. The focused latest conversation suppresses
@@ -25,7 +25,7 @@ closed. Blocked relationships and complete protobuf user settings
 are not modeled; a protobuf settings update invalidates notification preferences until
 another READY snapshot. This is not complete Discord notification-setting parity.
 
-Notification metadata is session-only. Read-state navigation maps are limited by the
+Notification metadata is session-only; the local opt-in persists across restarts. Read-state navigation maps are limited by the
 4,000-item navigation bound. Observed activity retains at most 4,096 fixed-size records /
 128 KiB, and notification candidates at most 32 records / 16 KiB. Preference snapshots
 have a 512-KiB bound and at most 4,000 settings/overrides. The OS worker queue holds eight

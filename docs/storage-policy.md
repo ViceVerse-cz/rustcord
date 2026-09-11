@@ -36,8 +36,11 @@ Interactive changes coalesce for 300 ms into at most one queued write and one fi
 value. A full or failed worker reports an unsaved change without an automatic retry loop;
 Retry saving is deliberate. Closing with pending/failed writes prompts before discarding.
 In-app preview edits are not saved; a write already requested outside preview still completes.
-The standalone --demo does not start the SQLite worker. Category collapse, native-notification
-opt-in, narrow People overlays, audio preferences and outer window geometry remain session-local.
+The standalone --demo does not start the SQLite worker. Category collapse, narrow People overlays and outer window geometry remain session-local.
+Notification opt-in, hidden-channel visibility, audio devices (up to 1,024 bytes each),
+noise suppression, push-to-talk and gain are saved in the device-wide `app_preferences`
+SQLite singleton (16 KiB maximum), using the existing background worker. These survive
+restart/logout; demo controls never read or write them. Save failures remain visible.
 
 Recently visited conversations now keep at most two dormant RAM timelines in the current
 account session, moved rather than cloned. Only readable Fresh ordinary text windows are parked;
@@ -82,10 +85,9 @@ service revalidation because older builds discarded that metadata. Account isola
 database/cache limits and logout deletion remain unchanged; unsupported content is not rendered
 or executed from SQLite. Invalid stored marker bits reject the cached page.
 
-Microphone gain and speaker volume are session-only bounded integer percentages (0..=200),
-initially 100. They are not written to SQLite or system mixer settings. Two callback atomics
-hold the active levels; device changes and calls in the same session retain them. Logout or
-resetting the preview clears them with the existing UI state. No audio or new queue is retained.
+Microphone gain and speaker volume are saved bounded integer percentages (0..=200),
+initially 100. System mixer settings are unchanged. Two callback atomics hold active levels;
+no audio is retained. Preview levels remain session-only.
 
 Loaded thread navigation shares the 4,000-entry account navigation and 4 MiB normalized navigation budgets. Incoming thread syncs additionally cap combined parent/thread entries at 4,000 and normalized snapshot metadata at 2 MiB; wire JSON remains capped at 4 MiB. Removed-member arrays are capped at 4,000 and are discarded after checking the owner. Navigation/member lists are session-only; selected thread messages/drafts reuse existing account history/draft storage. Actual accepted thread removals enqueue the existing account-wide history clear, preserving drafts; ignored, empty-scope and rename-only events do not clear disk history. This coarse invalidation trades refetch cost for simpler deletion, without new tables or workers.
 
@@ -125,7 +127,7 @@ A process-write trace was attempted with `sudo -n fs_usage -w -f filesys -t 3 <s
 
 The September 10 owner clarification prioritizes low RAM and small packages over minimizing disk caches. Avatars/icons remain static PNGs; visible embed previews use validated Discord media proxies. No animation or new image codec is enabled. One worker downloads/decodes at a time, with 128 bounded keys waiting, two decoded results (at most 2 MiB total), a 2 MiB encoded body ceiling, and 512×512 preview output. Avatar/icon decode limits remain 256×256 source / 1 MiB decoder allocations / 128×128 output; message previews and profile banners allow 1024×1024 source / 8 MiB decoder allocations. Shared textures are bounded by 64 entries and 16 MiB RGBA. These are component bounds, not whole-process RSS or driver allocations. Disk eviction retains only 32 candidate paths at a time. Worker completion fences replacement and deletion, so logout/clear cannot race an older worker's writes. Picture-cache failures appear in local-storage status. Disk cache contents are unencrypted. Category collapse preferences remain session-local. See [image policy](icons.md) and [embed persistence](embeds.md).
 
-The optional voice feature introduces no application audio files, recordings, voice-key store or saved device preference. Voice tokens/session IDs use redacted, zeroizing buffers and never enter SQLite or diagnostics; DAVE identities are regenerated for a new call. Eight-frame PCM queues, bounded Opus packets and one bounded decoder/jitter/PCM working set per remote speaker (up to 63) are transient media allocations, not disk caches. Guild voice rosters are session-only with 4,096-entry and 1 MiB budgets; they are never persisted. Upstream cryptographic tracing is compiled out. Audio-device shutdown is fenced before another device session starts. Synthetic crypto, transport and device-free capture-gate tests passed; actual audio-driver/permission artifacts and process writes during a physical call have not been traced. OS microphone permissions and driver behavior are outside Serein's cache-clearing guarantee.
+Voice introduces no application audio files, recordings or voice-key store. Device preferences are saved locally as described above. Voice tokens/session IDs use redacted, zeroizing buffers and never enter SQLite or diagnostics; DAVE identities are regenerated for a new call. Eight-frame PCM queues, bounded Opus packets and one bounded decoder/jitter/PCM working set per remote speaker (up to 63) are transient media allocations, not disk caches. Guild voice rosters are session-only with 4,096-entry and 1 MiB budgets; they are never persisted. Upstream cryptographic tracing is compiled out. Audio-device shutdown is fenced before another device session starts. Synthetic crypto, transport and device-free capture-gate tests passed; actual audio-driver/permission artifacts and process writes during a physical call have not been traced. OS microphone permissions and driver behavior are outside Serein's cache-clearing guarantee.
 
 Image attachment metadata remains bounded by 10 attachments / 64 KiB retained metadata and 256 KiB JSON per message, including original/proxy signed URLs. It counts toward existing window, pending-patch and database budgets. Decoded pixels reuse the shared media worker/cache; spoiler attachments are not requested before explicit reveal. Profile metadata (bio, pronouns, badges, connections and mutual-server summaries) stays in the single bounded RAM view. Profile and server-specific banner/avatar pixels may remain in the shared account image cache after closing the profile; cache clear/logout removes them under the same policy.
 
@@ -189,9 +191,9 @@ Existing recovery drafts and explicitly downloaded files keep their documented l
 No schema change or external runtime dependency is added; UI tests reuse the existing
 workspace test-support crate through a dev-dependency.
 
-Notification/read activity and notification preferences remain bounded session RAM only;
-no SQLite schema or saved-notification preference is introduced. The OS receives generic
-fixed text only after session opt-in and may keep its own notification/permission history.
+Notification/read activity and remote notification preferences remain bounded session RAM only;
+the local notification opt-in is saved in `app_preferences`. The OS receives generic
+fixed text only after explicit opt-in and may keep its own notification/permission history.
 Logout invalidates queued work and requests dismissal; this does not erase OS records.
 See [notification limits and platform behavior](notifications.md). Composer artwork uses
 the existing Twemoji atlas and custom-image cache; saved drafts keep their original wire

@@ -10,6 +10,8 @@ use std::{
 	},
 };
 pub enum Operation {
+	LoadAppPreferences,
+	SaveAppPreferences(local_store::AppPreferences),
 	LoadAppearance,
 	SaveAppearance(Appearance),
 	SaveThemeVariant(Option<String>),
@@ -47,6 +49,8 @@ pub enum Operation {
 	Forget,
 }
 pub enum Outcome {
+	AppPreferences(Result<local_store::AppPreferences, StoreError>),
+	AppPreferencesSaved(Result<(), StoreError>),
 	/// Saved appearance plus the saved theme preset key, if any.
 	Appearance(Appearance, Option<String>),
 	ReadingPreferences(Result<model::ReadingPreferences, StoreError>),
@@ -206,6 +210,18 @@ fn execute(
 ) -> Outcome {
 	// Settings completions are account-independent and have their own pending/error state.
 	match &operation {
+		Operation::LoadAppPreferences => {
+			return Outcome::AppPreferences(match store {
+				Ok(store) => store.app_preferences(),
+				Err(error) => Err(*error),
+			});
+		}
+		Operation::SaveAppPreferences(value) => {
+			return Outcome::AppPreferencesSaved(match store {
+				Ok(store) => store.save_app_preferences(value),
+				Err(error) => Err(*error),
+			});
+		}
 		Operation::LoadMinimizeToTray => {
 			return Outcome::MinimizeToTray(match store {
 				Ok(store) => store.minimize_to_tray(),
@@ -285,7 +301,9 @@ fn execute(
 			"Could not save GIF favorites; the change exists only in this session"
 		}
 		Operation::LoadChannel { .. } => "Could not read cached history",
-		Operation::LoadReadingPreferences
+		Operation::LoadAppPreferences
+		| Operation::SaveAppPreferences(_)
+		| Operation::LoadReadingPreferences
 		| Operation::SaveReadingPreferences(_)
 		| Operation::LoadGameActivity
 		| Operation::SaveGameActivity(_)
@@ -294,7 +312,9 @@ fn execute(
 	};
 	let result = match store {
 		Ok(store) => match operation {
-			Operation::LoadReadingPreferences
+			Operation::LoadAppPreferences
+			| Operation::SaveAppPreferences(_)
+			| Operation::LoadReadingPreferences
 			| Operation::SaveReadingPreferences(_)
 			| Operation::LoadGameActivity
 			| Operation::SaveGameActivity(_)
