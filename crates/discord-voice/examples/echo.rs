@@ -64,8 +64,8 @@ fn main() {
 		let mut clean = raw;
 		filtered.render(&[0.0; 960]).unwrap();
 		unfiltered.render(&[0.0; 960]).unwrap();
-		filtered.capture(&mut clean).unwrap();
-		unfiltered.capture(&mut raw).unwrap();
+		filtered.capture(&mut clean, false).unwrap();
+		unfiltered.capture(&mut raw, false).unwrap();
 		assert!(clean.iter().all(|s| s.is_finite() && s.abs() <= 1.0));
 		if tick >= 60 {
 			before += raw.iter().map(|s| s * s).sum::<f32>();
@@ -95,8 +95,8 @@ fn main() {
 		let mut raw = vowel;
 		filtered.render(&[0.0; 960]).unwrap();
 		unfiltered.render(&[0.0; 960]).unwrap();
-		filtered.capture(&mut vowel).unwrap();
-		unfiltered.capture(&mut raw).unwrap();
+		filtered.capture(&mut vowel, false).unwrap();
+		unfiltered.capture(&mut raw, false).unwrap();
 		if tick >= 50 {
 			voiced_before += raw.iter().map(|s| s * s).sum::<f32>();
 			voiced_after += vowel.iter().map(|s| s * s).sum::<f32>();
@@ -111,8 +111,8 @@ fn main() {
 	let mut reference = bypass;
 	filtered.render(&[0.0; 960]).unwrap();
 	unfiltered.render(&[0.0; 960]).unwrap();
-	filtered.capture(&mut bypass).unwrap();
-	unfiltered.capture(&mut reference).unwrap();
+	filtered.capture(&mut bypass, false).unwrap();
+	unfiltered.capture(&mut reference, false).unwrap();
 	assert_eq!(
 		bypass, reference,
 		"disabling suppression must retain the original AEC state"
@@ -139,7 +139,7 @@ fn main() {
 		if tick >= 400 {
 			original_energy += capture.iter().map(|s| s * s).sum::<f32>();
 		}
-		echo.capture(&mut capture).unwrap();
+		echo.capture(&mut capture, false).unwrap();
 		assert!(capture.iter().all(|s| s.is_finite() && s.abs() <= 1.0));
 		if tick >= 400 {
 			residual_energy += capture.iter().map(|s| s * s).sum::<f32>();
@@ -156,7 +156,7 @@ fn main() {
 	for tick in 0..100 {
 		let mut capture = std::array::from_fn(|i| ((tick * 960 + i) as f32 * 0.04).sin() * 0.2);
 		echo.render(&[0.0; 960]).unwrap();
-		echo.capture(&mut capture).unwrap();
+		echo.capture(&mut capture, false).unwrap();
 		if tick >= 50 {
 			speech_energy += capture.iter().map(|s| s * s).sum::<f32>();
 		}

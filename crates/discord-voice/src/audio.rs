@@ -218,12 +218,15 @@ impl Audio {
 						};
 						if worker_gate.capture() {
 							let start = metrics.start();
-							let result = active.echo.capture(&mut frame);
+							let result = active.echo.capture(&mut frame, start.is_some());
 							metrics.finish(Stage::EchoCapture, start);
 							noise_frames += u64::from(noise);
-							if let Err(error) = result {
-								emit(Err(error));
-								break 'audio;
+							match result {
+								Ok(noise_time) => metrics.add(Stage::Noise, noise_time),
+								Err(error) => {
+									emit(Err(error));
+									break 'audio;
+								}
 							}
 							let gain =
 								f32::from(worker_gate.input_gain.load(Ordering::Relaxed)) / 100.0;

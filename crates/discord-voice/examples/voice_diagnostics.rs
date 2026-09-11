@@ -13,6 +13,7 @@ fn main() {
 	for stage in [
 		Stage::EchoRender,
 		Stage::EchoCapture,
+		Stage::Noise,
 		Stage::Encode,
 		Stage::Mix,
 		Stage::Receive,

@@ -1,6 +1,7 @@
 //! Worker-owned AEC3. No devices, recording, or processing in audio callbacks.
 use nnnoiseless::DenoiseState;
 use sonora::{AudioProcessing, Config, StreamConfig, config::EchoCanceller};
+use std::time::{Duration, Instant};
 
 pub struct Echo {
 	processor: AudioProcessing,
@@ -44,7 +45,14 @@ impl Echo {
 		Ok(())
 	}
 
-	pub fn capture(&mut self, frame: &mut [f32; 960]) -> Result<(), &'static str> {
+	/// Returns the time spent in RNNoise when `time_noise` is set, so diagnostics can
+	/// report suppression separately from AEC without this module depending on them.
+	pub fn capture(
+		&mut self,
+		frame: &mut [f32; 960],
+		time_noise: bool,
+	) -> Result<Duration, &'static str> {
+		let mut noise_time = Duration::ZERO;
 		for chunk in frame.as_chunks_mut::<480>().0 {
 			let mut output = [0.0; 480];
 			// AEC3 estimates the acoustic delay from the actual rendered reference.
@@ -55,6 +63,7 @@ impl Echo {
 				.process_capture_f32(&[chunk], &mut [&mut output])
 				.map_err(|_| "Echo cancellation could not process microphone audio")?;
 			if let Some(noise) = &mut self.noise {
+				let start = time_noise.then(Instant::now);
 				// RNNoise expects 48 kHz mono float samples on the signed i16 scale.
 				let input = output.map(|s| {
 					if s.is_finite() {
@@ -71,9 +80,12 @@ impl Echo {
 						0.0
 					};
 				}
+				if let Some(start) = start {
+					noise_time += start.elapsed();
+				}
 			}
 			chunk.copy_from_slice(&output);
 		}
-		Ok(())
+		Ok(noise_time)
 	}
 }

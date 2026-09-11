@@ -66,6 +66,66 @@ opt-level = 3
 [profile.dev.package.sonora-simd]
 opt-level = 3
 
+# RNNoise suppression, its FFT chain and libopus run per 10-20 ms frame; unoptimized
+# they cost ~40% of a core in debug builds.
+[profile.dev.package.nnnoiseless]
+opt-level = 3
+
+[profile.dev.package.easyfft]
+opt-level = 3
+
+[profile.dev.package.realfft]
+opt-level = 3
+
+[profile.dev.package.rustfft]
+opt-level = 3
+
+[profile.dev.package.num-complex]
+opt-level = 3
+
+[profile.dev.package.generic_singleton]
+opt-level = 3
+
+[profile.dev.package.libopus_sys]
+opt-level = 3
+
+[profile.dev.package.opus2]
+opt-level = 3
+
+# Per-packet media crypto: DAVE frame decryption (AES-GCM) and transport XChaCha20-Poly1305.
+[profile.dev.package.davey]
+opt-level = 3
+
+[profile.dev.package.chacha20]
+opt-level = 3
+
+[profile.dev.package.chacha20poly1305]
+opt-level = 3
+
+[profile.dev.package.poly1305]
+opt-level = 3
+
+[profile.dev.package.aes]
+opt-level = 3
+
+[profile.dev.package.aes-gcm]
+opt-level = 3
+
+[profile.dev.package.ghash]
+opt-level = 3
+
+[profile.dev.package.polyval]
+opt-level = 3
+
+[profile.dev.package.universal-hash]
+opt-level = 3
+
+[profile.dev.package.cipher]
+opt-level = 3
+
+[profile.dev.package.aead]
+opt-level = 3
+
 [patch.crates-io]
 # Replace an affected SHAKE dependency while retaining the compatible HPKE API.
 hpke-rs = { path = "vendor/hpke-rs" }
