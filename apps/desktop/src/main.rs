@@ -1499,6 +1499,51 @@ impl Desktop {
 					request,
 					result: Err(Failure::Protocol),
 				},
+				Command::EditProfile {
+					user,
+					request,
+					changes,
+				} => {
+					let result = self
+						.state
+						.user
+						.as_ref()
+						.filter(|own| own.id == user)
+						.map(|own| {
+							let mut profile = self
+								.state
+								.own_profile
+								.data
+								.clone()
+								.unwrap_or_else(|| ui::synthetic_own_profile(own));
+							if let Some(changes) = changes {
+								if !changes.valid() {
+									return Err(Failure::Capacity);
+								}
+								if let Some(name) = changes.global_name {
+									profile.user.name =
+										name.clone().unwrap_or_else(|| profile.username.clone());
+									profile.global_name = name;
+								}
+								if let Some(bio) = changes.bio {
+									profile.bio = bio;
+								}
+								if let Some(pronouns) = changes.pronouns {
+									profile.pronouns = pronouns;
+								}
+								if let Some(color) = changes.accent_color {
+									profile.accent_color = color;
+								}
+							}
+							Ok(Box::new(profile))
+						})
+						.unwrap_or(Err(Failure::Protocol));
+					Event::ProfileEdited {
+						user,
+						request,
+						result,
+					}
+				}
 				Command::Members {
 					guild,
 					channel,

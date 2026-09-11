@@ -1,5 +1,48 @@
 # Initial performance evidence
 
+## Own profile editor - September 11, 2026
+
+Baseline `22e2283` and final runtime sources on `feat/profile-edit`, built from
+separate source worktrees with the locked Rust 1.98.1 toolchain. Both text release
+packages pass; both voice executables compile, but voice packaging fails on the
+same missing exact-version `openh264-sys2 0.9.8` and `openh264 0.9.8` license texts.
+Complete voice installed/archive sizes therefore remain unavailable. No dependency
+versions changed. Text totals include staged documentation/licenses, exclude the
+sibling voice directory and archives, and predate this final measurement addendum.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable, bytes | 55,044,608 | 55,143,936 | +99,328 (+0.18%) |
+| Text installed package, bytes | 59,967,663 | 60,074,259 | +106,596 (+0.18%) |
+| Text ZIP level 6, bytes | 36,017,303 | 36,059,832 | +42,529 (+0.12%) |
+| Voice executable, bytes | 61,060,608 | 61,163,520 | +102,912 (+0.17%) |
+| Maximum sampled working set, bytes | 166,354,944 | 167,079,936 | +724,992 (+0.44%) |
+| Settled working set, bytes | 166,354,944 | 167,079,936 | +724,992 (+0.44%) |
+| Settled private memory, bytes | 394,178,560 | 397,459,456 | +3,280,896 (+0.83%) |
+| Idle CPU, percent of one core | 0.0000 | 0.0000 | +0.0000 |
+| Reducer median, ms | 40.9315 | 40.2442 | -0.6873 (-1.68%) |
+
+Windows 11 Home, Ryzen 7 7800X3D (16 logical CPUs), 33,410,678,784 bytes usable RAM,
+wgpu renderer; actual adapter/backend and GPU memory were not measured. Both text
+builds ran as fresh native `--demo` processes, at the default 1120 x 760 logical
+viewport and 125% display scale: baseline `--demo-settings=account` versus changed
+`--demo-settings=profile`. After ten seconds warmup, five one-second PowerShell
+process samples measured WorkingSet64, PrivateMemorySize64 and TotalProcessorTime.
+Settled memory is the median of the last three samples; peak means maximum sampled,
+not lifetime peak. Idle CPU is the process-time delta divided by sampled wall time,
+as percent of one logical core. Neither short idle sample registered a CPU increment.
+This does not imply zero CPU cost. There were no scripted edits or helper-process
+measurements; background desktop activity was uncontrolled.
+
+Reducer: separate release targets for each revision, `cargo replay` warmup followed
+by five direct executable runs, 100,000 synthetic events, 500 records and
+236,992..237,477 estimated retained timeline bytes on both. The small timing and
+memory differences are noisy snapshots, not an improvement claim. Text archives use
+Python zipfile, sorted relative names and DEFLATE level 6. Frame/startup percentiles,
+editing latency, GPU allocation, real-account compatibility and voice runtime cost
+remain unmeasured. [Raw samples and package counts](pr-evidence/profile-edit/metrics.json)
+and [native screenshot procedure](pr-evidence/profile-edit/README.md) accompany the PR.
+
 ## September 11 — outgoing screen sharing
 
 Same host: macOS 27.0 (26A428), Apple M1 Pro, 16 GiB RAM, wgpu Metal, built-in 3024×1964 Retina display, default reading scale. Baseline is the verified `609f8bf` release package; changed packages come from `cargo xtask package` and `cargo xtask package-voice` at feature commit `fb3736d`, before merging unrelated main UI changes from `afac0ee`. Full package means the app bundle and the four license/readme/notice files staged by xtask; stale pre-existing ZIPs and the sibling voice directory are excluded. Gzip level 6 archives use the same Python tarfile procedure on both outputs.

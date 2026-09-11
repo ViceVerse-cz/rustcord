@@ -1,5 +1,54 @@
 # On-demand user profiles
 
+## Editing your profile — September 11, 2026
+
+Settings → Profile and your own profile card's Edit profile button open the global
+profile editor. My Account also links to it. Display name (32 characters), pronouns
+(40), About Me (190), and an optional 24-bit accent color have a session-only draft,
+live preview, explicit Save/Cancel, loading and failure states. Empty display name
+clears `global_name` to use the username; disabling custom color sends null.
+Avatar/banner uploads, username, server-specific profiles and security settings
+remain managed in Discord. Closing settings retains the draft for this session;
+Cancel restores the last loaded values. Profile drafts are not written to disk.
+
+A full own-account profile must load before saving. Only changed fields are sent in
+one `PATCH /users/@me`, followed by a fresh global-profile read that verifies those
+fields. The account response identity must match; its raw response is zeroized since
+the service may return ignored credential fields. The existing fixed-origin client,
+256 KiB wire and 64 KiB model limits, cooldowns and serial write worker apply. The
+edit payload is additionally limited to 4096 retained bytes, Unicode character
+limits and permitted control characters. Duplicate saves are disabled. No writes
+are automatically retried. An unconfirmed save preserves the draft and requires a
+reload; untouched fields adopt refreshed values while edited fields remain yours.
+Disconnect/session-generation changes reject obsolete results. Confirmed identity
+changes update the retained user views and invalidate stale profile snapshots.
+
+This is **unofficial normal-user behavior, not live-verified compatibility**.
+Sources checked September 11, 2026: the public implementation's
+[fixed edit route](https://github.com/dolfies/discord.py-self/blob/master/discord/http.py)
+and [current-user edit fields](https://github.com/dolfies/discord.py-self/blob/master/discord/user.py),
+the firsthand reverse-engineered [current-user payload](https://docs.discord.food/resources/user#modify-current-user),
+and Discord's [display-name limits](https://support.discord.com/hc/en-us/articles/12620128861463-New-Usernames-Display-Names)
+and [profile help](https://support.discord.com/hc/en-us/articles/4403147417623-Custom-Profiles).
+These are implementation evidence; normal-user profile writes are not established
+by the public bot API contract or a synthetic test.
+
+Offline reproduction: `cargo run --locked -p serein -- --demo --demo-settings=profile`.
+Edit fields, inspect the preview, Save, reopen your own card, then change a field
+and Cancel. Demo saves update only synthetic session state, with no account/network
+or persistence effects. No real account profile was read or modified for validation.
+
+The editor uses the existing settings typography, palette, filled controls and
+pill switch. At wide sizes the profile card sits beside the form; narrow windows
+keep Save/Cancel above the preview. Native screenshot reproduction:
+`cargo run --locked -p serein --example profile_preview -- --demo --output=PATH.png`.
+The example renders the real UI, primes one synthetic profile, and saves only its
+own wgpu framebuffer through the pinned screenshot callback on a bounded worker.
+`--light` and `--width=760 --height=900` cover the alternate layouts. This temporary
+capture window deliberately does not dispatch user commands to network adapters.
+
+## Viewing profiles
+
 Implemented September 10, 2026; redesigned as an anchored popout later the same day (see the last section). Clicking an existing visible user requests one profile through the authenticated Discord adapter. Closing or replacing the card cancels its task. The reducer accepts only the current user/guild/request/session combination and shows one card at a time. Fetched profiles are kept in a bounded RAM cache (see the popout section) so reopening a recently viewed card is instant; the card and cache are cleared on logout, session start, resync/permission invalidation, server removal, or session failure. It does not enumerate profiles, fetch mutual friends, read private notes, or persist profile metadata.
 
 The request is `GET /users/{user_id}/profile` with `with_mutual_guilds=true`, `with_mutual_friends=false`, `with_mutual_friends_count=false`, and an optional existing `guild_id` from the open conversation, independent of the server currently browsed in the sidebar. This normal-user route is **unofficial**, evidenced by [discord.py-self's HTTP implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/http.py#L4466-L4482). It is not a documented bot/OAuth capability or proof of Discord approval. No account-backed profile request was performed during implementation.

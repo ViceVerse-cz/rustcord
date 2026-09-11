@@ -2,6 +2,85 @@
 use crate::{Id, User, valid_avatar_hash};
 
 pub const MAX_PROFILE_BYTES: usize = 64 * 1024;
+pub const MAX_PROFILE_NAME_CHARS: usize = 32;
+pub const MAX_PROFILE_BIO_CHARS: usize = 190;
+pub const MAX_PROFILE_PRONOUNS_CHARS: usize = 40;
+pub const MAX_PROFILE_EDIT_BYTES: usize = 4096;
+
+/// Only explicitly changed fields are sent. Nested `None` clears a nullable field.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct ProfileEdit {
+	pub global_name: Option<Option<String>>,
+	pub bio: Option<String>,
+	pub pronouns: Option<String>,
+	pub accent_color: Option<Option<u32>>,
+}
+impl ProfileEdit {
+	pub fn bytes(&self) -> usize {
+		size_of::<Self>()
+			+ self.global_name.as_ref().map_or(0, bytes)
+			+ bytes(&self.bio)
+			+ bytes(&self.pronouns)
+	}
+	pub fn valid(&self) -> bool {
+		fn text(value: &str, max: usize, multiline: bool) -> bool {
+			value.len() <= max * 4
+				&& value.chars().count() <= max
+				&& value
+					.chars()
+					.all(|c| !c.is_control() || (multiline && matches!(c, '\n' | '\r' | '\t')))
+		}
+		self.bytes() <= MAX_PROFILE_EDIT_BYTES
+			&& self.global_name.as_ref().is_none_or(|name| {
+				name.as_ref().is_none_or(|name| {
+					!name.trim().is_empty() && text(name, MAX_PROFILE_NAME_CHARS, false)
+				})
+			}) && self
+			.bio
+			.as_ref()
+			.is_none_or(|bio| text(bio, MAX_PROFILE_BIO_CHARS, true))
+			&& self
+				.pronouns
+				.as_ref()
+				.is_none_or(|pronouns| text(pronouns, MAX_PROFILE_PRONOUNS_CHARS, false))
+			&& self
+				.accent_color
+				.flatten()
+				.is_none_or(|color| color <= 0xff_ffff)
+	}
+}
+
+#[cfg(test)]
+mod edit_tests {
+	use super::*;
+	#[test]
+	fn profile_edit_bounds_unicode_clear_values_and_retained_bytes() {
+		let mut edit = ProfileEdit {
+			global_name: Some(Some("🦀".repeat(MAX_PROFILE_NAME_CHARS))),
+			bio: Some("🦀".repeat(MAX_PROFILE_BIO_CHARS)),
+			pronouns: Some("🦀".repeat(MAX_PROFILE_PRONOUNS_CHARS)),
+			accent_color: Some(Some(0xff_ffff)),
+		};
+		assert!(edit.valid());
+		edit.bio.as_mut().unwrap().push('x');
+		assert!(!edit.valid());
+		edit.bio = Some("First line\nSecond line".into());
+		edit.global_name = Some(None);
+		edit.pronouns = Some(String::new());
+		edit.accent_color = Some(None);
+		assert!(edit.valid());
+		edit.global_name = Some(Some(" ".into()));
+		assert!(!edit.valid());
+		edit.global_name = None;
+		edit.accent_color = Some(Some(0x100_0000));
+		assert!(!edit.valid());
+		edit.accent_color = None;
+		edit.pronouns = Some("they\0them".into());
+		assert!(!edit.valid());
+		edit.pronouns = Some(String::with_capacity(MAX_PROFILE_EDIT_BYTES));
+		assert!(!edit.valid());
+	}
+}
 #[derive(Clone)]
 pub struct UserProfile {
 	pub user: User,
