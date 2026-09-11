@@ -2071,3 +2071,24 @@ The existing 100,000-event replay used one warmup and five alternating direct ex
 baseline ms 42.0013, 39.8364, 39.8950, 40.0632, 40.0000; after ms 39.6707, 39.4402,
 39.7760, 39.6746, 39.0214. These small differences do not demonstrate a speedup. Package/CI
 repairs preserve visible behavior; the new soak is development tooling, not bundled client code.
+
+
+Final integrated packages on `4b45c7e` include main `c3f1ba0` and the task repairs. Both
+`cargo xtask package` and `cargo xtask package-voice` passed on the same Windows host and
+private target (1m35s / 1m43s). Absolute sizes below use the same sorted DEFLATE9 method;
+text excludes nested voice. Documentation is measured at packaging time, before this append.
+These totals include later main UI/dependency changes, so their growth against c83 is not
+attributed to the soak workload. No additional replay run is needed for the later UI-only edits.
+
+| Final integrated metric | Text | Voice |
+| --- | ---: | ---: |
+| Executable bytes | 53,339,648 | 58,447,872 |
+| Installed bytes | 54,456,570 | 59,868,101 |
+| DEFLATE9 ZIP bytes | 33,006,303 | 35,190,914 |
+| Files | 65 | 128 |
+
+Native automation remains paused after the owner stopped it with Escape. The edit-focus
+repair has headless keyboard coverage; native focus and full-client UI performance remain
+unmeasured. Test-only rendering assertions now identify the actual activity texture and
+keyboard navigation reaches the unread button by accessible label. Neither changes shipped
+layout or adds runtime instrumentation.

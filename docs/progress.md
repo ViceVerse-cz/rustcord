@@ -2172,3 +2172,10 @@ The integrated unread-gap test assumed one Tab reached the jump button. The new 
 comes after focusable messages, so the test now traverses a bounded 32 Tabs to the enabled
 named button, checks no acknowledgement/jump on every Tab, and activates with Enter.
 The focused regression passed; shipping keyboard behavior is unchanged.
+
+Final combined validation on `4b45c7e` passed: `cargo xtask check` (98 UI tests),
+`cargo xtask package` and `cargo xtask package-voice` (1m35s / 1m43s). The invocation-workspace
+regression had already passed and its code was unaffected by the final UI-only integration.
+GitHub security, licenses and both sanitizer fuzz runs passed; native jobs were pending at
+recording. Final integrated package measurements are in performance.md. No native/account
+interoperability claim is made.
