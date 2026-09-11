@@ -247,6 +247,17 @@ capture diagnostics. Do not use a real owner session in default tests. Synthetic
 redaction, UTF-8 byte/line limits, disabled and broken-output cases, and message delivery plus
 heartbeat sequencing after unsupported dispatches. No live interoperability claim follows.
 
+### Existing DM call presence
+
+Session memory keeps at most 64 ongoing one-to-one DM channel IDs (512 bytes of ID storage,
+plus the Vec header), independently of the active local media session and incoming ringing.
+No voice secrets, participant payloads, audio, or new disk entries are retained for this list.
+Duplicate updates reuse an entry; at capacity, the oldest entry is evicted. Opening a DM
+requests its call state again through the bounded existing command/signaling queues. There
+is no background polling or all-DM subscription. Deletion/unavailability or channel removal
+clears the matching entry; fresh READY, resync and logout clear the list. A resumable
+disconnect retains it for replay, with Join disabled until Gateway connectivity returns.
+
 
 
 The reliable Gateway/HTTP-to-UI queue accepts one bounded navigation refresh burst

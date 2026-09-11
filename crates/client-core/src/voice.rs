@@ -7,6 +7,8 @@ use crate::{
 use model::{Id, Member};
 use std::time::Instant;
 pub const MAX_PARTICIPANTS: usize = 64;
+pub const MAX_DM_CALLS: usize = 64;
+pub const MAX_DM_CALL_BYTES: usize = MAX_DM_CALLS * size_of::<Id>();
 pub const MAX_ROSTER: usize = 4096;
 pub const MAX_ROSTER_BYTES: usize = 1024 * 1024;
 use std::fmt;
@@ -108,11 +110,21 @@ pub struct Call {
 pub struct State {
 	pub active: Option<Call>,
 	pub incoming: Option<Id>,
+	/// Known service calls, independent of ringing and this device's media session.
+	pub(crate) dm_calls: Vec<Id>,
 	pub roster: Vec<RosterEntry>,
 	sequence: u64,
 }
+impl State {
+	pub fn has_dm_call(&self, channel: Id) -> bool {
+		self.dm_calls.contains(&channel)
+	}
+}
 #[derive(Clone, Copy, Debug)]
 pub enum Command {
+	Sync {
+		channel: Id,
+	},
 	Ring {
 		channel: Id,
 		request: u64,
@@ -263,6 +275,7 @@ impl ClientState {
 			return None;
 		}
 		let guild = self.channel(channel)?.guild;
+		let ring = ring && guild.is_none() && !self.voice.has_dm_call(channel);
 		let participants: Vec<_> = self
 			.voice
 			.roster
@@ -302,7 +315,7 @@ impl ClientState {
 		Some(crate::Command::Voice(Command::Join {
 			channel,
 			request,
-			ring: ring && guild.is_none(),
+			ring,
 		}))
 	}
 	pub fn leave_call(&mut self) -> Option<crate::Command> {
@@ -381,7 +394,10 @@ impl ClientState {
 				participants,
 				unavailable,
 			} => {
-				if !self.can_call(channel) {
+				if self.auth != AuthState::Authenticated
+					|| !self.has_voice_access(channel)
+					|| self.channel(channel).is_none_or(|c| c.guild.is_some())
+				{
 					return;
 				}
 				if ringing.as_ref().is_some_and(|r| r.len() > 2)
@@ -392,6 +408,15 @@ impl ClientState {
 				if unavailable {
 					self.end_voice_channel(channel);
 					return;
+				}
+				if !self.voice.has_dm_call(channel) {
+					if self.voice.dm_calls.len() >= MAX_DM_CALLS
+						|| (self.voice.dm_calls.len() + 1) * size_of::<Id>() > MAX_DM_CALL_BYTES
+					{
+						// ponytail: oldest call metadata is evicted; viewing that DM queries it again.
+						self.voice.dm_calls.remove(0);
+					}
+					self.voice.dm_calls.push(channel);
 				}
 				if let Some(ringing) = ringing {
 					if self.user.as_ref().is_some_and(|u| ringing.contains(&u.id))
@@ -576,6 +601,7 @@ impl ClientState {
 		}
 	}
 	pub(crate) fn end_voice_channel(&mut self, channel: Id) {
+		self.voice.dm_calls.retain(|id| *id != channel);
 		self.voice.roster.retain(|r| r.channel != channel);
 		if self.voice.incoming == Some(channel) {
 			self.voice.incoming = None;
@@ -590,6 +616,7 @@ impl ClientState {
 		}
 	}
 	pub fn disconnect_voice(&mut self) {
+		self.voice.dm_calls.clear();
 		self.voice.roster.clear();
 		self.voice.incoming = None;
 		if let Some(call) = &mut self.voice.active {

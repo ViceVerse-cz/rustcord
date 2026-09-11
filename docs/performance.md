@@ -2738,3 +2738,50 @@ exact license texts for `openh264-sys2 0.9.8` and `openh264 0.9.8` are missing.
 The existing realfft 3.5.0 license-evidence warning also remains. Complete voice
 installed/ZIP sizes are unavailable; partial staging is not a complete package.
 No voice session or microphone was activated.
+
+## September 11: existing DM call discovery and Join banner
+
+Baseline 1ff190b1eafb6ff701231f56b4eff296c7d6c578 versus fix/existing-dm-call,
+Windows 11 Home 10.0.26200 x64, Ryzen 7 7800X3D (16 logical CPUs), 31.1 GiB RAM,
+Rust 1.98.1, pinned lockfile and existing optimized release profile. Baseline and
+changed artifacts were built from separate worktrees and retained separately.
+No dependency or media-code change. Package sizes were measured before these final
+performance/progress addenda; docs/pr-evidence and the sibling voice package are excluded.
+ZIP uses Python zipfile DEFLATE level 9 over all 670 text-package files.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable, bytes | 55,097,344 | 55,101,952 | +4,608 (+0.0084%) |
+| Text installed package, bytes | 60,039,047 | 60,049,160 | +10,113 (+0.0168%) |
+| Text ZIP, bytes | 35,394,655 | 35,397,727 | +3,072 (+0.0087%) |
+| Voice executable, bytes | 61,114,368 | 61,123,584 | +9,216 (+0.0151%) |
+| Voice full package / ZIP | Blocked | Blocked | Missing OpenH264 license texts |
+| Reducer replay median, ms | 42.7112 | 43.4964 | +0.7852 (+1.84%) |
+| Sampled process peak / final working set, bytes | 172,339,200 | 169,140,224 | -3,198,976 |
+| Sampled peak private bytes | 400,502,784 | 396,980,224 | -3,522,560 |
+| Sampled CPU time, ms | 15.625 / 10,112.516 ms | 234.375 / 10,150.817 ms | +218.750 ms |
+
+Reducer: one warmup then five direct replay-bench runs per build, 100,000 synthetic
+message events; retained timeline 236,992..237,477 estimated bytes / 500 records on both.
+Baseline samples (ms): 43.9417, 41.6154, 42.7112, 47.5427, 40.7737.
+After: 42.0201, 44.4412, 39.3236, 43.4964, 45.7269. This does not exercise live calls
+or prove a speed improvement/regression; the change is within these short-run ranges.
+
+Process samples: each text release launched with --demo, 8-second warmup, ten 1-second
+PowerShell Process samples, no scripted input. CPU was 0.155% versus 2.309% of one logical
+CPU (0.0097% versus 0.1443% of the 16-CPU machine). After working set ranged from
+167,018,496 to 169,140,224 bytes, so that sample had not fully settled. These are limited
+process observations, not controlled UI-idle evidence: builds were also running, native
+inspection was unavailable, and viewport/display scale/occlusion were not verified.
+wgpu is the configured renderer; backend, GPU memory, helpers, p95 frame/startup latency,
+and scripted call-banner interaction cost are unmeasured. Do not attribute the CPU or
+memory differences to this small feature without a controlled native comparison.
+
+Both text packages and both voice release compilations passed. Both voice packaging
+attempts stopped on missing exact license texts for openh264-sys2 0.9.8 and openh264 0.9.8;
+the pre-existing realfft license-evidence warning also remains. No notices were bypassed.
+The changed voice executable started --demo --demo-existing-call and remained responsive
+with a native window; its rendered appearance could not be inspected because the Computer
+Use native pipe was unavailable (Windows error 2). It was then stopped. No live account,
+microphone, call, recording or non-Windows test was used. Passive call storage is bounded
+to 64 channel IDs / 512 bytes plus the Vec header, with no polling or new disk storage.

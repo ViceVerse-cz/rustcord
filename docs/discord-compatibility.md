@@ -1,5 +1,13 @@
 # Discord compatibility — checked 2026-09-10
 
+## Existing DM calls — September 11, 2026
+
+Viewing a supported one-to-one DM requests its call state using the existing unofficial
+Gateway opcode 13. CALL_CREATE/UPDATE keep an ongoing-call banner independently of ringing
+or local media; CALL_DELETE/unavailability removes it. Join never rings an already known
+call. [Primary implementation evidence and owner-controlled live checks](voice.md) distinguish
+the passing local WebSocket/reducer/UI tests from still-unverified Discord discovery and audio.
+
 ## Outgoing screen sharing — September 11, 2026
 
 The optional voice build adds macOS 14+ ScreenCaptureKit and Windows Graphics Capture senders for an existing connected DM/server voice call. Share opens a native egui source/settings dialog first. It exposes 720p/1080p and 15/30/60 fps to all accounts, plus cursor visibility; only the explicit Share screen action creates a stream. No subscription fields are changed. Camera video, receiving streams and system/desktop audio remain unsupported.

@@ -2935,3 +2935,46 @@ Final voice release compilation also passed (+1,536 executable bytes), but
 `cargo xtask package-voice` failed on both baseline and after: missing exact license
 texts for openh264-sys2 0.9.8 and openh264 0.9.8, plus the existing realfft evidence
 warning. No notices or policy checks were bypassed; complete voice packages unavailable.
+
+## September 11: visible existing DM calls
+
+Previously an unjoined call disappeared when incoming ringing stopped, and its current
+state was queried only when starting a call. The selected one-to-one DM now requests
+existing call state during initial history load (also after READY/RESUMED) through the
+existing unofficial opcode 13. A Call in progress banner offers Join call without
+ringing; incoming Answer/Decline remains separate. Merely viewing a DM cannot join,
+ring, open audio devices, or interrupt another local call. Known call metadata survives
+local hangup and resumable reconnect, and clears on service deletion/unavailability,
+channel removal, fresh READY/resync and logout. It is capped at 64 IDs / 512 bytes.
+
+Baseline: clean main 1ff190b1eafb6ff701231f56b4eff296c7d6c578, Rust 1.98.1,
+Windows 11 x64. origin/main advanced afterward; baseline measurements remain pinned.
+The shared checkout switched branches externally during the task, so final work and
+PR delivery use E:/codex-builds/existing-dm-call-task on fix/existing-dm-call. After
+verifying the exact task diff still matched, only those task edits were removed from
+the shared checkout; unrelated work was preserved. No account data or credentials were used.
+
+Verification:
+- Baseline client-core voice tests: 3 passed.
+- cargo test --locked -p client-core -p test-support -p ui -p discord-gateway -p serein --all-features call: 12 passed. Includes local WebSocket discovery/partial updates/deletion, no ring/media side effects, decline/hangup/resume/removal/capacity, and clicked banner behavior at 320/900 px in light/dark with long names, demo/offline/text-only/busy gates.
+- cargo clippy --workspace --all-targets --all-features --locked -- -D warnings: passed after correcting the new nested conditional.
+- cargo xtask policy: passed.
+- cargo xtask check: blocked by the existing rustfmt difference at crates/discord-voice/src/camera.rs:359; reproduced in untouched baseline and left outside this task.
+- cargo test --workspace --all-features --locked: UI test process aborted with Windows STATUS_STACK_BUFFER_OVERRUN (0xc0000409). The same full UI command on the untouched baseline reproduced that process failure; focused call UI tests pass. Full workspace pass is not claimed.
+
+Native before/after screenshots and scripted UI timing are blocked: @oai/sky reports
+Computer Use native pipe is unavailable (Windows error 2); the Orca CLI is also absent.
+No screenshot was fabricated or substituted with a generated/headless render. The new
+--demo --demo-existing-call fixture demonstrates a known ongoing call without local
+media; its Join button stays disabled. Live Discord discovery, real joining/audio and
+other operating systems remain unverified. See voice.md for owner-controlled checks.
+Release/package measurements and their precise limitations are in performance.md.
+Keep this PR draft while the missing native evidence and repository-wide gates remain.
+
+Release results: text package passed; text executable +4,608 bytes, full text package
++10,113 bytes, ZIP +3,072 bytes. Voice release compiled (+9,216 executable bytes), but
+packaging failed on the same baseline OpenH264 license-text omissions; no gate bypass.
+Reducer replay median 42.7112 -> 43.4964 ms (five runs each), identical retained range.
+Short uncontrolled process samples are documented without a performance-improvement claim.
+The new voice --demo --demo-existing-call process started with a responsive native window;
+actual pixels remain unverified because native capture is unavailable.

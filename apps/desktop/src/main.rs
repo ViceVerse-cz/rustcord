@@ -396,6 +396,8 @@ impl Desktop {
 				test_support::notification_demo_state()
 			} else if std::env::args().any(|arg| arg == "--demo-voice") {
 				test_support::voice_demo_state()
+			} else if std::env::args().any(|arg| arg == "--demo-existing-call") {
+				test_support::existing_call_demo_state()
 			} else if std::env::args().any(|arg| arg == "--demo-call") {
 				test_support::call_demo_state()
 			} else if std::env::args().any(|arg| arg == "--demo-chat") {
@@ -1180,6 +1182,25 @@ impl Desktop {
 				},
 			});
 			return;
+		}
+		if let Command::History {
+			channel,
+			before: None,
+			after: None,
+			..
+		} = &command
+			&& !self.fixture_only
+			&& self.state.selected == Some(*channel)
+			&& self.state.can_call(*channel)
+			&& self
+				.state
+				.channels
+				.iter()
+				.any(|c| c.id == *channel && c.guild.is_none())
+		{
+			self.command(Command::Voice(client_core::voice::Command::Sync {
+				channel: *channel,
+			}));
 		}
 		if let Command::Voice(control) = &command {
 			if self.state.demo || self.fixture_only {
