@@ -53,6 +53,7 @@ pub struct TimelineView {
 	pending_viewer: Option<(Id, Id)>,
 	pub(super) download: crate::attachments::DownloadUi,
 	pub(super) audio: crate::audio::AudioUi,
+	pub(super) video: crate::video::VideoUi,
 	pub(super) opening: Option<String>,
 	text_size: f32,
 	scale: f32,
@@ -1080,6 +1081,7 @@ impl TimelineView {
 											&mut self.opening,
 											&mut self.download,
 											&mut self.audio,
+											&mut self.video,
 											state.demo,
 										);
 									}

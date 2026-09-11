@@ -4656,6 +4656,7 @@ dependencies = [
  "url",
  "webkit6",
  "windows 0.61.3",
+ "windows-core 0.61.2",
  "winit",
  "wry",
  "zeroize",

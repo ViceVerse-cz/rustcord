@@ -3,6 +3,8 @@ pub mod game_activity;
 pub mod notifications;
 pub mod save;
 pub mod tray;
+#[cfg(target_os = "windows")]
+pub mod video;
 use client_core::auth::{Failure, SessionSecret};
 #[cfg(not(target_os = "linux"))]
 use std::{

@@ -19,6 +19,20 @@ pub struct Attachment {
 	pub waveform: Vec<u8>,
 }
 impl Attachment {
+	pub fn is_video(&self) -> bool {
+		// Metadata selects the player; the native decoder validates the container and codec.
+		self.filename
+			.rsplit_once('.')
+			.is_some_and(|(_, extension)| {
+				["mov", "mp4", "webm", "mkv", "avi", "m4v"]
+					.iter()
+					.any(|kind| extension.eq_ignore_ascii_case(kind))
+			}) || self.content_type.as_deref().is_some_and(|kind| {
+			let kind = kind.split(';').next().unwrap_or(kind).trim();
+			kind.get(..6)
+				.is_some_and(|prefix| prefix.eq_ignore_ascii_case("video/"))
+		})
+	}
 	pub fn is_voice_message(&self) -> bool {
 		self.filename
 			.trim_start_matches("SPOILER_")
@@ -58,7 +72,7 @@ impl Attachment {
 			+ self.media.proxy_url.as_ref().map_or(0, String::capacity)
 	}
 	pub fn is_image(&self) -> bool {
-		if self.is_audio() {
+		if self.is_audio() || self.is_video() {
 			return false;
 		}
 		if let Some(kind) = &self.content_type {
@@ -99,6 +113,41 @@ pub fn valid_attachments(attachments: &[Attachment]) -> bool {
 #[cfg(test)]
 mod audio_tests {
 	use super::*;
+	#[test]
+	fn video_detection_uses_mime_and_case_insensitive_extension() {
+		let mut file = Attachment {
+			id: Id(1),
+			filename: String::new(),
+			description: None,
+			content_type: None,
+			size: 32,
+			media: EmbedMedia::default(),
+			spoiler: false,
+			duration_ms: None,
+			waveform: Vec::new(),
+		};
+		for filename in [
+			"CLIP.MOV",
+			"clip.Mp4",
+			"clip.webm",
+			"clip.mkv",
+			"clip.avi",
+			"clip.m4v",
+		] {
+			file.filename = filename.into();
+			for kind in [None, Some("application/octet-stream"), Some("image/jpeg")] {
+				file.content_type = kind.map(str::to_owned);
+				assert!(file.is_video(), "{filename}: {kind:?}");
+				assert!(!file.is_image());
+			}
+		}
+		file.filename = "clip".into();
+		file.content_type = Some(" Video/Quicktime; codecs=avc1 ".into());
+		assert!(file.is_video());
+		file.filename = "clip.mov.exe".into();
+		file.content_type = None;
+		assert!(!file.is_video());
+	}
 	#[test]
 	fn audio_detection_uses_mime_and_safe_filename_fallback() {
 		let mut file = Attachment {

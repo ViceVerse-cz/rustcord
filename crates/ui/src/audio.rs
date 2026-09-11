@@ -445,6 +445,7 @@ mod tests {
 							&mut opening,
 							&mut download,
 							audio,
+							&mut crate::video::VideoUi::default(),
 							false,
 						);
 						assert!(ui.min_rect().width() <= width + 2.0);
