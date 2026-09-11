@@ -370,7 +370,15 @@ impl MessagingUi {
 							);
 							inner.spacing_mut().item_spacing.x = if dm_list { 12.0 } else { 6.0 };
 							if channel.guild.is_none() {
-								if let Some(user) = channel.recipients.first() {
+								if channel.kind == 3 {
+									let avatar = self
+										.avatars
+										.show_group(&mut inner, channel, 32.0, state.demo);
+									self.group_menu.context(&avatar, state, channel);
+									if enabled && avatar.clicked() {
+										selected = Some(channel.id);
+									}
+								} else if let Some(user) = channel.recipients.first() {
 									let avatar =
 										self.avatars.show(&mut inner, user, 32.0, state.demo);
 									if channel.kind == 1
@@ -532,6 +540,9 @@ impl MessagingUi {
 									&mut self.user_action,
 								);
 							}
+							if channel.kind == 3 && channel.guild.is_none() {
+								self.group_menu.context(&response, state, channel);
+							}
 							if enabled && response.clicked() {
 								selected = Some(channel.id);
 							}
@@ -559,6 +570,7 @@ mod tests {
 			recipients: vec![],
 			member_list_id: None,
 			message_count: None,
+			icon: None,
 		}
 	}
 	#[test]

@@ -8,6 +8,7 @@ mod connection;
 mod credentials;
 mod downloads;
 mod game_activity;
+mod group_icon;
 mod reading_settings;
 mod screen;
 mod toggle_setting;
@@ -123,6 +124,7 @@ struct Desktop {
 	audio: audio::Audio,
 	notifications: platform::notifications::Notifications,
 	uploads: uploads::Uploads,
+	group_icon: group_icon::GroupIcon,
 	clipboard: Option<clipboard::Paste>,
 	download_close_pending: bool,
 	window: Arc<winit::window::Window>,
@@ -194,6 +196,11 @@ fn access_candidates(state: &State, event: &Event) -> Vec<model::Id> {
 		Event::UserAction(client_core::user_actions::Event::Written {
 			action: client_core::user_actions::Action::CloseDm(channel),
 			result: Ok(()),
+			..
+		}) => (None, Some(*channel)),
+		Event::GroupAction(client_core::group_actions::Event::Written {
+			channel,
+			result: Ok(None),
 			..
 		}) => (None, Some(*channel)),
 		Event::ServerAction(client_core::server_actions::Event::Written {
@@ -756,6 +763,7 @@ impl Desktop {
 				platform::notifications::Notifications::new(move || wake.request_repaint())
 			},
 			uploads: uploads::Uploads::default(),
+			group_icon: group_icon::GroupIcon::default(),
 			clipboard: None,
 			download_close_pending: false,
 			window: cc
@@ -809,6 +817,7 @@ impl Desktop {
 		})
 	}
 	fn connect(&mut self, secret: SessionSecret, save: bool, ctx: &egui::Context) {
+		self.group_icon.cancel();
 		if let Some(store) = &mut self.store {
 			store.cancel_load();
 		}
@@ -843,6 +852,7 @@ impl Desktop {
 		));
 	}
 	fn logout(&mut self, ctx: &egui::Context) {
+		self.group_icon.cancel();
 		self.notifications.clear();
 		self.uploads.cancel();
 		if let Some(store) = &mut self.store {
@@ -1385,6 +1395,39 @@ impl Desktop {
 						result: Ok(()),
 					})
 				}
+				Command::GroupAction { action, request } => {
+					use client_core::group_actions::{Action, Event as GroupEvent};
+					use model::Patch;
+					let channel = action.channel();
+					let patch = match action {
+						Action::Leave(_) => None,
+						Action::Edit { name, icon, .. } => Some(model::ChannelPatch {
+							id: channel,
+							name: name.map_or(Patch::Absent, Patch::Value),
+							icon: match icon {
+								Patch::Absent => self
+									.state
+									.channel(channel)
+									.and_then(|c| c.icon.clone())
+									.map_or(Patch::Null, Patch::Value),
+								Patch::Null => Patch::Null,
+								Patch::Value(_) => {
+									Patch::Value("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into())
+								}
+							},
+							last_message: Patch::Absent,
+							parent_id: Patch::Absent,
+							position: Patch::Absent,
+							kind: Patch::Absent,
+							message_count: Patch::Absent,
+						}),
+					};
+					Event::GroupAction(GroupEvent::Written {
+						channel,
+						request,
+						result: Ok(patch),
+					})
+				}
 				Command::MarkRead {
 					channel,
 					message,
@@ -1469,6 +1512,7 @@ impl Desktop {
 							parent_id: Some(parent),
 							position: 0,
 							name: title,
+							icon: None,
 							kind: 11,
 							recipients: vec![],
 							last_message: None,
@@ -1514,6 +1558,7 @@ impl Desktop {
 							parent_id: Some(parent),
 							position: 0,
 							name: format!("Synthetic archived thread {id}"),
+							icon: None,
 							kind: if kind == Kind::Public {
 								public_kind
 							} else {
@@ -2764,6 +2809,9 @@ impl eframe::App for Desktop {
 			ctx.send_viewport_cmd(egui::ViewportCommand::Close);
 		}
 		self.poll_avatars(&ctx);
+		if let Some((scope, result)) = self.group_icon.poll(&self.state) {
+			self.messaging.accept_group_icon(&ctx, scope, result);
+		}
 		self.messaging.voice_available = true;
 		if close_requested
 			&& !self.close_approved
@@ -2971,6 +3019,18 @@ impl eframe::App for Desktop {
 				self.state.status = error;
 			}
 
+			if let Some(scope) = self.messaging.take_group_icon_request() {
+				let result = if scope.0 != self.state.generation || !self.state.is_group_dm(scope.1)
+				{
+					Err("This group is no longer available")
+				} else {
+					self.group_icon
+						.start(scope, self.runtime.handle(), &ctx, self.window.clone())
+				};
+				if let Err(error) = result {
+					self.messaging.accept_group_icon(&ctx, scope, Err(error));
+				}
+			}
 			for key in self.messaging.take_avatar_requests() {
 				if !self
 					.avatars

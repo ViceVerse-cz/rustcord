@@ -32,6 +32,7 @@ fn channel(id: u64, kind: u8, parent: Option<Id>) -> Channel {
 		position: 0,
 		recipients: vec![],
 		last_message: None,
+		icon: None,
 		member_list_id: None,
 		message_count: None,
 	}
@@ -538,6 +539,7 @@ fn thread_target_changes_revoke_content_for_patches_creates_and_snapshots() {
 				0 => Event::ThreadChanged {
 					guild: Id(10),
 					patch: ChannelPatch {
+						icon: model::Patch::Absent,
 						id: Id(30),
 						parent_id: Patch::Value(parent),
 						kind: Patch::Absent,

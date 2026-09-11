@@ -30,6 +30,7 @@ fn ready() -> Event {
 				parent_id: None,
 				kind: 0,
 				name: "Synthetic".into(),
+				icon: None,
 				position: 0,
 				recipients: vec![],
 				last_message: None,

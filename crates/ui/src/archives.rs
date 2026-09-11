@@ -108,6 +108,7 @@ mod tests {
 			last_message: None,
 			member_list_id: None,
 			message_count: None,
+			icon: None,
 		}
 	}
 	fn frame(ctx: &egui::Context, key: Option<egui::Key>, draw: impl FnMut(&mut egui::Ui)) {

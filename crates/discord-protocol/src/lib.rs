@@ -6,6 +6,7 @@ mod attachments;
 mod embeds;
 mod extra_content;
 pub mod gifs;
+pub mod group_actions;
 pub mod guild_folders;
 pub mod invites;
 pub mod notifications;
@@ -86,6 +87,8 @@ impl UserDto {
 #[derive(Deserialize)]
 pub struct ChannelDto {
 	#[serde(default)]
+	pub icon: Option<String>,
+	#[serde(default)]
 	pub flags: u64,
 	#[serde(default)]
 	pub last_message_id: Option<Id>,
@@ -120,6 +123,7 @@ impl ChannelDto {
 			.map(UserDto::into_model)
 			.collect();
 		Channel {
+			icon: self.icon.filter(|hash| model::valid_avatar_hash(hash)),
 			last_message: self.last_message_id,
 			id: self.id,
 			guild: self.guild_id,
@@ -141,6 +145,8 @@ impl ChannelDto {
 }
 #[derive(Deserialize)]
 pub struct ChannelPatchDto {
+	#[serde(default)]
+	pub icon: Patch<String>,
 	#[serde(default)]
 	pub last_message_id: Patch<Id>,
 	pub id: Id,
@@ -166,6 +172,11 @@ impl ChannelPatchDto {
 
 	pub fn into_model(self) -> model::ChannelPatch {
 		model::ChannelPatch {
+			icon: match self.icon {
+				Patch::Value(hash) if model::valid_avatar_hash(&hash) => Patch::Value(hash),
+				Patch::Value(_) | Patch::Null => Patch::Null,
+				Patch::Absent => Patch::Absent,
+			},
 			last_message: self.last_message_id,
 			id: self.id,
 			name: self.name,
@@ -179,6 +190,39 @@ impl ChannelPatchDto {
 #[cfg(test)]
 mod channel_tests {
 	use super::*;
+	#[test]
+	fn group_icon_hash_and_patches_keep_absent_null_and_value_distinct() {
+		let channel = decode::<ChannelDto>(
+			br#"{"id":"3","type":3,"icon":"0123456789abcdef0123456789abcdef"}"#,
+		)
+		.unwrap()
+		.into_model();
+		assert_eq!(
+			channel.icon.as_deref(),
+			Some("0123456789abcdef0123456789abcdef")
+		);
+		assert!(matches!(
+			decode::<ChannelPatchDto>(br#"{"id":"3"}"#)
+				.unwrap()
+				.into_model()
+				.icon,
+			Patch::Absent
+		));
+		assert!(matches!(
+			decode::<ChannelPatchDto>(br#"{"id":"3","icon":null}"#)
+				.unwrap()
+				.into_model()
+				.icon,
+			Patch::Null
+		));
+		assert!(matches!(
+			decode::<ChannelPatchDto>(br#"{"id":"3","icon":"../invalid"}"#)
+				.unwrap()
+				.into_model()
+				.icon,
+			Patch::Null
+		));
+	}
 	#[test]
 	fn ready_omits_obfuscated_channels_and_their_threads_without_inventing_child_permissions() {
 		let mut ready: Ready = decode(br#"{

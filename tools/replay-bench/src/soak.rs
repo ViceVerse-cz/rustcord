@@ -34,6 +34,7 @@ fn ready(state: &mut State) {
 					last_message: None,
 					member_list_id: None,
 					message_count: None,
+					icon: None,
 				})
 				.collect(),
 		},

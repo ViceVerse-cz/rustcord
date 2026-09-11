@@ -1,6 +1,7 @@
 // Direct, origin-fixed REST adapter. No cookies, redirects, logging, persistence or bot SDK.
 mod activity_sharing;
 mod archives;
+mod group_actions;
 mod guild_folders;
 mod profile_edit;
 pub mod rpc;
@@ -312,6 +313,13 @@ impl DiscordApi {
 	}
 	pub async fn execute(&self, command: Command) -> Event {
 		match command {
+			Command::GroupAction { action, request } => {
+				Event::GroupAction(client_core::group_actions::Event::Written {
+					channel: action.channel(),
+					request,
+					result: self.group_action(action).await,
+				})
+			}
 			Command::JoinInvite { code, request } => Event::JoinInvite {
 				request,
 				result: self.join_invite(&code).await,

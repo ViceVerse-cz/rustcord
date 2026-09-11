@@ -1,5 +1,25 @@
 # Discord compatibility — checked 2026-09-10
 
+## Group conversation actions — September 11, 2026
+
+Group DM rows and the conversation header expose Edit Group, Mute/Unmute
+Conversation, and Leave Group. Edit changes the name and optionally the group
+icon; selecting an image prepares a local preview, and only Save sends it.
+Leave requires confirmation and is blocked by pending messages or an active
+call. Failed writes keep the editor draft; confirmed leave preserves text drafts.
+
+Group edit uses documented `PATCH /channels/{id}` group-DM name/icon fields;
+leave uses `DELETE /channels/{id}`. See Discord's [channel resource](https://docs.discord.com/developers/resources/channel#modify-channel)
+and [group chat help](https://support.discord.com/hc/en-us/articles/223657667-Group-Chat-and-Calls).
+Mute reuses the existing unofficial account notification-settings route and
+lasts until explicitly unmuted. Icon hashes hydrate from channel snapshots and
+absent/null/value channel updates; static artwork uses the existing bounded CDN
+worker with `channel-icons/{channel}/{hash}.png`.
+
+Offline HTTP, reducer, image-boundary and egui interaction tests cover these
+paths. The demo includes a synthetic group. No live group was edited, left, or
+muted, and normal-account service interoperability remains unverified.
+
 ## Embed image galleries — September 11, 2026
 
 Consecutive same-URL image embeds now share one native card: two columns, with a

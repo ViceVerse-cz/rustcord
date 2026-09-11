@@ -332,6 +332,7 @@ mod tests {
 				last_message: None,
 				position: 0,
 				recipients: vec![],
+				icon: None,
 				member_list_id: None,
 				message_count: None,
 			}],

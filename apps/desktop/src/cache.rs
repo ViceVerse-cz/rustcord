@@ -622,6 +622,7 @@ mod tests {
 				parent_id: None,
 				kind: 1,
 				name: "Synthetic DM".into(),
+				icon: None,
 				position: 0,
 				recipients: vec![],
 				last_message: None,

@@ -111,7 +111,7 @@ impl State {
 		self.request_user_action(Action::Block { user, blocked })
 	}
 	pub fn set_dm_muted(&mut self, channel: Id, muted: bool) -> Option<Command> {
-		if !self.is_one_to_one_dm(channel) {
+		if !self.is_one_to_one_dm(channel) && !self.is_group_dm(channel) {
 			return None;
 		}
 		self.request_user_action(Action::Mute { channel, muted })
@@ -239,9 +239,9 @@ impl State {
 						Action::Block { blocked: true, .. } => "User blocked",
 						Action::Block { blocked: false, .. } => "User unblocked",
 						Action::Mute { muted: true, .. } => {
-							"DM notifications muted until you turn them back on"
+							"Conversation notifications muted until you turn them back on"
 						}
-						Action::Mute { muted: false, .. } => "DM notifications unmuted",
+						Action::Mute { muted: false, .. } => "Conversation notifications unmuted",
 					}
 				});
 				self.status = self.user_actions.status.unwrap();
@@ -290,6 +290,7 @@ mod tests {
 				parent_id: None,
 				position: 0,
 				last_message: None,
+				icon: None,
 				member_list_id: None,
 				message_count: None,
 			}],
