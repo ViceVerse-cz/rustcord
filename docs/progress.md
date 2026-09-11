@@ -2269,3 +2269,27 @@ macOS CI then exposed a temporary-directory naming collision between parallel no
 the clock returned the same timestamp twice. Fixture names now include a process-local atomic
 sequence in addition to PID/time. This changes only test isolation, and the full local check
 passed again (395 tests); no packaging/runtime limits or release code changed.
+
+
+Main then advanced to `d8cb031` (pending upload/message UI). The PR merge checks exposed two
+new UI functions above Clippy's argument limit. That main commit was integrated without
+conflicts. The repair groups related mutable arguments using existing tuple conventions;
+no lint is disabled and upload/render behavior is retained. Validation of this combined tree
+follows; earlier measurements remain explicitly scoped to their recorded main revisions.
+
+
+The new compact pending-row fixture assumed fewer rows fit within the viewport. Its test
+now checks measured geometry against the viewport and overscan, and verifies unseen middle
+rows remain unmeasured. Integration also exposed a real scroll regression: the new immediate
+retry for existing timeline-row measurements applied wheel input twice and could replace the
+compensated bottom view with the tall leading row. Removing that immediate retry restores the
+existing next-frame repaint and anchor behavior. Pending-row handling is unchanged. All 106
+UI tests pass, including an explicit forced reflow while browsing that preserves the anchor.
+The leading-row test consumes its synthetic texture output before assertions so future failures
+report normally instead of aborting during a second destructor panic. Native automation remains
+paused by the owner; native screenshots and UI process measurements were not resumed.
+
+Final local validation of the d8cb031 integration and repairs passed: `cargo xtask check`
+(399 tests, strict Clippy and policy checks) and both Windows release packages. Cargo reported
+1m40s text and 1m41s voice. Separate combined sizes are in performance.md. Native automation
+remains paused and latest-head CI is pending at this commit.

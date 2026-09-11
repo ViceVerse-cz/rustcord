@@ -2139,3 +2139,20 @@ measurements before this evidence append, not a notice-only growth comparison.
 Cargo reported 1m37s text / 1m42s voice. The final conflict resolution only repairs test
 assumptions relative to incoming animation code; it does not change that production renderer.
 No native visual or full-client performance claim is added for the separately authored main UI.
+
+
+The next combined measurement includes main `d8cb031` pending-message UI plus the integration
+Clippy and scroll-reflow repairs. Same Windows toolchain, flags and DEFLATE9 method as above;
+measured before this evidence append. These are absolute combined sizes, not notice-only deltas.
+
+| Combined pending-UI metric | Text | Voice |
+| --- | ---: | ---: |
+| Executable bytes | 54,037,504 | 59,143,168 |
+| Installed bytes | 58,848,537 | 65,273,925 |
+| DEFLATE9 ZIP bytes | 34,958,789 | 37,578,520 |
+| Files | 668 | 910 |
+
+Cargo release build observations: 1m40s text / 1m41s voice. The integration repair removes one
+immediate layout retry; all 106 synthetic UI tests pass, including wheel displacement and
+anchor preservation. Native screenshot/process/frame measurements remain owner-paused; no
+native UI performance improvement is claimed.
