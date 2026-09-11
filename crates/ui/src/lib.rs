@@ -13,6 +13,7 @@ mod embeds;
 pub mod emoji;
 mod emoji_picker;
 pub mod fonts;
+mod formatting;
 mod forum;
 mod guild_folders;
 pub mod icons;
@@ -95,6 +96,9 @@ pub struct MessagingUi {
 	reading_sidebar_applied: Option<u16>,
 	reading_sidebar_constrained: bool,
 	reading_zoom_pending: bool,
+	/// Slider value while the pointer is still down; zoom is applied on release so the
+	/// slider does not rescale under the cursor mid-drag.
+	reading_zoom_draft: Option<u16>,
 	/// Where the open profile was requested from; the popout is placed beside it.
 	profile_anchor: Option<(Id, egui::Pos2)>,
 	members_narrow_open: bool,
@@ -1677,6 +1681,23 @@ impl MessagingUi {
                                 )));
                             edit_state.store(ctx, composer_id);
                             mention_changed = true;
+                        }
+                        if keyboard_enabled
+                            && !self.ime_active
+                            && !ime_this_frame
+                            && ctx.memory(|m| m.has_focus(composer_id))
+                            && let Some(style) = formatting::Style::consume(ctx)
+                        {
+                            let mut edit_state =
+                                egui::text_edit::TextEditState::load(ctx, composer_id).unwrap_or_default();
+                            let range = edit_state.cursor.char_range();
+                            if let Some(range) = formatting::apply(draft, style, range, remaining) {
+                                edit_state.cursor.set_char_range(Some(range));
+                                edit_state.store(ctx, composer_id);
+                                mention_changed = true;
+                            } else {
+                                state.status = "Formatting will not fit. Shorten this message or free draft space.";
+                            }
                         }
                         let rich_layout = &mut self.composer_layout;
                         if !self.ime_active

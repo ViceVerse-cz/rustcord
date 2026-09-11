@@ -1506,7 +1506,7 @@ impl State {
 				self.status = if unavailable {
 					"Conversation no longer available in navigation"
 				} else {
-					"Connected · unofficial session"
+					""
 				};
 				Ok(())
 			}
@@ -1824,7 +1824,7 @@ impl State {
 				self.gateway_connected = false;
 				self.cancel_history();
 				self.freshness = Freshness::Stale;
-				self.status = "Disconnected · history may be stale";
+				self.status = "Reconnecting…";
 				Ok(())
 			}
 			Event::Resumed => {
@@ -1832,7 +1832,7 @@ impl State {
 				self.gateway_connected = true;
 				self.cancel_history();
 				self.freshness = Freshness::Stale;
-				self.status = "Gateway resumed · reload active history to verify freshness";
+				self.status = "";
 				Ok(())
 			}
 			Event::Resync | Event::PermissionsChanged => {
@@ -1850,7 +1850,7 @@ impl State {
 				self.timeline.clear();
 				self.freshness = Freshness::Stale;
 				self.cancel_history();
-				self.status = "Session or permissions changed · reload active history";
+				self.status = "";
 				Ok(())
 			}
 			Event::Unavailable(channel) | Event::ThreadRemoved { id: channel, .. } => {
