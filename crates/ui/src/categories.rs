@@ -18,7 +18,7 @@ enum CachedRow {
 }
 #[derive(Default)]
 pub(super) struct Cache {
-	key: Option<(u64, u64, Option<Id>, Option<Id>)>,
+	key: Option<(u64, u64, Option<Id>, Option<Id>, bool)>,
 	rows: Vec<CachedRow>,
 }
 
@@ -27,11 +27,17 @@ fn rows<'a>(
 	guild: Option<Id>,
 	collapsed: &BTreeSet<Id>,
 	selected: Option<Id>,
+	show_hidden: bool,
 ) -> Vec<Row<'a>> {
 	let channels = &state.channels;
 	let mut categories: Vec<_> = channels
 		.iter()
-		.filter(|c| c.guild == guild && guild.is_some() && c.kind == 4)
+		.filter(|c| {
+			c.guild == guild
+				&& guild.is_some()
+				&& c.kind == 4
+				&& (show_hidden || state.can_view(c.id))
+		})
 		.collect();
 	categories.sort_unstable_by_key(|c| (c.position, c.id));
 	let category_ids: BTreeSet<_> = categories.iter().map(|c| c.id).collect();
@@ -42,7 +48,10 @@ fn rows<'a>(
 		.collect();
 	let mut groups: BTreeMap<Option<Id>, Vec<&Channel>> = BTreeMap::new();
 	let mut threads: BTreeMap<Id, Vec<&Channel>> = BTreeMap::new();
-	for channel in channels.iter().filter(|c| c.guild == guild && c.kind != 4) {
+	for channel in channels
+		.iter()
+		.filter(|c| c.guild == guild && c.kind != 4 && (show_hidden || state.can_view(c.id)))
+	{
 		if matches!(channel.kind, 10..=12)
 			&& let Some(parent) = channel.parent_id.and_then(|id| parents.get(&id))
 			&& parent.parent_id != Some(channel.id)
@@ -114,7 +123,13 @@ fn kind_label(kind: u8) -> &'static str {
 
 impl MessagingUi {
 	pub(super) fn channel_list(&mut self, ui: &mut egui::Ui, state: &State) -> Option<Id> {
-		let key = (state.generation, state.revision, self.guild, state.selected);
+		let key = (
+			state.generation,
+			state.revision,
+			self.guild,
+			state.selected,
+			self.show_hidden_channels,
+		);
 		if self.channel_cache.key != Some(key) {
 			// Session-only keys are pruned on navigation updates, never accumulated in egui memory.
 			let categories: BTreeSet<_> = state
@@ -130,6 +145,7 @@ impl MessagingUi {
 				self.guild,
 				&self.collapsed_categories,
 				state.selected,
+				self.show_hidden_channels,
 			);
 			let mut participants = BTreeMap::<Id, Vec<_>>::new();
 			for entry in &state.voice.roster {
@@ -545,6 +561,19 @@ mod tests {
 		}
 	}
 	#[test]
+	fn hidden_channels_are_opt_in() {
+		let state = State {
+			channels: vec![channel(1, 0, 0, None)],
+			..State::default()
+		};
+		assert!(!MessagingUi::default().show_hidden_channels);
+		assert!(rows(&state, Some(Id(100)), &BTreeSet::new(), None, false).is_empty());
+		assert_eq!(
+			rows(&state, Some(Id(100)), &BTreeSet::new(), None, true).len(),
+			1
+		);
+	}
+	#[test]
 	fn channel_rows_scroll_continuously_past_voice_participants() {
 		let mut state = test_support::demo_state();
 		state.guilds = vec![model::Guild {
@@ -643,7 +672,7 @@ mod tests {
 			state.channels.push(dm);
 		}
 		let order = |state: &State| {
-			rows(state, None, &BTreeSet::new(), state.selected)
+			rows(state, None, &BTreeSet::new(), state.selected, true)
 				.into_iter()
 				.filter_map(|row| match row {
 					Row::Channel(channel, _) => Some(channel.id.0),
@@ -814,7 +843,7 @@ mod tests {
 			..State::default()
 		};
 		assert_eq!(
-			ids(rows(&layout, Some(Id(100)), &BTreeSet::new(), None)),
+			ids(rows(&layout, Some(Id(100)), &BTreeSet::new(), None, true,)),
 			[3, 2, 4, 7, 8, 5, 9]
 		);
 		assert_eq!(
@@ -822,7 +851,8 @@ mod tests {
 				&layout,
 				Some(Id(100)),
 				&BTreeSet::from([Id(4)]),
-				Some(Id(8))
+				Some(Id(8)),
+				true,
 			)),
 			[3, 2, 4, 8, 5, 9]
 		);
@@ -850,7 +880,13 @@ mod tests {
 			channels: hierarchy.clone(),
 			..State::default()
 		};
-		let expanded = rows(&hierarchy_state, Some(Id(100)), &BTreeSet::new(), None);
+		let expanded = rows(
+			&hierarchy_state,
+			Some(Id(100)),
+			&BTreeSet::new(),
+			None,
+			true,
+		);
 		assert_eq!(expanded.len(), hierarchy.len() - 1);
 		assert_eq!(
 			ids(expanded),
@@ -861,6 +897,7 @@ mod tests {
 			Some(Id(100)),
 			&BTreeSet::from([Id(4)]),
 			Some(Id(8)),
+			true,
 		);
 		assert!(matches!(collapsed.last(), Some(Row::Channel(c, true)) if c.id == Id(8)));
 		assert_eq!(ids(collapsed), [20, 21, 22, 23, 24, 25, 27, 28, 4, 7, 8]);

@@ -83,6 +83,7 @@ pub struct MessagingUi {
 	user_action: Option<user_menu::Action>,
 	profile_link: Option<String>,
 	pub reading_preferences: model::ReadingPreferences,
+	pub show_hidden_channels: bool,
 	pub reading_status: &'static str,
 	pub reading_save_requested: bool,
 	pub share_game_activity: bool,

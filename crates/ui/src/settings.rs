@@ -561,6 +561,16 @@ impl MessagingUi {
 				.color(colors.muted),
 			);
 		});
+		ui.add_space(8.0);
+		ui.label(design::eyebrow(ui, "Channel list", colors.muted));
+		design::card(ui, |ui| {
+			design::switch(
+				ui,
+				"Show hidden channels",
+				Some("Show channels you cannot currently access."),
+				&mut self.show_hidden_channels,
+			);
+		});
 	}
 
 	fn activity_settings(&mut self, ui: &mut egui::Ui, state: &State) {
