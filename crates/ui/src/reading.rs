@@ -1,4 +1,4 @@
-use crate::MessagingUi;
+use crate::{MessagingUi, design};
 use egui::containers::panel::PanelState;
 use model::ReadingPreferences;
 
@@ -32,23 +32,57 @@ impl MessagingUi {
 	}
 
 	pub fn reading_settings(&mut self, ui: &mut egui::Ui, demo: bool) {
-		ui.strong("Reading and layout");
+		let colors = design::palette(ui);
+		ui.label(design::eyebrow(ui, "Reading and layout", colors.muted));
 		let mut value = self.reading_preferences;
-		ui.add(
-			egui::Slider::new(&mut value.zoom_percent, 80..=150)
-				.text("Zoom")
-				.suffix("%"),
-		);
-		ui.add(egui::Slider::new(&mut value.sidebar_width, 190..=360).text("Sidebar"));
-		ui.checkbox(&mut value.show_members, "Show People in wide windows");
-		if ui.button("Reset reading and layout").clicked() {
-			value = ReadingPreferences::default();
-			self.reading_save_requested = true;
-		}
-		ui.small(if demo {
-			"Preview uses session memory only"
-		} else {
-			self.reading_status
+		design::card(ui, |ui| {
+			ui.spacing_mut().item_spacing.y = 10.0;
+			ui.spacing_mut().slider_width = (ui.available_width() - 220.0).clamp(120.0, 360.0);
+			// The rail must stay visible on the raised card surface.
+			ui.visuals_mut().widgets.inactive.bg_fill = colors.selected;
+			ui.horizontal(|ui| {
+				ui.label(design::medium(ui, "Zoom", 15.0).color(colors.text_strong));
+				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+					ui.add(
+						egui::Slider::new(&mut value.zoom_percent, 80..=150)
+							.suffix("%")
+							.trailing_fill(true),
+					);
+				});
+			});
+			ui.separator();
+			ui.horizontal(|ui| {
+				ui.label(design::medium(ui, "Sidebar width", 15.0).color(colors.text_strong));
+				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+					ui.add(
+						egui::Slider::new(&mut value.sidebar_width, 190..=360)
+							.suffix(" px")
+							.trailing_fill(true),
+					);
+				});
+			});
+			ui.separator();
+			design::switch(
+				ui,
+				"Show People in wide windows",
+				Some("Keep the member list open whenever the window is wide enough."),
+				&mut value.show_members,
+			);
+		});
+		ui.horizontal_wrapped(|ui| {
+			if ui.button("Reset reading and layout").clicked() {
+				value = ReadingPreferences::default();
+				self.reading_save_requested = true;
+			}
+			ui.label(
+				egui::RichText::new(if demo {
+					"Preview uses session memory only"
+				} else {
+					self.reading_status
+				})
+				.size(12.0)
+				.color(colors.muted),
+			);
 		});
 		if !demo
 			&& self.reading_status.contains("could not")
