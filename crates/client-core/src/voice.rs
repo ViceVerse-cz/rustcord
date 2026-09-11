@@ -101,6 +101,7 @@ pub struct Call {
 	pub muted: bool,
 	pub deafened: bool,
 	pub participants: Vec<Participant>,
+	pub camera: bool,
 	pub error: Option<&'static str>,
 }
 #[derive(Default)]
@@ -140,6 +141,11 @@ pub enum Command {
 		channel: Id,
 		request: u64,
 		stream_request: u64,
+	},
+	SetCamera {
+		channel: Id,
+		request: u64,
+		enabled: bool,
 	},
 	Decline {
 		channel: Id,
@@ -249,6 +255,9 @@ impl ClientState {
 						|| (c.guild.is_none() && c.kind == 1 && c.recipients.len() == 1))
 			})
 	}
+	pub fn can_camera(&self, channel: Id) -> bool {
+		self.can_call(channel) && self.permission(channel, model::permissions::STREAM) == Some(true)
+	}
 	pub fn start_call(&mut self, channel: Id, ring: bool) -> Option<crate::Command> {
 		if !self.can_call(channel) || self.voice.active.is_some() {
 			return None;
@@ -283,6 +292,7 @@ impl ClientState {
 			phase: Phase::Connecting,
 			muted,
 			deafened: false,
+			camera: false,
 			participants,
 			error: None,
 		});
@@ -324,6 +334,23 @@ impl ClientState {
 	pub fn decline_call(&mut self) -> Option<crate::Command> {
 		Some(crate::Command::Voice(Command::Decline {
 			channel: self.voice.incoming.take()?,
+		}))
+	}
+	pub fn set_call_camera(&mut self, enabled: bool) -> Option<crate::Command> {
+		let call = self.voice.active.as_ref()?;
+		if call.camera == enabled
+			|| (enabled
+				&& (!matches!(call.phase, Phase::Connected | Phase::Waiting)
+					|| !self.can_camera(call.channel)))
+		{
+			return None;
+		}
+		let call = self.voice.active.as_mut()?;
+		call.camera = enabled;
+		Some(crate::Command::Voice(Command::SetCamera {
+			channel: call.channel,
+			request: call.request,
+			enabled,
 		}))
 	}
 	pub fn apply_voice(&mut self, event: Event) {
@@ -487,6 +514,7 @@ impl ClientState {
 					&& call.request == request
 				{
 					call.phase = Phase::Failed;
+					call.camera = false;
 					call.error = Some(message);
 					call.participants.clear();
 				}
@@ -566,6 +594,7 @@ impl ClientState {
 		self.voice.incoming = None;
 		if let Some(call) = &mut self.voice.active {
 			call.phase = Phase::Failed;
+			call.camera = false;
 			call.error = Some("Call disconnected; start a new call explicitly");
 			call.participants.clear();
 		}
@@ -768,6 +797,9 @@ mod tests {
 			"CONNECT permits a listen-only call"
 		);
 		assert!(state.voice.active.as_ref().unwrap().muted);
+		state.voice.active.as_mut().unwrap().phase = Phase::Connected;
+		assert!(!state.can_camera(Id(21)));
+		assert!(state.set_call_camera(true).is_none());
 		assert!(matches!(
 			state.set_call_mute(false, false),
 			Some(crate::Command::Voice(Command::SetMute { mute: true, .. }))
@@ -780,8 +812,9 @@ mod tests {
 			.roles
 			.as_mut()
 			.unwrap()[0]
-			.bits |= p::SPEAK;
+			.bits |= p::SPEAK | p::STREAM;
 		state.permissions.clear_cache();
+		assert!(state.set_call_camera(true).is_some());
 		assert!(matches!(
 			state.set_call_mute(false, false),
 			Some(crate::Command::Voice(Command::SetMute { mute: false, .. }))
@@ -797,6 +830,8 @@ mod tests {
 			.bits &= !p::CONNECT;
 		state.permissions.clear_cache();
 		assert!(!state.can_call(Id(21)));
+		assert!(state.set_call_camera(false).is_some());
+		assert!(!state.voice.active.as_ref().unwrap().camera);
 		assert!(state.set_call_mute(false, false).is_none());
 		state.leave_call();
 		assert!(state.start_call(Id(21), false).is_none());
@@ -986,6 +1021,8 @@ mod tests {
 		assert!(state.voice.active.is_none()); // Incoming call never grants microphone access.
 		assert!(state.start_call(Id(9), true).is_none());
 		assert!(state.start_call(Id(2), false).is_some());
+		assert!(!state.voice.active.as_ref().unwrap().camera);
+		assert!(state.set_call_camera(true).is_none());
 		let request = state.voice.active.as_ref().unwrap().request;
 		assert_eq!(
 			state.voice.active.as_ref().unwrap().phase,
@@ -1016,6 +1053,27 @@ mod tests {
 		});
 		assert_eq!(state.voice.active.as_ref().unwrap().phase, Phase::Connected);
 		assert!(matches!(
+			state.set_call_camera(true),
+			Some(crate::Command::Voice(Command::SetCamera {
+				enabled: true,
+				..
+			}))
+		));
+		assert!(state.voice.active.as_ref().unwrap().camera);
+		state.command_rejected(crate::Command::Voice(Command::SetCamera {
+			channel: Id(2),
+			request: request + 1,
+			enabled: true,
+		}));
+		assert!(state.voice.active.as_ref().unwrap().camera);
+		state.command_rejected(crate::Command::Voice(Command::SetCamera {
+			channel: Id(2),
+			request,
+			enabled: true,
+		}));
+		assert!(!state.voice.active.as_ref().unwrap().camera);
+		assert!(state.set_call_camera(true).is_some());
+		assert!(matches!(
 			state.set_call_mute(false, true),
 			Some(crate::Command::Voice(Command::SetMute {
 				mute: true,
@@ -1028,6 +1086,7 @@ mod tests {
 			event: CoreEvent::Disconnected,
 		});
 		assert_eq!(state.voice.active.as_ref().unwrap().phase, Phase::Failed);
+		assert!(!state.voice.active.as_ref().unwrap().camera);
 		state.apply_voice(Event::Progress {
 			channel: Id(2),
 			request,

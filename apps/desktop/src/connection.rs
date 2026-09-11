@@ -223,7 +223,7 @@ impl Connection {
 							}
 							if let Command::Voice(control)=command {
                                 use client_core::voice::{Command as V,Event as E};
-                                let (channel,request)=match control {V::Join{channel,request,..}|V::Ring{channel,request}|V::Leave{channel,request}|V::SetMute{channel,request,..}=>(channel,request),V::Decline{channel}=>(channel,0),V::StartStream{..}|V::StopStream{..}=>unreachable!("stream actions routed above")};
+                                let (channel,request)=match control {V::Join{channel,request,..}|V::Ring{channel,request}|V::Leave{channel,request}|V::SetMute{channel,request,..}|V::SetCamera{channel,request,..}=>(channel,request),V::Decline{channel}=>(channel,0),V::StartStream{..}|V::StopStream{..}=>unreachable!("stream actions routed above")};
                                 if !*voice_availability.borrow() {
                                     emit(Event::Voice(E::Failed{channel,request,message:"Voice is disconnected; no call was started"}))?;continue;
                                 }
@@ -430,6 +430,7 @@ fn ring_action(
 			V::Join { .. }
 			| V::Leave { .. }
 			| V::SetMute { .. }
+			| V::SetCamera { .. }
 			| V::StartStream { .. }
 			| V::StopStream { .. } => Ok(None),
 		};
@@ -462,7 +463,9 @@ fn ring_action(
 			}
 		}
 		V::Decline { .. } => Ok(Some((Some(owner), true))),
-		V::SetMute { .. } | V::StartStream { .. } | V::StopStream { .. } => Ok(None),
+		V::SetMute { .. } | V::SetCamera { .. } | V::StartStream { .. } | V::StopStream { .. } => {
+			Ok(None)
+		}
 	}
 }
 

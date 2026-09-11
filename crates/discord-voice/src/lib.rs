@@ -1,6 +1,7 @@
 //! Discord DM and guild voice media. No bot manager, relay, recording, or key persistence.
 mod activity;
 pub mod audio;
+pub mod camera;
 mod capture;
 mod crypto;
 mod jitter;
@@ -10,17 +11,21 @@ mod transport;
 mod video;
 pub use crypto::Identity;
 pub use transport::{run, run_stream, run_with_identity};
+pub mod camera_video;
 
 pub type Frame = [f32; 960];
 #[derive(Clone, Copy, Default)]
 pub struct Controls {
 	pub muted: bool,
+	/// Zero means off; a new value invalidates frames from the previous camera instance.
+	pub camera: u64,
 	pub deafened: bool,
 }
 pub enum Status {
 	Connecting,
 	Discovering,
 	TransportReady,
+	CameraAvailable(bool),
 	Securing,
 	WaitingForPeer,
 	Ready {

@@ -913,6 +913,17 @@ impl State {
 					request,
 					message: "Call action was not sent; the work queue is full",
 				}),
+				voice::Command::SetCamera {
+					channel, request, ..
+				} => {
+					if let Some(call) = &mut self.voice.active
+						&& call.channel == channel
+						&& call.request == request
+					{
+						call.camera = false;
+						self.status = "Camera control was not sent; camera is off locally";
+					}
+				}
 				_ => self.status = "Call control was not sent; local mute/hangup still applies",
 			}
 			return;

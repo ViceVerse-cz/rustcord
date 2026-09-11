@@ -482,6 +482,7 @@ pub fn voice_demo_state() -> State {
 	})
 	.collect();
 	state.voice.active = Some(Call {
+		camera: false,
 		channel: Id(25),
 		guild: Some(Id(10)),
 		request: 0,
@@ -518,6 +519,7 @@ pub fn call_demo_state() -> State {
 		server_deafened: false,
 	};
 	state.voice.active = Some(Call {
+		camera: false,
 		channel: Id(22),
 		guild: None,
 		request: 0,

@@ -35,9 +35,13 @@ model.workspace = true
 screencapturekit = { version = "=10.0.3", default-features = false, features = ["macos_14_0"] }
 objc2 = "=0.6.4"
 block2 = "=0.6.2"
-objc2-av-foundation = { version = "=0.3.2", default-features = false, features = ["std", "AVCaptureDevice", "AVMediaFormat", "block2"] }
+objc2-av-foundation = { version = "=0.3.2", default-features = false, features = ["std", "AVCaptureDevice", "AVCaptureInput", "AVCaptureOutputBase", "AVCaptureSession", "AVCaptureSessionPreset", "AVCaptureVideoDataOutput", "AVMediaFormat", "block2", "dispatch2", "objc2-core-media"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSDictionary", "NSString", "NSValue"] }
+objc2-core-media = { version = "=0.3.2", default-features = false, features = ["std", "CMSampleBuffer", "objc2-core-video"] }
+objc2-core-video = { version = "=0.3.2", default-features = false, features = ["std", "CVBase", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVReturn"] }
+dispatch2 = "=0.3.1"
 
-# The macOS permission module alone permits the documented Objective-C calls.
+# Only the macOS permission and camera modules permit documented native calls.
 [lints.rust]
 unsafe_code = "deny"
 

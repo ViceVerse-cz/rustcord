@@ -355,12 +355,31 @@ impl MessagingUi {
 			return;
 		}
 		ui.painter().rect_filled(rect, 8, TILE_FILL);
+		let preview = state
+			.user
+			.as_ref()
+			.is_some_and(|user| user.id == entry.participant.user)
+			&& state
+				.voice
+				.active
+				.as_ref()
+				.is_some_and(|call| call.channel == entry.channel && call.camera);
+		if preview && let Some(texture) = &self.voice_camera_preview {
+			let image_size = egui::vec2(size.y * 4.0 / 3.0, size.y).min(size);
+			ui.put(
+				egui::Rect::from_center_size(rect.center(), image_size),
+				egui::Image::new((texture.id(), image_size)).corner_radius(8),
+			);
+		}
 		let avatar_size = (size.y * 0.45).clamp(48.0, 80.0);
 		let avatar_rect = egui::Rect::from_center_size(
 			rect.center() - egui::vec2(0.0, 10.0),
 			egui::Vec2::splat(avatar_size),
 		);
 		let mut avatar_ui = ui.new_child(egui::UiBuilder::new().max_rect(avatar_rect));
+		if preview && self.voice_camera_preview.is_some() {
+			avatar_ui.set_opacity(0.0);
+		}
 		let avatar = if let Some(user) = user {
 			self.avatars
 				.show(&mut avatar_ui, user, avatar_size, state.demo)
@@ -449,6 +468,9 @@ impl MessagingUi {
 				&& self.screen.context == Some((state.generation, channel, call.request))
 			{
 				notices.push((self.screen.status.to_owned(), false));
+			}
+			if !self.voice_camera_status.is_empty() {
+				notices.push((self.voice_camera_status.into(), false));
 			}
 			if let Some(error) = call.error {
 				notices.push((error.to_owned(), false));
@@ -729,15 +751,19 @@ impl MessagingUi {
 			return;
 		};
 		let phase = call.phase;
+		let camera = call.camera;
+		let can_camera =
+			self.voice_camera_available && state.can_camera(channel) && phase == Phase::Connected;
 		let can_speak = state.can_speak(channel);
 		let (mut muted, mut deafened) = (call.muted || !can_speak, call.deafened);
 		let controls = self.controls_enabled(state);
 		let compact = ui.available_width() < 480.0;
 		let width = if compact {
-			76.0 + 12.0 + 48.0 + 12.0 + 64.0
+			124.0 + 12.0 + 48.0 + 12.0 + 64.0
 		} else {
-			152.0 + 12.0 + 192.0 + 12.0 + 64.0
+			124.0 + 12.0 + 192.0 + 12.0 + 64.0
 		};
+		let mut camera_clicked = false;
 		let mut mute_clicked = false;
 		let mut deafen_changed = false;
 		let mut leave = false;
@@ -776,26 +802,36 @@ impl MessagingUi {
 				);
 				egui::Popup::menu(&settings)
 					.show(|ui| self.voice_settings_menu(ui, state.demo, true));
-				if !compact {
-					control(
-						ui,
-						crate::icons::Icon::VideoSlash,
-						48.0,
-						false,
-						STAGE_TEXT,
-						"Camera",
-						"Camera is not available in Serein.",
-					);
-					control(
-						ui,
-						crate::icons::Icon::ChevronDown,
-						28.0,
-						false,
-						STAGE_TEXT,
-						"Camera settings",
-						"Camera is not available in Serein.",
-					);
-				}
+				camera_clicked = control(
+					ui,
+					if camera {
+						crate::icons::Icon::Video
+					} else {
+						crate::icons::Icon::VideoSlash
+					},
+					48.0,
+					controls && (camera || can_camera),
+					if camera { colors.positive } else { STAGE_TEXT },
+					if camera {
+						"Turn off camera"
+					} else {
+						"Turn on camera"
+					},
+					if camera {
+						"Stop sharing your camera"
+					} else if state.demo {
+						"Camera is off in the offline preview"
+					} else if !cfg!(target_os = "macos") {
+						"Camera capture is currently available on macOS only"
+					} else if !self.voice_camera_available {
+						"Camera requires H264 support from the voice server"
+					} else if !state.can_camera(channel) {
+						"Camera is unavailable with current channel permissions"
+					} else {
+						"Share your default camera with this call"
+					},
+				)
+				.clicked();
 			});
 			if !compact {
 				pill(ui, |ui| {
@@ -880,6 +916,10 @@ impl MessagingUi {
 			};
 			leave = hang_up.clicked() && !state.demo;
 		});
+		if camera_clicked && let Some(command) = state.set_call_camera(!camera) {
+			self.voice_camera_status = "";
+			commands.push(command);
+		}
 		if mute_clicked {
 			muted = !muted;
 		}

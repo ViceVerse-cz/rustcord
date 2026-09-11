@@ -62,6 +62,7 @@ struct Pending {
 }
 enum Notice {
 	TransportReady,
+	CameraAvailable(bool),
 	WaitingForPeer,
 	Progress(Phase),
 	MediaReady(String),
@@ -85,10 +86,16 @@ struct Live {
 	task: JoinHandle<()>,
 	devices: Devices,
 	device_deadline: Option<Instant>,
+	camera_frames: mpsc::SyncSender<discord_voice::camera_video::Frame>,
+	camera_negotiated: bool,
+	camera_clock: Instant,
 }
 #[derive(Default)]
 pub struct Voice {
 	screen: crate::screen::Screen,
+	camera: Option<discord_voice::camera::Camera>,
+	camera_generation: u64,
+	camera_preview: Option<std::sync::Arc<std::sync::Mutex<Option<egui::ColorImage>>>>,
 	pending: Option<Pending>,
 	live: Option<Live>,
 	retiring: Option<mpsc::Receiver<()>>,
@@ -98,13 +105,32 @@ impl Voice {
 	pub fn stop(&mut self) {
 		self.screen.stop();
 		self.pending = None;
+		self.stop_camera();
 		if let Some(live) = self.live.take() {
 			live.audio.set_ready(false);
 			live.task.abort();
 			self.retiring = Some(live.audio.shutdown());
 		}
 	}
+	pub fn stop_camera(&mut self) {
+		if let Some(camera) = &self.camera {
+			camera.stop();
+		}
+		self.camera_preview = None;
+		if let Some(live) = &self.live {
+			live.controls.send_if_modified(|controls| {
+				let changed = controls.camera != 0;
+				controls.camera = 0;
+				changed
+			});
+		}
+	}
 	fn reap(&mut self) {
+		if self.camera_preview.is_none()
+			&& self.camera.as_ref().is_some_and(|camera| camera.stopped())
+		{
+			self.camera = None;
+		}
 		if self
 			.retiring
 			.as_ref()
@@ -304,6 +330,9 @@ impl Voice {
 			.filter(|call| call.phase != Phase::Failed)
 			.map(|call| (state.generation, call.channel, call.request));
 		if expected.is_none() {
+			ui.voice_camera_available = false;
+			ui.voice_camera_preview = None;
+			ui.voice_camera_status = "";
 			ui.voice_privacy_code = None;
 		}
 		let current = self
@@ -355,6 +384,7 @@ impl Voice {
 			}
 		}
 		let mut failure = None;
+		let mut camera_paused = false;
 		let mut command = None;
 		if let Some(live) = &mut self.live {
 			let call = state.voice.active.as_ref().expect("matching active call");
@@ -376,7 +406,8 @@ impl Voice {
 				if control.muted == muted && control.deafened == deafened {
 					false
 				} else {
-					*control = Controls { muted, deafened };
+					control.muted = muted;
+					control.deafened = deafened;
 					true
 				}
 			});
@@ -394,6 +425,7 @@ impl Voice {
 					break;
 				};
 				match event {
+					Notice::CameraAvailable(available) => live.camera_negotiated = available,
 					Notice::TransportReady => {
 						if live.ring_pending {
 							live.ring_pending = false;
@@ -404,6 +436,7 @@ impl Voice {
 						}
 					}
 					Notice::WaitingForPeer => {
+						camera_paused = true;
 						ui.voice_privacy_code = None;
 						live.audio.set_ready(false);
 						live.device_deadline = None;
@@ -414,6 +447,7 @@ impl Voice {
 						});
 					}
 					Notice::Progress(phase) => {
+						camera_paused = true;
 						ui.voice_privacy_code = None;
 						live.audio.set_ready(false);
 						live.device_deadline = None;
@@ -495,7 +529,14 @@ impl Voice {
 		let command = if let Some(error) = failure {
 			self.fail(state, error)
 		} else {
-			command
+			if camera_paused && state.voice.active.as_ref().is_some_and(|call| call.camera) {
+				self.stop_camera();
+				ui.voice_camera_preview = None;
+				ui.voice_camera_status =
+					"Camera stopped while the call reconnected; turn it on again when ready";
+				return state.set_call_camera(false);
+			}
+			self.poll_camera(state, ui, ctx).or(command)
 		};
 		if command.is_some() {
 			return command;
@@ -511,6 +552,99 @@ impl Voice {
 		});
 		self.screen.poll(runtime, state, ui, ctx, call)
 	}
+	fn poll_camera(
+		&mut self,
+		state: &mut State,
+		ui: &mut ui::MessagingUi,
+		ctx: &egui::Context,
+	) -> Option<Command> {
+		let supported = cfg!(target_os = "macos");
+		ui.voice_camera_available = supported
+			&& self
+				.live
+				.as_ref()
+				.is_some_and(|live| live.camera_negotiated);
+		let requested = state.voice.active.as_ref().is_some_and(|call| call.camera);
+		let secure =
+			state.voice.active.as_ref().is_some_and(|call| {
+				call.phase == Phase::Connected && state.can_camera(call.channel)
+			});
+		let error = self.camera.as_ref().and_then(|camera| camera.error());
+		if !requested || !secure || !ui.voice_camera_available || error.is_some() {
+			self.stop_camera();
+			ui.voice_camera_preview = None;
+			if requested {
+				ui.voice_camera_status =
+					error.unwrap_or("Camera stopped; reconnect securely before turning it on");
+				return state.set_call_camera(false);
+			}
+			return None;
+		}
+		if self.camera_preview.is_none() {
+			if self.camera.is_some() {
+				ui.voice_camera_status = "Camera is still closing; try again shortly";
+				return state.set_call_camera(false);
+			}
+			let live = self.live.as_ref()?;
+			self.camera_generation = self.camera_generation.checked_add(1).unwrap_or(1);
+			let generation = self.camera_generation;
+			let send = live.camera_frames.clone();
+			let receive = std::sync::Arc::new(std::sync::Mutex::new(None));
+			let preview = receive.clone();
+			let start = live.camera_clock;
+			let wake = ctx.clone();
+			let on_frame = std::sync::Arc::new(move |frame: discord_voice::camera::Frame| {
+				let data = frame.h264;
+				if data.len() > discord_voice::camera_video::MAX_FRAME_BYTES {
+					return;
+				}
+				let _ = send.try_send(discord_voice::camera_video::Frame {
+					generation,
+					timestamp: (start.elapsed().as_micros() * 90 / 1000) as u32,
+					data,
+				});
+				let image = egui::ColorImage::from_rgb(
+					[discord_voice::camera::WIDTH, discord_voice::camera::HEIGHT],
+					&frame.rgb,
+				);
+				if let Ok(mut slot) = preview.try_lock() {
+					*slot = Some(image);
+				}
+				wake.request_repaint();
+			});
+			let wake = ctx.clone();
+			match discord_voice::camera::Camera::start(
+				on_frame,
+				std::sync::Arc::new(move || wake.request_repaint()),
+			) {
+				Ok(camera) => {
+					self.camera = Some(camera);
+					self.camera_preview = Some(receive);
+					ui.voice_camera_status = "Opening camera…";
+					live.controls
+						.send_modify(|controls| controls.camera = generation);
+				}
+				Err(error) => {
+					ui.voice_camera_status = error;
+					return state.set_call_camera(false);
+				}
+			}
+		}
+		let image = self
+			.camera_preview
+			.as_ref()
+			.and_then(|preview| preview.try_lock().ok()?.take());
+		if let Some(image) = image {
+			if let Some(texture) = &mut ui.voice_camera_preview {
+				texture.set(image, egui::TextureOptions::LINEAR);
+			} else {
+				ui.voice_camera_preview =
+					Some(ctx.load_texture("local-camera", image, egui::TextureOptions::LINEAR));
+			}
+			ui.voice_camera_status = "Camera on · local preview";
+		}
+		None
+	}
 	fn start_media(
 		&mut self,
 		runtime: &Runtime,
@@ -521,6 +655,7 @@ impl Voice {
 		input_enabled: bool,
 	) -> Result<(), &'static str> {
 		let (capture_send, capture) = mpsc::sync_channel(8);
+		let (camera_frames, camera_receive) = mpsc::sync_channel(1);
 		let (playback, playback_receive) = mpsc::sync_channel(8);
 		let (send, events) = mpsc::sync_channel(8);
 		let (speaking, speakers) = watch::channel([0; 64]);
@@ -544,6 +679,7 @@ impl Voice {
 		)?;
 		let (controls, control_receive) = watch::channel(Controls {
 			muted: listen_only || ui.voice_push_to_talk,
+			camera: 0,
 			deafened: false,
 		});
 		audio.set_controls(listen_only || ui.voice_push_to_talk, false);
@@ -574,9 +710,15 @@ impl Voice {
 				capture,
 				playback,
 				control_receive,
+				if cfg!(target_os = "macos") {
+					Some(camera_receive)
+				} else {
+					None
+				},
 				move |event| {
 					let notice = match event {
 						Status::TransportReady => Notice::TransportReady,
+						Status::CameraAvailable(available) => Notice::CameraAvailable(available),
 						Status::Connecting => Notice::Progress(Phase::ConnectingTransport),
 						Status::Discovering => Notice::Progress(Phase::Discovering),
 						Status::Securing => Notice::Progress(Phase::Securing),
@@ -622,6 +764,9 @@ impl Voice {
 			task,
 			devices,
 			device_deadline: None,
+			camera_frames,
+			camera_negotiated: false,
+			camera_clock: Instant::now(),
 		});
 		Ok(())
 	}

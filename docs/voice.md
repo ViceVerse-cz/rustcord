@@ -29,7 +29,7 @@ Start calls the selected existing DM; incoming calls require Answer or Decline. 
 
 Mute/deafen, session-local input/output selection and focused V push-to-talk are implemented. Push-to-talk releases when focus is lost and is disabled while text entry has focus. It is not a global hotkey. Devices are initialized only following an explicit call and encrypted readiness; no microphone test runs at startup. Acoustic echo cancellation is enabled automatically; see below for its limits. Device loss requires selecting a usable device and calling again; there is no automatic device fallback.
 
-DM calls accept only their expected peer. Server calls support up to 64 total participants, with independent bounded decoder/jitter state and mixed mono playback. Only DAVE version 1 is accepted; encryption downgrades and group identities outside the authenticated participant roster fail closed. Group DMs, Stage channels, recording and camera video are unsupported. The optional outgoing screen-share sender is described below. Voice WebSocket resumption has a finite retry budget; failed resumption or main Gateway disconnect requires an explicit new call. Voice credentials, ephemeral DAVE identities and audio stay in bounded session memory. The displayed privacy code applies to the current group epoch; identities are not remembered across calls. Comparing codes does not establish long-term identity verification or text-message encryption.
+DM calls accept only their expected peer. Server calls support up to 64 total participants, with independent bounded decoder/jitter state and mixed mono playback. Only DAVE version 1 is accepted; encryption downgrades and group identities outside the authenticated participant roster fail closed. Group DMs, Stage channels, recording and incoming video are unsupported. Outgoing screen sharing and macOS camera support is described below. Voice WebSocket resumption has a finite retry budget; failed resumption or main Gateway disconnect requires an explicit new call. Voice credentials, ephemeral DAVE identities and audio stay in bounded session memory. The displayed privacy code applies to the current group epoch; identities are not remembered across calls. Comparing codes does not establish long-term identity verification or text-message encryption.
 
 ## Protocol classification
 
@@ -194,3 +194,27 @@ In a connected call, select **Share your screen**, choose a display/window, 720p
 Capture uses macOS 14+ ScreenCaptureKit (screen-recording permission in System Settings) or Windows Graphics Capture. Source discovery alone does not start streaming. Closing or minimizing a selected source may pause frames or end capture, according to the native API. The initial Windows adapter accepts source dimensions up to 3840×2160. Changes to screen-server metadata, lost video permission, leaving the call and logout stop sharing. The sender never starts itself after reconnection.
 
 The native demo (`cargo run --locked -p serein --features voice -- --demo --demo-voice`) exposes a synthetic picker without OS source discovery or capture. Live screen sharing requires the same owner-controlled developer-session gate as voice testing. See [compatibility and limits](discord-compatibility.md#outgoing-screen-sharing--september-11-2026).
+
+## Camera in calls (macOS local implementation)
+
+The voice build can send the default macOS camera after an explicit camera-on click in a
+connected DM or guild call. The camera button remains available in narrow call controls.
+A local preview replaces your avatar; permission/device errors appear in the call stage.
+Guild camera use requires STREAM permission. Camera-off, permission loss, call failure,
+leave and logout stop capture; a call security pause stops the camera and requires another
+click after reconnection. Demo mode never requests camera or microphone access.
+
+AVFoundation captures 640×480 frames, capped at 15 frames/second; OpenH264 encodes on a
+worker with a 600 kbit/s target (not a measured bandwidth guarantee). One pending native
+frame (1,228,800 bytes), one RGB preview, one encoded frame (128 KiB), and up to 256 RTP
+packets from one bounded frame are retained. Frames are independently decodable to tolerate
+drops. DAVE H264 frame encryption precedes RTP fragmentation and the existing authenticated
+UDP transport. No camera recording or cache is created; text-only builds exclude the codec.
+
+Video SSRC assignment, H264 selection and opcode 12 announcements follow the
+[public interoperability implementation](https://github.com/dank074/Discord-video-stream/blob/master/src/client/voice/BaseMediaConnection.ts)
+(checked September 11, 2026); these normal-user video extensions remain unofficial and
+live-unverified. This initial sender has no remote-video decoding, camera picker, adaptive
+bitrate or RTP retransmission. Windows/Linux capture is explicitly unavailable. Physical
+permission/device behavior, delivery to the official client and network-loss performance
+require the owner-controlled live gate; an offline launch does not establish those results.

@@ -120,3 +120,52 @@ texts/notices are recorded in docs/dependency-versions.md and
 assets/licenses/voice/PROVENANCE.md and staged by the existing voice packager.
 
 Optional screen sharing adds **screencapturekit 10.0.3** (MIT OR Apache-2.0) on macOS, **windows-capture 2.0.1** (MIT) on Windows and **openh264 / openh264-sys2 0.9.8** (BSD-2-Clause) for source-built Cisco OpenH264 encoding. It reuses **image 0.25.10** (MIT OR Apache-2.0) for bounded scaling. Native frameworks are supplied by the OS. These dependencies stay behind the existing voice feature. Unmodified available license texts and source provenance are retained in `assets/licenses/voice/PROVENANCE.md`; the noted missing binding license text and existing full per-artifact redistribution review remain outstanding.
+
+Camera sending in the optional macOS voice build uses **openh264 0.9.8** and
+**openh264-sys2 0.9.8** (BSD-2-Clause, Ralf Biedert), built locally with the
+`source` feature. The sys crate bundles **Cisco OpenH264 2.6.0**, as identified
+by `upstream/codec/api/wels/codec_ver.h`; its BSD-2-Clause notice is reproduced
+below verbatim from that registry archive's `upstream/LICENSE`. The Rust
+wrapper manifests and README declare BSD-2-Clause, but their published archives
+omit a standalone wrapper license text; the codec notice does not invent one.
+Registry archive checksums and exact versions are retained in `Cargo.lock`.
+This build does not download or redistribute Cisco's prebuilt codec binaries
+and makes no claim to their separately described patent-license coverage.
+
+New support dependencies are **wide 1.7.0** and **safe_arch 1.2.0**
+(Zlib OR Apache-2.0 OR MIT), and build-time **nasm-rs 0.3.2**
+(MIT OR Apache-2.0). Native capture additionally selects **objc2-core-media
+0.3.2** and **objc2-core-video 0.3.2** (Zlib OR Apache-2.0 OR MIT), alongside
+existing objc2/objc2-foundation/objc2-av-foundation, block2 and dispatch2
+bindings. CoreMedia, CoreVideo and AVFoundation remain macOS system frameworks.
+These camera and codec additions are absent from the text-only build. Their
+exact per-artifact license collection remains subject to the existing packaging
+gate described above; no camera package was produced by this local change.
+
+Cisco OpenH264 2.6.0 notice:
+
+```text
+Copyright (c) 2013, Cisco Systems
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+
+* Redistributions in binary form must reproduce the above copyright notice, this
+  list of conditions and the following disclaimer in the documentation and/or
+  other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```

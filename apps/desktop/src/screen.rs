@@ -458,7 +458,9 @@ impl Screen {
 					Status::TransportReady | Status::Securing => "Securing screen video…",
 					Status::WaitingForPeer => "Waiting for screen-share security…",
 					Status::Ready { .. } => "Sharing your screen",
-					Status::RemoteAudio | Status::Speaking(_) => return Ok(()),
+					Status::RemoteAudio | Status::Speaking(_) | Status::CameraAvailable(_) => {
+						return Ok(());
+					}
 				};
 				send.send_replace(Some(Notice::Status(status)));
 				wake.request_repaint();

@@ -29,6 +29,9 @@ pub(super) struct Calls {
 	pub(super) allowed: BTreeMap<Id, Option<Id>>,
 	pub(super) active: Option<(Id, u64)>,
 	active_guild: Option<Id>,
+	muted: bool,
+	deafened: bool,
+	camera: bool,
 	departing: Option<(Id, u64)>,
 	departing_guild: Option<Id>,
 	pub(super) departure_deadline: Option<Instant>,
@@ -40,6 +43,9 @@ impl Calls {
 	pub(super) fn disconnected(&mut self) {
 		self.active = None;
 		self.active_guild = None;
+		self.muted = false;
+		self.deafened = false;
+		self.camera = false;
 		self.departing = None;
 		self.departure_deadline = None;
 		self.stream = None;
@@ -51,6 +57,7 @@ impl Calls {
 			self.active = None;
 			self.active_guild = None;
 			self.stream = None;
+			self.camera = false;
 		}
 	}
 	pub(super) fn departure_expired(&mut self) -> Option<Event> {
@@ -196,7 +203,7 @@ impl Calls {
 		Ok(())
 	}
 	pub(super) fn packet(&mut self, command: Command) -> Result<Option<Frame>, Failure> {
-		let (channel, guild, mute, deaf) = match command {
+		let (channel, guild) = match command {
 			Command::Join {
 				channel, request, ..
 			} => {
@@ -206,7 +213,10 @@ impl Calls {
 				}
 				self.active = Some((channel, request));
 				self.active_guild = guild;
-				(Some(channel), guild, false, false)
+				self.muted = false;
+				self.deafened = false;
+				self.camera = false;
+				(Some(channel), guild)
 			}
 			Command::Leave { channel, request } => {
 				if self.active != Some((channel, request)) {
@@ -216,7 +226,10 @@ impl Calls {
 				self.departing_guild = self.active_guild;
 				self.departure_deadline = Some(Instant::now() + Duration::from_secs(10));
 				self.stream = None;
-				(None, self.active_guild, true, true)
+				self.muted = true;
+				self.deafened = true;
+				self.camera = false;
+				(None, self.active_guild)
 			}
 			Command::SetMute {
 				channel,
@@ -230,14 +243,30 @@ impl Calls {
 				if self.allowed.get(&channel) != Some(&self.active_guild) {
 					return Err(Failure::Forbidden);
 				}
-				(Some(channel), self.active_guild, mute || deaf, deaf)
+				self.muted = mute || deaf;
+				self.deafened = deaf;
+				(Some(channel), self.active_guild)
+			}
+			Command::SetCamera {
+				channel,
+				request,
+				enabled,
+			} => {
+				if self.active != Some((channel, request)) {
+					return Ok(None);
+				}
+				if enabled && self.allowed.get(&channel) != Some(&self.active_guild) {
+					return Err(Failure::Forbidden);
+				}
+				self.camera = enabled;
+				(Some(channel), self.active_guild)
 			}
 			Command::StartStream { .. }
 			| Command::StopStream { .. }
 			| Command::Decline { .. }
 			| Command::Ring { .. } => return Ok(None),
 		};
-		Ok(Some(Frame::Text(json!({"op":4,"d":{"guild_id":guild,"channel_id":channel,"self_mute":mute,"self_deaf":deaf,"self_video":false}}).to_string().into())))
+		Ok(Some(Frame::Text(json!({"op":4,"d":{"guild_id":guild,"channel_id":channel,"self_mute":self.muted,"self_deaf":self.deafened,"self_video":self.camera}}).to_string().into())))
 	}
 	pub(super) fn stream_packet(
 		&mut self,
@@ -479,6 +508,7 @@ impl Calls {
 			self.active = None;
 			self.active_guild = None;
 			self.stream = None;
+			self.camera = false;
 		}
 		Ok(())
 	}
@@ -513,6 +543,7 @@ impl Calls {
 						self.active = None;
 						self.active_guild = None;
 						self.stream = None;
+						self.camera = false;
 					}
 					emit(Event::Voice(voice::Event::Deleted {
 						channel: call.channel_id,
@@ -587,6 +618,79 @@ fn participant(state: &VoiceStateDto) -> Participant {
 mod tests {
 	use super::*;
 	use std::sync::Mutex;
+	#[test]
+	fn camera_controls_preserve_mute_and_reject_stale_or_revoked_enable() {
+		let mut calls = Calls::default();
+		let channel = Id(20);
+		calls.allowed.insert(channel, Some(Id(10)));
+		calls
+			.packet(Command::Join {
+				channel,
+				request: 1,
+				ring: false,
+			})
+			.unwrap();
+		calls
+			.packet(Command::SetMute {
+				channel,
+				request: 1,
+				mute: true,
+				deaf: true,
+			})
+			.unwrap();
+		for command in [
+			Command::SetCamera {
+				channel,
+				request: 1,
+				enabled: true,
+			},
+			Command::SetMute {
+				channel,
+				request: 1,
+				mute: true,
+				deaf: true,
+			},
+		] {
+			let Frame::Text(frame) = calls.packet(command).unwrap().unwrap() else {
+				panic!("voice state")
+			};
+			let value: serde_json::Value = serde_json::from_str(&frame).unwrap();
+			assert_eq!(value["d"]["self_video"], true);
+			assert_eq!(value["d"]["self_mute"], true);
+			assert_eq!(value["d"]["self_deaf"], true);
+		}
+		assert!(
+			calls
+				.packet(Command::SetCamera {
+					channel,
+					request: 2,
+					enabled: false
+				})
+				.unwrap()
+				.is_none()
+		);
+		assert!(calls.camera);
+		calls.allowed.clear();
+		assert!(matches!(
+			calls.packet(Command::SetCamera {
+				channel,
+				request: 1,
+				enabled: true
+			}),
+			Err(Failure::Forbidden)
+		));
+		assert!(
+			calls
+				.packet(Command::SetCamera {
+					channel,
+					request: 1,
+					enabled: false
+				})
+				.unwrap()
+				.is_some()
+		);
+		assert!(!calls.camera);
+	}
 	#[test]
 	fn revoked_voice_denies_mute_and_server_secrets_but_allows_departure() {
 		let mut calls = Calls::default();

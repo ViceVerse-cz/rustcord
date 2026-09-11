@@ -1038,6 +1038,14 @@ impl Desktop {
 				}
 			}
 			#[cfg(feature = "voice")]
+			if matches!(
+				control,
+				client_core::voice::Command::SetCamera { enabled: false, .. }
+			) {
+				self.voice.stop_camera();
+				self.messaging.voice_camera_preview = None;
+			}
+			#[cfg(feature = "voice")]
 			if matches!(control, client_core::voice::Command::Leave { .. }) {
 				self.voice.stop();
 			}
