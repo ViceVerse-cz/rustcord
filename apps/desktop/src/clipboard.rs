@@ -6,7 +6,7 @@ use model::Id;
 use std::sync::mpsc;
 
 pub enum Content {
-	File(Source),
+	File(Vec<Source>),
 	Text(String),
 }
 
@@ -30,7 +30,31 @@ impl Paste {
 		let context = context.clone();
 		runtime.spawn(async move {
 			let result = match tokio::task::spawn_blocking(move || read(request)).await {
-				Ok(Ok(Read::Path(path))) => Source::inspect(path).await.map(Content::File),
+				Ok(Ok(Read::Paths(paths))) => {
+					let mut sources = Vec::with_capacity(paths.len());
+					let mut total = 0;
+					let mut error = None;
+					for path in paths {
+						match Source::inspect(path).await {
+							Ok(source) => {
+								total += source.size();
+								if total > discord_api::upload::MAX_TOTAL_BYTES {
+									error = Some("Attachments must total at most 20 MB");
+									break;
+								}
+								sources.push(source);
+							}
+							Err(failure) => {
+								error = Some(failure);
+								break;
+							}
+						}
+					}
+					match error {
+						Some(error) => Err(error),
+						None => Ok(Content::File(sources)),
+					}
+				}
 				Ok(Ok(Read::Content(content))) => Ok(content),
 				Ok(Err(error)) => Err(error),
 				Err(_) => Err("Clipboard reading interrupted; paste again"),
@@ -56,22 +80,24 @@ impl Paste {
 }
 
 enum Read {
-	Path(std::path::PathBuf),
+	Paths(Vec<std::path::PathBuf>),
 	Content(Content),
 }
 
 fn read(request: ui::AttachmentPaste) -> Result<Read, &'static str> {
 	let mut clipboard = arboard::Clipboard::new().map_err(|_| "Clipboard unavailable")?;
 	match clipboard.get().file_list() {
-		Ok(mut paths) if !paths.is_empty() => {
-			if paths.len() != 1 {
-				return Err("Paste exactly one local file");
+		Ok(paths) if !paths.is_empty() => {
+			if paths.len() > discord_api::upload::MAX_FILES {
+				return Err("Attach up to 10 files per message");
 			}
-			let path = paths.remove(0);
-			if !path.is_absolute() || path.as_os_str().as_encoded_bytes().len() > 4096 {
+			if paths
+				.iter()
+				.any(|path| !path.is_absolute() || path.as_os_str().as_encoded_bytes().len() > 4096)
+			{
 				return Err("Paste a local file with a supported path");
 			}
-			return Ok(Read::Path(path));
+			return Ok(Read::Paths(paths));
 		}
 		Err(arboard::Error::ContentNotAvailable) | Ok(_) => {}
 		Err(_) => return Err("Could not read copied files; paste again"),
@@ -90,6 +116,9 @@ fn read(request: ui::AttachmentPaste) -> Result<Read, &'static str> {
 			.flat_map(|pixel| pixel.to_srgba_unmultiplied())
 			.collect();
 		return png(&bytes, image.width(), image.height());
+	}
+	if let Ok(image) = clipboard.get_image() {
+		return png(&image.bytes, image.width, image.height);
 	}
 	if let Some(text) = request.text.or_else(|| clipboard.get_text().ok()) {
 		if text.len() > client_core::MAX_DRAFT_BYTES {
@@ -117,7 +146,7 @@ fn png(bytes: &[u8], width: usize, height: usize) -> Result<Read, &'static str> 
 			image::ExtendedColorType::Rgba8,
 		)
 		.map_err(|_| "Could not prepare pasted image")?;
-	Source::pasted_png(encoded).map(|source| Read::Content(Content::File(source)))
+	Source::pasted_png(encoded).map(|source| Read::Content(Content::File(vec![source])))
 }
 
 #[cfg(test)]
@@ -129,8 +158,8 @@ mod tests {
 		else {
 			panic!("Expected image source")
 		};
-		assert_eq!(source.filename(), "pasted-image.png");
-		assert!(source.size() > 0 && source.size() <= discord_api::upload::MAX_BYTES);
+		assert_eq!(source[0].filename(), "pasted-image.png");
+		assert!(source[0].size() > 0 && source[0].size() <= discord_api::upload::MAX_BYTES);
 		assert!(super::png(&[], usize::MAX, 2).is_err());
 		assert!(super::png(&[], 4096, 4096).is_err());
 		assert!(super::png(&[], 1, 1).is_err());

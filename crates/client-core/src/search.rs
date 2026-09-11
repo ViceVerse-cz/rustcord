@@ -33,7 +33,7 @@ impl State {
 		if !self.can_search() || !model::valid_search_query(&query) {
 			return None;
 		}
-		let channel = self.channels.iter().find(|c| Some(c.id) == self.selected)?;
+		let channel = self.channel(self.selected?)?;
 		let (channel, guild) = (channel.id, channel.guild);
 		if before.is_some()
 			&& !self.search.as_ref().is_some_and(|s| {
@@ -142,6 +142,8 @@ impl State {
 						!page.hits.is_empty() && view.pin_before.is_none_or(|b| cursor < b)
 					}) =>
 			{
+				self.message_actions
+					.reconcile_pins(channel, &page, view.pin_before.is_none());
 				view.page = Some(page);
 				view.error = None;
 			}

@@ -532,3 +532,27 @@ Available license texts/notices and provenance are under `assets/licenses/voice`
 ## September 11 screen sharing
 
 Pinned direct additions: screencapturekit 10.0.3 (MIT OR Apache-2.0, macOS, default features disabled with `macos_14_0` for aspect-preserving output), windows-capture 2.0.1 (MIT, Windows), openh264 and openh264-sys2 0.9.8 (BSD-2-Clause, source build). Image 0.25.10 is already resolved. New support crates: apple-cf 0.10.0, apple-metal 0.9.0, crossbeam-queue 0.3.14, doom-fish-utils 0.4.0 and nasm-rs 0.3.2 (MIT OR Apache-2.0), wide 1.7.0 and safe_arch 1.2.0 (Zlib OR Apache-2.0 OR MIT). No existing locked package version changes. These remain optional voice dependencies, with platform capture dependencies target-specific.
+
+
+### Game process enumeration (September 11, 2026)
+
+The existing pinned `windows` 0.61.3 dependency additionally enables
+`Win32_System_Diagnostics_ToolHelp`; no package or lockfile dependency is added.
+Platform keeps `unsafe_code = deny` with one narrowly allowed Windows detector function
+for the reviewed ToolHelp/CloseHandle FFI. Other workspace crates retain their existing
+forbid policy. The snapshot handle is owned once and closed on every return path.
+
+
+## Per-build notice inventory - September 11, 2026
+
+The static tables above describe resolved dependencies. Each new text/voice package also
+contains `licenses/dependencies/inventory.json`, selected from Cargo compiler-artifact IDs
+with locked, offline, host-filtered metadata. Its conservative scope includes build-time
+crates; it does not prove linker-level inclusion. Exact-version/source overrides supplement
+missing root texts, nested notices and corresponding MPL sources. No dependencies changed.
+
+See `assets/licenses/dependencies/PROVENANCE.md` for hashes and known upstream omissions.
+`complete: false` records unresolved grants for realfft/dispatch and modern objc2 components
+when selected; source archives and a labeled MIT reference do not close those omissions.
+New unreviewed missing texts fail packaging. Native system-library redistribution and a
+complete transitive notice review remain separate release gates.

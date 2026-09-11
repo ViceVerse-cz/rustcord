@@ -2,7 +2,7 @@
 use egui::{FontId, Stroke, TextFormat, text::LayoutJob};
 use model::Id;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
-use std::collections::VecDeque;
+use std::collections::HashMap;
 use unicode_segmentation::UnicodeSegmentation;
 
 const MAX_INPUT: usize = 8192;
@@ -34,42 +34,58 @@ pub struct Formatted {
 
 #[derive(Default)]
 pub struct FormatCache {
-	entries: VecDeque<((Id, u16), String, Formatted)>,
+	entries: HashMap<(Id, u16), (String, Formatted, u64)>,
 	bytes: usize,
+	clock: u64,
 }
 impl FormatCache {
 	pub fn retain(&mut self, mut keep: impl FnMut(Id) -> bool) {
-		self.entries.retain(|((id, _), _, _)| keep(*id));
-		self.bytes = self
-			.entries
-			.iter()
-			.map(|(_, source, parsed)| source.capacity() + parsed.bytes())
-			.sum();
+		self.entries.retain(|(id, _), (source, parsed, _)| {
+			if keep(*id) {
+				true
+			} else {
+				self.bytes -= source.capacity() + parsed.bytes();
+				false
+			}
+		});
 	}
 	pub fn get(&mut self, id: Id, source: &str) -> &Formatted {
 		self.get_part(id, 0, source)
 	}
 	pub fn get_part(&mut self, message: Id, part: u16, source: &str) -> &Formatted {
 		let id = (message, part);
-		let existing = self.entries.iter().position(|(cached, _, _)| *cached == id);
-		let entry = existing.and_then(|index| self.entries.remove(index));
-		let entry = match entry {
-			Some((id, cached, parsed)) if cached == source => (id, cached, parsed),
-			_ => {
-				let mut end = source.len().min(64 * 1024);
-				while !source.is_char_boundary(end) {
-					end -= 1;
-				}
-				(id, source[..end].to_owned(), Formatted::parse(source))
+		self.clock += 1;
+		if self
+			.entries
+			.get(&id)
+			.is_some_and(|(cached, _, _)| cached == source)
+		{
+			let entry = self.entries.get_mut(&id).expect("cached message");
+			entry.2 = self.clock;
+		} else {
+			if let Some((source, parsed, _)) = self.entries.remove(&id) {
+				self.bytes -= source.capacity() + parsed.bytes();
 			}
-		};
-		self.entries.push_back(entry);
-		self.retain(|_| true);
-		while self.entries.len() > 64 || self.bytes > 1024 * 1024 {
-			let (_, source, parsed) = self.entries.pop_front().expect("cache over budget");
-			self.bytes -= source.capacity() + parsed.bytes();
+			let mut end = source.len().min(64 * 1024);
+			while !source.is_char_boundary(end) {
+				end -= 1;
+			}
+			let parsed = Formatted::parse(source);
+			let source = source[..end].to_owned();
+			self.bytes += source.capacity() + parsed.bytes();
+			self.entries.insert(id, (source, parsed, self.clock));
+			while self.entries.len() > 64 || self.bytes > 1024 * 1024 {
+				let oldest = *self
+					.entries
+					.iter()
+					.min_by_key(|(_, entry)| entry.2)
+					.expect("cache over budget")
+					.0;
+				let (source, parsed, _) = self.entries.remove(&oldest).expect("oldest entry");
+				self.bytes -= source.capacity() + parsed.bytes();
+			}
 		}
-		&self.entries.back().expect("one bounded message fits").2
+		&self.entries.get(&id).expect("one bounded message fits").1
 	}
 }
 
@@ -632,7 +648,7 @@ impl Formatted {
 	) -> egui::Response {
 		let mut response: Option<egui::Response> = None;
 		let mut pending = Vec::new();
-		let size = egui::TextStyle::Body.resolve(ui.style()).size * 1.25;
+		let size = crate::emoji::inline_size(ui);
 		let flush = |pending: &mut Vec<(String, Style)>, ui: &mut egui::Ui| {
 			let job = Self::layout(pending, ui);
 			pending.clear();
@@ -665,7 +681,10 @@ impl Formatted {
 				} else {
 					None
 				};
-				if image.is_none() && custom.is_none() {
+				if image.is_none()
+					&& custom.is_none()
+					&& (style.code || crate::emoji::lookup(cluster).is_none())
+				{
 					offset += len;
 					continue;
 				}
@@ -793,6 +812,7 @@ mod tests {
 			position: 0,
 			recipients: vec![],
 			member_list_id: None,
+			message_count: None,
 			last_message: None,
 		};
 		assert_eq!(
@@ -1335,6 +1355,7 @@ mod tests {
 			position: 0,
 			recipients: vec![],
 			member_list_id: None,
+			message_count: None,
 		})
 		.collect();
 		for id in [1, 2, 3, 4, 5] {
@@ -1488,6 +1509,44 @@ mod tests {
 			);
 		}
 	}
+	#[test]
+	fn loading_emoji_reserve_the_same_message_space_without_font_fallback() {
+		let ctx = egui::Context::default();
+		let parsed = Formatted::parse("😀👩🏽‍💻❤️🇨🇿");
+		let mut cold_size = None;
+		for ready in [false, true] {
+			if ready {
+				crate::emoji::install(&ctx).unwrap();
+			}
+			let output = ctx.run_ui(Default::default(), |ui| {
+				ui.set_max_width(65.0);
+				parsed.show(ui, &mut None);
+				if let Some(size) = cold_size {
+					assert_eq!(ui.min_size(), size);
+				} else {
+					cold_size = Some(ui.min_size());
+				}
+			});
+			let mut images = 0;
+			for shape in &output.shapes {
+				match &shape.shape {
+					egui::Shape::Text(text) if text.galley.job.text != "?" => {
+						assert!(
+							text.galley
+								.rows
+								.iter()
+								.all(|row| row.visuals.mesh.is_empty())
+						);
+					}
+					egui::Shape::Rect(rect) if rect.brush.is_some() => images += 1,
+					_ => {}
+				}
+			}
+			assert_eq!(images, if ready { 4 } else { 0 });
+			output.drop_without_applying_deltas();
+		}
+	}
+
 	#[test]
 	fn emoji_render_as_whole_images_but_code_and_source_stay_literal() {
 		let ctx = egui::Context::default();

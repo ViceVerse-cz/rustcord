@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 client-core.workspace = true
+tokio.workspace = true
 notify-rust = { version = "=4.18.0", features = ["preview-macos-un"] }
 winit.workspace = true
 keyring.workspace = true
@@ -18,11 +19,12 @@ rfd = { version = "=0.17.2", default-features = false, features = ["xdg-portal",
 gtk4 = { version = "=0.11.4", features = ["v4_10"] }
 webkit6 = "=0.6.1"
 
-[lints]
-workspace = true
+[lints.rust]
+# Native IPC security permits unsafe only in its audited OS boundary functions.
+unsafe_code = "deny"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "=0.61.3", features = ["UI_Notifications"] }
+windows = { version = "=0.61.3", features = ["UI_Notifications", "Win32_Security_Authorization", "Win32_System_Threading"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 futures-lite = "=2.6.1"

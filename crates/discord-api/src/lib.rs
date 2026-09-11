@@ -1,6 +1,9 @@
 // Direct, origin-fixed REST adapter. No cookies, redirects, logging, persistence or bot SDK.
 mod archives;
+mod guild_folders;
+pub mod rpc;
 pub mod upload;
+mod user_actions;
 use client_core::{
 	Command, Event,
 	auth::{AuthProvider, Failure, SessionSecret},
@@ -35,6 +38,34 @@ pub struct DiscordApi {
 	#[cfg(test)]
 	upload_origin: Option<std::net::SocketAddr>,
 }
+/// Headers Discord's web client sends on every REST call; without them a normal-user
+/// session is classified as automated and quarantined (spam flag, attachment limits).
+fn fingerprint_headers() -> Result<reqwest::header::HeaderMap, Failure> {
+	let mut headers = reqwest::header::HeaderMap::new();
+	headers.insert(
+		"x-super-properties",
+		HeaderValue::from_str(&client_core::fingerprint::super_properties())
+			.map_err(|_| Failure::Network)?,
+	);
+	headers.insert(
+		"x-discord-locale",
+		HeaderValue::from_static(client_core::fingerprint::LOCALE),
+	);
+	headers.insert("x-discord-timezone", HeaderValue::from_static("UTC"));
+	headers.insert(
+		reqwest::header::ACCEPT_LANGUAGE,
+		HeaderValue::from_static("en-US,en;q=0.9"),
+	);
+	headers.insert(
+		reqwest::header::ORIGIN,
+		HeaderValue::from_static("https://discord.com"),
+	);
+	headers.insert(
+		reqwest::header::REFERER,
+		HeaderValue::from_static("https://discord.com/channels/@me"),
+	);
+	Ok(headers)
+}
 impl DiscordApi {
 	pub fn new(secret: Arc<SessionSecret>) -> Result<Self, Failure> {
 		let client = Client::builder()
@@ -44,7 +75,8 @@ impl DiscordApi {
 			.no_proxy()
 			.timeout(Duration::from_secs(20))
 			.connect_timeout(Duration::from_secs(10))
-			.user_agent("Serein/0.1 (unofficial native client)")
+			.user_agent(client_core::fingerprint::user_agent())
+			.default_headers(fingerprint_headers()?)
 			.build()
 			.map_err(|_| Failure::Network)?;
 		Ok(Self {
@@ -237,8 +269,79 @@ impl DiscordApi {
 		.await
 		.map(|_| ())
 	}
+	// https://docs.discord.com/developers/resources/invite#get-invite
+	async fn invite(&self, code: &str) -> Result<model::InvitePreview, Failure> {
+		if !client_core::invites::valid_code(code) {
+			return Err(Failure::Protocol);
+		}
+		let bytes = self
+			.request_limited(
+				Method::GET,
+				&format!("/invites/{code}?with_counts=true"),
+				None,
+				64 * 1024,
+			)
+			.await?;
+		discord_protocol::invites::decode(&bytes).map_err(|_| Failure::Protocol)
+	}
+	// Unofficial user endpoint; observed in discord.py-self/http.py accept_invite (2026-09-11).
+	// No challenge solving or retry. An unreadable success body is an uncertain write.
+	async fn join_invite(&self, code: &str) -> Result<model::Id, Failure> {
+		if !client_core::invites::valid_code(code) {
+			return Err(Failure::Protocol);
+		}
+		let bytes = self
+			.request_limited(
+				Method::POST,
+				&format!("/invites/{code}"),
+				Some(serde_json::json!({})),
+				64 * 1024,
+			)
+			.await
+			.map_err(|f| {
+				f.protocol_at(
+					"Invite rejected · it may be expired, invalid, or require joining in Discord",
+				)
+			})?;
+		discord_protocol::invites::decode(&bytes)
+			.map(|p| p.guild)
+			.map_err(|_| Failure::Ambiguous)
+	}
 	pub async fn execute(&self, command: Command) -> Event {
 		match command {
+			Command::JoinInvite { code, request } => Event::JoinInvite {
+				request,
+				result: self.join_invite(&code).await,
+			},
+			Command::GuildFolders(settings) => Event::GuildFolders(match settings {
+				Some(settings) => self.save_guild_folders(settings).await,
+				None => self.guild_folders().await,
+			}),
+			Command::UserAction { action, request } => {
+				Event::UserAction(client_core::user_actions::Event::Written {
+					action,
+					request,
+					result: self.user_action(action).await,
+				})
+			}
+			Command::Invite { code } => {
+				let result = self.invite(&code).await.map(Box::new);
+				Event::Invite { code, result }
+			}
+			Command::CreatePost {
+				parent,
+				guild,
+				title,
+				content,
+				request,
+			} => {
+				let result = self.create_post(parent, guild, &title, &content).await;
+				Event::PostCreated {
+					parent,
+					request,
+					result,
+				}
+			}
 			Command::Archives {
 				parent,
 				guild,
@@ -280,6 +383,11 @@ impl DiscordApi {
 				}
 			}
 			Command::CancelSearch => Event::Failure(Failure::Protocol),
+			Command::Gifs { query, request } => Event::Gifs {
+				request,
+				result: self.gifs(query.as_deref()).await,
+			},
+			Command::CancelGifs => Event::Failure(Failure::Protocol),
 			Command::MarkRead {
 				channel,
 				message,
@@ -428,15 +536,21 @@ impl DiscordApi {
 				Event::SendResult { nonce, result }
 			}
 			Command::Edit {
+				request,
 				channel,
 				message,
 				content,
 			} => {
 				if content.trim().is_empty() || content.chars().count() > client_core::MAX_CONTENT {
-					return Event::Failure(Failure::Capacity);
+					return Event::Edited {
+						request,
+						channel,
+						message,
+						result: Err(Failure::Capacity),
+					};
 				}
 				let body = serde_json::json!({"content": content, "allowed_mentions": allowed_mentions(&content)});
-				match self
+				let result = self
 					.request(
 						Method::PATCH,
 						&format!("/channels/{channel}/messages/{message}"),
@@ -447,10 +561,12 @@ impl DiscordApi {
 						decode::<MessageDto>(&bytes)
 							.map(MessageDto::into_model)
 							.map_err(|_| Failure::Ambiguous)
-					}) {
-					Ok(m) => Event::Message(m),
-					Err(Failure::Forbidden) => Event::Unavailable(channel),
-					Err(f) => Event::Failure(f),
+					});
+				Event::Edited {
+					request,
+					channel,
+					message,
+					result,
 				}
 			}
 			Command::Delete { channel, message } => {
@@ -468,6 +584,29 @@ impl DiscordApi {
 					},
 					Err(Failure::Forbidden) => Event::Unavailable(channel),
 					Err(f) => Event::Failure(f),
+				}
+			}
+			Command::Pin {
+				request,
+				channel,
+				message,
+				pinned,
+			} => {
+				// Documented message pin routes; a failed pin never affects channel access.
+				let result = self
+					.request(
+						if pinned { Method::PUT } else { Method::DELETE },
+						&format!("/channels/{channel}/messages/pins/{message}"),
+						None,
+					)
+					.await
+					.map(|_| ());
+				Event::Pinned {
+					request,
+					channel,
+					message,
+					pinned,
+					result,
 				}
 			}
 		}
@@ -572,13 +711,55 @@ impl DiscordApi {
 			.map(client_core::search::Outcome::Page)
 			.map_err(|_| Failure::Protocol)
 	}
+	/// Unofficial normal-client relay of KLIPY search/trending. Only the query text is encoded
+	/// into a fixed route; previews stay static and are loaded by the credential-free worker.
+	async fn gifs(&self, query: Option<&str>) -> Result<model::GifPage, Failure> {
+		const OPTIONS: &str = "media_format=tinygif&provider=klipy&locale=en-US";
+		match query {
+			Some(query) => {
+				if !model::valid_search_query(query) {
+					return Err(Failure::Protocol);
+				}
+				let encoded: String = query.bytes().map(|b| format!("%{b:02X}")).collect();
+				let bytes = self
+					.request_limited(
+						Method::GET,
+						&format!(
+							"/gifs/search?q={encoded}&limit={}&{OPTIONS}",
+							model::GIF_PAGE_SIZE
+						),
+						None,
+						gifs::MAX_WIRE,
+					)
+					.await?;
+				decode::<gifs::SearchReply>(&bytes)
+					.map_err(|_| Failure::Protocol)?
+					.into_page()
+					.map_err(|_| Failure::Protocol)
+			}
+			None => {
+				let bytes = self
+					.request_limited(
+						Method::GET,
+						&format!("/gifs/trending?limit={}&{OPTIONS}", model::GIF_PAGE_SIZE),
+						None,
+						gifs::MAX_WIRE,
+					)
+					.await?;
+				decode::<gifs::TrendingReply>(&bytes)
+					.map_err(|_| Failure::Protocol)?
+					.into_page()
+					.map_err(|_| Failure::Protocol)
+			}
+		}
+	}
 	async fn send_message(
 		&self,
 		channel: model::Id,
 		content: &str,
 		nonce: &str,
 		reply: Option<model::Id>,
-		attachment: Option<serde_json::Value>,
+		attachment: Option<Vec<serde_json::Value>>,
 	) -> Result<model::Message, Failure> {
 		if (content.trim().is_empty() && attachment.is_none())
 			|| content.chars().count() > client_core::MAX_CONTENT
@@ -591,7 +772,7 @@ impl DiscordApi {
 				serde_json::json!({"message_id":reply,"channel_id":channel});
 		}
 		if let Some(attachment) = attachment {
-			body["attachments"] = serde_json::json!([attachment]);
+			body["attachments"] = serde_json::json!(attachment);
 		}
 		// No enforce_nonce claim until normal-user semantics are live verified. Never auto-retry writes.
 		self.request(
@@ -606,6 +787,46 @@ impl DiscordApi {
 				return Err(Failure::Ambiguous);
 			}
 			Ok(message.into_model())
+		})
+	}
+}
+impl DiscordApi {
+	/// Documented forum post creation: one thread with its starter message. Never auto-retried.
+	async fn create_post(
+		&self,
+		parent: model::Id,
+		guild: model::Id,
+		title: &str,
+		content: &str,
+	) -> Result<model::Channel, Failure> {
+		let title = title.trim();
+		if title.is_empty()
+			|| title.chars().count() > client_core::forum::MAX_TITLE
+			|| content.trim().is_empty()
+			|| content.chars().count() > client_core::MAX_CONTENT
+		{
+			return Err(Failure::Capacity);
+		}
+		let body = serde_json::json!({
+			"name": title,
+			"auto_archive_duration": 4320,
+			"message": {"content": content, "allowed_mentions": allowed_mentions(content)},
+		});
+		self.request(
+			Method::POST,
+			&format!("/channels/{parent}/threads"),
+			Some(body),
+		)
+		.await
+		.and_then(|bytes| {
+			let post = decode::<ChannelDto>(&bytes).map_err(|_| Failure::Ambiguous)?;
+			if post.parent_id != Some(parent) || post.guild_id.is_some_and(|id| id != guild) {
+				return Err(Failure::Ambiguous);
+			}
+			let mut post = post.into_model();
+			post.guild = Some(guild);
+			post.name = post.name.chars().take(128).collect();
+			Ok(post)
 		})
 	}
 }

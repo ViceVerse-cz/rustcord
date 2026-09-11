@@ -1,4 +1,4 @@
-//! One user-selected file, staged to Discord's signed storage target before message creation.
+//! User-selected files, staged to Discord's signed storage target before message creation.
 //! Paths, signed URLs and file bytes are never serialized into diagnostics or retained as drafts.
 use crate::{DiscordApi, Failure};
 use client_core::{Command, Event};
@@ -10,12 +10,15 @@ use std::{
 use tokio::{fs::File, io::AsyncReadExt, sync::watch};
 
 pub const MAX_BYTES: u64 = 20_000_000;
+pub const MAX_FILES: usize = 10;
+pub const MAX_TOTAL_BYTES: u64 = MAX_BYTES;
 const CHUNK_BYTES: usize = 64 * 1024;
 const MAX_RESPONSE: usize = 64 * 1024;
 const CANCELLED: &str = "Upload cancelled; no message was sent";
 const CHANGED: &str = "Selected file changed or disappeared; select it again";
 
 // Deliberately neither Debug nor Serialize: local paths must not enter logs or session caches.
+#[derive(Clone)]
 pub struct Source {
 	path: PathBuf,
 	bytes: Option<std::sync::Arc<[u8]>>,
@@ -79,6 +82,22 @@ impl Source {
 	pub fn size(&self) -> u64 {
 		self.size
 	}
+	/// Whole selection bytes for a local preview, only while the file is at most `limit` bytes
+	/// and still matches the inspected metadata. Pasted images reuse their in-memory buffer.
+	pub async fn preview_bytes(&self, limit: u64) -> Option<std::sync::Arc<[u8]>> {
+		if self.size > limit {
+			return None;
+		}
+		if let Some(bytes) = &self.bytes {
+			return Some(bytes.clone());
+		}
+		let metadata = tokio::fs::symlink_metadata(&self.path).await.ok()?;
+		if !self.matches(&metadata) {
+			return None;
+		}
+		let bytes = tokio::fs::read(&self.path).await.ok()?;
+		(bytes.len() as u64 == self.size).then(|| bytes.into())
+	}
 	fn matches(&self, metadata: &std::fs::Metadata) -> bool {
 		metadata.is_file()
 			&& !metadata.file_type().is_symlink()
@@ -128,6 +147,17 @@ impl DiscordApi {
 		command: Command,
 		source: Source,
 		progress: watch::Sender<Status>,
+		cancel: watch::Receiver<bool>,
+	) -> Event {
+		self.upload_messages(command, vec![source], progress, cancel)
+			.await
+	}
+
+	pub async fn upload_messages(
+		&self,
+		command: Command,
+		sources: Vec<Source>,
+		progress: watch::Sender<Status>,
 		mut cancel: watch::Receiver<bool>,
 	) -> Event {
 		let Command::Send {
@@ -148,11 +178,38 @@ impl DiscordApi {
 				result: Err(failure),
 			};
 		}
+		if sources.is_empty()
+			|| sources.len() > MAX_FILES
+			|| sources.iter().map(Source::size).sum::<u64>() > MAX_TOTAL_BYTES
+		{
+			let failure = Failure::ProtocolAt("Choose up to 10 files totaling at most 20 MB");
+			progress.send_replace(Status::Failed(failure.label()));
+			return Event::SendResult {
+				nonce,
+				result: Err(failure),
+			};
+		}
+		let total = sources.iter().map(Source::size).sum::<u64>();
 		progress.send_replace(Status::Preparing);
+		let prepare = async {
+			for source in &sources {
+				source.validate().await?;
+			}
+			let mut attachments = Vec::with_capacity(sources.len());
+			let mut completed = 0;
+			for (id, source) in sources.iter().enumerate() {
+				attachments.push(
+					self.upload_file(channel, source, id, &progress, completed, total)
+						.await?,
+				);
+				completed += source.size();
+			}
+			Ok::<_, Failure>(attachments)
+		};
 		let prepared = tokio::select! {
 			biased;
 			_ = cancelled(&mut cancel) => Err(Failure::ProtocolAt(CANCELLED)),
-			result = self.upload_file(channel, &source, &progress) => result,
+			result = prepare => result,
 		};
 		let result = match prepared {
 			Ok(attachment) => {
@@ -183,7 +240,10 @@ impl DiscordApi {
 		&self,
 		channel: model::Id,
 		source: &Source,
+		id: usize,
 		progress: &watch::Sender<Status>,
+		completed: u64,
+		batch_total: u64,
 	) -> Result<serde_json::Value, Failure> {
 		source.validate().await?;
 		let (file, original): (Box<dyn tokio::io::AsyncRead + Send + Unpin>, Option<File>) =
@@ -207,7 +267,7 @@ impl DiscordApi {
 					.map_err(|_| Failure::ProtocolAt(CHANGED))?;
 				(Box::new(file), Some(original))
 			};
-		let body = serde_json::json!({"files":[{"id":"0","filename":source.filename(),"file_size":source.size()}]});
+		let body = serde_json::json!({"files":[{"id":id.to_string(),"filename":source.filename(),"file_size":source.size(),"is_clip":false}]});
 		let response = self
 			.request_limited(
 				Method::POST,
@@ -231,7 +291,10 @@ impl DiscordApi {
 			));
 		}
 		let target = response.attachments.remove(0);
-		if target.id.as_ref().is_some_and(|id| id != "0" && id != 0)
+		if target
+			.id
+			.as_ref()
+			.is_some_and(|value| value != &id.to_string() && value != id)
 			|| target.upload_filename.is_empty()
 			|| target.upload_filename.len() > 1024
 			|| target.upload_filename.chars().any(char::is_control)
@@ -251,10 +314,14 @@ impl DiscordApi {
 			.connect_timeout(Duration::from_secs(10))
 			.read_timeout(Duration::from_secs(30))
 			.timeout(Duration::from_secs(300))
+			.user_agent(client_core::fingerprint::user_agent())
 			.build()
 			.map_err(|_| Failure::Network)?;
 		let total = source.size();
-		progress.send_replace(Status::Uploading { sent: 0, total });
+		progress.send_replace(Status::Uploading {
+			sent: completed,
+			total: batch_total,
+		});
 		let updates = progress.clone();
 		let stream = futures_util::stream::try_unfold((file, 0u64), move |(mut file, sent)| {
 			let updates = updates.clone();
@@ -267,13 +334,19 @@ impl DiscordApi {
 				let sent = sent + bytes.len() as u64;
 				// Latest-value progress cannot fill the session event queue. Bytes count
 				// data supplied to HTTP, not a remote receipt or confirmed message.
-				updates.send_replace(Status::Uploading { sent, total });
+				updates.send_replace(Status::Uploading {
+					sent: completed + sent,
+					total: batch_total,
+				});
 				Ok(Some((bytes, (file, sent))))
 			}
 		});
 		let mut response = client
 			.put(url)
-			.header(reqwest::header::CONTENT_TYPE, "")
+			.header(
+				reqwest::header::CONTENT_TYPE,
+				content_type(source.filename()),
+			)
 			.header(reqwest::header::CONTENT_LENGTH, total)
 			.body(reqwest::Body::wrap_stream(stream))
 			.send()
@@ -284,7 +357,11 @@ impl DiscordApi {
 				"File upload rejected; no message was sent",
 			));
 		}
-		if *progress.borrow() != (Status::Uploading { sent: total, total }) {
+		if *progress.borrow()
+			!= (Status::Uploading {
+				sent: completed + total,
+				total: batch_total,
+			}) {
 			return Err(Failure::ProtocolAt(
 				"File upload incomplete; no message was sent",
 			));
@@ -316,7 +393,7 @@ impl DiscordApi {
 			return Err(Failure::Expired);
 		}
 		Ok(
-			serde_json::json!({"id":"0","filename":source.filename(),"uploaded_filename":target.upload_filename}),
+			serde_json::json!({"id":id.to_string(),"filename":source.filename(),"uploaded_filename":target.upload_filename}),
 		)
 	}
 
@@ -341,6 +418,32 @@ impl DiscordApi {
 						&& url.port() == Some(address.port())
 				}));
 		if allowed { Ok(url) } else { Err(invalid) }
+	}
+}
+
+/// MIME type the official client declares on the storage PUT, from the filename extension.
+fn content_type(filename: &str) -> &'static str {
+	let extension = filename
+		.rsplit_once('.')
+		.map(|(_, e)| e.to_ascii_lowercase())
+		.unwrap_or_default();
+	match extension.as_str() {
+		"png" => "image/png",
+		"jpg" | "jpeg" => "image/jpeg",
+		"gif" => "image/gif",
+		"webp" => "image/webp",
+		"svg" => "image/svg+xml",
+		"mp4" => "video/mp4",
+		"webm" => "video/webm",
+		"mov" => "video/quicktime",
+		"mp3" => "audio/mpeg",
+		"ogg" => "audio/ogg",
+		"wav" => "audio/wav",
+		"pdf" => "application/pdf",
+		"zip" => "application/zip",
+		"json" => "application/json",
+		"txt" | "md" | "log" | "rs" | "toml" | "csv" => "text/plain",
+		_ => "application/octet-stream",
 	}
 }
 
@@ -472,20 +575,26 @@ mod tests {
             api.upload_origin = Some(storage.local_addr().unwrap());
             let upload_url = format!("http://{}/signed?upload_id=synthetic", storage.local_addr().unwrap());
             let server = tokio::spawn(async move {
+                for id in 0..2 {
                 let (mut socket, _) = api_listener.accept().await.unwrap();
                 let (head, bytes) = request(&mut socket).await;
                 assert!(head.starts_with("POST /channels/1/attachments HTTP/1.1"));
                 assert!(head.contains("SYNTHETIC_UPLOAD_TOKEN"));
-                assert_eq!(serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(), serde_json::json!({"files":[{"id":"0","filename":filename,"file_size":CHUNK_BYTES*2+9}]}));
-                respond(&mut socket, "200 OK", &serde_json::json!({"attachments":[{"id":0,"upload_url":upload_url,"upload_filename":"synthetic-upload/file.txt"}]}).to_string()).await;
+                assert!(head.to_ascii_lowercase().contains("x-super-properties: "));
+                assert!(head.contains(&format!("user-agent: {}", client_core::fingerprint::user_agent())));
+                assert_eq!(serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(), serde_json::json!({"files":[{"id":id.to_string(),"filename":filename,"file_size":CHUNK_BYTES*2+9,"is_clip":false}]}));
+                respond(&mut socket, "200 OK", &serde_json::json!({"attachments":[{"id":id,"upload_url":upload_url,"upload_filename":format!("synthetic-upload/{id}/file.txt")}]}).to_string()).await;
                 let (mut socket, _) = storage.accept().await.unwrap();
                 let (head, bytes) = request(&mut socket).await;
                 assert!(head.starts_with("PUT /signed?upload_id=synthetic HTTP/1.1"));
                 assert!(!head.to_ascii_lowercase().contains("authorization"));
                 assert!(!head.to_ascii_lowercase().contains("cookie"));
                 assert!(!head.contains("SYNTHETIC_UPLOAD_TOKEN"));
+                assert!(!head.to_ascii_lowercase().contains("x-super-properties"));
+                assert!(head.to_ascii_lowercase().contains("content-type: text/plain"));
                 assert_eq!(bytes, vec![b'x'; CHUNK_BYTES*2+9]);
                 respond(&mut socket, "200 OK", "").await;
+                }
                 let (mut socket, _) = api_listener.accept().await.unwrap();
                 let (head, bytes) = request(&mut socket).await;
                 assert!(head.starts_with("POST /channels/1/messages HTTP/1.1"));
@@ -493,14 +602,14 @@ mod tests {
                 let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
                 assert_eq!(body["content"], "");
                 assert_eq!(body["nonce"], "synthetic-upload");
-                assert_eq!(body["attachments"], serde_json::json!([{"id":"0","filename":filename,"uploaded_filename":"synthetic-upload/file.txt"}]));
+                assert_eq!(body["attachments"], serde_json::json!([{"id":"0","filename":filename,"uploaded_filename":"synthetic-upload/0/file.txt"},{"id":"1","filename":filename,"uploaded_filename":"synthetic-upload/1/file.txt"}]));
                 assert_eq!(body["allowed_mentions"], serde_json::json!({"parse":[],"users":[],"replied_user":false}));
                 assert_eq!(body["message_reference"], serde_json::json!({"message_id":"2","channel_id":"1"}));
                 respond(&mut socket, "200 OK", r#"{"id":"3","channel_id":"1","author":{"id":"4","username":"Synthetic"},"nonce":"synthetic-upload"}"#).await;
             });
             let (progress, status) = watch::channel(Status::Preparing);
             let (_cancel, cancelled) = watch::channel(false);
-            assert!(matches!(api.upload_message(command(), source, progress, cancelled).await, Event::SendResult { result: Ok(message), .. } if message.id == model::Id(3)));
+            assert!(matches!(api.upload_messages(command(), vec![source.clone(), source], progress, cancelled).await, Event::SendResult { result: Ok(message), .. } if message.id == model::Id(3)));
             assert_eq!(*status.borrow(), Status::Finished);
             server.await.unwrap();
         }).await.unwrap();

@@ -10,16 +10,34 @@ enum Row<'a> {
 	Participant(&'a client_core::voice::RosterEntry),
 }
 
+#[derive(Clone, Copy)]
+enum CachedRow {
+	Category(usize, usize),
+	Channel(usize, bool),
+	Participant(usize),
+}
+#[derive(Default)]
+pub(super) struct Cache {
+	key: Option<(u64, u64, Option<Id>, Option<Id>, bool)>,
+	rows: Vec<CachedRow>,
+}
+
 fn rows<'a>(
 	state: &'a State,
 	guild: Option<Id>,
 	collapsed: &BTreeSet<Id>,
 	selected: Option<Id>,
+	show_hidden: bool,
 ) -> Vec<Row<'a>> {
 	let channels = &state.channels;
 	let mut categories: Vec<_> = channels
 		.iter()
-		.filter(|c| c.guild == guild && guild.is_some() && c.kind == 4)
+		.filter(|c| {
+			c.guild == guild
+				&& guild.is_some()
+				&& c.kind == 4
+				&& (show_hidden || state.can_view(c.id))
+		})
 		.collect();
 	categories.sort_unstable_by_key(|c| (c.position, c.id));
 	let category_ids: BTreeSet<_> = categories.iter().map(|c| c.id).collect();
@@ -30,7 +48,10 @@ fn rows<'a>(
 		.collect();
 	let mut groups: BTreeMap<Option<Id>, Vec<&Channel>> = BTreeMap::new();
 	let mut threads: BTreeMap<Id, Vec<&Channel>> = BTreeMap::new();
-	for channel in channels.iter().filter(|c| c.guild == guild && c.kind != 4) {
+	for channel in channels
+		.iter()
+		.filter(|c| c.guild == guild && c.kind != 4 && (show_hidden || state.can_view(c.id)))
+	{
 		if matches!(channel.kind, 10..=12)
 			&& let Some(parent) = channel.parent_id.and_then(|id| parents.get(&id))
 			&& parent.parent_id != Some(channel.id)
@@ -102,59 +123,97 @@ fn kind_label(kind: u8) -> &'static str {
 
 impl MessagingUi {
 	pub(super) fn channel_list(&mut self, ui: &mut egui::Ui, state: &State) -> Option<Id> {
-		// Session-only keys are pruned on navigation updates, never accumulated in egui memory.
-		let categories: BTreeSet<_> = state
-			.channels
-			.iter()
-			.filter(|c| c.kind == 4)
-			.map(|c| c.id)
-			.collect();
-		self.collapsed_categories
-			.retain(|id| categories.contains(id));
-		let channel_rows = rows(
-			state,
+		let key = (
+			state.generation,
+			state.revision,
 			self.guild,
-			&self.collapsed_categories,
 			state.selected,
+			self.show_hidden_channels,
 		);
-		let mut participants = BTreeMap::<Id, Vec<_>>::new();
-		for entry in &state.voice.roster {
-			if Some(entry.guild) == self.guild && state.can_view(entry.channel) {
-				participants.entry(entry.channel).or_default().push(entry);
+		if self.channel_cache.key != Some(key) {
+			// Session-only keys are pruned on navigation updates, never accumulated in egui memory.
+			let categories: BTreeSet<_> = state
+				.channels
+				.iter()
+				.filter(|c| c.kind == 4)
+				.map(|c| c.id)
+				.collect();
+			self.collapsed_categories
+				.retain(|id| categories.contains(id));
+			let channel_rows = rows(
+				state,
+				self.guild,
+				&self.collapsed_categories,
+				state.selected,
+				self.show_hidden_channels,
+			);
+			let mut participants = BTreeMap::<Id, Vec<_>>::new();
+			for entry in &state.voice.roster {
+				if Some(entry.guild) == self.guild && state.can_view(entry.channel) {
+					participants.entry(entry.channel).or_default().push(entry);
+				}
 			}
-		}
-		let mut rows = Vec::with_capacity(channel_rows.len() + state.voice.roster.len());
-		for row in channel_rows {
-			let channel = match &row {
-				Row::Channel(channel, _) if channel.kind == 2 => Some(channel.id),
-				_ => None,
-			};
-			rows.push(row);
-			if let Some(entries) = channel.and_then(|id| participants.remove(&id)) {
-				rows.extend(entries.into_iter().map(Row::Participant));
+			let mut rows = Vec::with_capacity(channel_rows.len() + state.voice.roster.len());
+			for row in channel_rows {
+				let channel = match &row {
+					Row::Channel(channel, _) if channel.kind == 2 => Some(channel.id),
+					_ => None,
+				};
+				rows.push(row);
+				if let Some(entries) = channel.and_then(|id| participants.remove(&id)) {
+					rows.extend(entries.into_iter().map(Row::Participant));
+				}
 			}
+			let indices: BTreeMap<_, _> = state
+				.channels
+				.iter()
+				.enumerate()
+				.map(|(i, c)| (c.id, i))
+				.collect();
+			let participants: BTreeMap<_, _> = state
+				.voice
+				.roster
+				.iter()
+				.enumerate()
+				.map(|(i, p)| ((p.channel, p.participant.user), i))
+				.collect();
+			self.channel_cache.rows = rows
+				.into_iter()
+				.map(|row| match row {
+					Row::Category(c, n) => CachedRow::Category(indices[&c.id], n),
+					Row::Channel(c, n) => CachedRow::Channel(indices[&c.id], n),
+					Row::Participant(p) => {
+						CachedRow::Participant(participants[&(p.channel, p.participant.user)])
+					}
+				})
+				.collect();
+			self.channel_cache.key = Some(key);
 		}
 		let colors = design::palette(ui);
 		let mut selected = None;
-		if rows.is_empty() {
+		if self.channel_cache.rows.is_empty() {
 			ui.label(RichText::new("No conversations available here.").color(colors.muted));
 		}
 		let dm_list = self.guild.is_none();
 		let row_height = if dm_list { 44.0 } else { 34.0 };
+		let row_count = self.channel_cache.rows.len();
+		let previous_spacing = ui.spacing().item_spacing.y;
+		ui.spacing_mut().item_spacing.y = 0.0;
 		egui::ScrollArea::vertical()
 			.id_salt(("channel-list", self.guild))
 			.auto_shrink([false, false])
-			.show_rows(ui, row_height, rows.len(), |ui, range| {
-				ui.spacing_mut().item_spacing.y = 0.0;
+			.show_rows(ui, row_height, row_count, |ui, range| {
 				for index in range {
-					match rows[index] {
-						Row::Participant(entry) => {
+					match self.channel_cache.rows[index] {
+						CachedRow::Participant(entry) => {
+							let entry = &state.voice.roster[entry];
 							ui.horizontal(|ui| {
 								ui.add_space(28.0);
 								self.voice_participant(ui, state, entry);
 							});
 						}
-						Row::Category(category, count) => {
+						CachedRow::Category(category, count) => {
+							let category = &state.channels[category];
 							let collapsed = self.collapsed_categories.contains(&category.id);
 							let (rect, response) = ui
 								.push_id(category.id, |ui| {
@@ -219,6 +278,7 @@ impl MessagingUi {
 								)
 							});
 							if response.clicked() {
+								self.channel_cache.key = None;
 								if collapsed {
 									self.collapsed_categories.remove(&category.id);
 								} else {
@@ -226,7 +286,8 @@ impl MessagingUi {
 								}
 							}
 						}
-						Row::Channel(channel, nested) => {
+						CachedRow::Channel(channel, nested) => {
+							let channel = &state.channels[channel];
 							let active = state.selected == Some(channel.id);
 							if channel.kind == 2 {
 								let response =
@@ -247,7 +308,7 @@ impl MessagingUi {
 							} else {
 								state.unread_count(channel.id)
 							};
-							// Forum containers open their post archive; Discord lists them as browsable rows.
+							// Forum containers open their post list; Discord lists them as browsable rows.
 							let forum = channel.guild.is_some() && matches!(channel.kind, 15 | 16);
 							let enabled = visible && (channel.supports_text() || forum);
 							// Kinds Serein cannot render keep Discord's own destination.
@@ -322,8 +383,19 @@ impl MessagingUi {
 											colors.sidebar,
 										);
 									}
-									if avatar.clicked() {
-										self.profile = Some(user.clone());
+									if channel.kind == 1 {
+										crate::user_menu::show(
+											&avatar,
+											state,
+											user,
+											&mut self.profile,
+											&mut self.user_action,
+										);
+									}
+									// The avatar is part of the row: clicking it opens the conversation,
+									// the profile stays behind the context menu and the header avatar.
+									if enabled && avatar.clicked() {
+										selected = Some(channel.id);
 									}
 								} else {
 									design::avatar(&mut inner, &channel.name, 32.0);
@@ -448,17 +520,25 @@ impl MessagingUi {
 									),
 								)
 							});
+							if channel.kind == 1
+								&& let Some(user) = channel.recipients.first()
+							{
+								crate::user_menu::show(
+									&response,
+									state,
+									user,
+									&mut self.profile,
+									&mut self.user_action,
+								);
+							}
 							if enabled && response.clicked() {
-								if forum {
-									self.archive_parent = Some(channel.id);
-								} else {
-									selected = Some(channel.id);
-								}
+								selected = Some(channel.id);
 							}
 						}
 					}
 				}
 			});
+		ui.spacing_mut().item_spacing.y = previous_spacing;
 		selected
 	}
 }
@@ -477,6 +557,101 @@ mod tests {
 			kind,
 			recipients: vec![],
 			member_list_id: None,
+			message_count: None,
+		}
+	}
+	#[test]
+	fn hidden_channels_are_opt_in() {
+		let state = State {
+			channels: vec![channel(1, 0, 0, None)],
+			..State::default()
+		};
+		assert!(!MessagingUi::default().show_hidden_channels);
+		assert!(rows(&state, Some(Id(100)), &BTreeSet::new(), None, false).is_empty());
+		assert_eq!(
+			rows(&state, Some(Id(100)), &BTreeSet::new(), None, true).len(),
+			1
+		);
+	}
+	#[test]
+	fn channel_rows_scroll_continuously_past_voice_participants() {
+		let mut state = test_support::demo_state();
+		state.guilds = vec![model::Guild {
+			id: Id(100),
+			name: "Synthetic".into(),
+			icon: None,
+			emojis: None,
+		}];
+		state.channels = (0..20)
+			.map(|index| {
+				channel(
+					200 + index,
+					if index == 1 { 2 } else { 0 },
+					index as i32,
+					None,
+				)
+			})
+			.collect();
+		state
+			.permissions
+			.replace(test_support::permission_snapshot(&state))
+			.unwrap();
+		state.voice.roster = vec![client_core::voice::RosterEntry {
+			guild: Id(100),
+			channel: Id(201),
+			member: None,
+			participant: client_core::voice::Participant {
+				user: Id(999),
+				muted: true,
+				deafened: true,
+				server_muted: false,
+				server_deafened: false,
+			},
+		}];
+		let mut view = MessagingUi {
+			guild: Some(Id(100)),
+			..Default::default()
+		};
+		let ctx = egui::Context::default();
+		design::apply(&ctx);
+		let mut original_y = None;
+		for offset in [0.0, 33.0, 34.0, 41.0, 42.0, 67.0, 68.0, 101.0, 102.0] {
+			let output = ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(240.0, 200.0),
+					)),
+					..Default::default()
+				},
+				|ui| {
+					let id = ui.make_persistent_id(egui::IdSalt::new(("channel-list", view.guild)));
+					let mut scroll = egui::scroll_area::State::load(&ctx, id).unwrap_or_default();
+					scroll.offset.y = offset;
+					scroll.store(&ctx, id);
+					view.channel_list(ui, &state);
+					assert_eq!(ui.spacing().item_spacing.y, 8.0);
+				},
+			);
+			let y = output.shapes.iter().find_map(|shape| match &shape.shape {
+				egui::Shape::Text(text) if text.galley.job.text == "Synthetic 204" => {
+					Some(text.pos.y)
+				}
+				_ => None,
+			});
+			output.drop_without_applying_deltas();
+			assert!(
+				view.channel_cache
+					.rows
+					.iter()
+					.any(|row| matches!(row, CachedRow::Participant(_)))
+			);
+			let y = y.expect("The same synthetic channel remains visible");
+			let original = *original_y.get_or_insert(y);
+			assert!(
+				(y + offset - original).abs() < 0.1,
+				"Channel jumped at scroll offset {offset}: {y} versus {original}"
+			);
 		}
 	}
 	#[test]
@@ -497,7 +672,7 @@ mod tests {
 			state.channels.push(dm);
 		}
 		let order = |state: &State| {
-			rows(state, None, &BTreeSet::new(), state.selected)
+			rows(state, None, &BTreeSet::new(), state.selected, true)
 				.into_iter()
 				.filter_map(|row| match row {
 					Row::Channel(channel, _) => Some(channel.id.0),
@@ -668,7 +843,7 @@ mod tests {
 			..State::default()
 		};
 		assert_eq!(
-			ids(rows(&layout, Some(Id(100)), &BTreeSet::new(), None)),
+			ids(rows(&layout, Some(Id(100)), &BTreeSet::new(), None, true,)),
 			[3, 2, 4, 7, 8, 5, 9]
 		);
 		assert_eq!(
@@ -676,7 +851,8 @@ mod tests {
 				&layout,
 				Some(Id(100)),
 				&BTreeSet::from([Id(4)]),
-				Some(Id(8))
+				Some(Id(8)),
+				true,
 			)),
 			[3, 2, 4, 8, 5, 9]
 		);
@@ -704,7 +880,13 @@ mod tests {
 			channels: hierarchy.clone(),
 			..State::default()
 		};
-		let expanded = rows(&hierarchy_state, Some(Id(100)), &BTreeSet::new(), None);
+		let expanded = rows(
+			&hierarchy_state,
+			Some(Id(100)),
+			&BTreeSet::new(),
+			None,
+			true,
+		);
 		assert_eq!(expanded.len(), hierarchy.len() - 1);
 		assert_eq!(
 			ids(expanded),
@@ -715,6 +897,7 @@ mod tests {
 			Some(Id(100)),
 			&BTreeSet::from([Id(4)]),
 			Some(Id(8)),
+			true,
 		);
 		assert!(matches!(collapsed.last(), Some(Row::Channel(c, true)) if c.id == Id(8)));
 		assert_eq!(ids(collapsed), [20, 21, 22, 23, 24, 25, 27, 28, 4, 7, 8]);
@@ -759,6 +942,9 @@ mod tests {
 		assert!(state.selected.is_none());
 		// A category is a keyboard-operable button, never a history-selection command.
 		state.channels = vec![channel(4, 4, 0, None), channel(8, 0, 0, Some(Id(4)))];
+		// Direct fixture replacement must invalidate derived views, as State::apply does.
+		state.revision += 1;
+		state.invalidate_navigation();
 		let ctx = egui::Context::default();
 		for key in [egui::Key::Tab, egui::Key::Enter] {
 			let input = egui::RawInput {
@@ -780,6 +966,8 @@ mod tests {
 		assert!(state.selected.is_none());
 		// Forum containers never request history; their loaded posts remain keyboard-selectable.
 		state.channels = vec![channel(7, 15, 0, None), channel(8, 11, 0, Some(Id(7)))];
+		state.revision += 1;
+		state.invalidate_navigation();
 		state
 			.permissions
 			.replace(test_support::permission_snapshot(&state))
@@ -787,7 +975,7 @@ mod tests {
 		assert!(state.select(Id(7)).is_none());
 		let ctx = egui::Context::default();
 		let mut picked = None;
-		// The forum row itself opens its archive; the second Tab reaches the loaded post.
+		// The forum row itself is a destination; the second Tab reaches the loaded post.
 		for key in [egui::Key::Tab, egui::Key::Tab, egui::Key::Enter] {
 			ctx.run_ui(
 				egui::RawInput {

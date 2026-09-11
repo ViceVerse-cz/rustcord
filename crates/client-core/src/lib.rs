@@ -1,10 +1,16 @@
 //! Single UI-thread state owner. Adapters deliver generation-tagged typed events.
 pub mod archives;
 pub mod auth;
+pub mod fingerprint;
+pub mod forum;
+pub mod gifs;
+pub mod guild_folders;
 pub mod permissions;
 #[cfg(test)]
 mod permissions_tests;
 
+pub mod invites;
+pub mod message_actions;
 pub mod notifications;
 pub mod presence;
 pub mod profile;
@@ -17,6 +23,7 @@ pub mod screen;
 pub mod search;
 mod threads;
 pub mod typing;
+pub mod user_actions;
 pub mod voice;
 use model::*;
 use session_cache::Timeline;
@@ -31,6 +38,26 @@ pub const EVENT_SLOTS: usize = 8; // UI drain batch; reliable events share a 32 
 pub const COMMAND_SLOTS: usize = 16; // each admitted command <= 16 KiB
 
 pub enum Command {
+	/// None loads the current settings; Some saves the complete folder layout.
+	GuildFolders(Option<model::guild_folders::Settings>),
+	UserAction {
+		action: user_actions::Action,
+		request: u64,
+	},
+	JoinInvite {
+		code: String,
+		request: u64,
+	},
+	Invite {
+		code: String,
+	},
+	CreatePost {
+		parent: Id,
+		guild: Id,
+		title: String,
+		content: String,
+		request: u64,
+	},
 	Archives {
 		parent: Id,
 		guild: Id,
@@ -51,6 +78,11 @@ pub enum Command {
 		request: u64,
 	},
 	CancelSearch,
+	Gifs {
+		query: Option<String>,
+		request: u64,
+	},
+	CancelGifs,
 	MarkRead {
 		channel: Id,
 		message: Id,
@@ -83,6 +115,7 @@ pub enum Command {
 		reply: Option<Id>,
 	},
 	Edit {
+		request: u64,
 		channel: Id,
 		message: Id,
 		content: String,
@@ -91,9 +124,31 @@ pub enum Command {
 		channel: Id,
 		message: Id,
 	},
+	Pin {
+		request: u64,
+		channel: Id,
+		message: Id,
+		pinned: bool,
+	},
 }
 pub enum Event {
+	JoinInvite {
+		request: u64,
+		result: Result<Id, auth::Failure>,
+	},
+	GuildJoined(Guild),
+	GuildFolders(Result<model::guild_folders::Settings, auth::Failure>),
+	UserAction(user_actions::Event),
+	Invite {
+		code: String,
+		result: Result<Box<model::InvitePreview>, auth::Failure>,
+	},
 	Typing(typing::Signal),
+	PostCreated {
+		parent: Id,
+		request: u64,
+		result: Result<Channel, auth::Failure>,
+	},
 	Archives {
 		parent: Id,
 		request: u64,
@@ -103,6 +158,10 @@ pub enum Event {
 		channel: Id,
 		request: u64,
 		result: Result<search::Outcome, auth::Failure>,
+	},
+	Gifs {
+		request: u64,
+		result: Result<model::GifPage, auth::Failure>,
 	},
 	ReadState(read_state::Event),
 	NotificationPreferences(notifications::Event),
@@ -179,6 +238,20 @@ pub enum Event {
 		channel: Id,
 		ids: Vec<Id>,
 	},
+	/// A pin or unpin request finished; `Err` carries the service failure label.
+	Edited {
+		request: u64,
+		channel: Id,
+		message: Id,
+		result: Result<Message, auth::Failure>,
+	},
+	Pinned {
+		request: u64,
+		channel: Id,
+		message: Id,
+		pinned: bool,
+		result: Result<(), auth::Failure>,
+	},
 	SendResult {
 		nonce: String,
 		result: Result<Message, auth::Failure>,
@@ -203,13 +276,30 @@ pub struct Pending {
 	pub delivery: Delivery,
 	pub confirmed: Option<Id>,
 }
+#[derive(Default)]
+pub struct NavigationIndex {
+	bytes: std::cell::Cell<Option<(usize, usize, usize)>>,
+	channels: std::cell::RefCell<BTreeMap<Id, usize>>,
+	channel_stamp: std::cell::Cell<Option<(usize, usize)>>,
+	guilds: std::cell::RefCell<BTreeMap<Id, usize>>,
+}
+
 pub struct State {
+	pub guild_folders: Option<model::guild_folders::Settings>,
+	pub folders_pending: bool,
+	pub folders_error: Option<&'static str>,
+	pub user_actions: user_actions::Actions,
 	pub typing: typing::Typing,
 	pub permissions: permissions::Permissions,
 	pub archives: Option<archives::View>,
+	pub posting: forum::Posting,
 	pub archived_thread: Option<Id>,
 	pub search: Option<search::SearchView>,
 	pub search_request: u64,
+	pub gifs: gifs::Gifs,
+	/// A pin changed in this channel; the pins view should be reloaded once.
+	pub pins_changed: Option<Id>,
+	pub message_actions: message_actions::MessageActions,
 	pub search_target: Option<Id>,
 	/// The active range was fetched around a target, independently of its consumed scroll cue.
 	pub history_targeted: bool,
@@ -220,15 +310,21 @@ pub struct State {
 	pub profile: Option<profile::ProfileView>,
 	pub profile_request: u64,
 	pub profile_cache: profile::ProfileCache,
+	pub invites: invites::Cache,
+	pub invite_join: invites::Join,
 	pub voice: voice::State,
 	pub generation: u64,
 	pub auth: auth::AuthState,
 	pub user: Option<User>,
 	pub members: Option<MemberList>,
 	pub direct_presences: Vec<MemberPresence>,
+	#[doc(hidden)]
+	pub direct_presence_bytes: Option<(usize, usize)>,
 	pub member_request: u64,
 	pub guilds: Vec<Guild>,
 	pub channels: Vec<Channel>,
+	#[doc(hidden)]
+	pub navigation_index: NavigationIndex,
 	pub selected: Option<Id>,
 	pub timeline: Timeline,
 	pub resident: resident::Windows,
@@ -252,12 +348,20 @@ pub struct State {
 impl Default for State {
 	fn default() -> Self {
 		Self {
+			guild_folders: None,
+			folders_pending: false,
+			folders_error: None,
+			user_actions: user_actions::Actions::default(),
 			typing: typing::Typing::default(),
 			permissions: permissions::Permissions::default(),
 			archives: None,
+			posting: forum::Posting::default(),
 			archived_thread: None,
 			search: None,
 			search_request: 0,
+			gifs: gifs::Gifs::default(),
+			pins_changed: None,
+			message_actions: Default::default(),
 			search_target: None,
 			history_targeted: false,
 			reply_deletions: ReplyDeletions::default(),
@@ -267,15 +371,19 @@ impl Default for State {
 			profile: None,
 			profile_request: 0,
 			profile_cache: Default::default(),
+			invites: Default::default(),
+			invite_join: Default::default(),
 			voice: voice::State::default(),
 			generation: 1,
 			auth: auth::AuthState::Unauthenticated,
 			user: None,
 			members: None,
 			direct_presences: vec![],
+			direct_presence_bytes: None,
 			member_request: 0,
 			guilds: vec![],
 			channels: vec![],
+			navigation_index: NavigationIndex::default(),
 			selected: None,
 			timeline: Timeline::default(),
 			resident: resident::Windows::default(),
@@ -298,7 +406,87 @@ impl Default for State {
 		}
 	}
 }
+/// Channels the conversation pane can present: text, voice, and forum containers.
+fn navigable(channel: &Channel) -> bool {
+	channel.supports_text()
+		|| channel.kind == 2
+		|| (channel.guild.is_some() && matches!(channel.kind, 15 | 16))
+}
 impl State {
+	pub(crate) fn navigation_bytes(&self) -> usize {
+		if let Some((channels, guilds, bytes)) = self.navigation_index.bytes.get()
+			&& channels == self.channels.len()
+			&& guilds == self.guilds.len()
+		{
+			return bytes;
+		}
+		let bytes = self.channels.iter().map(Channel::bytes).sum::<usize>()
+			+ self.guilds.iter().map(Guild::bytes).sum::<usize>();
+		self.set_navigation_bytes(bytes);
+		bytes
+	}
+	fn set_navigation_bytes(&self, bytes: usize) {
+		self.navigation_index
+			.bytes
+			.set(Some((self.channels.len(), self.guilds.len(), bytes)));
+	}
+
+	fn channel_stamp(&self) -> (usize, usize) {
+		(self.channels.as_ptr() as usize, self.channels.len())
+	}
+	fn channel_index(&self, id: Id) -> Option<usize> {
+		let stamp = self.channel_stamp();
+		if self.navigation_index.channel_stamp.get() == Some(stamp) {
+			let cached = self.navigation_index.channels.borrow().get(&id).copied();
+			if cached.is_none_or(|index| {
+				self.channels
+					.get(index)
+					.is_some_and(|channel| channel.id == id)
+			}) {
+				return cached;
+			}
+		}
+		let mut index = self.navigation_index.channels.borrow_mut();
+		*index = self
+			.channels
+			.iter()
+			.take(MAX_NAV)
+			.enumerate()
+			.map(|(index, channel)| (channel.id, index))
+			.collect();
+		self.navigation_index.channel_stamp.set(Some(stamp));
+		index.get(&id).copied()
+	}
+	pub fn channel(&self, id: Id) -> Option<&Channel> {
+		self.channel_index(id)
+			.and_then(|index| self.channels.get(index))
+	}
+	/// Call after replacing IDs or payloads directly in synthetic navigation vectors.
+	pub fn invalidate_navigation(&self) {
+		self.navigation_index.channel_stamp.set(None);
+		self.navigation_index.guilds.borrow_mut().clear();
+		self.navigation_index.bytes.set(None);
+	}
+
+	pub fn guild(&self, id: Id) -> Option<&Guild> {
+		let cached = self.navigation_index.guilds.borrow().get(&id).copied();
+		if let Some(guild) = cached
+			.and_then(|index| self.guilds.get(index))
+			.filter(|guild| guild.id == id)
+		{
+			return Some(guild);
+		}
+		let mut index = self.navigation_index.guilds.borrow_mut();
+		*index = self
+			.guilds
+			.iter()
+			.take(MAX_NAV)
+			.enumerate()
+			.map(|(index, guild)| (guild.id, index))
+			.collect();
+		index.get(&id).and_then(|index| self.guilds.get(*index))
+	}
+
 	pub fn logout(&mut self) {
 		let generation = self.generation.wrapping_add(1);
 		*self = Self {
@@ -327,10 +515,14 @@ impl State {
 				.sum::<usize>()
 	}
 	pub fn select(&mut self, channel: Id) -> Option<Command> {
+		// Keep the current conversation intact, but allow a restored channel to load again.
+		if self.selected == Some(channel) && self.freshness != Freshness::Unavailable {
+			return None;
+		}
 		if !self
 			.channels
 			.iter()
-			.any(|c| c.id == channel && (c.supports_text() || c.kind == 2))
+			.any(|c| c.id == channel && navigable(c))
 		{
 			self.status = "This channel kind is unsupported";
 			return None;
@@ -351,19 +543,21 @@ impl State {
 		self.older_exhausted = false;
 		self.reply = None;
 		self.revision += 1;
-		if self.channels.iter().any(|c| c.id == channel && c.kind == 2) {
+		if self
+			.channels
+			.iter()
+			.any(|c| c.id == channel && !c.supports_text())
+		{
 			self.cancel_history();
 			self.freshness = Freshness::Fresh;
 			return None;
 		}
 		let command = self.history(None);
-		if self.freshness == Freshness::Loading && self.timeline.row_count() != 0 {
-			self.status = "Showing recent conversation · revalidating history";
-		}
 		Some(command)
 	}
 	pub fn request_members(&mut self) -> Option<Command> {
-		let channel = self.channels.iter().find(|c| Some(c.id) == self.selected)?;
+		let index = self.channel_index(self.selected?)?;
+		let channel = &self.channels[index];
 		self.member_request = self.member_request.wrapping_add(1);
 		if !self.can_view(channel.id) {
 			return None;
@@ -546,7 +740,7 @@ impl State {
 			.duration_since(std::time::UNIX_EPOCH)
 			.unwrap_or_default()
 			.as_millis();
-		let nonce = format!("{epoch}{:06}", self.send_sequence % 1_000_000);
+		let nonce = fingerprint::nonce(epoch, self.send_sequence);
 		self.pending.push(Pending {
 			channel,
 			content: content.clone(),
@@ -564,6 +758,29 @@ impl State {
 		})
 	}
 	pub fn command_rejected(&mut self, command: Command) {
+		if matches!(command, Command::GuildFolders(_)) {
+			self.apply_guild_folders(Err(auth::Failure::ProtocolAt(
+				"Server organization was not queued; try again",
+			)));
+			return;
+		}
+		if let Command::UserAction { action, request } = command {
+			let _ = self.apply_user_action(user_actions::Event::Written {
+				action,
+				request,
+				result: Err(auth::Failure::ProtocolAt(
+					"User action was not queued; try again",
+				)),
+			});
+			return;
+		}
+		if let Command::CreatePost {
+			parent, request, ..
+		} = command
+		{
+			self.apply_post(parent, request, Err(auth::Failure::Capacity));
+			return;
+		}
 		if let Command::Archives {
 			parent, request, ..
 		} = command
@@ -581,7 +798,40 @@ impl State {
 			self.apply_search(channel, request, Err(auth::Failure::Capacity));
 			return;
 		}
-		if matches!(command, Command::CancelSearch) {
+		if matches!(command, Command::CancelSearch | Command::CancelGifs) {
+			return;
+		}
+		if let Command::Gifs { request, .. } = command {
+			self.apply_gifs(request, Err(auth::Failure::Capacity));
+			return;
+		}
+		if let Command::Edit {
+			channel,
+			message,
+			request,
+			..
+		} = command
+		{
+			self.apply_edit_result(channel, message, request, Err(auth::Failure::Capacity));
+			return;
+		}
+		if let Command::Pin {
+			request,
+			channel,
+			message,
+			pinned,
+		} = command
+		{
+			self.apply(Envelope {
+				generation: self.generation,
+				event: Event::Pinned {
+					request,
+					channel,
+					message,
+					pinned,
+					result: Err(auth::Failure::Capacity),
+				},
+			});
 			return;
 		}
 		if let Command::MarkRead {
@@ -625,6 +875,19 @@ impl State {
 			};
 			let _ = self.apply_reactions(event);
 			self.status = "Work queue full; reaction action was not sent";
+			return;
+		}
+		if let Command::JoinInvite { request, .. } = command {
+			self.apply_invite_join(
+				request,
+				Err(auth::Failure::ProtocolAt(
+					"Join was not sent · work queue full",
+				)),
+			);
+			return;
+		}
+		if let Command::Invite { code } = command {
+			self.apply_invite(code, Err(auth::Failure::Capacity));
 			return;
 		}
 		if let Command::Profile {
@@ -707,6 +970,13 @@ impl State {
 			}
 			return;
 		}
+		// Preserve the running total through channel-create/permission bursts at guild admission.
+		if !matches!(
+			&envelope.event,
+			Event::ChannelCreated(_) | Event::ChannelRestored(_) | Event::Permissions(_)
+		) {
+			self.navigation_index.bytes.set(None);
+		}
 		let access_changed = envelope.event.changes_access();
 		// Ephemeral names must not outlive navigation identity/permission replacement.
 		if access_changed {
@@ -714,9 +984,8 @@ impl State {
 		}
 		let previous_access = access_changed.then(|| self.permission_access()).flatten();
 		let previous_member_list = (access_changed && self.members.is_some()).then(|| {
-			self.channels
-				.iter()
-				.find(|channel| Some(channel.id) == self.selected)
+			self.selected
+				.and_then(|id| self.channel(id))
 				.and_then(|channel| self.member_list_id(channel))
 		});
 		if let Event::ChannelRestored(channel) = &envelope.event
@@ -724,7 +993,7 @@ impl State {
 				|| !matches!(channel.kind, 0 | 2 | 4 | 5 | 13..=16)
 				|| !channel.guild.is_some_and(|guild| {
 					guild.0 != 0 && self.guilds.iter().any(|known| known.id == guild)
-				}) || self.channels.iter().any(|known| known.id == channel.id))
+				}) || self.channel(channel.id).is_some())
 		{
 			return;
 		}
@@ -762,6 +1031,9 @@ impl State {
 			return;
 		}
 		self.invalidate_resident_event(&envelope.event);
+		if let Event::ChannelCreated(channel) = &envelope.event {
+			self.observe_dm_reopened(channel.id);
+		}
 		self.revision += 1;
 		if matches!(
 			&envelope.event,
@@ -781,9 +1053,13 @@ impl State {
 			self.clear_search();
 		}
 		let result = match envelope.event {
+			Event::GuildFolders(result) => {
+				self.apply_guild_folders(result);
+				Ok(())
+			}
 			Event::Typing(_) => unreachable!("typing is handled before timeline invalidation"),
 			Event::Permissions(mut event) => {
-				let known = |id: Id| self.guilds.iter().any(|guild| guild.id == id);
+				let known = |id: Id| self.guild(id).is_some();
 				match &mut event {
 					permissions::Event::Snapshot(snapshot)
 						if snapshot.guilds.iter().any(|guild| !known(guild.id)) =>
@@ -809,11 +1085,7 @@ impl State {
 					_ => {}
 				}
 				if let permissions::Event::Channel { channel, guild, .. } = &mut event {
-					let actual = self
-						.channels
-						.iter()
-						.find(|c| c.id == *channel)
-						.and_then(|c| c.guild);
+					let actual = self.channel(*channel).and_then(|c| c.guild);
 					if guild.is_some() && actual.is_some() && *guild != actual {
 						return;
 					}
@@ -839,6 +1111,14 @@ impl State {
 				self.apply_archives(parent, request, result);
 				Ok(())
 			}
+			Event::PostCreated {
+				parent,
+				request,
+				result,
+			} => {
+				self.apply_post(parent, request, result);
+				Ok(())
+			}
 			Event::Search {
 				channel,
 				request,
@@ -847,8 +1127,13 @@ impl State {
 				self.apply_search(channel, request, result);
 				Ok(())
 			}
+			Event::Gifs { request, result } => {
+				self.apply_gifs(request, result);
+				Ok(())
+			}
 			Event::ReadState(event) => self.apply_read_state(event),
 			Event::NotificationPreferences(event) => self.apply_notification_preferences(event),
+			Event::UserAction(event) => self.apply_user_action(event),
 			Event::ThreadsSync {
 				guild,
 				parents,
@@ -856,6 +1141,30 @@ impl State {
 				removed,
 			} => self.apply_threads_sync(guild, parents, threads, removed),
 			Event::Reactions(event) => self.apply_reactions(event),
+			Event::JoinInvite { request, result } => {
+				self.apply_invite_join(request, result);
+				Ok(())
+			}
+			Event::GuildJoined(guild) => {
+				if !self.guilds.iter().any(|g| g.id == guild.id) {
+					let bytes = self.navigation_bytes() + guild.bytes();
+					if guild.id.0 == 0
+						|| guild.name.len() > 512
+						|| self.guilds.len() + self.channels.len() >= MAX_NAV
+						|| bytes > MAX_EVENT_BYTES
+					{
+						self.fail(auth::Failure::Capacity);
+						return;
+					}
+					self.guilds.push(guild);
+					self.set_navigation_bytes(bytes);
+				}
+				Ok(())
+			}
+			Event::Invite { code, result } => {
+				self.apply_invite(code, result.map(|embed| *embed));
+				Ok(())
+			}
 			Event::Profile {
 				user,
 				guild,
@@ -872,17 +1181,18 @@ impl State {
 						.emojis
 						.as_ref()
 						.map_or(0, custom_emoji_bytes);
-					let navigation_bytes = self.guilds.iter().map(Guild::bytes).sum::<usize>()
-						+ self.channels.iter().map(Channel::bytes).sum::<usize>();
+					let navigation_bytes = self.navigation_bytes();
 					if !valid_custom_emojis(&emojis)
 						|| navigation_bytes - previous + custom_emoji_bytes(&emojis)
 							> MAX_EVENT_BYTES
 					{
 						self.guilds[index].emojis = None;
+						self.navigation_index.bytes.set(None);
 						self.fail(auth::Failure::Capacity);
 						return;
 					}
 					self.guilds[index].emojis = Some(emojis);
+					self.navigation_index.bytes.set(None);
 				}
 				Ok(())
 			}
@@ -912,24 +1222,22 @@ impl State {
 					return;
 				}
 				if matches!(channel.kind, 10..=12)
-					&& (!self.guilds.iter().any(|g| Some(g.id) == channel.guild)
+					&& (!channel
+						.guild
+						.is_some_and(|guild| self.guild(guild).is_some())
 						|| self.channels.iter().any(|old| {
 							old.id == channel.id
 								&& (old.guild != channel.guild || !matches!(old.kind, 10..=12))
 						})) {
 					return;
 				}
-				let old = self.channels.iter().position(|c| c.id == channel.id);
+				let old = self.channel_index(channel.id);
+				let navigation_bytes = self.navigation_bytes()
+					- old.map_or(0, |index| self.channels[index].bytes())
+					+ channel.bytes();
 				if channel.recipients.len() > 64
 					|| (old.is_none() && self.channels.len() + self.guilds.len() >= MAX_NAV)
-					|| self
-						.channels
-						.iter()
-						.filter(|c| c.id != channel.id)
-						.map(Channel::bytes)
-						.sum::<usize>() + channel.bytes()
-						+ self.guilds.iter().map(Guild::bytes).sum::<usize>()
-						> MAX_EVENT_BYTES
+					|| navigation_bytes > MAX_EVENT_BYTES
 				{
 					self.fail(auth::Failure::Capacity);
 					return;
@@ -954,8 +1262,17 @@ impl State {
 					}
 					self.channels[index] = channel;
 				} else {
+					let id = channel.id;
+					self.navigation_index
+						.channels
+						.get_mut()
+						.insert(id, self.channels.len());
 					self.channels.push(channel);
+					self.navigation_index
+						.channel_stamp
+						.set(Some(self.channel_stamp()));
 				}
+				self.set_navigation_bytes(navigation_bytes);
 				Ok(())
 			}
 			Event::ChannelChanged(patch) | Event::ThreadChanged { patch, .. } => {
@@ -991,10 +1308,10 @@ impl State {
 					if let Patch::Value(kind) = patch.kind {
 						channel.kind = kind;
 					}
-					if self.selected == Some(channel.id)
-						&& !channel.supports_text()
-						&& channel.kind != 2
-					{
+					if let Patch::Value(count) = patch.message_count {
+						channel.message_count = Some(count);
+					}
+					if self.selected == Some(channel.id) && !navigable(channel) {
 						self.selected = None;
 						self.invalidate_members();
 						self.timeline.clear();
@@ -1092,6 +1409,7 @@ impl State {
 				channels,
 			} => {
 				self.direct_presences.clear();
+				self.direct_presence_bytes = None;
 				if self
 					.user
 					.as_ref()
@@ -1130,17 +1448,15 @@ impl State {
 					.iter()
 					.filter(|old| {
 						current.get(&old.id).is_none_or(|channel| {
-							(old.supports_text() && !channel.supports_text())
-								|| (old.kind == 2 && channel.kind != 2)
+							(navigable(old) && !navigable(channel))
+								|| (old.supports_text() != channel.supports_text())
 						})
 					})
 					.map(|channel| channel.id)
 					.collect();
-				let unavailable = self.selected.is_some_and(|id| {
-					current
-						.get(&id)
-						.is_none_or(|channel| !channel.supports_text() && channel.kind != 2)
-				});
+				let unavailable = self
+					.selected
+					.is_some_and(|id| current.get(&id).is_none_or(|channel| !navigable(channel)));
 				if unavailable && let Some(selected) = self.selected {
 					removed.insert(selected);
 				}
@@ -1158,6 +1474,9 @@ impl State {
 				self.profile_cache.clear();
 				self.read_state.reset();
 				self.notification_preferences = notifications::Preferences::default();
+				self.cancel_user_action();
+				self.cancel_invite_join();
+				self.user_actions.reset();
 				self.user = Some(user);
 				self.guilds = guilds;
 				self.channels = channels;
@@ -1265,7 +1584,20 @@ impl State {
 				Ok(())
 			}
 			Event::Message(mut m) => {
+				if self.timeline.get(m.id).is_some_and(|old| {
+					old.edited_at
+						.is_none_or(|at| m.edited_at.is_some_and(|new| new >= at))
+				}) {
+					self.message_actions.observe_content(m.channel, m.id);
+				}
 				self.typing_message(&m);
+				if let Some(post) = self
+					.channels
+					.iter_mut()
+					.find(|c| c.id == m.channel && matches!(c.kind, 10..=12))
+				{
+					post.message_count = post.message_count.map(|n| n.saturating_add(1));
+				}
 				let deletion = if m.reply_deleted && self.accepts_reply_source(&m) {
 					self.record_reply_deletion(&m);
 					if self.selected == Some(m.channel) {
@@ -1303,6 +1635,12 @@ impl State {
 				}
 			}
 			Event::Patch(mut p) => {
+				if !matches!(p.content, Patch::Absent)
+					&& self.timeline.get(p.id).is_some_and(
+						|old| !matches!(p.edited, Patch::Value(at) if old.edited_at.is_some_and(|old| at < old)),
+					) {
+					self.message_actions.observe_content(p.channel, p.id);
+				}
 				if self.selected == Some(p.channel)
 					&& self.reactions.invalidated(p.id)
 					&& !matches!(p.reactions, Patch::Absent)
@@ -1339,6 +1677,25 @@ impl State {
 				} else {
 					Ok(())
 				}
+			}
+			Event::Edited {
+				channel,
+				message,
+				request,
+				result,
+			} => {
+				self.apply_edit_result(channel, message, request, result);
+				Ok(())
+			}
+			Event::Pinned {
+				channel,
+				message,
+				pinned,
+				request,
+				result,
+			} => {
+				self.apply_pin_result(channel, message, pinned, request, result);
+				Ok(())
 			}
 			Event::DeleteBulk { channel, ids } => {
 				if ids.len() <= 100 {
@@ -1436,6 +1793,9 @@ impl State {
 				Ok(())
 			}
 			Event::Disconnected => {
+				self.cancel_message_actions();
+				self.cancel_user_action();
+				self.cancel_invite_join();
 				self.read_state.cancel();
 				self.clear_profile();
 				let roster = std::mem::take(&mut self.voice.roster);
@@ -1457,7 +1817,11 @@ impl State {
 				Ok(())
 			}
 			Event::Resync | Event::PermissionsChanged => {
+				self.cancel_message_actions();
+				self.cancel_user_action();
+				self.cancel_invite_join();
 				self.direct_presences.clear();
+				self.direct_presence_bytes = None;
 				self.permissions = permissions::Permissions::default();
 				self.read_state.cancel();
 				self.clear_profile();
@@ -1500,9 +1864,8 @@ impl State {
 			self.reconcile_permissions(previous_access);
 			if let Some(previous) = previous_member_list {
 				let current = self
-					.channels
-					.iter()
-					.find(|channel| Some(channel.id) == self.selected)
+					.selected
+					.and_then(|id| self.channel(id))
 					.and_then(|channel| self.member_list_id(channel));
 				if previous != current {
 					// Let the visible pane request the new list; late snapshots lose their request scope.
@@ -1536,6 +1899,7 @@ impl State {
 		}
 	}
 	fn remove_channels(&mut self, removed: &BTreeSet<Id>) {
+		self.invalidate_navigation();
 		for id in removed {
 			self.resident.remove(*id);
 		}
@@ -1591,7 +1955,15 @@ impl State {
 			_ => {}
 		}
 		if failure.ends_session() {
+			self.cancel_message_actions();
+			if self.folders_pending {
+				self.folders_pending = false;
+				self.folders_error = Some(failure.label());
+			}
+			self.cancel_user_action();
+			self.cancel_invite_join();
 			self.direct_presences.clear();
+			self.direct_presence_bytes = None;
 			self.clear_cached_history();
 			self.clear_search();
 			self.search_target = None;
@@ -1624,7 +1996,11 @@ impl Event {
 		matches!(
 			self,
 			Event::Ready { .. }
-				| Event::Permissions(_)
+				| Event::UserAction(user_actions::Event::Written {
+					action: user_actions::Action::CloseDm(_),
+					result: Ok(()),
+					..
+				}) | Event::Permissions(_)
 				| Event::Resync
 				| Event::PermissionsChanged
 				| Event::Unavailable(_)
@@ -1643,12 +2019,23 @@ impl Event {
 	pub fn bytes(&self) -> usize {
 		size_of::<Self>()
 			+ match self {
+				Self::Edited { result, .. } => result.as_ref().map_or(0, Message::bytes),
+				Self::GuildFolders(result) => result
+					.as_ref()
+					.map_or(0, model::guild_folders::Settings::heap_bytes),
+				Self::UserAction(user_actions::Event::Relationships(entries)) => entries
+					.as_ref()
+					.map_or(0, |e| e.capacity() * size_of::<(Id, bool)>()),
 				Self::Archives { result, .. } => {
 					result.as_ref().map_or(0, model::archives::Page::bytes)
 				}
+				Self::PostCreated { result, .. } => result.as_ref().map_or(0, Channel::bytes),
 				Self::Search {
 					result: Ok(search::Outcome::Page(page) | search::Outcome::Pins(page)),
 					..
+				} => page.bytes(),
+				Self::Gifs {
+					result: Ok(page), ..
 				} => page.bytes(),
 				Self::ReadState(read_state::Event::Snapshot { entries, .. }) => entries
 					.as_ref()
@@ -1659,6 +2046,10 @@ impl Event {
 				}
 				Self::Reactions(reactions::Event::Read { result, .. }) => {
 					result.as_ref().map_or(0, |r| model::reaction_bytes(r))
+				}
+				Self::GuildJoined(guild) => guild.bytes(),
+				Self::Invite { code, result } => {
+					code.capacity() + result.as_ref().map_or(0, |embed| embed.bytes())
 				}
 				Self::Profile { result, .. } => result.as_ref().map_or(0, |p| p.bytes()),
 				Self::Voice(event) => event.bytes(),
@@ -1798,6 +2189,7 @@ mod tests {
 				recipients: vec![],
 				last_message: None,
 				member_list_id: None,
+				message_count: None,
 			}],
 			selected: Some(Id(1)),
 			auth: auth::AuthState::Authenticated,
@@ -1849,6 +2241,7 @@ mod tests {
 				recipients: vec![],
 				last_message: None,
 				member_list_id: None,
+				message_count: None,
 			}],
 			selected: Some(Id(1)),
 			auth: auth::AuthState::Authenticated,
@@ -1945,6 +2338,7 @@ mod tests {
 				recipients: vec![],
 				last_message: None,
 				member_list_id: None,
+				message_count: None,
 			}],
 			gateway_connected: true,
 			auth: auth::AuthState::Authenticated,
@@ -2360,6 +2754,7 @@ mod tests {
 			kind: 0,
 			recipients: vec![],
 			member_list_id: None,
+			message_count: None,
 		};
 		apply(&mut state, Event::ChannelCreated(channel.clone()));
 		apply(&mut state, Event::ChannelCreated(channel));
@@ -2373,6 +2768,7 @@ mod tests {
 				parent_id: Patch::Null,
 				position: Patch::Value(0),
 				kind: Patch::Absent,
+				message_count: Patch::Absent,
 			}),
 		);
 		assert_eq!(state.channels[0].parent_id, None);
@@ -2390,6 +2786,7 @@ mod tests {
 				parent_id: Patch::Absent,
 				position: Patch::Absent,
 				kind: Patch::Value(4),
+				message_count: Patch::Absent,
 			}),
 		);
 		assert!(state.selected.is_none());
@@ -2410,6 +2807,7 @@ mod tests {
 					kind: 4,
 					recipients: vec![],
 					member_list_id: None,
+					message_count: None,
 				}),
 			);
 		}
@@ -2470,6 +2868,7 @@ mod tests {
 				recipients: vec![],
 				last_message: None,
 				member_list_id: None,
+				message_count: None,
 			}],
 			..State::default()
 		};
@@ -2603,6 +3002,7 @@ mod tests {
 				kind: 1,
 				recipients: vec![user.clone()],
 				member_list_id: None,
+				message_count: None,
 			}],
 			..State::default()
 		};
@@ -2658,6 +3058,7 @@ mod tests {
 			recipients: vec![],
 			last_message: Some(Id(80)),
 			member_list_id: Some("known-list".into()),
+			message_count: None,
 		};
 		let mut state = State {
 			user: Some(message(1).author),
@@ -2680,6 +3081,7 @@ mod tests {
 			position: 0,
 			last_message: None,
 			member_list_id: None,
+			message_count: None,
 			..channel.clone()
 		};
 		apply(&mut state, Event::ChannelRestored(candidate.clone()));
@@ -2696,6 +3098,7 @@ mod tests {
 				parent_id: Patch::Absent,
 				position: Patch::Absent,
 				kind: Patch::Absent,
+				message_count: Patch::Absent,
 			}),
 		);
 		assert_eq!(state.channels[0].name, "Renamed");
@@ -2791,6 +3194,7 @@ mod tests {
 			recipients: vec![],
 			last_message: None,
 			member_list_id: None,
+			message_count: None,
 		};
 		let guild = Guild {
 			id: Id(10),
@@ -2873,6 +3277,7 @@ mod tests {
 			recipients: vec![],
 			last_message: None,
 			member_list_id: None,
+			message_count: None,
 		};
 		let user = || User {
 			id: Id(2),
@@ -3020,6 +3425,7 @@ mod tests {
 					kind: 1,
 					recipients: vec![],
 					member_list_id: None,
+					message_count: None,
 				}],
 			},
 		);

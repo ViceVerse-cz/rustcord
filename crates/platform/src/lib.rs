@@ -1,4 +1,5 @@
 //! The only credential-persistence boundary; the only webview is a temporary login surface.
+pub mod game_activity;
 pub mod notifications;
 pub mod save;
 use client_core::auth::{Failure, SessionSecret};
@@ -17,6 +18,8 @@ mod login_linux;
 #[cfg(target_os = "linux")]
 pub use login_linux::LoginView;
 
+/// Logical height of the native header the desktop app draws above the login webview.
+pub const LOGIN_HEADER_HEIGHT: f32 = 56.0;
 const SERVICE: &str = "org.serein.desktop";
 const ACCOUNT: &str = "discord-session";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,7 +127,7 @@ impl LoginView {
 #[cfg(not(target_os = "linux"))]
 fn bounds(parent: &winit::window::Window) -> wry::Rect {
 	let size = parent.inner_size();
-	let header = (90.0 * parent.scale_factor()) as u32;
+	let header = (LOGIN_HEADER_HEIGHT as f64 * parent.scale_factor()).round() as u32;
 	wry::Rect {
 		position: wry::dpi::PhysicalPosition::new(0, header as i32).into(),
 		size: wry::dpi::PhysicalSize::new(size.width, size.height.saturating_sub(header)).into(),

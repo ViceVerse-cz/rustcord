@@ -156,6 +156,7 @@ mod tests {
 					kind: 1,
 					recipients: vec![],
 					member_list_id: None,
+					message_count: None,
 					last_message: None,
 				})
 				.collect(),

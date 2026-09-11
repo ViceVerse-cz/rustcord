@@ -1,4 +1,4 @@
-use crate::MessagingUi;
+use crate::{MessagingUi, design};
 use egui::containers::panel::PanelState;
 use model::ReadingPreferences;
 
@@ -8,6 +8,7 @@ impl MessagingUi {
 			return;
 		}
 		self.reading_preferences = value;
+		self.avatars.set_animation(value.animate_gifs);
 		self.reading_sidebar_applied = None;
 		let zoom = f32::from(value.zoom_percent) / 100.0;
 		if (ctx.zoom_factor() - zoom).abs() > 0.001 {
@@ -20,6 +21,8 @@ impl MessagingUi {
 
 	/// Called once per desktop frame, before loading preferences, including on sign-in.
 	pub fn sync_reading_zoom(&mut self, ctx: &egui::Context) {
+		self.avatars
+			.set_animation(self.reading_preferences.animate_gifs);
 		if std::mem::take(&mut self.reading_zoom_pending) {
 			return;
 		}
@@ -32,23 +35,71 @@ impl MessagingUi {
 	}
 
 	pub fn reading_settings(&mut self, ui: &mut egui::Ui, demo: bool) {
-		ui.strong("Reading and layout");
+		let colors = design::palette(ui);
+		ui.label(design::eyebrow(ui, "Reading and layout", colors.muted));
 		let mut value = self.reading_preferences;
-		ui.add(
-			egui::Slider::new(&mut value.zoom_percent, 80..=150)
-				.text("Zoom")
-				.suffix("%"),
-		);
-		ui.add(egui::Slider::new(&mut value.sidebar_width, 190..=360).text("Sidebar"));
-		ui.checkbox(&mut value.show_members, "Show People in wide windows");
-		if ui.button("Reset reading and layout").clicked() {
-			value = ReadingPreferences::default();
-			self.reading_save_requested = true;
-		}
-		ui.small(if demo {
-			"Preview uses session memory only"
-		} else {
-			self.reading_status
+		design::card(ui, |ui| {
+			ui.spacing_mut().item_spacing.y = 10.0;
+			ui.spacing_mut().slider_width = (ui.available_width() - 220.0).clamp(120.0, 360.0);
+			// The rail must stay visible on the raised card surface.
+			ui.visuals_mut().widgets.inactive.bg_fill = colors.selected;
+			ui.horizontal(|ui| {
+				ui.label(design::medium(ui, "Zoom", 15.0).color(colors.text_strong));
+				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+					ui.add(
+						egui::Slider::new(&mut value.zoom_percent, 80..=150)
+							.suffix("%")
+							.trailing_fill(true),
+					);
+				});
+			});
+			ui.separator();
+			ui.horizontal(|ui| {
+				ui.label(design::medium(ui, "Sidebar width", 15.0).color(colors.text_strong));
+				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+					ui.add(
+						egui::Slider::new(&mut value.sidebar_width, 190..=360)
+							.suffix(" px")
+							.trailing_fill(true),
+					);
+				});
+			});
+			ui.separator();
+			design::switch(
+				ui,
+				"Show People in wide windows",
+				Some("Keep the member list open whenever the window is wide enough."),
+				&mut value.show_members,
+			);
+			ui.separator();
+			design::switch(
+				ui,
+				"Animate GIFs",
+				Some("Visible chat GIFs play automatically."),
+				&mut value.animate_gifs,
+			);
+			ui.separator();
+			design::switch(
+				ui,
+				"Hide image and GIF links",
+				Some("Hide standalone links when their image or GIF preview is shown."),
+				&mut value.hide_media_links,
+			);
+		});
+		ui.horizontal_wrapped(|ui| {
+			if ui.button("Reset reading and layout").clicked() {
+				value = ReadingPreferences::default();
+				self.reading_save_requested = true;
+			}
+			ui.label(
+				egui::RichText::new(if demo {
+					"Preview uses session memory only"
+				} else {
+					self.reading_status
+				})
+				.size(12.0)
+				.color(colors.muted),
+			);
 		});
 		if !demo
 			&& self.reading_status.contains("could not")
@@ -61,16 +112,22 @@ impl MessagingUi {
 		}
 	}
 
-	pub(super) fn prepare_reading_sidebar(&mut self, ui: &egui::Ui) -> f32 {
+	/// `panel` is the resizable panel id and `reserved` the fixed width it holds besides the list.
+	pub(super) fn prepare_reading_sidebar(
+		&mut self,
+		ui: &egui::Ui,
+		panel: &str,
+		reserved: f32,
+	) -> f32 {
 		// Preserve space for the conversation at high zoom. Temporary viewport limits
 		// must not replace the user's preferred width on disk.
-		let maximum = (ui.available_width() - 260.0).clamp(190.0, 360.0);
+		let maximum = (ui.available_width() - reserved - 260.0).clamp(190.0, 360.0);
 		let constrained = f32::from(self.reading_preferences.sidebar_width) > maximum;
 		if self.reading_sidebar_applied != Some(self.reading_preferences.sidebar_width)
 			|| self.reading_sidebar_constrained != constrained
 		{
 			ui.ctx()
-				.data_mut(|data| data.remove::<PanelState>(ui.id().with("channels")));
+				.data_mut(|data| data.remove::<PanelState>(ui.id().with(panel)));
 			self.reading_sidebar_applied = Some(self.reading_preferences.sidebar_width);
 		}
 		self.reading_sidebar_constrained = constrained;
@@ -121,7 +178,7 @@ mod tests {
 				egui::RawInput {
 					screen_rect: Some(egui::Rect::from_min_size(
 						egui::Pos2::ZERO,
-						egui::vec2(480.0, 360.0),
+						egui::vec2(480.0, 480.0),
 					)),
 					events,
 					..Default::default()
@@ -140,6 +197,8 @@ mod tests {
 			zoom_percent: 125,
 			sidebar_width: 300,
 			show_members: false,
+			animate_gifs: false,
+			hide_media_links: true,
 		};
 		view.apply_reading_preferences(&ctx, custom);
 		for _ in 0..3 {
@@ -260,7 +319,7 @@ mod tests {
 					..Default::default()
 				},
 				|ui| {
-					let maximum = view.prepare_reading_sidebar(ui);
+					let maximum = view.prepare_reading_sidebar(ui, "channels", 0.0);
 					let panel = egui::Panel::left("channels")
 						.default_size(
 							f32::from(view.reading_preferences.sidebar_width).min(maximum),

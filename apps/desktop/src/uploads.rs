@@ -1,4 +1,4 @@
-//! One explicit attachment selection or upload; paths never enter UI state or diagnostics.
+//! One bounded attachment batch selection or upload; paths never enter UI state or diagnostics.
 use client_core::Command;
 use discord_api::upload::{Source, Status};
 use eframe::egui;
@@ -12,14 +12,56 @@ use tokio::sync::watch;
 
 pub struct UploadRequest {
 	pub command: Command,
-	pub source: Source,
+	pub source: Vec<Source>,
 	pub progress: watch::Sender<Status>,
 	pub cancel: watch::Sender<bool>,
 }
 
+type Selected = (Source, Option<egui::ColorImage>);
 struct Choosing {
-	result: mpsc::Receiver<Result<Option<Source>, &'static str>>,
+	result: mpsc::Receiver<Result<Option<Vec<Selected>>, &'static str>>,
 	cancelled: Arc<AtomicBool>,
+}
+/// Longest edge of the composer thumbnail; the full decode stays bounded by `image::Limits`.
+const PREVIEW_EDGE: u32 = 320;
+const PREVIEW_ALLOC: u64 = 64 * 1024 * 1024;
+fn previewable(filename: &str) -> bool {
+	filename.rsplit_once('.').is_some_and(|(_, extension)| {
+		matches!(
+			extension.to_ascii_lowercase().as_str(),
+			"png" | "jpg" | "jpeg" | "gif" | "webp"
+		)
+	})
+}
+/// Downscaled pixels for the composer card, decoded on a blocking worker, never in a frame.
+async fn preview(source: &Source) -> Option<egui::ColorImage> {
+	if !previewable(source.filename()) {
+		return None;
+	}
+	let bytes = source.preview_bytes(discord_api::upload::MAX_BYTES).await?;
+	tokio::task::spawn_blocking(move || decode_preview(&bytes))
+		.await
+		.ok()
+		.flatten()
+}
+fn decode_preview(bytes: &[u8]) -> Option<egui::ColorImage> {
+	let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+		.with_guessed_format()
+		.ok()?;
+	let mut limits = image::Limits::default();
+	limits.max_image_width = Some(8192);
+	limits.max_image_height = Some(8192);
+	limits.max_alloc = Some(PREVIEW_ALLOC);
+	reader.limits(limits);
+	let image = reader
+		.decode()
+		.ok()?
+		.thumbnail(PREVIEW_EDGE, PREVIEW_EDGE)
+		.into_rgba8();
+	Some(egui::ColorImage::from_rgba_unmultiplied(
+		[image.width() as usize, image.height() as usize],
+		image.as_raw(),
+	))
 }
 struct Uploading {
 	progress: watch::Receiver<Status>,
@@ -29,7 +71,9 @@ struct Uploading {
 #[derive(Default)]
 pub struct Uploads {
 	scope: Option<(u64, Id)>,
-	selected: Option<Source>,
+	selected: Vec<Source>,
+	preview: Option<Arc<egui::ColorImage>>,
+	previewing: Option<mpsc::Receiver<Option<egui::ColorImage>>>,
 	choosing: Option<Choosing>,
 	uploading: Option<Uploading>,
 	last: Option<Status>,
@@ -39,14 +83,31 @@ impl Uploads {
 		&mut self,
 		generation: u64,
 		channel: Id,
-		source: Source,
+		source: Vec<Source>,
+		runtime: &tokio::runtime::Handle,
+		context: &egui::Context,
 	) -> Result<(), &'static str> {
-		if self.busy() || self.selected.is_some() {
-			return Err("Remove the current attachment or wait for its operation to finish");
+		if self.busy() {
+			return Err("Wait for the current attachment operation to finish");
 		}
+		self.admit(&source)?;
 		self.scope = Some((generation, channel));
 		self.last = None;
-		self.selected = Some(source);
+		let (send, receive) = mpsc::sync_channel(1);
+		let context = context.clone();
+		let copy = source.first().cloned();
+		if self.selected.is_empty() {
+			runtime.spawn(async move {
+				let thumbnail = match copy {
+					Some(source) => preview(&source).await,
+					None => None,
+				};
+				let _ = send.send(thumbnail);
+				context.request_repaint();
+			});
+			self.previewing = Some(receive);
+		}
+		self.selected.extend(source);
 		Ok(())
 	}
 	pub fn start_choose(
@@ -57,8 +118,8 @@ impl Uploads {
 		context: &egui::Context,
 		parent: Arc<winit::window::Window>,
 	) -> Result<(), &'static str> {
-		if self.busy() || self.selected.is_some() {
-			return Err("Remove the current attachment or wait for its operation to finish");
+		if self.busy() {
+			return Err("Wait for the current attachment operation to finish");
 		}
 		// Construct on the native UI thread; await and inspect outside rendering.
 		let dialog = platform::save::attachment_source(parent);
@@ -73,24 +134,26 @@ impl Uploads {
 		context: &egui::Context,
 		files: Vec<egui::DroppedFileHandle>,
 	) -> Result<(), &'static str> {
-		if self.busy() || self.selected.is_some() {
-			return Err("Remove the current attachment or wait for its operation to finish");
+		if self.busy() {
+			return Err("Wait for the current attachment operation to finish");
 		}
-		if files.len() != 1 {
-			return Err("Drop exactly one local file");
+		if files.is_empty() || files.len() + self.selected.len() > discord_api::upload::MAX_FILES {
+			return Err("Attach up to 10 files per message");
 		}
-		// Native egui handles expose a local path. Never call their whole-file bytes API.
-		let path = files[0].path();
-		if !path.is_absolute() || path.as_os_str().as_encoded_bytes().len() > 4096 {
-			return Err("Drop a local file with a supported path");
+		let mut paths = Vec::with_capacity(files.len());
+		for file in files {
+			let path = file.path();
+			if !path.is_absolute() || path.as_os_str().as_encoded_bytes().len() > 4096 {
+				return Err("Drop a local file with a supported path");
+			}
+			paths.push(path.to_owned());
 		}
-		let path = path.to_owned();
 		self.start_selection(
 			generation,
 			channel,
 			runtime,
 			context,
-			async move { Some(path) },
+			async move { Some(paths) },
 		);
 		Ok(())
 	}
@@ -100,7 +163,7 @@ impl Uploads {
 		channel: Id,
 		runtime: &tokio::runtime::Handle,
 		context: &egui::Context,
-		selection: impl std::future::Future<Output = Option<std::path::PathBuf>> + Send + 'static,
+		selection: impl std::future::Future<Output = Option<Vec<std::path::PathBuf>>> + Send + 'static,
 	) {
 		let cancelled = Arc::new(AtomicBool::new(false));
 		let flag = cancelled.clone();
@@ -112,10 +175,28 @@ impl Uploads {
 				if flag.load(Ordering::Acquire) {
 					return Ok(None);
 				}
-				match path {
-					Some(path) => Source::inspect(path).await.map(Some),
-					None => Ok(None),
+				let Some(paths) = path else {
+					return Ok(None);
+				};
+				if paths.is_empty() || paths.len() > discord_api::upload::MAX_FILES {
+					return Err("Attach up to 10 files per message");
 				}
+				let mut selected = Vec::with_capacity(paths.len());
+				let mut total = 0;
+				for path in paths {
+					let source = Source::inspect(path).await?;
+					total += source.size();
+					if total > discord_api::upload::MAX_TOTAL_BYTES {
+						return Err("Attachments must total at most 20 MB");
+					}
+					let thumbnail = if selected.is_empty() {
+						preview(&source).await
+					} else {
+						None
+					};
+					selected.push((source, thumbnail));
+				}
+				Ok(Some(selected))
 			}
 			.await;
 			let _ = send.send(result);
@@ -125,6 +206,14 @@ impl Uploads {
 		self.last = None;
 		self.choosing = Some(Choosing { result, cancelled });
 	}
+	pub fn revalidate_scope(&mut self, generation: u64, channel: Option<Id>, allowed: bool) {
+		if self
+			.scope
+			.is_some_and(|scope| !allowed || Some(scope) != channel.map(|id| (generation, id)))
+		{
+			self.remove();
+		}
+	}
 	pub fn poll(
 		&mut self,
 		generation: u64,
@@ -132,12 +221,7 @@ impl Uploads {
 		allowed: bool,
 		context: &egui::Context,
 	) {
-		if self
-			.scope
-			.is_some_and(|scope| !allowed || Some(scope) != channel.map(|id| (generation, id)))
-		{
-			self.remove();
-		}
+		self.revalidate_scope(generation, channel, allowed);
 		if let Some(choosing) = &self.choosing {
 			let result = match choosing.result.try_recv() {
 				Ok(result) => Some(result),
@@ -153,14 +237,37 @@ impl Uploads {
 					self.last = Some(Status::Cancelled);
 				} else {
 					match result {
-						Ok(Some(source)) => {
-							self.selected = Some(source);
-							self.last = None;
+						Ok(Some(selected)) => {
+							let (sources, thumbnails): (Vec<_>, Vec<_>) =
+								selected.into_iter().unzip();
+							match self.admit(&sources) {
+								Ok(()) => {
+									if self.selected.is_empty() {
+										self.preview =
+											thumbnails.into_iter().next().flatten().map(Arc::new);
+									}
+									self.selected.extend(sources);
+									self.last = None;
+								}
+								Err(error) => self.last = Some(Status::Failed(error)),
+							}
 						}
 						Ok(None) => self.last = Some(Status::Cancelled),
 						Err(error) => self.last = Some(Status::Failed(error)),
 					}
 				}
+			}
+		}
+		if let Some(previewing) = &self.previewing {
+			match previewing.try_recv() {
+				Ok(thumbnail) => {
+					self.preview = thumbnail
+						.filter(|_| !self.selected.is_empty())
+						.map(Arc::new);
+					self.previewing = None;
+				}
+				Err(mpsc::TryRecvError::Disconnected) => self.previewing = None,
+				Err(mpsc::TryRecvError::Empty) => {}
 			}
 		}
 		if let Some(uploading) = &mut self.uploading {
@@ -191,16 +298,60 @@ impl Uploads {
 			context.request_repaint_after(std::time::Duration::from_millis(100));
 		}
 	}
+	fn admit(&self, sources: &[Source]) -> Result<(), &'static str> {
+		if sources.is_empty()
+			|| self.selected.len() + sources.len() > discord_api::upload::MAX_FILES
+		{
+			return Err("Attach up to 10 files per message");
+		}
+		if self
+			.selected
+			.iter()
+			.chain(sources)
+			.map(Source::size)
+			.sum::<u64>()
+			> discord_api::upload::MAX_TOTAL_BYTES
+		{
+			return Err("Attachments must total at most 20 MB");
+		}
+		Ok(())
+	}
+	pub fn files(&self) -> Vec<(String, u64)> {
+		self.selected
+			.iter()
+			.map(|s| (s.filename().to_owned(), s.size()))
+			.collect()
+	}
+	pub fn remove_at(&mut self, index: usize) {
+		if !self.busy() && index < self.selected.len() {
+			self.selected.remove(index);
+			if index == 0 {
+				self.preview = None;
+				self.previewing = None;
+			}
+		}
+	}
+
 	pub fn selection(&self) -> Option<(&str, u64)> {
 		self.selected
-			.as_ref()
+			.first()
 			.map(|source| (source.filename(), source.size()))
+	}
+	pub fn preview(&self) -> Option<Arc<egui::ColorImage>> {
+		self.selected.first().and(self.preview.clone())
 	}
 	pub fn busy(&self) -> bool {
 		self.choosing.is_some() || self.uploading.is_some()
 	}
 	pub fn has_unsent(&self) -> bool {
-		self.selected.is_some() || self.busy()
+		!self.selected.is_empty() || self.busy()
+	}
+	pub fn transfer_progress(&self) -> (Option<(u64, u64)>, bool) {
+		match self.last {
+			Some(Status::Uploading { sent, total }) => (Some((sent, total)), false),
+			Some(Status::Sending | Status::Finished) => (None, true),
+			_ => (None, false),
+		}
 	}
 	pub fn status(&self) -> Option<String> {
 		if let Some(choosing) = &self.choosing {
@@ -216,19 +367,21 @@ impl Uploads {
 		if self.uploading.as_ref().is_some_and(|job| job.cancelling) {
 			return Some("Cancelling upload; a message already sending may still arrive".into());
 		}
-		self.last.as_ref().map(|status| match status {
+		Some(match self.last.as_ref()? {
 			Status::Preparing => "Preparing attachment...".into(),
 			Status::Uploading { sent, total } => {
 				format!("Uploading attachment: {sent} / {total} bytes")
 			}
 			Status::Sending => "Sending attachment message...".into(),
-			Status::Finished => "Attachment message sent".into(),
+			Status::Finished => return None,
 			Status::Cancelled => "Attachment upload cancelled".into(),
 			Status::Failed(error) => (*error).into(),
 		})
 	}
 	pub fn remove(&mut self) {
-		self.selected = None;
+		self.selected.clear();
+		self.preview = None;
+		self.previewing = None;
 		self.cancel();
 	}
 	pub fn cancel(&mut self) {
@@ -240,18 +393,20 @@ impl Uploads {
 			uploading.cancel.send_replace(true);
 		}
 	}
-	pub fn take_source(&mut self, generation: u64, channel: Id) -> Option<Source> {
+	pub fn take_source(&mut self, generation: u64, channel: Id) -> Option<Vec<Source>> {
 		if self.scope != Some((generation, channel)) || self.busy() {
 			return None;
 		}
-		self.selected.take()
+		self.preview = None;
+		self.previewing = None;
+		(!self.selected.is_empty()).then(|| std::mem::take(&mut self.selected))
 	}
 	pub fn begin_upload(
 		&mut self,
 		progress: watch::Receiver<Status>,
 		cancel: watch::Sender<bool>,
 	) -> Result<(), &'static str> {
-		if self.busy() || self.selected.is_some() || self.scope.is_none() {
+		if self.busy() || !self.selected.is_empty() || self.scope.is_none() {
 			cancel.send_replace(true);
 			return Err("Attachment operation already active or no selection scope");
 		}
@@ -273,8 +428,22 @@ impl Drop for Uploads {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[test]
+	fn progress_distinguishes_streamed_bytes_from_message_confirmation() {
+		let mut uploads = Uploads::default();
+		assert_eq!(uploads.transfer_progress(), (None, false));
+		uploads.last = Some(Status::Uploading {
+			sent: 42,
+			total: 100,
+		});
+		assert_eq!(uploads.transfer_progress(), (Some((42, 100)), false));
+		uploads.last = Some(Status::Sending);
+		assert_eq!(uploads.transfer_progress(), (None, true));
+		uploads.last = Some(Status::Failed("rejected"));
+		assert_eq!(uploads.transfer_progress(), (None, false));
+	}
 	#[tokio::test]
-	async fn file_drop_is_single_scoped_selection_and_never_reads_handle_bytes() {
+	async fn file_drop_is_bounded_scoped_selection_and_never_reads_handle_bytes() {
 		struct SyntheticDrop(std::path::PathBuf);
 		impl std::fmt::Debug for SyntheticDrop {
 			fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -314,7 +483,7 @@ mod tests {
 			|path: std::path::PathBuf| -> egui::DroppedFileHandle { Arc::new(SyntheticDrop(path)) };
 		for files in [
 			vec![],
-			vec![handle(path.clone()), handle(path.clone())],
+			(0..11).map(|_| handle(path.clone())).collect(),
 			vec![handle(std::path::PathBuf::new())],
 			vec![handle("memory-only.txt".into())],
 			vec![handle(std::env::temp_dir().join("x".repeat(4097)))],
@@ -355,8 +524,12 @@ mod tests {
 		assert!(
 			uploads
 				.start_drop(1, Id(2), &runtime, &context, vec![handle(path.clone())])
-				.is_err()
+				.is_ok()
 		);
+		settle(&mut uploads, &context, Id(2)).await;
+		assert_eq!(uploads.files().len(), 2);
+		uploads.remove_at(1);
+		assert_eq!(uploads.files().len(), 1);
 		assert!(uploads.selection().is_some());
 		assert!(uploads.take_source(1, Id(3)).is_none());
 		uploads.remove();
@@ -382,7 +555,9 @@ mod tests {
 				result,
 				cancelled: cancelled.clone(),
 			}),
-			selected: None,
+			selected: vec![],
+			preview: None,
+			previewing: None,
 			uploading: None,
 			last: None,
 		};
@@ -415,6 +590,6 @@ mod tests {
 		drop(progress);
 		uploads.poll(2, Some(Id(2)), true, &context);
 		assert!(!uploads.busy());
-		assert_eq!(uploads.status().as_deref(), Some("Attachment message sent"));
+		assert_eq!(uploads.status(), None);
 	}
 }

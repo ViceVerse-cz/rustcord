@@ -24,6 +24,8 @@ pub struct Connection {
 	pub events: ReliableEvents,
 	pub typing: mpsc::Receiver<Envelope>,
 	pub terminal: watch::Receiver<Option<Failure>>,
+	pub share_activity: watch::Sender<bool>,
+	pub game_activity: watch::Receiver<crate::game_activity::Detection>,
 	typing_channel: Arc<AtomicU64>,
 	task: JoinHandle<()>,
 }
@@ -55,6 +57,8 @@ impl Connection {
 		let (send, events) = reliable_events(ctx.clone());
 		let (typing_send, typing) = mpsc::channel(8);
 		let (finished, terminal) = watch::channel(None);
+		let (share_activity, share_receive) = watch::channel(false);
+		let (game_report, game_activity) = watch::channel(Ok(None));
 		let wake = ctx.clone();
 		let typing_channel = Arc::new(AtomicU64::new(0));
 		let active_typing = typing_channel.clone();
@@ -76,13 +80,15 @@ impl Connection {
                 let emit=Arc::new(emit);
                 let (member_send,member_receive)=watch::channel(None);
                 let (voice_send,voice_receive)=mpsc::channel(8);
+				let (activity_send,activity_receive)=watch::channel(None);
+				let _activity_task=AbortTask(tokio::spawn(crate::game_activity::run(share_receive,activity_send,game_report,wake.clone(),user.clone())));
                 let dm_channels=Arc::new(Mutex::new(BTreeSet::new()));
                 let gateway_channels=dm_channels.clone();
                 let (voice_online,mut voice_availability)=watch::channel(false);
                 let gateway_api=api.clone();let gateway_emit=emit.clone();let terminal_send=finished.clone();
                 let gateway_wake=wake.clone();
                 let mut gateway_task=AbortTask(tokio::spawn(async move {
-                    let error=discord_gateway::run_with_voice(secret,gateway,member_receive,voice_receive,|event|{
+                    let error=discord_gateway::run_with_activity(secret,gateway,member_receive,voice_receive,activity_receive,|event|{
                         if let Event::Ready{user:ready_user,channels,..}=&event {
                             if ready_user.id!=user.id {return Err(Failure::InvalidCredential);}
                             *gateway_channels.lock().map_err(|_|Failure::Protocol)?=channels.iter().filter(|c|c.guild.is_none()&&c.kind==1&&c.recipients.len()==1).map(|c|c.id).collect();
@@ -106,14 +112,16 @@ impl Connection {
                 let mut writes=AbortTask(tokio::spawn(async move {
                     while let Some(command)=write_receive.recv().await {
                         let event=write_api.execute(command).await;
-                        let failure=match &event {Event::Failure(f)=>Some(*f),Event::SendResult{result:Err(f),..}=>Some(*f),Event::Reactions(client_core::reactions::Event::Written{result:Err(f),..})=>Some(*f),Event::ReadState(client_core::read_state::Event::Result{result:Err(f),..})=>Some(*f),_=>None};
+                        let failure=match &event {Event::Failure(f)=>Some(*f),Event::Edited{result:Err(f),..}|Event::Pinned{result:Err(f),..}=>Some(*f),Event::GuildFolders(Err(f))=>Some(*f),Event::JoinInvite{result:Err(f),..}=>Some(*f),Event::SendResult{result:Err(f),..}=>Some(*f),Event::UserAction(client_core::user_actions::Event::Written{result:Err(f),..})=>Some(*f),Event::Reactions(client_core::reactions::Event::Written{result:Err(f),..})=>Some(*f),Event::ReadState(client_core::read_state::Event::Result{result:Err(f),..})=>Some(*f),_=>None};
                         let error=write_emit(event).err().or(failure.filter(|f|f.ends_session()));
                         if let Some(error)=error {write_api.stop();let _=write_finished.send(Some(error));write_wake.request_repaint();break;}
                     }
                 }));
                 let mut history:Option<AbortTask>=None;
                 let mut profile:Option<AbortTask>=None;
+                let mut invite:Option<AbortTask>=None;
                 let mut search:Option<AbortTask>=None;
+                let mut gifs:Option<AbortTask>=None;
                 let mut reaction_read:Option<AbortTask>=None;
                 let mut ringing:Option<AbortTask>=None;
                 let mut upload:Option<AbortTask>=None;
@@ -140,7 +148,7 @@ impl Connection {
                             let api=api.clone();let emit=emit.clone();let finished=finished.clone();let wake=wake.clone();
                             upload=Some(AbortTask(tokio::spawn(async move {
                                 let mut updates=request.progress.subscribe();
-                                let operation=api.upload_message(request.command,request.source,request.progress,request.cancel.subscribe());
+                                let operation=api.upload_messages(request.command,request.source,request.progress,request.cancel.subscribe());
                                 tokio::pin!(operation);
                                 let mut observing=true;
                                 let event=loop {
@@ -158,6 +166,19 @@ impl Connection {
                         command=receive.recv()=>{
                             let Some(command)=command else {break;};
                             if matches!(command,Command::CancelSearch) {drop(search.take());continue;}
+                            if matches!(command,Command::CancelGifs) {drop(gifs.take());continue;}
+                            if matches!(command,Command::Gifs{..}) {
+                                drop(gifs.take());
+                                let api=api.clone();let emit=emit.clone();let finished=finished.clone();let wake=wake.clone();
+                                gifs=Some(AbortTask(tokio::spawn(async move {
+                                    let event=api.execute(command).await;
+                                    let failure=match &event {Event::Gifs{result:Err(f),..} if f.ends_session() && *f!=Failure::Capacity=>Some(*f),_=>None};
+                                    let error=emit(event).err().or(failure);
+                                    if let Some(error)=error {api.stop();let _=finished.send(Some(error));}
+                                    wake.request_repaint();
+                                })));
+                                continue;
+                            }
                             if matches!(command,Command::Search{..}|Command::Pins{..}|Command::Archives{..}) {
                                 drop(search.take());
                                 let api=api.clone();let emit=emit.clone();let finished=finished.clone();let wake=wake.clone();
@@ -224,6 +245,17 @@ impl Connection {
                                 }
                                 continue;
                             }
+                            if matches!(command, Command::Invite {..}) {
+                                drop(invite.take());
+                                let api=api.clone(); let emit=emit.clone(); let finished=finished.clone(); let wake=wake.clone();
+                                invite=Some(AbortTask(tokio::spawn(async move {
+                                    let event=api.execute(command).await;
+                                    let failure=match &event {Event::Invite{result:Err(f),..} if f.ends_session()=>Some(*f),_=>None};
+                                    if let Some(error)=emit(event).err().or(failure) {api.stop();let _=finished.send(Some(error));}
+                                    wake.request_repaint();
+                                })));
+                                continue;
+                            }
                             if matches!(command,Command::CancelProfile) {drop(profile.take());continue;}
                             if matches!(command,Command::Profile{..}) {
                                 drop(profile.take());
@@ -270,6 +302,8 @@ impl Connection {
 			events,
 			typing,
 			terminal,
+			share_activity,
+			game_activity,
 			typing_channel,
 			task,
 		}
@@ -460,6 +494,7 @@ mod tests {
 				kind: 0,
 				recipients: vec![],
 				member_list_id: None,
+				message_count: None,
 				last_message: None,
 			}),
 		}

@@ -1,5 +1,7 @@
 //! UI-neutral session entities. No filesystem or network dependencies.
 pub mod archives;
+pub mod gifs;
+pub mod guild_folders;
 pub mod permissions;
 mod reading_preferences;
 pub use reading_preferences::ReadingPreferences;
@@ -17,6 +19,7 @@ pub use mentions::*;
 mod reactions;
 pub use reactions::*;
 mod search;
+pub use gifs::*;
 pub use search::*;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{fmt, str::FromStr};
@@ -97,6 +100,16 @@ pub fn valid_avatar_hash(hash: &str) -> bool {
 	let hash = hash.strip_prefix("a_").unwrap_or(hash);
 	hash.len() == 32 && hash.bytes().all(|b| b.is_ascii_hexdigit())
 }
+#[derive(Clone)]
+pub struct InvitePreview {
+	pub guild: Id,
+	pub embed: Embed,
+}
+impl InvitePreview {
+	pub fn bytes(&self) -> usize {
+		size_of::<Self>() - size_of::<Embed>() + self.embed.bytes()
+	}
+}
 #[derive(Clone, PartialEq, Eq)]
 pub struct Guild {
 	pub emojis: Option<Vec<CustomEmoji>>,
@@ -136,6 +149,8 @@ pub struct Channel {
 	pub recipients: Vec<User>,
 	/// Unofficial service member-list identity; absent when permission metadata is missing.
 	pub member_list_id: Option<String>,
+	/// Thread reply count reported by the service; None for non-threads or unknown.
+	pub message_count: Option<u32>,
 }
 impl Channel {
 	pub fn bytes(&self) -> usize {
@@ -157,6 +172,7 @@ pub struct ChannelPatch {
 	pub parent_id: Patch<Id>,
 	pub position: Patch<i32>,
 	pub kind: Patch<u8>,
+	pub message_count: Patch<u32>,
 }
 #[derive(Clone, PartialEq, Eq)]
 pub struct Message {

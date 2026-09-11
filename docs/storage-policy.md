@@ -1,5 +1,14 @@
 # Local storage policy and audit
 
+User context actions (September 11): close-DM, block and notification-mute preferences are
+written directly to Discord through the existing authenticated transport, never a new local
+settings file. Relationship state keeps at most 4000 fixed ID/bool entries with a 128 KiB
+estimated allocation ceiling; only one fixed-size action may be pending. DM mute state reuses
+the existing bounded notification overrides. Logout clears both with other account RAM state.
+Closing a DM preserves its local draft. Accepted navigation removal uses the existing account
+history invalidation path, which can clear other cached history but preserves drafts. The
+standalone offline fixture changes synthetic RAM only and issues no service or storage writes.
+
 Current reply metadata schema is 10. It adds one constrained reply_deleted boolean to each
 bounded message row; legacy rows default to unknown (false). Only an explicit service-null
 reference on a valid same-channel reply/context-menu message establishes deletion. Nested
@@ -321,3 +330,42 @@ stream/buffers on cancellation. Pausing retains the current bounded decoded clip
 ## Screen sharing
 
 Screen/window labels, selected source identifiers, settings, raw pixels and encoded video exist only in session memory. They are not written to SQLite, diagnostics, previews or video files. Sources and video queues use the limits in [screen-sharing compatibility](discord-compatibility.md#outgoing-screen-sharing--september-11-2026). Stream credentials and DAVE identities are ephemeral and redacted; the signing key is shared with the active voice call and zeroized when its final owner drops. Native OS/driver capture surfaces are distinct from application-owned frame buffers. Synthetic PR screenshots are development evidence, excluded from runtime assets.
+
+
+### Own game activity (September 11, 2026)
+
+Sharing is off by default. The application-wide `game_activity` SQLite singleton stores
+one constrained boolean; disabling deletes the override. The independent additive table
+is created even for existing schema-10/12 databases, requires no message migration, and survives
+account logout like appearance. A failed load stays off; failed writes are visible in settings.
+Preview controls never load or save this preference.
+
+While enabled in an authenticated connection, Serein owns one standard Discord IPC endpoint
+and at most eight connected game workers. Windows uses a current-user-only pipe DACL and
+rejects remote connections; Unix uses a 0600 socket and checks peer UID. Occupied paths are
+never replaced or unlinked. Unix removes only its own device/inode on teardown; Windows
+explicitly disconnects clients, including blocked writers. No process enumeration remains.
+The handshake returns only the current user ID/name and empty legacy avatar/discriminator
+fields; no token, chat, account-read, authentication, call or microphone API is exposed.
+
+Each client frame is capped at 16 KiB before allocation. Replies assemble one temporary
+buffer capped at 16 KiB plus the eight-byte header per writing client, released after the
+write completes or is cancelled. The handshake timeout is 10 seconds,
+partial-frame and write deadlines are five seconds. Idle clients do not poll. At most one
+new client is admitted per five seconds; each client processes at most ten frames per second.
+A 16-item update queue carries activities bounded to 1,152 string bytes plus fixed fields;
+eight latest per-client activities and the Gateway current/last values have the same bound.
+The latest updated connected game wins; clearing/disconnecting it restores another active game.
+
+Each connection lazily requests public application metadata and registered assets once, using
+credential-free HTTPS with redirects/proxies disabled and ten-second request deadlines.
+A shared lookup mutex serializes requests and preserves Retry-After cooldowns across clients.
+Responses are capped at 256 KiB, asset lists at 1,024 entries with 256-byte names. These are
+session RAM only (up to eight lists), not disk caches. Missing artwork is omitted; name lookup
+failure clears that connection and reports an error. Game-supplied URLs, secrets, buttons and
+join/party actions are never forwarded. There is no activity history or telemetry.
+
+Disabling sharing cancels the listener, clients and metadata work and queues an empty Gateway
+activity; publication including clears remains subject to the existing five-second interval.
+Connection teardown cancels IPC with the authenticated session. Demo mode never binds IPC or
+looks up metadata. The saved boolean and database schema are unchanged.

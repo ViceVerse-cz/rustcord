@@ -47,7 +47,7 @@ impl State {
 		if !self.can_archive(parent, kind) {
 			return None;
 		}
-		let guild = self.channels.iter().find(|c| c.id == parent)?.guild?;
+		let guild = self.channel(parent)?.guild?;
 		if before.is_some()
 			&& !self.archives.as_ref().is_some_and(|view| {
 				view.parent == parent
@@ -140,7 +140,7 @@ impl State {
 			return None;
 		}
 		let thread = page.threads.iter().find(|c| c.id == id)?;
-		if let Some(existing) = self.channels.iter().find(|c| c.id == id) {
+		if let Some(existing) = self.channel(id) {
 			if existing.guild != thread.guild
 				|| existing.parent_id != thread.parent_id
 				|| existing.kind != thread.kind
@@ -178,7 +178,7 @@ impl State {
 	}
 
 	fn archive_thread_kind(&self, parent: Id, kind: Kind) -> Option<u8> {
-		let parent = self.channels.iter().find(|c| c.id == parent)?;
+		let parent = self.channel(parent)?;
 		Some(match kind {
 			Kind::Public if parent.kind == 5 => 10,
 			Kind::Public => 11,
@@ -204,6 +204,7 @@ mod tests {
 			recipients: vec![],
 			last_message: None,
 			member_list_id: None,
+			message_count: None,
 		}
 	}
 	fn state() -> State {
@@ -433,6 +434,7 @@ mod tests {
 							parent_id: model::Patch::Absent,
 							position: model::Patch::Absent,
 							kind: model::Patch::Absent,
+							message_count: model::Patch::Absent,
 						},
 					}
 				} else {

@@ -1,0 +1,921 @@
+//! User settings modal in Discord's layout: a sidebar of pages on the left, the selected page
+//! on the right, and a round close control with its Escape hint.
+use crate::{MessagingUi, design, icons};
+use client_core::State;
+use egui::RichText;
+
+#[derive(Default)]
+pub(super) struct Settings {
+	pub open: bool,
+	page: Page,
+	query: String,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum Page {
+	Account,
+	#[default]
+	Appearance,
+	Notifications,
+	Activity,
+	Voice,
+	Storage,
+}
+impl Page {
+	const ALL: [Self; 6] = [
+		Self::Account,
+		Self::Appearance,
+		Self::Notifications,
+		Self::Activity,
+		Self::Voice,
+		Self::Storage,
+	];
+	const USER: [Self; 1] = [Self::Account];
+	const APP: [Self; 5] = [
+		Self::Appearance,
+		Self::Notifications,
+		Self::Activity,
+		Self::Voice,
+		Self::Storage,
+	];
+	fn label(self) -> &'static str {
+		match self {
+			Self::Account => "My Account",
+			Self::Appearance => "Appearance",
+			Self::Notifications => "Notifications",
+			Self::Activity => "Game Activity",
+			Self::Voice => "Voice & Audio",
+			Self::Storage => "Data & Privacy",
+		}
+	}
+	fn description(self) -> &'static str {
+		match self {
+			Self::Account => "The Discord account signed in on this device.",
+			Self::Appearance => "Theme, colour preset, zoom and layout.",
+			Self::Notifications => "Desktop alerts for this session.",
+			Self::Activity => "Show others what you are playing.",
+			Self::Voice => "Microphone, speakers and voice processing.",
+			Self::Storage => "What Serein keeps on this device.",
+		}
+	}
+	fn matches(self, query: &str) -> bool {
+		let keywords = match self {
+			Self::Account => "my account profile logout",
+			Self::Appearance => {
+				"appearance theme dark light system zoom reading layout sidebar people reset colour color preset animate animated gifs autoplay hide image links"
+			}
+			Self::Notifications => "notifications desktop system alerts",
+			Self::Activity => "game activity playing osu status presence sharing",
+			Self::Voice => {
+				"voice audio microphone speakers devices volume gain noise suppression push to talk"
+			}
+			Self::Storage => "data privacy local storage clear cache drafts credentials",
+		};
+		keywords.contains(query)
+	}
+}
+
+impl MessagingUi {
+	/// Fixture-only entry point for the native offline settings preview.
+	pub fn preview_settings(&mut self, page: &str) {
+		self.settings.open = true;
+		if let Some(page) = Page::ALL
+			.into_iter()
+			.find(|candidate| candidate.label().to_lowercase().contains(page))
+		{
+			self.settings.page = page;
+		}
+	}
+	pub(super) fn show_settings(&mut self, ctx: &egui::Context, state: &State) {
+		let colors = design::palette_for(ctx);
+		let size = ctx.content_rect().size() - egui::vec2(32.0, 40.0);
+		let width = size.x.clamp(280.0, 1100.0);
+		let height = size.y.clamp(240.0, 820.0);
+		let wide = width >= 620.0;
+		let modal = egui::Modal::new(egui::Id::unique("user-settings"))
+			.backdrop_color(egui::Color32::from_black_alpha(180))
+			.frame(
+				egui::Frame::new()
+					.fill(colors.chat.to_opaque())
+					.corner_radius(12)
+					.stroke(egui::Stroke::new(1.0, colors.border)),
+			)
+			.show(ctx, |ui| {
+				ui.set_width(width);
+				ui.set_height(height);
+				if wide {
+					egui::Panel::left("settings-navigation")
+						.exact_size(232.0)
+						.resizable(false)
+						.frame(
+							egui::Frame::new()
+								.fill(colors.sidebar.to_opaque())
+								.corner_radius(egui::CornerRadius {
+									nw: 12,
+									sw: 12,
+									ne: 0,
+									se: 0,
+								})
+								.inner_margin(egui::Margin {
+									left: 12,
+									right: 8,
+									top: 20,
+									bottom: 16,
+								}),
+						)
+						.show(ui, |ui| self.settings_navigation(ui, state));
+				}
+				egui::CentralPanel::default()
+					.frame(egui::Frame::new().inner_margin(egui::Margin {
+						left: if wide { 40 } else { 20 },
+						right: 20,
+						top: 24,
+						bottom: 24,
+					}))
+					.show(ui, |ui| {
+						ui.horizontal_top(|ui| {
+							ui.vertical(|ui| {
+								ui.spacing_mut().item_spacing.y = 2.0;
+								ui.label(
+									design::semibold(ui, self.settings.page.label(), 20.0)
+										.color(colors.text_strong),
+								);
+								ui.label(
+									RichText::new(self.settings.page.description())
+										.size(13.0)
+										.color(colors.muted),
+								);
+							});
+							ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+								if close_control(ui).clicked() {
+									self.settings.open = false;
+								}
+							});
+						});
+						if !wide {
+							ui.add_space(8.0);
+							self.settings_search(ui);
+							egui::ComboBox::from_id_salt("settings-page")
+								.selected_text(self.settings.page.label())
+								.width(ui.available_width())
+								.show_ui(ui, |ui| {
+									for page in Page::ALL {
+										if page.matches(&self.settings.query.to_lowercase()) {
+											ui.selectable_value(
+												&mut self.settings.page,
+												page,
+												page.label(),
+											);
+										}
+									}
+								});
+						}
+						ui.add_space(16.0);
+						egui::ScrollArea::vertical()
+							.id_salt(("settings-content", self.settings.page as u8))
+							.auto_shrink([false, false])
+							.show(ui, |ui| {
+								ui.set_width(ui.available_width().min(720.0));
+								ui.spacing_mut().item_spacing.y = 12.0;
+								let query = self.settings.query.to_lowercase();
+								if !Page::ALL.into_iter().any(|p| p.matches(&query)) {
+									ui.label(
+										design::semibold(ui, "No settings found", 16.0)
+											.color(colors.text_strong),
+									);
+									ui.weak("Try theme, notifications, voice, or cache.");
+									return;
+								}
+								match self.settings.page {
+									Page::Account => self.account_page(ui, state),
+									Page::Appearance => {
+										self.appearance_settings(ui);
+										ui.add_space(8.0);
+										self.reading_settings(ui, state.demo);
+									}
+									Page::Notifications => self.notification_settings(ui, state),
+									Page::Activity => self.activity_settings(ui, state),
+									Page::Voice => {
+										design::card(ui, |ui| {
+											self.voice_settings_menu(
+												ui,
+												state.demo,
+												state.voice.active.is_some(),
+											);
+										});
+									}
+									Page::Storage => self.storage_page(ui, state),
+								}
+								ui.add_space(24.0);
+							});
+					});
+			});
+		if modal.should_close() {
+			self.settings.open = false;
+		}
+	}
+
+	fn settings_navigation(&mut self, ui: &mut egui::Ui, state: &State) {
+		let colors = design::palette(ui);
+		egui::ScrollArea::vertical()
+			.id_salt("settings-navigation-scroll")
+			.auto_shrink([false, false])
+			.show(ui, |ui| {
+				ui.spacing_mut().item_spacing.y = 2.0;
+				self.settings_search(ui);
+				ui.add_space(12.0);
+				let query = self.settings.query.to_lowercase();
+				for (heading, pages) in [
+					("User settings", &Page::USER[..]),
+					("App settings", &Page::APP[..]),
+				] {
+					let visible: Vec<Page> = pages
+						.iter()
+						.copied()
+						.filter(|page| page.matches(&query))
+						.collect();
+					if visible.is_empty() {
+						continue;
+					}
+					ui.add_space(6.0);
+					ui.add(egui::Label::new(design::eyebrow(ui, heading, colors.muted)));
+					ui.add_space(2.0);
+					for page in visible {
+						if nav_item(ui, page.label(), self.settings.page == page).clicked() {
+							self.settings.page = page;
+						}
+					}
+				}
+				ui.add_space(8.0);
+				ui.separator();
+				ui.add_space(4.0);
+				self.settings_logout(ui, state.demo);
+				ui.add_space(12.0);
+				ui.label(
+					RichText::new(format!("Serein {}", self.build.version))
+						.size(12.0)
+						.color(colors.muted),
+				);
+				ui.label(
+					RichText::new("Unofficial · not endorsed by Discord")
+						.size(11.0)
+						.color(colors.muted),
+				);
+			});
+	}
+
+	fn settings_search(&mut self, ui: &mut egui::Ui) {
+		let colors = design::palette(ui);
+		egui::Frame::new()
+			.fill(colors.raised)
+			.corner_radius(6)
+			.inner_margin(egui::Margin::symmetric(8, 4))
+			.show(ui, |ui| {
+				ui.horizontal(|ui| {
+					ui.spacing_mut().item_spacing.x = 6.0;
+					let response = ui.add(
+						egui::TextEdit::singleline(&mut self.settings.query)
+							.hint_text("Search")
+							.char_limit(64)
+							.frame(egui::Frame::NONE)
+							.desired_width(ui.available_width() - 24.0),
+					);
+					icons::inline(ui, icons::Icon::Search, 16.0, colors.muted);
+					if response.changed() {
+						let query = self.settings.query.to_lowercase();
+						if !self.settings.page.matches(&query)
+							&& let Some(page) = Page::ALL.into_iter().find(|p| p.matches(&query))
+						{
+							self.settings.page = page;
+						}
+					}
+				});
+			});
+	}
+
+	fn settings_logout(&mut self, ui: &mut egui::Ui, demo: bool) {
+		let colors = design::palette(ui);
+		let label = if demo { "Exit preview" } else { "Log out" };
+		let (rect, response) =
+			ui.allocate_exact_size(egui::vec2(ui.available_width(), 32.0), egui::Sense::click());
+		response.widget_info(|| {
+			egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+		});
+		if response.hovered() || response.has_focus() {
+			ui.painter().rect_filled(rect, 4, colors.hover);
+		}
+		ui.painter().text(
+			egui::pos2(rect.left() + 10.0, rect.center().y),
+			egui::Align2::LEFT_CENTER,
+			label,
+			egui::FontId::new(15.0, design::medium_family(ui.ctx())),
+			colors.danger,
+		);
+		icons::paint(
+			ui.painter(),
+			icons::Icon::External,
+			egui::Rect::from_center_size(
+				egui::pos2(rect.right() - 18.0, rect.center().y),
+				egui::Vec2::splat(16.0),
+			),
+			colors.danger,
+		);
+		if response.clicked() {
+			self.logout_requested = true;
+			self.settings.open = false;
+		}
+	}
+
+	fn account_page(&mut self, ui: &mut egui::Ui, state: &State) {
+		let colors = design::palette(ui);
+		let name = state
+			.user
+			.as_ref()
+			.map_or("Your account", |u| u.name.as_str())
+			.to_owned();
+		egui::Frame::new()
+			.fill(colors.raised)
+			.stroke(egui::Stroke::new(1.0, colors.border))
+			.corner_radius(8)
+			.show(ui, |ui| {
+				ui.set_width(ui.available_width());
+				ui.spacing_mut().item_spacing.y = 0.0;
+				let (banner, _) = ui.allocate_exact_size(
+					egui::vec2(ui.available_width(), 96.0),
+					egui::Sense::hover(),
+				);
+				ui.painter().rect_filled(
+					banner,
+					egui::CornerRadius {
+						nw: 8,
+						ne: 8,
+						sw: 0,
+						se: 0,
+					},
+					colors.accent,
+				);
+				egui::Frame::new()
+					.inner_margin(egui::Margin {
+						left: 16,
+						right: 16,
+						top: 12,
+						bottom: 16,
+					})
+					.show(ui, |ui| {
+						ui.set_width(ui.available_width());
+						ui.horizontal(|ui| {
+							ui.add_space(96.0);
+							ui.vertical(|ui| {
+								ui.spacing_mut().item_spacing.y = 2.0;
+								ui.add(
+									egui::Label::new(
+										design::semibold(ui, name.clone(), 20.0)
+											.color(colors.text_strong),
+									)
+									.truncate(),
+								);
+								ui.label(
+									RichText::new(if state.demo {
+										"Offline preview · synthetic account"
+									} else {
+										"Signed in with your Discord account"
+									})
+									.size(13.0)
+									.color(colors.muted),
+								);
+							});
+						});
+						ui.add_space(16.0);
+						egui::Frame::new()
+							.fill(colors.chat)
+							.corner_radius(8)
+							.inner_margin(egui::Margin::symmetric(16, 12))
+							.show(ui, |ui| {
+								ui.set_width(ui.available_width());
+								ui.spacing_mut().item_spacing.y = 10.0;
+								account_row(ui, "Display name", &name);
+								ui.separator();
+								account_row(
+									ui,
+									"Profile, email, password and security",
+									"Managed in Discord",
+								);
+							});
+					});
+				// Avatar overlapping the banner edge, ringed by the card surface.
+				let avatar = egui::Rect::from_min_size(
+					banner.left_bottom() + egui::vec2(16.0, -40.0),
+					egui::Vec2::splat(80.0),
+				);
+				ui.painter()
+					.circle_filled(avatar.center(), 44.0, colors.raised);
+				ui.scope_builder(egui::UiBuilder::new().max_rect(avatar), |ui| {
+					if let Some(user) = &state.user {
+						self.avatars.show(ui, user, 80.0, state.demo);
+					} else {
+						design::avatar(ui, &name, 80.0);
+					}
+				});
+			});
+		ui.add_space(8.0);
+		ui.label(design::eyebrow(ui, "Session", colors.muted));
+		design::card(ui, |ui| {
+			ui.horizontal(|ui| {
+				ui.vertical(|ui| {
+					ui.set_width((ui.available_width() - 140.0).max(120.0));
+					ui.spacing_mut().item_spacing.y = 2.0;
+					ui.label(
+						design::medium(
+							ui,
+							if state.demo {
+								"Exit preview"
+							} else {
+								"Log out"
+							},
+							15.0,
+						)
+						.color(colors.text_strong),
+					);
+					ui.label(
+						RichText::new(if state.demo {
+							"Closes the offline fixture. Nothing is stored for the preview."
+						} else {
+							"Removes the saved login and clears this account's local cache and drafts."
+						})
+						.size(13.0)
+						.color(colors.muted),
+					);
+				});
+				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+					if ui
+						.add(
+							egui::Button::new(
+								design::medium(
+									ui,
+									if state.demo {
+										"Exit preview"
+									} else {
+										"Log out"
+									},
+									14.0,
+								)
+								.color(egui::Color32::WHITE),
+							)
+							.fill(colors.danger)
+							.corner_radius(6),
+						)
+						.clicked()
+					{
+						self.logout_requested = true;
+						self.settings.open = false;
+					}
+				});
+			});
+		});
+	}
+
+	fn appearance_settings(&mut self, ui: &mut egui::Ui) {
+		let colors = design::palette(ui);
+		ui.label(design::eyebrow(ui, "Theme", colors.muted));
+		theme_preference_cards(ui);
+		ui.add_space(8.0);
+		ui.label(design::eyebrow(ui, "Colour preset", colors.muted));
+		let current = design::variant();
+		design::card(ui, |ui| {
+			ui.horizontal_wrapped(|ui| {
+				ui.spacing_mut().item_spacing = egui::vec2(12.0, 10.0);
+				for variant in design::Variant::ALL {
+					let swatch = design::colors(ui.visuals().dark_mode, variant);
+					let selected = variant == current;
+					let (rect, response) =
+						ui.allocate_exact_size(egui::vec2(76.0, 70.0), egui::Sense::click());
+					response.widget_info(|| {
+						egui::WidgetInfo::selected(
+							egui::WidgetType::RadioButton,
+							true,
+							selected,
+							variant.label(),
+						)
+					});
+					let painter = ui.painter();
+					if response.hovered() || response.has_focus() {
+						painter.rect_filled(rect, 6, colors.hover);
+					}
+					let center = egui::pos2(rect.center().x, rect.top() + 24.0);
+					match swatch.backdrop {
+						Some([top, bottom]) => {
+							painter.circle_filled(center, 20.0, bottom);
+							painter.circle_filled(center - egui::vec2(5.0, 5.0), 11.0, top);
+						}
+						None => {
+							painter.circle_filled(center, 20.0, swatch.chat);
+							painter.circle_filled(center + egui::vec2(5.0, 5.0), 9.0, swatch.base);
+						}
+					}
+					painter.circle_stroke(
+						center,
+						20.0,
+						egui::Stroke::new(
+							if selected { 2.5 } else { 1.0 },
+							if selected {
+								colors.accent
+							} else {
+								colors.border
+							},
+						),
+					);
+					if selected {
+						painter.circle_filled(center, 10.0, colors.accent);
+						icons::paint(
+							painter,
+							icons::Icon::Check,
+							egui::Rect::from_center_size(center, egui::Vec2::splat(12.0)),
+							colors.accent_text,
+						);
+					}
+					painter.text(
+						egui::pos2(rect.center().x, rect.bottom() - 10.0),
+						egui::Align2::CENTER_CENTER,
+						variant.label(),
+						egui::FontId::proportional(11.0),
+						if selected {
+							colors.text_strong
+						} else {
+							colors.muted
+						},
+					);
+					if response.clicked() && !selected {
+						design::set_variant(variant);
+						design::apply(ui.ctx());
+						self.theme_variant_changed = Some(variant);
+					}
+				}
+			});
+			ui.add_space(4.0);
+			ui.label(
+				RichText::new(format!(
+					"{} · saved with your appearance. Gradient presets always use dark text.",
+					current.label()
+				))
+				.size(12.0)
+				.color(colors.muted),
+			);
+		});
+		ui.add_space(8.0);
+		ui.label(design::eyebrow(ui, "Channel list", colors.muted));
+		design::card(ui, |ui| {
+			design::switch(
+				ui,
+				"Show hidden channels",
+				Some("Show channels you cannot currently access."),
+				&mut self.show_hidden_channels,
+			);
+		});
+	}
+
+	fn activity_settings(&mut self, ui: &mut egui::Ui, state: &State) {
+		let colors = design::palette(ui);
+		design::card(ui, |ui| {
+			design::switch(
+				ui,
+				"Share game activity",
+				Some("Display your current game as activity on Discord."),
+				&mut self.share_game_activity,
+			);
+			ui.separator();
+			let game = self
+				.own_game
+				.as_deref()
+				.filter(|_| self.share_game_activity);
+			ui.label(
+				design::medium(
+					ui,
+					game.map_or_else(
+						|| {
+							if self.share_game_activity {
+								"Waiting for a game to connect".into()
+							} else {
+								"Activity sharing is off".into()
+							}
+						},
+						str::to_owned,
+					),
+					16.0,
+				)
+				.color(colors.text_strong),
+			);
+			ui.label(
+				egui::RichText::new(if state.demo {
+					"Offline preview: synthetic activity, never shared or saved."
+				} else {
+					self.game_activity_status
+				})
+				.size(12.0)
+				.color(colors.muted),
+			);
+		});
+	}
+
+	fn notification_settings(&mut self, ui: &mut egui::Ui, state: &State) {
+		let colors = design::palette(ui);
+		ui.label(design::eyebrow(ui, "Desktop", colors.muted));
+		design::card(ui, |ui| {
+			ui.add_enabled_ui(!state.demo || self.notification_test_available, |ui| {
+				design::switch(
+					ui,
+					"Enable Desktop Notifications",
+					Some("Show system notifications for new activity while Serein is open."),
+					&mut self.notifications_enabled,
+				);
+			});
+			ui.separator();
+			ui.label(
+				RichText::new(
+					"Message previews are hidden. OS notification history may remain after logout. Applies to this session; turn it on again after restarting Serein.",
+				)
+				.size(12.0)
+				.color(colors.muted),
+			);
+			ui.label(
+				RichText::new(if state.demo && !self.notification_test_available {
+					"Offline preview never sends system notifications."
+				} else {
+					self.notification_status
+				})
+				.size(12.0)
+				.color(colors.muted),
+			);
+			if self.notification_test_available
+				&& self.notifications_enabled
+				&& ui.button("Send generic test notification").clicked()
+			{
+				self.notification_test_requested = true;
+			}
+			if !state.demo && !state.notification_preferences_known() {
+				ui.label(
+					RichText::new("Alerts wait for your Discord notification preferences.")
+						.size(12.0)
+						.color(colors.warning),
+				);
+			}
+		});
+	}
+
+	fn storage_page(&mut self, ui: &mut egui::Ui, state: &State) {
+		let colors = design::palette(ui);
+		ui.label(design::eyebrow(ui, "Local storage", colors.muted));
+		design::card(ui, |ui| {
+			ui.label(
+				"Messages and drafts are cached on this device inside bounded, account-isolated files. Local cache data is not encrypted by Serein; saved login tokens use the OS credential store.",
+			);
+			ui.label(
+				RichText::new(if state.demo {
+					"Preview uses session memory only."
+				} else {
+					self.storage_status
+				})
+				.size(12.0)
+				.color(colors.muted),
+			);
+			ui.separator();
+			ui.horizontal(|ui| {
+				ui.vertical(|ui| {
+					ui.set_width((ui.available_width() - 140.0).max(120.0));
+					ui.spacing_mut().item_spacing.y = 2.0;
+					ui.label(design::medium(ui, "Clear cache", 15.0).color(colors.text_strong));
+					ui.label(
+						RichText::new(
+							"Removes cached messages and media. Drafts and your login stay.",
+						)
+						.size(13.0)
+						.color(colors.muted),
+					);
+				});
+				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+					if ui
+						.add_enabled(
+							!state.demo,
+							egui::Button::new(design::medium(ui, "Clear cache", 14.0))
+								.stroke(egui::Stroke::new(1.0, colors.border))
+								.corner_radius(6),
+						)
+						.clicked()
+					{
+						self.clear_cache_requested = true;
+					}
+				});
+			});
+		});
+		ui.add_space(8.0);
+		ui.label(design::eyebrow(ui, "Your privacy", colors.muted));
+		design::card(ui, |ui| {
+			ui.label(
+				"Serein does not collect telemetry or upload diagnostics. Discord retains service-side data according to its own policies.",
+			);
+		});
+	}
+}
+
+fn account_row(ui: &mut egui::Ui, label: &str, value: &str) {
+	let colors = design::palette(ui);
+	ui.horizontal(|ui| {
+		ui.vertical(|ui| {
+			ui.set_width((ui.available_width() - 160.0).max(100.0));
+			ui.spacing_mut().item_spacing.y = 2.0;
+			ui.label(design::eyebrow(ui, label, colors.muted));
+			ui.add(
+				egui::Label::new(RichText::new(value).size(15.0).color(colors.text_strong))
+					.truncate(),
+			);
+		});
+	});
+}
+
+/// Sidebar entry in the settings modal; the selected page uses the strong surface and text.
+fn nav_item(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
+	let colors = design::palette(ui);
+	let (rect, response) =
+		ui.allocate_exact_size(egui::vec2(ui.available_width(), 32.0), egui::Sense::click());
+	response.widget_info(|| {
+		egui::WidgetInfo::selected(
+			egui::WidgetType::SelectableLabel,
+			ui.is_enabled(),
+			selected,
+			label,
+		)
+	});
+	let hot = response.hovered() || response.has_focus();
+	if selected {
+		ui.painter().rect_filled(rect, 4, colors.selected);
+	} else if hot {
+		ui.painter().rect_filled(rect, 4, colors.hover);
+	}
+	ui.painter().text(
+		egui::pos2(rect.left() + 10.0, rect.center().y),
+		egui::Align2::LEFT_CENTER,
+		label,
+		egui::FontId::new(15.0, design::medium_family(ui.ctx())),
+		if selected {
+			colors.text_strong
+		} else if hot {
+			colors.text
+		} else {
+			colors.muted
+		},
+	);
+	response
+}
+
+/// Discord's round close button with the "ESC" hint underneath.
+fn close_control(ui: &mut egui::Ui) -> egui::Response {
+	let colors = design::palette(ui);
+	let (rect, response) = ui.allocate_exact_size(egui::vec2(40.0, 56.0), egui::Sense::click());
+	response.widget_info(|| {
+		egui::WidgetInfo::labeled(
+			egui::WidgetType::Button,
+			ui.is_enabled(),
+			"Close settings (Esc)",
+		)
+	});
+	let hot = response.hovered() || response.has_focus();
+	let center = egui::pos2(rect.center().x, rect.top() + 18.0);
+	ui.painter().circle(
+		center,
+		18.0,
+		if hot {
+			colors.hover
+		} else {
+			egui::Color32::TRANSPARENT
+		},
+		egui::Stroke::new(2.0, if hot { colors.text } else { colors.muted }),
+	);
+	icons::paint(
+		ui.painter(),
+		icons::Icon::Close,
+		egui::Rect::from_center_size(center, egui::Vec2::splat(16.0)),
+		if hot {
+			colors.text_strong
+		} else {
+			colors.muted
+		},
+	);
+	ui.painter().text(
+		egui::pos2(rect.center().x, rect.bottom() - 6.0),
+		egui::Align2::CENTER_CENTER,
+		"ESC",
+		egui::FontId::new(11.0, design::semibold_family(ui.ctx())),
+		colors.muted,
+	);
+	response.on_hover_text("Close settings (Esc)")
+}
+
+/// Dark, light or system cards with a miniature of each palette and a radio marker.
+fn theme_preference_cards(ui: &mut egui::Ui) {
+	let colors = design::palette(ui);
+	let current = ui.ctx().options(|options| options.theme_preference);
+	let mut chosen = None;
+	ui.horizontal(|ui| {
+		ui.spacing_mut().item_spacing.x = 10.0;
+		let width = ((ui.available_width() - 20.0) / 3.0).clamp(88.0, 240.0);
+		for (preference, label) in [
+			(egui::ThemePreference::Dark, "Dark"),
+			(egui::ThemePreference::Light, "Light"),
+			(egui::ThemePreference::System, "Sync with system"),
+		] {
+			let selected = current == preference;
+			let (rect, response) =
+				ui.allocate_exact_size(egui::vec2(width, 76.0), egui::Sense::click());
+			response.widget_info(|| {
+				egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, selected, label)
+			});
+			let painter = ui.painter();
+			painter.rect(
+				rect,
+				8,
+				if response.hovered() {
+					colors.hover
+				} else {
+					colors.raised
+				},
+				egui::Stroke::new(
+					if selected { 2.0 } else { 1.0 },
+					if selected {
+						colors.accent
+					} else {
+						colors.border
+					},
+				),
+				egui::StrokeKind::Inside,
+			);
+			let swatch = egui::Rect::from_min_size(
+				rect.min + egui::vec2(12.0, 12.0),
+				egui::vec2(52.0, 34.0),
+			);
+			let variant = design::variant();
+			let (left, right) = match preference {
+				egui::ThemePreference::Dark => {
+					let p = design::colors(true, variant);
+					(p.sidebar.to_opaque(), p.chat.to_opaque())
+				}
+				egui::ThemePreference::Light => {
+					let p = design::colors(false, variant);
+					(p.sidebar.to_opaque(), p.chat.to_opaque())
+				}
+				egui::ThemePreference::System => (
+					design::colors(true, variant).chat.to_opaque(),
+					design::colors(false, variant).chat.to_opaque(),
+				),
+			};
+			painter.rect_filled(swatch, 6, right);
+			painter.rect_filled(
+				swatch.with_max_x(swatch.left() + swatch.width() * 0.42),
+				egui::CornerRadius {
+					nw: 6,
+					sw: 6,
+					ne: 0,
+					se: 0,
+				},
+				left,
+			);
+			painter.rect_stroke(
+				swatch,
+				6,
+				egui::Stroke::new(1.0, colors.border),
+				egui::StrokeKind::Inside,
+			);
+			let radio = egui::pos2(rect.right() - 20.0, rect.top() + 20.0);
+			painter.circle_stroke(
+				radio,
+				8.0,
+				egui::Stroke::new(
+					2.0,
+					if selected {
+						colors.accent
+					} else {
+						colors.muted
+					},
+				),
+			);
+			if selected {
+				painter.circle_filled(radio, 4.5, colors.accent);
+			}
+			painter.text(
+				egui::pos2(rect.left() + 12.0, rect.bottom() - 14.0),
+				egui::Align2::LEFT_CENTER,
+				label,
+				egui::FontId::new(14.0, design::medium_family(ui.ctx())),
+				if selected {
+					colors.text_strong
+				} else {
+					colors.text
+				},
+			);
+			if response.clicked() {
+				chosen = Some(preference);
+			}
+		}
+	});
+	if let Some(preference) = chosen {
+		ui.ctx().set_theme(preference);
+	}
+}

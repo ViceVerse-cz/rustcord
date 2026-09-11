@@ -58,12 +58,72 @@ ICONS = [
     ("chat-centered-text", "fill/chat-centered-text-fill.svg", "cc2c02e50a62aa98aae8634d518b2cc311413765ddfddae5908bf9168113d0a7"),
     ("paper-plane-right", "fill/paper-plane-right-fill.svg", "a8e6f3a92755f1bc79bcfd691e794709bec6b13d68b948adc1eb035a2ddd8fff"),
     ("arrow-square-out", "bold/arrow-square-out-bold.svg", "68348bacc7f539b8d73de92d7c120f22e424b4364374ccab01719ada8c8a12aa"),
+    ("github-logo", "fill/github-logo-fill.svg", "35b2036490005bcb95a68d07d43d441ae585c6c6dde0e902bb3daf0ddbc615b9"),
+    ("twitch-logo", "fill/twitch-logo-fill.svg", "df5adaa427994af42c961715d6e75f496b1832606a68cbd8090d09c25a4e8361"),
+    ("steam-logo", "fill/steam-logo-fill.svg", "1715fdfe47e32c6cbff76fd80dcb47c1e5a704b2067412dd64dff20b8d802a11"),
+    ("spotify-logo", "fill/spotify-logo-fill.svg", "50360bee2998f48367780b6f1637d208169acb0d3384e27e145f29b456b73bd4"),
+    ("youtube-logo", "fill/youtube-logo-fill.svg", "fce097e65d0df0cb2bb84cd282bb6cc08ccb47ec18d41b7c22870830257065be"),
+    ("x-logo", "fill/x-logo-fill.svg", "b760dcebe932bafc69784799231eb8ce988dc33fa5d68d20e706508b24264526"),
+    ("reddit-logo", "fill/reddit-logo-fill.svg", "f6e1c29f724ad06cf8ab8c41e26a72a482e6187724ac7cc91fe880b9c499873d"),
+    ("facebook-logo", "fill/facebook-logo-fill.svg", "4ef00877d0348c4db3eb93d01d36d9b82528ca2d635d0e3a5e51515299cf99f7"),
+    ("instagram-logo", "fill/instagram-logo-fill.svg", "24444c671b0c50580b39138453762225d4d53b7d04c978244b8027a84c719746"),
+    ("tiktok-logo", "fill/tiktok-logo-fill.svg", "aafb59c3c1902035736bc955e1b4485e46fd8b633bb2cd2e046937cc1b26c5cb"),
+    ("paypal-logo", "fill/paypal-logo-fill.svg", "b49cb17698ca5c2d807577413f992b9d0050b2a94ca4c812c6e6441a32f9f820"),
+    ("amazon-logo", "fill/amazon-logo-fill.svg", "96d475f1eaed1733e9c6dcae74b52900be7e399b128917a8f50d89d773041491"),
+    ("mastodon-logo", "fill/mastodon-logo-fill.svg", "f9d1bf489b16a34763aa7f8e8de62f72812cb9888fd92bbc47eeac33d1426122"),
+    ("skype-logo", "fill/skype-logo-fill.svg", "bd264055d7317fb0cfe3a39ae17028d2a5447dc3a204a999c5e5fbebed423e28"),
+    ("game-controller", "fill/game-controller-fill.svg", "9dcb7af7b4854bb2da15ab1852292428c4d95314b06cd25aa5f45f21b3134884"),
+    ("television", "fill/television-fill.svg", "47da225e96c028e8d8fb02db79798082f8f2dfaad22dd9c2ad576f982f4a0de4"),
+    ("globe", "bold/globe-bold.svg", "b1dff2302e56cfc39cb704bb109486ee53d29a9a65f5a02f50e258259fbf743e"),
+    ("link", "bold/link-bold.svg", "087d63d78d4a37d570853cb62e688323759cda2081b22455674544f87adc3444"),
+    ("copy", "bold/copy-bold.svg", "204e84365593c418c71d9ce0674be3dd3e5ff13d0dc13e1f728249ef9571bf9e"),
+    ("seal-check", "fill/seal-check-fill.svg", "27702a62622ac4156d2a18b10fc7c526b3b2b9f782741e2cb07aea6964d71132"),
+    ("calendar-blank", "fill/calendar-blank-fill.svg", "405596825bf3705baa7d289ed1242106fded80e34967927549a0413f4303a0ac"),
+    ("discord-logo", "fill/discord-logo-fill.svg", "2a7b2d1a0c1d8bc53a54cf8d9c9b70c890455d90d4260b62e79ff640a7e5a610"),
+    ("file", "fill/file-fill.svg", "d6fe00691e45b5e9b87ccc5a8fc9022485935408167ab1234817915df4fd1ca4"),
+    ("file-image", "fill/file-image-fill.svg", "0266eb983ed5cec9152d76691152123b92b2cb84d8c139c37793d0870df3f601"),
+    ("file-pdf", "fill/file-pdf-fill.svg", "12622b293b9a1efa1f56969ca74ab88085d388c4be926f81cfcb49406a8da05d"),
+    ("file-zip", "fill/file-zip-fill.svg", "3b4355954bef19b2572639dcb619e0e81513118dd76c3c2fc8bab6d9a23c9032"),
+    ("file-text", "fill/file-text-fill.svg", "8c6f36452a441d39886ad7929778c2a90ea66cca519490da4918e7da7bade242"),
+    ("file-code", "fill/file-code-fill.svg", "127044e7395681d5306c7553cc2287e16c63f9d4578f4f6fe7710f277e5b7624"),
+    ("file-audio", "fill/file-audio-fill.svg", "835c6bfde42e68d716db3dd4db0e02843f6a7bd704a4377287a4b022d80ace7a"),
+    ("file-video", "fill/file-video-fill.svg", "2940d83bf3560f389d6a826ca639741a9098d5bfe8910ea371fdc4c83790b827"),
+    ("trash", "fill/trash-fill.svg", "f78767cc15e1a7d6eea49c4efb515cf6fceaf07fbc421e8ce18373d07c14b673"),
+    ("arrow-down", "bold/arrow-down-bold.svg", "193222b87a796f1c56336f51cb041cfd2a6c899ae0a027248a63fc183758a364"),
+    ("arrow-up", "bold/arrow-up-bold.svg", "87dade5b87b48190dae13370375e2d84f6c22548eebac93ff2f46d091882fb78"),
+    ("check", "bold/check-bold.svg", "d0ca4e324ff5bb3a1a3bacb9f7580359b8e03cc6862a614d5ed14458db64bedf"),
+    ("gif", "bold/gif-bold.svg", "cbdd66cdfbe9f084d2ecc7e7a27686830b5230cc0a18f9765fb9c147ac8e0647"),
+    ("star", "bold/star-bold.svg", "e456b195ce0f28235d63c0612b835fd120c747a8132d2be984863e2125674240"),
+    ("star-fill", "fill/star-fill.svg", "42451b34121b695bdaab88fdcf3eacec9cda9ac36d222349609426dcb9f04b48"),
+    ("fire", "fill/fire-fill.svg", "512355fb2a156f0c39485a28bc6f81cf1df3de35faed9c5ad62c30cec5d8d63c"),
+    ("arrow-left", "bold/arrow-left-bold.svg", "7588792d7824e7c5337bca7b5de96ad0685ddea0a5732dfb62701d163a076563"),
+    ("folder", "fill/folder-fill.svg", "2217bd2f730884d7a8aec3e3358eb7500448b0e3d86f33a63142f40f0622bfe9"),
+    ("folder-open", "fill/folder-open-fill.svg", "f9e57c3d40ab536915f8302a4390405f5660ee7b7275a3f80b384d977c59373e"),
 ]
 LICENSE_SHA256 = "ddbe6082ec3cf979db47e5af549d2849c5d6182b3e005ef91ce1dbb9eb122f11"
 
+# Brand marks Phosphor does not ship come from Simple Icons (CC0 1.0). Their 24-unit glyphs
+# fill the whole view box, so they are drawn at Phosphor's visual size inside the cell.
+SIMPLE_VERSION = "16.30.0"  # simple-icons on npm, CC0-1.0
+SIMPLE_BASE = f"https://cdn.jsdelivr.net/npm/simple-icons@{SIMPLE_VERSION}"
+SIMPLE_ICONS = [
+    ("playstation", "icons/playstation.svg", "b68b4d7b63443759b9c4d77a5501c5758eeae06a6d594d278d5eb6cb4d3dbbe4"),
+    ("battle-net", "icons/battledotnet.svg", "78206c9c5e7fd24803cd50cd5c71c3bb1b02def42ca4f5d186e318eb9e247b7e"),
+    ("epic-games", "icons/epicgames.svg", "a19b1eb5a46edc11a7dc7f1ce6fa1701ea4e4cf451feec88441c523f4b50cde3"),
+    ("league-of-legends", "icons/leagueoflegends.svg", "b653d9c5733c71613fa0367c09c9d419df2f0e7ef91cbeab6b93a2e20d5f223b"),
+    ("riot-games", "icons/riotgames.svg", "b80c5880b88b8e489b2da7753bed612b3ce6b2948a3f995ad5d31050f443b520"),
+    ("bungie", "icons/bungie.svg", "92c3b473805eaffdc7092cb8e8c1500ccac1bea19c129d46b026c22af6000db7"),
+    ("roblox", "icons/roblox.svg", "9245b2f23fde91a5ef34f36aea32c1bf08a1a1254c08b86e7f060a4f72986234"),
+    ("crunchyroll", "icons/crunchyroll.svg", "3b9c3d87339e18ec09f25e0c3eaffdc5ad4630df3d108fcd907e1b64c4cd13ea"),
+    ("ebay", "icons/ebay.svg", "846e8d8ac6cea49766e7c62e095e739d115ed355f9b63bf46067f14c9343c745"),
+    ("bluesky", "icons/bluesky.svg", "49752973164fbbf4464fbb4776f011c1eff207e5d7ad9254e031af025814eb75"),
+]
+SIMPLE_LICENSE_SHA256 = "9046848b63a5c92bff14e4accca80bd987e0623b74adf9226ce5198d312b79d5"
+SIMPLE_SCALE = 0.8  # Phosphor fill glyphs span roughly 205 of their 256 units.
 
-def fetch(path):
-    with urllib.request.urlopen(f"{BASE}/{path}", timeout=60) as response:
+
+def fetch(path, base=BASE):
+    with urllib.request.urlopen(f"{base}/{path}", timeout=60) as response:
         return response.read(1024 * 1024)
 
 
@@ -87,9 +147,17 @@ def main():
     elif hashlib.sha256(license_text).hexdigest() != LICENSE_SHA256:
         raise ValueError("LICENSE SHA-256 mismatch")
 
-    names = [name for name, _, _ in ICONS]
+    simple_license = fetch("LICENSE.md", SIMPLE_BASE)
+    if args.print_hashes:
+        print("SIMPLE LICENSE", hashlib.sha256(simple_license).hexdigest())
+    elif hashlib.sha256(simple_license).hexdigest() != SIMPLE_LICENSE_SHA256:
+        raise ValueError("Simple Icons LICENSE SHA-256 mismatch")
+
+    sources = [(name, asset, sha256, False) for name, asset, sha256 in ICONS]
+    sources += [(name, asset, sha256, True) for name, asset, sha256 in SIMPLE_ICONS]
+    names = [name for name, _, _, _ in sources]
     assert len(set(names)) == len(names)
-    rows = (len(ICONS) + COLUMNS - 1) // COLUMNS
+    rows = (len(sources) + COLUMNS - 1) // COLUMNS
     width, height = COLUMNS * CELL, rows * CELL
     parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">']
     parts.append(
@@ -98,19 +166,24 @@ def main():
         '<path d="M40 24 L232 216" stroke="#000" stroke-width="44" stroke-linecap="round"/></mask></defs>'
     )
     index = []
-    for cell, (name, asset, sha256) in enumerate(ICONS):
-        svg = fetch(f"assets/{asset}")
+    for cell, (name, asset, sha256, simple) in enumerate(sources):
+        svg = fetch(asset, SIMPLE_BASE) if simple else fetch(f"assets/{asset}")
         digest = hashlib.sha256(svg).hexdigest()
         if args.print_hashes:
             print(name, asset, digest)
         elif digest != sha256:
             raise ValueError(f"{asset} SHA-256 mismatch: {digest}")
         text = svg.decode("utf-8")
-        assert 'viewBox="0 0 256 256"' in text, asset
         body = inner_svg(text)
         x = (cell % COLUMNS) * CELL + PAD
         y = (cell // COLUMNS) * CELL + PAD
-        scale = GLYPH / 256
+        if simple:
+            assert 'viewBox="0 0 24 24"' in text, asset
+            inset = GLYPH * (1 - SIMPLE_SCALE) / 2
+            x, y, scale = x + inset, y + inset, GLYPH * SIMPLE_SCALE / 24
+        else:
+            assert 'viewBox="0 0 256 256"' in text, asset
+            scale = GLYPH / 256
         if name.endswith("-slash") and "slash" not in asset:
             # Phosphor has no slashed headphones; compose the upstream glyph with a knocked-out
             # diagonal in the style of its own `*-slash` icons.
@@ -129,8 +202,9 @@ def main():
     atlas_svg.unlink()
     (destination / "index.tsv").write_text("".join(f"{name}\t{cell}\n" for name, cell in index), encoding="utf-8")
     (destination / "LICENSE").write_bytes(license_text)
-    print(f"{len(ICONS)} icons; {width}x{height}; atlas {(destination / 'atlas.png').stat().st_size} bytes")
-    for file in ["atlas.png", "index.tsv", "LICENSE"]:
+    (destination / "LICENSE-SIMPLE-ICONS").write_bytes(simple_license)
+    print(f"{len(sources)} icons; {width}x{height}; atlas {(destination / 'atlas.png').stat().st_size} bytes")
+    for file in ["atlas.png", "index.tsv", "LICENSE", "LICENSE-SIMPLE-ICONS"]:
         print(file, hashlib.sha256((destination / file).read_bytes()).hexdigest())
 
 

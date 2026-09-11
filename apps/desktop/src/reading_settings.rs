@@ -151,6 +151,8 @@ mod tests {
 					zoom_percent: 150,
 					sidebar_width: 360,
 					show_members: false,
+					animate_gifs: false,
+					hide_media_links: true,
 				}))
 				.is_none()
 		);

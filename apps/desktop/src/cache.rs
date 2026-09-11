@@ -15,11 +15,32 @@ pub enum Operation {
 	SaveThemeVariant(Option<String>),
 	LoadReadingPreferences,
 	SaveReadingPreferences(model::ReadingPreferences),
+	LoadGameActivity,
+	SaveGameActivity(bool),
 	LoadDrafts,
-	LoadChannel { channel: Id, request: u64 },
-	SaveDraft { channel: Id, content: String },
-	SaveChannel { channel: Id, messages: Vec<Message> },
-	DeleteMessages { channel: Id, ids: Vec<Id> },
+	LoadGifFavorites,
+	SaveGifFavorites(Vec<model::Gif>),
+	LoadChannel {
+		channel: Id,
+		request: u64,
+	},
+	SaveDraft {
+		channel: Id,
+		content: String,
+	},
+	SaveChannel {
+		channel: Id,
+		messages: Vec<Message>,
+	},
+	SaveChanges {
+		channel: Id,
+		messages: Vec<Message>,
+		retained: Vec<Id>,
+	},
+	DeleteMessages {
+		channel: Id,
+		ids: Vec<Id>,
+	},
 	ClearHistory,
 	Forget,
 }
@@ -28,7 +49,10 @@ pub enum Outcome {
 	Appearance(Appearance, Option<String>),
 	ReadingPreferences(Result<model::ReadingPreferences, StoreError>),
 	ReadingPreferencesSaved(Result<(), StoreError>),
+	GameActivity(Result<bool, StoreError>),
+	GameActivitySaved(Result<(), StoreError>),
 	Drafts(BTreeMap<Id, String>),
+	GifFavorites(Vec<model::Gif>),
 	Channel {
 		channel: Id,
 		request: u64,
@@ -135,7 +159,9 @@ impl Cache {
 		let epoch = self.history.epoch();
 		if matches!(
 			operation,
-			Operation::LoadChannel { .. } | Operation::SaveChannel { .. }
+			Operation::LoadChannel { .. }
+				| Operation::SaveChannel { .. }
+				| Operation::SaveChanges { .. }
 		) && !self.history.allows(epoch)
 		{
 			return false;
@@ -176,6 +202,18 @@ fn execute(
 ) -> Outcome {
 	// Settings completions are account-independent and have their own pending/error state.
 	match &operation {
+		Operation::LoadGameActivity => {
+			return Outcome::GameActivity(match store {
+				Ok(store) => store.game_activity_enabled(),
+				Err(error) => Err(*error),
+			});
+		}
+		Operation::SaveGameActivity(value) => {
+			return Outcome::GameActivitySaved(match store {
+				Ok(store) => store.save_game_activity_enabled(*value),
+				Err(error) => Err(*error),
+			});
+		}
 		Operation::LoadReadingPreferences => {
 			return Outcome::ReadingPreferences(match store {
 				Ok(store) => store.reading_preferences(),
@@ -192,7 +230,9 @@ fn execute(
 	}
 	if matches!(
 		operation,
-		Operation::LoadChannel { .. } | Operation::SaveChannel { .. }
+		Operation::LoadChannel { .. }
+			| Operation::SaveChannel { .. }
+			| Operation::SaveChanges { .. }
 	) && !history.allows(epoch)
 	{
 		return Outcome::Saved;
@@ -220,14 +260,26 @@ fn execute(
 		Operation::SaveDraft { .. } => {
 			"Could not save a draft; latest text may exist only in memory"
 		}
-		Operation::SaveChannel { .. } => "Could not save cached history",
+		Operation::SaveChannel { .. } | Operation::SaveChanges { .. } => {
+			"Could not save cached history"
+		}
 		Operation::LoadDrafts => "Could not restore drafts from local storage",
+		Operation::LoadGifFavorites => "Could not restore GIF favorites from local storage",
+		Operation::SaveGifFavorites(_) => {
+			"Could not save GIF favorites; the change exists only in this session"
+		}
 		Operation::LoadChannel { .. } => "Could not read cached history",
-		Operation::LoadReadingPreferences | Operation::SaveReadingPreferences(_) => unreachable!(),
+		Operation::LoadReadingPreferences
+		| Operation::SaveReadingPreferences(_)
+		| Operation::LoadGameActivity
+		| Operation::SaveGameActivity(_) => unreachable!(),
 	};
 	let result = match store {
 		Ok(store) => match operation {
-			Operation::LoadReadingPreferences | Operation::SaveReadingPreferences(_) => {
+			Operation::LoadReadingPreferences
+			| Operation::SaveReadingPreferences(_)
+			| Operation::LoadGameActivity
+			| Operation::SaveGameActivity(_) => {
 				unreachable!()
 			}
 			Operation::LoadAppearance => store
@@ -240,6 +292,10 @@ fn execute(
 				.save_theme_variant(variant.as_deref())
 				.map(|_| Outcome::Saved),
 			Operation::LoadDrafts => store.load_drafts(account).map(Outcome::Drafts),
+			Operation::LoadGifFavorites => store.gif_favorites(account).map(Outcome::GifFavorites),
+			Operation::SaveGifFavorites(favorites) => store
+				.save_gif_favorites(account, &favorites)
+				.map(|_| Outcome::Saved),
 			Operation::LoadChannel { channel, request } => store
 				.load_channel(account, channel)
 				.map(|messages| Outcome::Channel {
@@ -250,6 +306,13 @@ fn execute(
 				}),
 			Operation::SaveDraft { channel, content } => store
 				.save_draft(account, channel, &content)
+				.map(|_| Outcome::Saved),
+			Operation::SaveChanges {
+				channel,
+				messages,
+				retained,
+			} => store
+				.save_changes(account, channel, &messages, &retained)
 				.map(|_| Outcome::Saved),
 			Operation::SaveChannel { channel, messages } => store
 				.save_channel(account, channel, &messages)
@@ -282,6 +345,52 @@ mod tests {
 	use super::*;
 
 	#[test]
+	fn game_activity_operations_keep_their_own_results_even_when_history_is_blocked() {
+		let safety = HistorySafety::default();
+		safety.block();
+		let mut store = Ok(LocalStore::open(std::path::Path::new(":memory:")).unwrap());
+		assert!(matches!(
+			execute(&mut store, &safety, Id(0), 0, Operation::LoadGameActivity),
+			Outcome::GameActivity(Ok(false))
+		));
+		assert!(matches!(
+			execute(
+				&mut store,
+				&safety,
+				Id(0),
+				0,
+				Operation::SaveGameActivity(true)
+			),
+			Outcome::GameActivitySaved(Ok(()))
+		));
+		assert!(matches!(
+			execute(&mut store, &safety, Id(9), 0, Operation::LoadGameActivity),
+			Outcome::GameActivity(Ok(true))
+		));
+		let mut unavailable = Err(StoreError::Unavailable);
+		assert!(matches!(
+			execute(
+				&mut unavailable,
+				&safety,
+				Id(0),
+				0,
+				Operation::LoadGameActivity
+			),
+			Outcome::GameActivity(Err(StoreError::Unavailable))
+		));
+		assert!(matches!(
+			execute(
+				&mut unavailable,
+				&safety,
+				Id(0),
+				0,
+				Operation::SaveGameActivity(false)
+			),
+			Outcome::GameActivitySaved(Err(StoreError::Unavailable))
+		));
+	}
+
+	#[test]
 	fn reading_operations_report_their_own_results_without_touching_account_history() {
 		let safety = HistorySafety::default();
 		let mut store = Ok(LocalStore::open(std::path::Path::new(":memory:")).unwrap());
@@ -289,6 +398,8 @@ mod tests {
 			zoom_percent: 125,
 			sidebar_width: 300,
 			show_members: false,
+			animate_gifs: false,
+			hide_media_links: true,
 		};
 		store
 			.as_mut()
@@ -428,6 +539,7 @@ mod tests {
 				recipients: vec![],
 				last_message: None,
 				member_list_id: None,
+				message_count: None,
 			}],
 			..Default::default()
 		};

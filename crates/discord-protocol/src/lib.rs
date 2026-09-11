@@ -3,6 +3,9 @@ pub mod archives;
 mod attachments;
 mod embeds;
 mod extra_content;
+pub mod gifs;
+pub mod guild_folders;
+pub mod invites;
 pub mod notifications;
 pub mod permissions;
 pub mod pins;
@@ -10,6 +13,9 @@ pub mod presence;
 pub mod profile;
 mod reactions;
 pub mod read_state;
+pub mod ready;
+pub mod relationships;
+pub mod rpc;
 pub mod search;
 pub mod stream;
 pub mod threads;
@@ -96,6 +102,8 @@ pub struct ChannelDto {
 	pub recipients: Vec<UserDto>,
 	#[serde(default)]
 	pub permission_overwrites: Option<Vec<Overwrite>>,
+	#[serde(default)]
+	pub message_count: Option<u32>,
 }
 impl ChannelDto {
 	pub fn is_obfuscated(&self) -> bool {
@@ -125,6 +133,7 @@ impl ChannelDto {
 			kind: self.kind,
 			recipients,
 			member_list_id: None,
+			message_count: self.message_count,
 		}
 	}
 }
@@ -145,6 +154,8 @@ pub struct ChannelPatchDto {
 	pub permission_overwrites: Patch<Vec<Overwrite>>,
 	#[serde(default)]
 	pub flags: Patch<u64>,
+	#[serde(default)]
+	pub message_count: Patch<u32>,
 }
 impl ChannelPatchDto {
 	pub fn is_obfuscated(&self) -> bool {
@@ -159,6 +170,7 @@ impl ChannelPatchDto {
 			parent_id: self.parent_id,
 			position: self.position,
 			kind: self.kind,
+			message_count: self.message_count,
 		}
 	}
 }
@@ -281,6 +293,12 @@ impl GuildPatchDto {
 }
 #[derive(Deserialize)]
 pub struct Ready {
+	#[serde(default)]
+	pub relationships: Option<relationships::Snapshot>,
+	#[serde(default)]
+	pub presences: Option<Box<RawValue>>,
+	#[serde(default)]
+	pub merged_presences: Option<presence::MergedPresences>,
 	#[serde(default)]
 	pub users: Vec<UserDto>,
 	#[serde(default)]
@@ -1189,12 +1207,18 @@ pub struct VoiceMemberDto {
 #[derive(Deserialize)]
 pub struct ReadySupplemental {
 	#[serde(default)]
+	pub presences: Option<Box<RawValue>>,
+	#[serde(default)]
+	pub merged_presences: Option<presence::MergedPresences>,
+	#[serde(default)]
 	pub guilds: Vec<GuildDto>,
 	#[serde(default)]
 	pub merged_members: Vec<Vec<VoiceMemberDto>>,
 }
 #[derive(Deserialize)]
 pub struct PassiveVoiceUpdate {
+	#[serde(default, deserialize_with = "read_state::entries")]
+	pub updated_channels: Vec<read_state::LatestChannel>,
 	#[serde(default)]
 	pub guild_id: Option<Id>,
 	#[serde(default)]

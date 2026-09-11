@@ -1,7 +1,20 @@
 use client_core::{Envelope, Event};
 use model::Id;
 use std::time::Instant;
+mod soak;
 fn main() {
+	if std::env::args().nth(1).as_deref() == Some("--soak") {
+		let seconds = std::env::args()
+			.nth(2)
+			.map_or(Ok(60), |value| value.parse::<u64>())
+			.expect("Soak seconds must be an integer from 1 to 3600");
+		assert!(
+			(1..=3600).contains(&seconds),
+			"Soak seconds must be from 1 to 3600"
+		);
+		soak::run(std::time::Duration::from_secs(seconds));
+		return;
+	}
 	if std::env::args().nth(1).as_deref() == Some("--navigation") {
 		navigation();
 		return;
@@ -48,6 +61,7 @@ fn navigation() {
 			recipients: vec![],
 			last_message: None,
 			member_list_id: None,
+			message_count: None,
 		})
 		.collect();
 	state.selected = None;

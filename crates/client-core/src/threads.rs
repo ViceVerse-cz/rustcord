@@ -119,6 +119,7 @@ mod tests {
 			recipients: vec![],
 			last_message: None,
 			member_list_id: None,
+			message_count: None,
 		};
 		let mut state = State {
 			user: Some(User {
@@ -354,6 +355,7 @@ mod tests {
 			recipients: vec![],
 			last_message: None,
 			member_list_id: None,
+			message_count: None,
 		};
 		let original = vec![
 			channel(10, 1, None, 0),

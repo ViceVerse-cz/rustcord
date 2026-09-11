@@ -379,6 +379,17 @@ pub fn ready(bytes: &[u8], user: Id) -> Result<p::Snapshot, DecodeError> {
 	let ready: Ready = decode(bytes)?;
 	checked_snapshot(ready.guilds.0, ready.merged_members.map(|m| m.0), user)
 }
+/// The gateway envelope is parsed once; each consumer validates only its own fields.
+pub fn ready_fields(
+	guilds: &[u8],
+	merged: Option<&[u8]>,
+	user: Id,
+) -> Result<p::Snapshot, DecodeError> {
+	let guilds: List<Guild, MAX_ITEMS> = decode(guilds)?;
+	let merged: Option<List<List<Member, MAX_ITEMS>, MAX_ITEMS>> =
+		merged.map(decode).transpose()?;
+	checked_snapshot(guilds.0, merged.map(|m| m.0), user)
+}
 pub fn guild(bytes: &[u8], user: Id) -> Result<p::Snapshot, DecodeError> {
 	checked_snapshot(vec![decode(bytes)?], None, user)
 }
@@ -437,12 +448,28 @@ pub fn passive(bytes: &[u8], user: Id) -> Result<Option<MemberUpdate>, DecodeErr
 		updated_members: List<Member, MAX_ITEMS>,
 	}
 	let update: Update = decode(bytes)?;
-	match update.guild_id {
-		Some(guild) => self_member(update.updated_members.0, user, guild, false),
-		None if update.updated_members.0.is_empty() => Ok(None),
+	passive_member(update.guild_id, update.updated_members.0, user)
+}
+pub fn passive_fields(
+	guild: Option<Id>,
+	members: &[u8],
+	user: Id,
+) -> Result<Option<MemberUpdate>, DecodeError> {
+	let members: List<Member, MAX_ITEMS> = decode(members)?;
+	passive_member(guild, members.0, user)
+}
+fn passive_member(
+	guild: Option<Id>,
+	members: Vec<Member>,
+	user: Id,
+) -> Result<Option<MemberUpdate>, DecodeError> {
+	match guild {
+		Some(guild) => self_member(members, user, guild, false),
+		None if members.is_empty() => Ok(None),
 		None => Err(DecodeError),
 	}
 }
+
 pub fn supplemental(bytes: &[u8], user: Id) -> Result<Vec<MemberUpdate>, DecodeError> {
 	let ready: Ready = decode(bytes)?;
 	if ready

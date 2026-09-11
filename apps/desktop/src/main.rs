@@ -6,6 +6,7 @@ mod clipboard;
 mod connection;
 mod credentials;
 mod downloads;
+mod game_activity;
 mod reading_settings;
 #[cfg(feature = "voice")]
 mod screen;
@@ -36,6 +37,9 @@ fn main() -> eframe::Result {
 					.with_title_shown(false)
 					.with_titlebar_shown(false)
 					.with_fullsize_content_view(true)
+			} else if cfg!(target_os = "windows") {
+				// The app paints its own caption strip and buttons; see `ui::design::window_controls`.
+				builder.with_decorations(false)
 			} else {
 				builder
 			}
@@ -51,6 +55,59 @@ fn main() -> eframe::Result {
 		Box::new(move |cc| Ok(Box::new(Desktop::new(cc, demo)?))),
 	)
 }
+/// Opt-in aggregate CPU callback timings; no payloads, per-frame logs, or repaint timer.
+struct FrameMetrics {
+	enabled: bool,
+	started: Option<std::time::Instant>,
+	frames: u64,
+	inputless: u64,
+	buckets: [u64; 8],
+	reflows: (u64, u64),
+}
+impl Default for FrameMetrics {
+	fn default() -> Self {
+		Self {
+			enabled: std::env::var_os("SEREIN_FRAME_DIAGNOSTICS").is_some_and(|v| v == "1"),
+			started: None,
+			frames: 0,
+			inputless: 0,
+			buckets: [0; 8],
+			reflows: (0, 0),
+		}
+	}
+}
+impl FrameMetrics {
+	fn begin(&mut self, ctx: &egui::Context) {
+		if self.enabled {
+			self.started = Some(std::time::Instant::now());
+			self.inputless += u64::from(ctx.input(|i| i.events.is_empty()));
+		}
+	}
+	fn finish(&mut self) {
+		if let Some(started) = self.started.take() {
+			let micros = started.elapsed().as_micros();
+			let bucket = [1000, 2000, 4000, 8000, 16000, 32000, 64000]
+				.partition_point(|limit| *limit < micros);
+			self.buckets[bucket] += 1;
+			self.frames += 1;
+		}
+	}
+}
+impl Drop for FrameMetrics {
+	fn drop(&mut self) {
+		if self.enabled {
+			use std::io::Write;
+			let _ = writeln!(
+				std::io::stderr(),
+				"[Serein frames] callbacks={} without_input={} cpu_us_buckets(1000,2000,4000,8000,16000,32000,64000,above)={:?} reflows(total,consecutive)={:?}",
+				self.frames,
+				self.inputless,
+				self.buckets,
+				self.reflows
+			);
+		}
+	}
+}
 struct Desktop {
 	login: Option<platform::LoginView>,
 	connection: Option<connection::Connection>,
@@ -63,6 +120,9 @@ struct Desktop {
 	clipboard: Option<clipboard::Paste>,
 	download_close_pending: bool,
 	window: Arc<winit::window::Window>,
+	monitor_geometry: Option<(Option<egui::Rect>, Option<f32>)>,
+	monitor_period: Option<Duration>,
+	frame_metrics: FrameMetrics,
 	avatars: Option<avatars::AvatarWorker>,
 	avatar_start_failed: bool,
 	avatar_clear_account: Option<model::Id>,
@@ -79,6 +139,7 @@ struct Desktop {
 	appearance: egui::ThemePreference,
 	appearance_changed: bool,
 	reading: reading_settings::ReadingSettings,
+	game_activity: game_activity::Settings,
 	variant_changed: bool,
 	pending_save: Option<Arc<SessionSecret>>,
 	credential_status: &'static str,
@@ -91,6 +152,52 @@ struct Desktop {
 	synthetic_id: u64,
 	#[cfg(feature = "developer-session")]
 	token_input: Zeroizing<String>,
+}
+/// Check only navigation whose effective access can change with this event.
+fn access_candidates(state: &State, event: &Event) -> Vec<model::Id> {
+	use client_core::permissions::Event as Permission;
+	let (guilds, channel): (Option<Vec<model::Id>>, Option<model::Id>) = match event {
+		Event::Ready { .. } | Event::Permissions(Permission::Snapshot(_)) => (None, None),
+		Event::Permissions(permission) => match permission {
+			Permission::Guild(guild) => (Some(vec![guild.id]), None),
+			Permission::Role { guild, .. }
+			| Permission::RoleRemoved { guild, .. }
+			| Permission::Member { guild, .. }
+			| Permission::Owner { guild, .. }
+			| Permission::UnavailableGuild(guild) => (Some(vec![*guild]), None),
+			Permission::Members(members) => (Some(members.iter().map(|m| m.0).collect()), None),
+			Permission::Channel { channel, .. } => (None, Some(*channel)),
+			Permission::Snapshot(_) => unreachable!(),
+		},
+		Event::ChannelCreated(channel) | Event::ChannelRestored(channel) => {
+			// A new channel cannot revoke existing access. Duplicate IDs can replace metadata.
+			if state.channel(channel.id).is_none() {
+				return Vec::new();
+			}
+			(None, Some(channel.id))
+		}
+		Event::ChannelChanged(patch) | Event::ThreadChanged { patch, .. } => (None, Some(patch.id)),
+		Event::ThreadRemoved { id, .. } => (None, Some(*id)),
+		Event::UserAction(client_core::user_actions::Event::Written {
+			action: client_core::user_actions::Action::CloseDm(channel),
+			result: Ok(()),
+			..
+		}) => (None, Some(*channel)),
+		Event::ThreadsSync { guild, .. } => (Some(vec![*guild]), None),
+		_ => return Vec::new(),
+	};
+	state
+		.channels
+		.iter()
+		.filter(|c| {
+			c.supports_text()
+				&& channel.is_none_or(|id| c.id == id || c.parent_id == Some(id))
+				&& guilds
+					.as_ref()
+					.is_none_or(|ids| c.guild.is_some_and(|id| ids.contains(&id)))
+		})
+		.map(|c| c.id)
+		.collect()
 }
 fn wants_cached_history(state: &State, channel: model::Id, request: u64) -> bool {
 	state.selected == Some(channel)
@@ -179,7 +286,9 @@ fn changes_active_history(state: &State, event: &Event) -> bool {
 			..
 		} => &message.channel,
 		Event::Patch(patch) => &patch.channel,
-		Event::Delete { channel, .. } | Event::DeleteBulk { channel, .. } => channel,
+		Event::Edited { channel, .. }
+		| Event::Delete { channel, .. }
+		| Event::DeleteBulk { channel, .. } => channel,
 		_ => return false,
 	};
 	state.selected == Some(*channel)
@@ -250,7 +359,7 @@ impl Desktop {
 		demo: bool,
 	) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
 		ui::fonts::install(&cc.egui_ctx);
-		ui::emoji::install(&cc.egui_ctx)?;
+		ui::emoji::install_async(&cc.egui_ctx)?;
 		ui::icons::install(&cc.egui_ctx);
 		if demo {
 			// Fixture-only preset preview, e.g. `--demo --demo-theme=onyx --demo-light`.
@@ -344,6 +453,18 @@ impl Desktop {
 			)
 		}));
 		let mut reading = reading_settings::ReadingSettings::default();
+		let mut game_activity = game_activity::Settings::default();
+		if cache.as_ref().is_some_and(|cache| {
+			cache.queue(
+				state.generation,
+				model::Id(0),
+				cache::Operation::LoadGameActivity,
+			)
+		}) {
+			cache_pending += 1;
+		} else if !demo {
+			game_activity.failed = true;
+		}
 		if let Some(cache) = &cache {
 			if cache.queue(
 				state.generation,
@@ -361,10 +482,32 @@ impl Desktop {
 			.last()
 			.map_or(10_000, |m| m.id.0.max(10_000));
 		let mut messaging = ui::MessagingUi::default();
+		if demo && std::env::args().any(|arg| arg == "--demo-game-activity") {
+			messaging.share_game_activity = true;
+			messaging.own_game = Some("Playing osu!".into());
+		}
+		messaging.build = ui::design::Build {
+			channel: if cfg!(debug_assertions) {
+				ui::design::Channel::Dev
+			} else if option_env!("SEREIN_CHANNEL") == Some("nightly") {
+				ui::design::Channel::Nightly
+			} else {
+				ui::design::Channel::Stable
+			},
+			version: env!("CARGO_PKG_VERSION"),
+		};
 		messaging.notification_test_available =
 			demo && std::env::args().any(|arg| arg == "--demo-system-notifications");
 		if messaging.notification_test_available {
 			state.status = "Offline fixture · explicit system notification test";
+		}
+		if demo
+			&& let Some(page) = std::env::args().find_map(|arg| {
+				arg.strip_prefix("--demo-settings")
+					.map(|rest| rest.trim_start_matches('=').to_lowercase())
+			}) {
+			// `--demo-settings` or `--demo-settings=account` etc.
+			messaging.preview_settings(&page);
 		}
 		if demo && std::env::args().any(|arg| arg == "--demo-profile") {
 			// Presence for the fixture card comes from the same synthetic People rows.
@@ -375,9 +518,66 @@ impl Desktop {
 			messaging.preview_profile(test_support::message(1, model::Id(20)).author);
 			state.status = "Offline fixture · synthetic profile card opened at startup";
 		}
+		if demo && std::env::args().any(|arg| arg == "--demo-pins") {
+			messaging.preview_pins();
+			state.status = "Offline fixture · pinned messages popout opened at startup";
+		}
 		if demo && std::env::args().any(|arg| arg == "--demo-emoji") {
 			messaging.preview_emoji_picker();
 			state.status = "Offline fixture · emoji popout opened at startup";
+		}
+		if demo && std::env::args().any(|arg| arg == "--demo-attachment=file") {
+			// Non-image variant: exercises the file-kind glyph and extension badge.
+			messaging.preview_attachment("quarterly-report.pdf", 1_482_311, None);
+			state.status = "Offline fixture · synthetic file attachment staged in the composer";
+		} else if demo && std::env::args().any(|arg| arg == "--demo-attachment") {
+			// Synthetic gradient stands in for a decoded photo; no file is read or uploaded.
+			let (width, height) = (320usize, 200usize);
+			let pixels = (0..width * height)
+				.map(|index| {
+					let (x, y) = (
+						(index % width) as f32 / width as f32,
+						(index / width) as f32 / height as f32,
+					);
+					let ring = ((x - 0.65).powi(2) + (y - 0.4).powi(2)).sqrt();
+					if ring < 0.12 {
+						egui::Color32::from_rgb(255, 214, 102)
+					} else {
+						egui::Color32::from_rgb(
+							(40.0 + 120.0 * y) as u8,
+							(110.0 + 90.0 * x) as u8,
+							(190.0 - 60.0 * y) as u8,
+						)
+					}
+				})
+				.collect();
+			let image = egui::ColorImage {
+				size: [width, height],
+				source_size: egui::vec2(width as f32, height as f32),
+				pixels,
+			};
+			messaging.preview_attachment("synthetic-holiday.png", 2_437_120, Some(image));
+			state.status = "Offline fixture · synthetic attachment staged in the composer";
+		}
+		if demo && std::env::args().any(|arg| arg == "--demo-sending") {
+			messaging.preview_sending(&cc.egui_ctx, &mut state);
+			state.status = "Offline fixture · synthetic pending message; no upload or send";
+		}
+		// `--demo-gifs`, `--demo-gifs=favorites`, `--demo-gifs=trending` or `--demo-gifs=<query>`.
+		if demo
+			&& let Some(section) = std::env::args().find_map(|arg| {
+				arg.strip_prefix("--demo-gifs")
+					.map(|rest| rest.strip_prefix('=').unwrap_or("").to_owned())
+			}) {
+			let favorites: Vec<_> = test_support::gif_page(None)
+				.gifs
+				.into_iter()
+				.skip(2)
+				.take(5)
+				.collect();
+			state.restore_gif_favorites(favorites);
+			messaging.preview_gif_picker(&section);
+			state.status = "Offline fixture · GIF popout opened at startup";
 		}
 		if demo
 			&& let Some(query) = std::env::args()
@@ -385,6 +585,26 @@ impl Desktop {
 		{
 			messaging.preview_search(&query);
 			state.status = "Offline fixture · synthetic search opened at startup";
+		}
+		if demo
+			&& std::env::args().any(|arg| arg == "--demo-browsing")
+			&& let Some(channel) = state.selected
+		{
+			// Fixture-only: an unread marker on the oldest loaded message plus a targeted history
+			// page, so both timeline overlays render without pointer input.
+			let oldest = state.timeline.iter().next().map(|message| message.id);
+			let _ = state.apply_read_state(client_core::read_state::Event::Snapshot {
+				entries: Some(vec![(channel, oldest, 0)]),
+				version: Some(1),
+				partial: false,
+			});
+			state.history_targeted = true;
+			state.status = "Offline fixture · unread strip and older-messages bar shown";
+		}
+		if demo && std::env::args().any(|arg| arg == "--demo-login") {
+			// Fixture-only: render the sign-in screen without a session.
+			state.user = None;
+			state.status = "Disconnected";
 		}
 		Ok(Self {
 			login: None,
@@ -404,6 +624,9 @@ impl Desktop {
 				.winit_window()
 				.ok_or("Native window unavailable")?
 				.clone(),
+			monitor_geometry: None,
+			monitor_period: None,
+			frame_metrics: FrameMetrics::default(),
 			avatars: None,
 			avatar_cleanup: None,
 			avatar_start_failed: false,
@@ -420,6 +643,7 @@ impl Desktop {
 			appearance: egui::ThemePreference::System,
 			appearance_changed: false,
 			reading,
+			game_activity,
 			variant_changed: false,
 			pending_save: None,
 			credential_status: if demo {
@@ -463,7 +687,7 @@ impl Desktop {
 		self.state.generation += 1;
 		self.messaging.draft_restore_pending = false;
 		self.state.auth = AuthState::Authenticating;
-		self.state.status = "Connecting to Discord · experimental normal-user adapter";
+		self.state.status = "Connecting to Discord…";
 		let secret = Arc::new(secret);
 		self.pending_save = save.then(|| secret.clone());
 		self.connection = Some(connection::Connection::start(
@@ -500,6 +724,7 @@ impl Desktop {
 			}
 		}
 		self.messaging.clear();
+		self.messaging.share_game_activity = self.game_activity.enabled;
 		ctx.memory_mut(|m| *m = egui::Memory::default());
 		ui::design::apply(ctx);
 		ctx.set_theme(self.appearance);
@@ -541,7 +766,9 @@ impl Desktop {
 		if let Some(cache) = &self.cache {
 			if matches!(
 				operation,
-				cache::Operation::LoadChannel { .. } | cache::Operation::SaveChannel { .. }
+				cache::Operation::LoadChannel { .. }
+					| cache::Operation::SaveChannel { .. }
+					| cache::Operation::SaveChanges { .. }
 			) && !cache.history.allows(cache.history.epoch())
 			{
 				return false;
@@ -587,6 +814,70 @@ impl Desktop {
 			ctx.request_repaint_after(delay);
 		}
 		self.messaging.reading_status = self.reading.status();
+	}
+	fn sync_game_activity(&mut self, ctx: &egui::Context) {
+		let previous = (
+			self.messaging.own_game.clone(),
+			self.messaging.game_activity_status,
+		);
+		if self.state.demo {
+			self.messaging.own_game = self
+				.messaging
+				.share_game_activity
+				.then(|| "Playing osu!".to_owned());
+			self.messaging.game_activity_status =
+				"Offline preview: synthetic activity, never shared or saved.";
+			if previous
+				!= (
+					self.messaging.own_game.clone(),
+					self.messaging.game_activity_status,
+				) {
+				ctx.request_repaint();
+			}
+			return;
+		}
+		if self.fixture_only {
+			return;
+		}
+		self.game_activity
+			.observe(self.messaging.share_game_activity);
+		if self.game_activity.dirty && !self.game_activity.saving {
+			let accepted = self.cache.as_ref().is_some_and(|cache| {
+				cache.queue(
+					self.state.generation,
+					model::Id(0),
+					cache::Operation::SaveGameActivity(self.game_activity.enabled),
+				)
+			});
+			self.game_activity.dirty = false;
+			self.game_activity.saving = accepted;
+			self.game_activity.failed = !accepted;
+			self.cache_pending += usize::from(accepted);
+		}
+		self.messaging.own_game = None;
+		self.messaging.game_activity_status = self.game_activity.status();
+		if let Some(connection) = &self.connection {
+			connection.share_activity.send_if_modified(|enabled| {
+				if *enabled == self.game_activity.enabled {
+					return false;
+				}
+				*enabled = self.game_activity.enabled;
+				true
+			});
+			if self.game_activity.enabled && self.state.gateway_connected {
+				match &*connection.game_activity.borrow() {
+					Ok(game) => self.messaging.own_game = game.clone(),
+					Err(error) => self.messaging.game_activity_status = error,
+				}
+			}
+		}
+		if previous
+			!= (
+				self.messaging.own_game.clone(),
+				self.messaging.game_activity_status,
+			) {
+			ctx.request_repaint();
+		}
 	}
 	fn request_history_clear(&mut self, account: model::Id) {
 		if self.state.demo || self.fixture_only {
@@ -766,6 +1057,16 @@ impl Desktop {
 		}
 		if self.state.demo {
 			let event = match command {
+				Command::GuildFolders(settings) => {
+					Event::GuildFolders(Ok(settings.unwrap_or_default()))
+				}
+				Command::UserAction { action, request } => {
+					Event::UserAction(client_core::user_actions::Event::Written {
+						action,
+						request,
+						result: Ok(()),
+					})
+				}
 				Command::MarkRead {
 					channel,
 					message,
@@ -820,7 +1121,7 @@ impl Desktop {
 								});
 							}
 							reactions.retain(|r| r.count > 0);
-							self.state.reactions.writing = None;
+							self.state.reactions.reset();
 							let _ = self.state.timeline.set_reactions(message, Some(reactions));
 							// The fixture has no service readback; it updates synthetic RAM only.
 							E::Written {
@@ -833,6 +1134,31 @@ impl Desktop {
 					})
 				}
 				Command::Voice(_) | Command::CancelProfile | Command::CancelSearch => return,
+				Command::CreatePost {
+					parent,
+					guild,
+					title,
+					request,
+					..
+				} => {
+					self.synthetic_id += 1;
+					Event::PostCreated {
+						parent,
+						request,
+						result: Ok(model::Channel {
+							id: model::Id(self.synthetic_id),
+							guild: Some(guild),
+							parent_id: Some(parent),
+							position: 0,
+							name: title,
+							kind: 11,
+							recipients: vec![],
+							last_message: None,
+							member_list_id: None,
+							message_count: Some(0),
+						}),
+					}
+				}
 				Command::Archives {
 					parent,
 					guild,
@@ -878,6 +1204,7 @@ impl Desktop {
 							recipients: vec![],
 							last_message: None,
 							member_list_id: None,
+							message_count: None,
 						})
 						.collect();
 					Event::Archives {
@@ -970,6 +1297,19 @@ impl Desktop {
 						})),
 					}
 				}
+				Command::Gifs { query, request } => Event::Gifs {
+					request,
+					result: Ok(test_support::gif_page(query.as_deref())),
+				},
+				Command::CancelGifs => return,
+				Command::JoinInvite { request, .. } => Event::JoinInvite {
+					request,
+					result: Err(Failure::ProtocolAt("Server joining unavailable offline")),
+				},
+				Command::Invite { code } => Event::Invite {
+					code,
+					result: Err(Failure::Protocol),
+				},
 				Command::Profile {
 					user,
 					guild,
@@ -1013,24 +1353,46 @@ impl Desktop {
 					}
 				}
 				Command::Edit {
+					request,
 					channel,
 					message,
 					content,
-				} => Event::Patch(model::MessagePatch {
-					extra_content: Default::default(),
-					reactions: model::Patch::Absent,
-					embeds: model::Patch::Absent,
-					attachments: model::Patch::Absent,
-					mentions: model::Patch::Absent,
-					embeds_suppressed: model::Patch::Absent,
-					id: message,
-					channel,
-					content: model::Patch::Value(content),
-					edited: model::Patch::Value(1),
-				}),
+				} => {
+					let result = self
+						.state
+						.timeline
+						.get(message)
+						.cloned()
+						.ok_or(Failure::Protocol)
+						.map(|mut updated| {
+							updated.content = content;
+							updated.edited = true;
+							updated.edited_at =
+								Some(updated.edited_at.unwrap_or(0).saturating_add(1));
+							updated
+						});
+					Event::Edited {
+						request,
+						channel,
+						message,
+						result,
+					}
+				}
 				Command::Delete { channel, message } => Event::Delete {
 					channel,
 					id: message,
+				},
+				Command::Pin {
+					request,
+					channel,
+					message,
+					pinned,
+				} => Event::Pinned {
+					request,
+					channel,
+					message,
+					pinned,
+					result: Ok(()),
 				},
 			};
 			self.state.apply(Envelope {
@@ -1049,22 +1411,61 @@ impl Desktop {
 	fn sign_in_screen(&mut self, ui: &mut egui::Ui) {
 		let p = ui::design::palette(ui);
 		egui::CentralPanel::default()
-			.frame(egui::Frame::NONE.fill(p.canvas).inner_margin(32))
+			.frame(egui::Frame::NONE.fill(p.canvas))
 			.show(ui, |ui| {
-				egui::ScrollArea::vertical()
-					.id_salt("sign-in-scroll")
+				// Soft radial accent glow behind the card instead of a flat canvas.
+				let rect = ui.max_rect();
+				let glow = rect.center() - egui::vec2(0.0, rect.height() * 0.1);
+				let radius = rect.width().max(rect.height()) * 0.55;
+				let mut mesh = egui::Mesh::default();
+				let alpha = if ui.visuals().dark_mode { 0.16 } else { 0.10 };
+				mesh.colored_vertex(glow, p.accent.gamma_multiply(alpha));
+				const SEGMENTS: u32 = 48;
+				for i in 0..=SEGMENTS {
+					let angle = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+					mesh.colored_vertex(
+						glow + egui::vec2(angle.cos(), angle.sin()) * radius,
+						egui::Color32::TRANSPARENT,
+					);
+				}
+				for i in 1..=SEGMENTS {
+					mesh.add_triangle(0, i, i + 1);
+				}
+				ui.painter().add(egui::Shape::mesh(mesh));
+				let header = egui::Frame::NONE
+					.inner_margin(egui::Margin {
+						left: (16.0 + ui::design::TRAFFIC_LIGHT_INSET) as i8,
+						right: if ui::design::WINDOW_CONTROLS_WIDTH > 0.0 {
+							0
+						} else {
+							24
+						},
+						top: if ui::design::WINDOW_CONTROLS_WIDTH > 0.0 {
+							0
+						} else {
+							18
+						},
+						bottom: 12,
+					})
 					.show(ui, |ui| {
 						ui.horizontal(|ui| {
-							ui.label(egui::RichText::new("Serein").size(24.0).strong());
-							ui.add_space(4.0);
-							ui.label(
-								egui::RichText::new("EARLY PREVIEW")
-									.size(10.0)
-									.color(p.accent),
-							);
+							ui.label(ui::design::semibold(ui, "Serein", 20.0).color(p.text_strong));
+							ui.add_space(6.0);
+							egui::Frame::NONE
+								.fill(p.accent.gamma_multiply(0.16))
+								.corner_radius(4)
+								.inner_margin(egui::Margin::symmetric(6, 2))
+								.show(ui, |ui| {
+									ui.label(
+										ui::design::semibold(ui, "EARLY PREVIEW", 10.0)
+											.color(p.accent),
+									);
+								});
 							ui.with_layout(
 								egui::Layout::right_to_left(egui::Align::Center),
 								|ui| {
+									ui::design::window_controls(ui);
+									ui.add_space(12.0);
 									ui.menu_button("Appearance", |ui| {
 										egui::widgets::global_theme_preference_buttons(ui);
 										self.messaging.reading_settings(
@@ -1075,144 +1476,150 @@ impl Desktop {
 								},
 							);
 						});
-						let wide = ui.available_width() >= 900.0;
-						ui.add_space(if wide {
-							((ui.available_height() - 460.0) * 0.4).max(30.0)
-						} else {
-							24.0
+					});
+				ui::design::window_drag(ui, header.response.rect);
+				egui::ScrollArea::vertical()
+					.id_salt("sign-in-scroll")
+					.show(ui, |ui| {
+						ui.add_space(((ui.available_height() - 560.0) * 0.4).max(8.0));
+						ui.vertical_centered(|ui| {
+							ui.allocate_ui_with_layout(
+								egui::vec2(ui.available_width().min(460.0), 0.0),
+								egui::Layout::top_down(egui::Align::Min),
+								|ui| self.sign_in_card(ui),
+							);
+							ui.add_space(20.0);
+							ui.label(
+								egui::RichText::new(
+									"Independent and open source. Not affiliated with Discord.",
+								)
+								.size(12.0)
+								.color(p.muted),
+							);
+							ui.add_space(24.0);
 						});
-						if wide {
-							let left = (ui.available_width() - 438.0).min(530.0);
-							ui.horizontal_top(|ui| {
-								ui.allocate_ui_with_layout(
-									egui::vec2(left, 390.0),
-									egui::Layout::top_down(egui::Align::Min),
-									|ui| {
-										ui.add_space(30.0);
-										ui.label(
-											egui::RichText::new(
-												"Your conversations.\nA little more calm.",
-											)
-											.size(42.0)
-											.color(p.text),
-										);
-										ui.add_space(16.0);
-										ui.add(
-											egui::Label::new(
-												egui::RichText::new(
-													"A lightweight home for the servers and people you already know.",
-												)
-												.size(18.0)
-												.color(p.muted),
-											)
-											.wrap(),
-										);
-										ui.add_space(36.0);
-										ui.label(
-											egui::RichText::new("YOUR ACCOUNT. YOUR COMMUNITIES.")
-												.size(11.0)
-												.color(p.accent),
-										);
-										ui.add_space(4.0);
-										ui.label(
-											egui::RichText::new(
-												"Connect to Discord, then pick up the conversation.",
-											)
-											.color(p.muted),
-										);
-									},
-								);
-								ui.add_space(40.0);
-								ui.allocate_ui_with_layout(
-									egui::vec2(390.0, 390.0),
-									egui::Layout::top_down(egui::Align::Min),
-									|ui| self.sign_in_card(ui),
-								);
-							});
-						} else {
-							ui.vertical_centered(|ui| {
-								ui.label(
-									egui::RichText::new("A little more room to talk.").size(30.0),
-								);
-								ui.add_space(18.0);
-								ui.allocate_ui_with_layout(
-									egui::vec2(ui.available_width().min(430.0), 390.0),
-									egui::Layout::top_down(egui::Align::Min),
-									|ui| self.sign_in_card(ui),
-								);
-							});
-						}
-						ui.add_space(28.0);
-						ui.label(
-							egui::RichText::new(
-								"Independent. Open source. Not affiliated with Discord.",
-							)
-							.size(12.0)
-							.color(p.muted),
-						);
 					});
 			});
 	}
 	fn sign_in_card(&mut self, ui: &mut egui::Ui) {
 		let ctx = ui.ctx().clone();
 		let p = ui::design::palette(ui);
-		egui::Frame::NONE.fill(p.surface).stroke(egui::Stroke::new(1.0, p.border))
-            .corner_radius(16).inner_margin(28).show(ui, |ui| {
-                ui.set_width((ui.available_width()).min(350.0));
-                ui.heading("Welcome to Serein");
-                ui.add_space(4.0);
-                ui.label(egui::RichText::new("Continue with your Discord account.").color(p.muted));
-                ui.add_space(22.0);
-                {
-                    ui.add_enabled(!self.fixture_only, egui::Checkbox::new(&mut self.authorized, "I own this account and authorize this test session."));
-                    ui.add_space(8.0);
-                    let can_sign_in = !self.fixture_only && self.authorized && !self.forgetting && self.state.auth != AuthState::Authenticating;
-                    if ui.add_enabled_ui(can_sign_in, |ui| ui::design::primary_button(ui, "Sign in with Discord  →")).inner.clicked() {
-                        if let Some(store)=&mut self.store {store.cancel_load();}
-                        self.credential_status="Sign in through Discord; saved-login lookup stopped";
-                        let wake = ctx.clone();
-                        match platform::LoginView::open(self.window.clone(), move || wake.request_repaint()) {
-                            Ok(login) => { self.login = Some(login); self.state.auth = AuthState::Authenticating; self.state.status = "Waiting for Discord login"; }
-                            Err(_) => { self.state.auth = AuthState::Failed; self.state.status = "Platform login webview unavailable; see platform-support.md"; }
-                        }
-                    }
-                    if self.fixture_only { ui.small("Offline preview. Launch normally to sign in."); }
-                    ui.add_space(8.0);
-                    ui.label(egui::RichText::new("Opens Discord’s login page. Your device’s credential store remembers your login.").size(12.0).color(p.muted));
-                    ui.add_space(12.0);
-                    if self.state.auth != AuthState::Unauthenticated || self.state.status != "Disconnected" || self.forgetting {
-                        ui.label(self.state.status);
-                    }
-                    ui.label(egui::RichText::new(self.credential_status).size(12.0));
-                    if self.cache_error || self.cache_pending > 0 || self.cache_clears.pending() { ui.small(self.cache_status); }
-                    ui.label(egui::RichText::new("Unofficial clients may put your Discord account at risk.").size(12.0).color(p.muted));
-                }
-                ui.add_space(18.0);
-                ui.separator();
-                ui.add_space(10.0);
-                if ui.add(egui::Button::new("Preview the interface  →").frame(false)).clicked() {
-                    if let Some(store)=&mut self.store {store.cancel_load();}
-                    self.connection = None; self.pending_save = None;
-                    let generation = self.state.generation + 1;
-                    self.state = test_support::demo_state(); self.state.generation = generation; self.messaging.clear();
-                }
-                ui.label(egui::RichText::new("Sample conversations. No Discord connection.").size(12.0).color(p.muted));
-                ui.add_space(12.0);
-                ui.collapsing("About this preview", |ui| {
-                    ui.small("Messaging, reactions, search and read markers have offline tests. Real Discord interoperability is still unverified; attachment uploads and advanced search remain incomplete.");
-                    ui.small("Messages and drafts are cached locally. Login tokens use the operating system credential store.");
-                    ui.small(self.credential_status);
-                    if !self.fixture_only && ui.button("Forget saved login").clicked() { self.logout(&ctx); }
-                });
-                #[cfg(feature = "developer-session")]
-                if !self.fixture_only { ui.collapsing("Developer session", |ui| {
-                    ui.add(egui::TextEdit::singleline(&mut *self.token_input).password(true).char_limit(2048).hint_text("Owner-supplied test credential"));
-                    if ui.add_enabled(self.authorized, egui::Button::new("Connect imported session (RAM only)")).clicked() {
-                        let input = std::mem::take(&mut *self.token_input);
-                        match SessionSecret::from_owner_input(input) { Ok(secret) => self.connect(secret, false, &ctx), Err(f) => self.state.status = f.label() }
-                    }
-                }); }
-            });
+		let shadow = egui::epaint::Shadow {
+			offset: [0, 8],
+			blur: 24,
+			spread: 0,
+			color: egui::Color32::from_black_alpha(if ui.visuals().dark_mode { 90 } else { 30 }),
+		};
+		egui::Frame::NONE
+			.fill(p.surface)
+			.stroke(egui::Stroke::new(1.0, p.border))
+			.shadow(shadow)
+			.corner_radius(12)
+			.inner_margin(32)
+			.show(ui, |ui| {
+				ui.vertical_centered(|ui| {
+					let (rect, _) = ui.allocate_exact_size(egui::vec2(56.0, 56.0), egui::Sense::hover());
+					ui.painter().rect_filled(rect, 14, p.accent);
+					ui::icons::paint(ui.painter(), ui::icons::Icon::Discord, rect.shrink(13.0), p.accent_text);
+					ui.add_space(16.0);
+					ui.label(ui::design::semibold(ui, "Welcome to Serein", 24.0).color(p.text_strong));
+					ui.add_space(6.0);
+					ui.label(egui::RichText::new("Sign in with your Discord account to pick up where you left off.").size(15.0).color(p.muted));
+				});
+				ui.add_space(24.0);
+				let can_sign_in = !self.fixture_only && self.authorized && !self.forgetting && self.state.auth != AuthState::Authenticating;
+				let label = if self.state.auth == AuthState::Authenticating { "Waiting for Discord…" } else { "Continue with Discord" };
+				let button = ui
+					.add_enabled_ui(can_sign_in, |ui| {
+						ui::design::primary_icon_button(ui, ui::icons::Icon::Discord, label)
+					})
+					.inner;
+				if button.clicked() {
+					if let Some(store) = &mut self.store { store.cancel_load(); }
+					self.credential_status = "Sign in through Discord; saved-login lookup stopped";
+					let wake = ctx.clone();
+					match platform::LoginView::open(self.window.clone(), move || wake.request_repaint()) {
+						Ok(login) => { self.login = Some(login); self.state.auth = AuthState::Authenticating; self.state.status = "Waiting for Discord login"; }
+						Err(_) => { self.state.auth = AuthState::Failed; self.state.status = "Platform login webview unavailable; see platform-support.md"; }
+					}
+				}
+				ui.add_space(12.0);
+				ui.add_enabled_ui(!self.fixture_only, |ui| {
+					ui.horizontal_wrapped(|ui| {
+						ui.spacing_mut().item_spacing.x = 8.0;
+						ui.checkbox(&mut self.authorized, "");
+						ui.label(egui::RichText::new("I own this account and authorize this session.").size(13.0).color(p.text));
+					});
+				});
+				ui.add_space(6.0);
+				ui.label(egui::RichText::new("Discord's own login page opens inside Serein. Passwords and 2FA stay there; only the session token is kept, in your OS credential store.").size(12.0).color(p.muted));
+				// Status: one banner, only when something is happening or went wrong.
+				let attention = matches!(self.state.auth, AuthState::Failed | AuthState::Expired | AuthState::Challenged);
+				let busy = self.state.auth == AuthState::Authenticating || self.forgetting || self.cache_pending > 0 || self.cache_clears.pending();
+				let show_status = attention || busy || self.state.status != "Disconnected" || (!self.fixture_only && self.credential_status != "Checking saved login…" && !self.credential_status.is_empty());
+				if show_status && !(self.fixture_only && self.state.status == "Disconnected") {
+					ui.add_space(14.0);
+					let (fill, color) = if attention { (p.warning.gamma_multiply(0.14), p.warning) } else { (p.raised, p.text) };
+					egui::Frame::NONE.fill(fill).corner_radius(8).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
+						ui.set_width(ui.available_width());
+						if self.state.status != "Disconnected" || attention {
+							ui.label(egui::RichText::new(self.state.status).size(13.0).color(color));
+						}
+						if !self.fixture_only && !self.credential_status.is_empty() {
+							ui.label(egui::RichText::new(self.credential_status).size(12.0).color(p.muted));
+						}
+						if self.cache_error || self.cache_pending > 0 || self.cache_clears.pending() {
+							ui.label(egui::RichText::new(self.cache_status).size(12.0).color(p.muted));
+						}
+					});
+				}
+				ui.add_space(22.0);
+				ui.horizontal(|ui| {
+					let y = ui.cursor().top() + 8.0;
+					let left = ui.cursor().left();
+					let width = ui.available_width();
+					let galley = ui.painter().layout_no_wrap("or".into(), egui::FontId::proportional(12.0), p.muted);
+					let text_w = galley.size().x + 20.0;
+					ui.painter().hline(left..=left + (width - text_w) * 0.5, y, egui::Stroke::new(1.0, p.border));
+					ui.painter().galley(egui::pos2(left + (width - galley.size().x) * 0.5, y - galley.size().y * 0.5), galley, p.muted);
+					ui.painter().hline(left + (width + text_w) * 0.5..=left + width, y, egui::Stroke::new(1.0, p.border));
+					ui.allocate_space(egui::vec2(width, 16.0));
+				});
+				ui.add_space(14.0);
+				if ui::design::secondary_button(ui, "Explore the offline preview").clicked() {
+					if let Some(store) = &mut self.store { store.cancel_load(); }
+					self.connection = None;
+					self.pending_save = None;
+					let generation = self.state.generation + 1;
+					self.state = test_support::demo_state();
+					self.state.generation = generation;
+					self.messaging.clear();
+				}
+				ui.add_space(8.0);
+				ui.vertical_centered(|ui| {
+					ui.label(egui::RichText::new("Sample conversations. No Discord connection.").size(12.0).color(p.muted));
+				});
+				ui.add_space(16.0);
+				ui.collapsing("About this preview", |ui| {
+						ui.small("Messaging, reactions, search and read markers have offline tests. Real Discord interoperability is still unverified; attachment uploads and advanced search remain incomplete.");
+						ui.small("Messages and drafts are cached locally. Login tokens use the operating system credential store.");
+						ui.small("Unofficial clients may put your Discord account at risk.");
+						if !self.fixture_only {
+							ui.small(self.credential_status);
+							if ui.button("Forget saved login").clicked() { self.logout(&ctx); }
+						}
+					});
+				#[cfg(feature = "developer-session")]
+				if !self.fixture_only {
+					ui.collapsing("Developer session", |ui| {
+						ui.add(egui::TextEdit::singleline(&mut *self.token_input).password(true).char_limit(2048).hint_text("Owner-supplied test credential"));
+						if ui.add_enabled(self.authorized, egui::Button::new("Connect imported session (RAM only)")).clicked() {
+							let input = std::mem::take(&mut *self.token_input);
+							match SessionSecret::from_owner_input(input) { Ok(secret) => self.connect(secret, false, &ctx), Err(f) => self.state.status = f.label() }
+						}
+					});
+				}
+			});
 	}
 	fn clear_avatars(&mut self, ctx: &egui::Context) {
 		self.avatar_start_failed = false;
@@ -1301,7 +1708,10 @@ impl Desktop {
 					self.cache_error = true;
 					self.cache_status = error;
 				}
-				self.messaging.accept_avatar(ctx, result.key, result.image);
+				self.messaging
+					.accept_avatar(ctx, result.key.clone(), result.image);
+				self.messaging
+					.accept_gif_animation(result.key, result.frames);
 			}
 		}
 	}
@@ -1328,6 +1738,18 @@ impl Desktop {
 			self.cache_pending = self.cache_pending.saturating_sub(1);
 			// Settings are global; account removal/write failures still matter after logout.
 			match &outcome {
+				cache::Outcome::GameActivity(result) => {
+					self.game_activity.restore(*result);
+					if !self.state.demo && !self.fixture_only {
+						self.messaging.share_game_activity = self.game_activity.enabled;
+					}
+					continue;
+				}
+				cache::Outcome::GameActivitySaved(result) => {
+					self.game_activity.saving = false;
+					self.game_activity.failed = result.is_err();
+					continue;
+				}
 				cache::Outcome::ReadingPreferences(result) => {
 					if let Some(value) = self.reading.restore(*result)
 						&& !self.state.demo
@@ -1398,6 +1820,9 @@ impl Desktop {
 				continue;
 			}
 			match outcome {
+				cache::Outcome::GifFavorites(favorites) => {
+					self.state.restore_gif_favorites(favorites);
+				}
 				cache::Outcome::Drafts(drafts) => {
 					for (channel, content) in drafts {
 						if !self
@@ -1426,6 +1851,8 @@ impl Desktop {
 					}
 				}
 				cache::Outcome::Appearance(..)
+				| cache::Outcome::GameActivity(_)
+				| cache::Outcome::GameActivitySaved(_)
 				| cache::Outcome::ReadingPreferences(_)
 				| cache::Outcome::ReadingPreferencesSaved(_)
 				| cache::Outcome::HistoryCleared
@@ -1497,6 +1924,8 @@ impl Desktop {
 			terminal = *connection.terminal.borrow();
 		}
 		let mut persist_timeline = false;
+		let mut full_window = false;
+		let mut changed_messages = std::collections::BTreeSet::new();
 		for mut event in events {
 			if event.generation != self.state.generation {
 				continue;
@@ -1519,28 +1948,8 @@ impl Desktop {
 			let ready = matches!(event.event, Event::Ready { .. });
 			let resumed = matches!(event.event, Event::Resumed);
 			let confirmed_channel = confirmed_recovery_channel(&self.state, &event.event);
-			let mut removed_channels: std::collections::BTreeSet<_> = if matches!(
-				&event.event,
-				Event::Ready { .. }
-					| Event::Permissions(_)
-					| Event::ChannelChanged(_)
-					| Event::ThreadChanged { .. }
-					| Event::ChannelCreated(_)
-					| Event::ChannelRestored(_)
-					| Event::ThreadsSync { .. }
-					| Event::ThreadRemoved { .. }
-			) {
-				self.state
-					.channels
-					.iter()
-					.filter(|channel| {
-						channel.supports_text() && self.state.can_read_history(channel.id)
-					})
-					.map(|channel| channel.id)
-					.collect()
-			} else {
-				Default::default()
-			};
+			let mut removed_channels = access_candidates(&self.state, &event.event);
+			removed_channels.retain(|id| self.state.can_read_history(*id));
 			let invalidate = matches!(
 				event.event,
 				Event::Resync | Event::PermissionsChanged | Event::Unavailable(_)
@@ -1549,12 +1958,31 @@ impl Desktop {
 				|| matches!(&event.event, Event::HistoryFailed { channel, request, failure: Failure::Forbidden }
                 if self.state.selected == Some(*channel) && self.state.request == *request && self.state.history_pending);
 			let history_changed = changes_active_history(&self.state, &event.event);
+			if history_changed {
+				match &event.event {
+					Event::Message(message)
+					| Event::SendResult {
+						result: Ok(message),
+						..
+					} => {
+						changed_messages.insert(message.id);
+					}
+					Event::Edited { message, .. } => {
+						changed_messages.insert(*message);
+					}
+					Event::Patch(patch) => {
+						changed_messages.insert(patch.id);
+					}
+					_ => full_window = true,
+				}
+			}
 			if event.generation == self.state.generation
 				&& (invalidate
 					|| event.event.changes_access()
 					|| matches!(
 						&event.event,
 						Event::NotificationPreferences(_)
+							| Event::UserAction(_)
 							| Event::Disconnected | Event::ReadState(
 							client_core::read_state::Event::Ack { .. }
 						) | Event::ReadState(client_core::read_state::Event::Result {
@@ -1569,20 +1997,12 @@ impl Desktop {
 			// Fence pending disk writes before the post-drain timeline snapshot is saved.
 			let deleted_replies = self.state.take_reply_deletions();
 			if let Some(&(channel, _)) = deleted_replies.first() {
+				full_window = true;
 				let ids: Vec<_> = deleted_replies.into_iter().map(|(_, id)| id).collect();
 				self.messaging.messages_deleted(ctx, channel, &ids);
 				self.delete_cached_ids(channel, ids);
 			}
-			if !removed_channels.is_empty() {
-				for channel in self
-					.state
-					.channels
-					.iter()
-					.filter(|c| c.supports_text() && self.state.can_read_history(c.id))
-				{
-					removed_channels.remove(&channel.id);
-				}
-			}
+			removed_channels.retain(|id| !self.state.can_read_history(*id));
 			#[cfg(feature = "voice")]
 			if let Some(error) = voice_failure
 				&& let Some(command) = self.voice.fail(&mut self.state, error)
@@ -1604,6 +2024,7 @@ impl Desktop {
 				if !self.messaging.draft_restore_pending {
 					self.messaging.draft_restore_pending =
 						self.queue_cache(cache::Operation::LoadDrafts);
+					self.queue_cache(cache::Operation::LoadGifFavorites);
 				}
 				if let Some(secret) = self.pending_save.take()
 					&& let Some(store) = &self.store
@@ -1632,10 +2053,23 @@ impl Desktop {
 			&& let Some(channel) = self.state.selected
 			&& self.state.can_read_history(channel)
 		{
-			self.queue_cache(cache::Operation::SaveChannel {
-				channel,
-				messages: self.state.timeline.iter().cloned().collect(),
-			});
+			let messages = self
+				.state
+				.timeline
+				.iter()
+				.filter(|m| full_window || changed_messages.contains(&m.id))
+				.cloned()
+				.collect();
+			let operation = if full_window {
+				cache::Operation::SaveChannel { channel, messages }
+			} else {
+				cache::Operation::SaveChanges {
+					channel,
+					messages,
+					retained: self.state.timeline.iter().map(|m| m.id).collect(),
+				}
+			};
+			self.queue_cache(operation);
 		}
 		if let Some(failure) = terminal {
 			for (setting, scope) in [
@@ -1697,30 +2131,58 @@ impl Desktop {
 
 		#[cfg(target_os = "linux")]
 		if self.login.is_some() {
-			ctx.request_repaint_after(Duration::from_millis(16));
+			ctx.request_repaint_after(self.frame_period().unwrap_or(Duration::from_millis(16)));
 		}
 		if self.login.is_some() {
 			ctx.request_repaint_after(Duration::from_secs(1));
 		}
 	}
 }
+impl Desktop {
+	/// Frame period of the display the window is on; egui otherwise assumes 60 Hz.
+	fn frame_period(&self) -> Option<Duration> {
+		self.monitor_period
+	}
+	fn refresh_frame_period(&mut self) -> Option<Duration> {
+		let millihertz = self.window.current_monitor()?.refresh_rate_millihertz()?;
+		(1_000..=1_000_000)
+			.contains(&millihertz)
+			.then(|| Duration::from_secs_f64(1000.0 / f64::from(millihertz)))
+	}
+}
 impl eframe::App for Desktop {
 	fn persist_egui_memory(&self) -> bool {
 		false
 	}
-	fn logic(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-		self.messaging.sync_reading_zoom(ctx);
-		if !self.fixture_only && !self.state.demo {
-			self.reading.observe(
-				self.messaging.reading_preferences,
-				std::time::Instant::now(),
-			);
+	fn raw_input_hook(&mut self, _: &egui::Context, raw_input: &mut egui::RawInput) {
+		// Viewport position/scale comes from native events; avoid an OS monitor query on paints.
+		if let Some(viewport) = raw_input.viewports.get(&raw_input.viewport_id) {
+			let geometry = (viewport.outer_rect, viewport.native_pixels_per_point);
+			if self.monitor_geometry != Some(geometry) {
+				self.monitor_geometry = Some(geometry);
+				self.monitor_period = self.refresh_frame_period();
+			}
 		}
+		if let Some(period) = self.frame_period() {
+			raw_input.predicted_dt = period.as_secs_f32();
+		}
+	}
+	fn logic(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+		self.frame_metrics.begin(ctx);
+		self.messaging.sync_reading_zoom(ctx);
 		self.poll(ctx);
+		let (focused, hidden_or_closing, ptt_down) = ctx.input(|input| {
+			(
+				input.focused,
+				input.viewport().visible() == Some(false) || input.viewport().close_requested(),
+				input.key_down(egui::Key::V),
+			)
+		});
+		#[cfg(not(feature = "voice"))]
+		let _ = ptt_down;
 		if self.state.user.is_none()
 			|| (!self.state.demo && self.state.auth != AuthState::Authenticated)
-			|| ctx
-				.input(|i| i.viewport().visible() == Some(false) || i.viewport().close_requested())
+			|| hidden_or_closing
 		{
 			self.audio.stop();
 			self.messaging.audio().stop();
@@ -1744,22 +2206,25 @@ impl eframe::App for Desktop {
 		while let Some(notification) = self.state.take_notification() {
 			if !self.fixture_only
 				&& self.messaging.notifications_enabled
-				&& !(ctx.input(|i| i.focused)
-					&& self.messaging.viewing_latest(notification.channel))
+				&& !(focused && self.messaging.viewing_latest(notification.channel))
 			{
 				self.notifications.notify();
 			}
 		}
 		#[cfg(feature = "voice")]
 		{
-			self.messaging.voice_ptt_active = ctx
-				.input(|input| input.focused && input.key_down(egui::Key::V))
-				&& !ctx.egui_wants_keyboard_input();
-			self.poll_voice(ctx);
+			self.messaging.voice_ptt_active =
+				focused && ptt_down && !ctx.egui_wants_keyboard_input();
 		}
 	}
 	fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
 		let ctx = ui.ctx().clone();
+		let (close_requested, dropped) = ctx.input_mut(|input| {
+			(
+				input.viewport().close_requested(),
+				std::mem::take(&mut input.raw.dropped_files),
+			)
+		});
 		ui::design::paint_backdrop(&ctx);
 		let upload_allowed = self.state.user.is_some()
 			&& self.state.gateway_connected
@@ -1781,14 +2246,17 @@ impl eframe::App for Desktop {
 						self.messaging.pasted_text = Some((paste.channel, paste.target, text));
 					}
 					Ok(clipboard::Content::File(source)) if upload_allowed && can_attach => {
-						if let Err(error) =
-							self.uploads
-								.select_pasted(paste.generation, paste.channel, source)
-						{
+						if let Err(error) = self.uploads.select_pasted(
+							paste.generation,
+							paste.channel,
+							source,
+							self.runtime.handle(),
+							&ctx,
+						) {
 							self.state.status = error;
 						}
 					}
-					Ok(clipboard::Content::File(_)) => {
+					Ok(clipboard::Content::File(..)) => {
 						self.state.status = "Attaching files is unavailable here"
 					}
 					Err(error) => self.state.status = error,
@@ -1806,7 +2274,6 @@ impl eframe::App for Desktop {
 			&ctx,
 		);
 		// Move native handles once; never load dropped bytes on the rendering thread.
-		let dropped = ctx.input_mut(|input| std::mem::take(&mut input.raw.dropped_files));
 		if !dropped.is_empty() {
 			if upload_allowed
 				&& can_attach
@@ -1831,12 +2298,21 @@ impl eframe::App for Desktop {
 					"File not attached; return to a connected conversation and drop it again";
 			}
 		}
-		self.messaging.attachment = self
-			.uploads
-			.selection()
-			.map(|(name, size)| (name.to_owned(), size));
+		// Offline fixtures may stage a synthetic attachment without any upload selection.
+		if !self.state.demo || self.uploads.selection().is_some() {
+			self.messaging.attachment = self
+				.uploads
+				.selection()
+				.map(|(name, size)| (name.to_owned(), size));
+			self.messaging.attachment_preview = self.uploads.preview();
+			self.messaging.attachment_files = self.uploads.files();
+		}
 		self.messaging.upload_busy = self.uploads.busy() || self.clipboard.is_some();
 		self.messaging.upload_status = self.uploads.status();
+		if !self.state.demo {
+			let (progress, sending) = self.uploads.transfer_progress();
+			self.messaging.update_upload_progress(progress, sending);
+		}
 		if self.state.user.is_none() {
 			self.downloads.cancel();
 		}
@@ -1853,7 +2329,7 @@ impl eframe::App for Desktop {
 		};
 		self.messaging.downloads().active = self.downloads.is_active();
 		self.messaging.downloads().status = download_status;
-		if ctx.input(|i| i.viewport().close_requested()) && self.downloads.is_active() {
+		if close_requested && self.downloads.is_active() {
 			self.downloads.cancel();
 			self.download_close_pending = true;
 			ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -1866,10 +2342,8 @@ impl eframe::App for Desktop {
 			ctx.send_viewport_cmd(egui::ViewportCommand::Close);
 		}
 		self.poll_avatars(&ctx);
-		#[cfg(feature = "voice")]
-		self.poll_voice(&ctx);
 		self.messaging.voice_available = cfg!(feature = "voice");
-		if ctx.input(|i| i.viewport().close_requested())
+		if close_requested
 			&& !self.close_approved
 			&& ((self.state.demo && self.state.has_unsent())
 				|| self
@@ -1884,16 +2358,78 @@ impl eframe::App for Desktop {
 				|| self.cache_pending > 0
 				|| self.cache_clears.pending()
 				|| (!self.fixture_only && self.reading.needs_attention())
+				|| (!self.fixture_only && self.game_activity.needs_attention())
 				|| self.cache_error)
 		{
 			ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
 			self.confirming_close = true;
 		}
 		if self.login.is_some() {
-			egui::CentralPanel::default().show(ui,|ui|{
-                ui.heading("Discord sign-in");ui.horizontal(|ui|{ui.label("Official discord.com page · temporary login webview · Serein is unofficial");if ui.button("Cancel login").clicked(){self.login=None;self.state.auth=AuthState::Unauthenticated;}});
-                ui.small("Complete login here. Passwords and QR challenges stay in the webview; only the resulting token is saved.");
-            });
+			let p = ui::design::palette(ui);
+			egui::Panel::top("login-header")
+				.exact_size(platform::LOGIN_HEADER_HEIGHT)
+				.show_separator_line(false)
+				.frame(
+					egui::Frame::NONE
+						.fill(p.surface)
+						.stroke(egui::Stroke::new(1.0, p.border))
+						.inner_margin(egui::Margin::symmetric(16, 0)),
+				)
+				.show(ui, |ui| {
+					ui::design::window_drag(ui, ui.max_rect());
+					ui.horizontal_centered(|ui| {
+						ui.add_space(ui::design::TRAFFIC_LIGHT_INSET);
+						let (rect, _) =
+							ui.allocate_exact_size(egui::vec2(32.0, 32.0), egui::Sense::hover());
+						ui.painter().rect_filled(rect, 8, p.accent);
+						ui::icons::paint(
+							ui.painter(),
+							ui::icons::Icon::Discord,
+							rect.shrink(7.0),
+							p.accent_text,
+						);
+						ui.add_space(4.0);
+						ui.vertical(|ui| {
+							ui.spacing_mut().item_spacing.y = 1.0;
+							ui.label(
+								ui::design::semibold(ui, "Sign in to Discord", 15.0)
+									.color(p.text_strong),
+							);
+							ui.label(
+								egui::RichText::new(
+									"discord.com · temporary login window · passwords and 2FA never leave the page",
+								)
+								.size(12.0)
+								.color(p.muted),
+							);
+						});
+						ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+							ui::design::window_controls(ui);
+							if ui
+								.add(
+									egui::Button::new(
+										ui::design::medium(ui, "Cancel", 13.0).color(p.text_strong),
+									)
+									.fill(p.raised)
+									.stroke(egui::Stroke::new(1.0, p.border))
+									.corner_radius(6)
+									.min_size(egui::vec2(0.0, 32.0)),
+								)
+								.clicked()
+							{
+								self.login = None;
+								self.state.auth = AuthState::Unauthenticated;
+							}
+						});
+					});
+				});
+			egui::CentralPanel::default()
+				.frame(egui::Frame::NONE.fill(p.canvas))
+				.show(ui, |ui| {
+					ui.centered_and_justified(|ui| {
+						ui.label(egui::RichText::new("Loading discord.com…").color(p.muted));
+					});
+				});
 			if let Some(login) = &self.login {
 				login.resize(&self.window);
 			}
@@ -1939,12 +2475,11 @@ impl eframe::App for Desktop {
 			{
 				self.notifications.notify();
 			}
-			// Selection may have changed during this frame; never reuse another channel's file.
-			self.uploads.poll(
+			// Revalidate scope after navigation without polling workers a second time.
+			self.uploads.revalidate_scope(
 				self.state.generation,
 				self.state.selected,
 				self.state.user.is_some() && self.state.gateway_connected,
-				&ctx,
 			);
 			if !self
 				.state
@@ -1953,8 +2488,17 @@ impl eframe::App for Desktop {
 			{
 				self.uploads.cancel();
 			}
+			if let Some(index) = self.messaging.remove_attachment_index.take() {
+				self.uploads.remove_at(index);
+				if self.state.demo {
+					self.messaging.attachment = None;
+					self.messaging.attachment_preview = None;
+				}
+			}
 			if std::mem::take(&mut self.messaging.remove_attachment_requested) {
 				self.uploads.remove();
+				self.messaging.attachment = None;
+				self.messaging.attachment_preview = None;
 			}
 			if std::mem::take(&mut self.messaging.cancel_upload_requested) {
 				self.uploads.cancel();
@@ -2052,6 +2596,7 @@ impl eframe::App for Desktop {
 		}
 		let appearance = ctx.options(|options| options.theme_preference);
 		self.save_reading_preferences(&ctx);
+		self.sync_game_activity(&ctx);
 		if appearance != self.appearance {
 			self.appearance = appearance;
 			self.appearance_changed = true;
@@ -2061,6 +2606,10 @@ impl eframe::App for Desktop {
 				egui::ThemePreference::Dark => local_store::Appearance::Dark,
 			};
 			self.queue_cache_for(model::Id(0), cache::Operation::SaveAppearance(preference));
+		}
+		if std::mem::take(&mut self.state.gifs.favorites_changed) {
+			let favorites = self.state.gifs.favorites.clone();
+			self.queue_cache(cache::Operation::SaveGifFavorites(favorites));
 		}
 		if let Some(variant) = self.messaging.theme_variant_changed.take() {
 			self.variant_changed = true;
@@ -2073,6 +2622,7 @@ impl eframe::App for Desktop {
                 if self.forgetting{ui.label("Wait for saved-login removal to finish.");}
                 if self.cache_clears.pending(){ui.label("Cached history cleanup is pending; closing now may leave deleted messages on disk.");}
                 if !self.fixture_only && self.reading.needs_attention(){ui.label(self.reading.status());}
+				if !self.fixture_only && self.game_activity.needs_attention(){ui.label(self.game_activity.status());}
                 ui.horizontal(|ui|{
                     if ui.button("Keep working").clicked(){self.confirming_close=false;self.confirming_logout=false;self.download_close_pending=false;}
                     if ui.add_enabled(!self.forgetting,egui::Button::new("Discard and continue")).clicked(){
@@ -2081,6 +2631,8 @@ impl eframe::App for Desktop {
                 });
             });
 		}
+		self.frame_metrics.reflows = self.messaging.timeline_reflows();
+		self.frame_metrics.finish();
 	}
 }
 

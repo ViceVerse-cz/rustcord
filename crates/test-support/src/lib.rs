@@ -1,6 +1,79 @@
 //! Handcrafted synthetic data. No network imports; never evidence of live compatibility.
 use client_core::{Envelope, Event, State};
 use model::*;
+/// Synthetic Tenor-shaped results. Previews under `/synthetic/` are painted locally; no request.
+pub fn gif_page(query: Option<&str>) -> model::GifPage {
+	const TITLES: [&str; 12] = [
+		"Excited wave",
+		"Slow clap",
+		"Thumbs up",
+		"Happy dance",
+		"Mind blown",
+		"Popcorn time",
+		"Cat typing",
+		"High five",
+		"Facepalm",
+		"Confetti",
+		"Nodding",
+		"Shrug",
+	];
+	const SIZES: [(u32, u32); 12] = [
+		(498, 280),
+		(498, 498),
+		(320, 240),
+		(498, 372),
+		(498, 210),
+		(400, 500),
+		(498, 280),
+		(360, 360),
+		(498, 320),
+		(498, 260),
+		(300, 420),
+		(498, 280),
+	];
+	let needle = query.map(str::to_lowercase);
+	let gifs = TITLES
+		.iter()
+		.enumerate()
+		.filter(|(_, title)| {
+			needle
+				.as_deref()
+				.is_none_or(|needle| title.to_lowercase().contains(needle) || needle.len() <= 3)
+		})
+		.map(|(index, title)| model::Gif {
+			id: format!("synthetic-{index}"),
+			title: (*title).to_owned(),
+			url: format!(
+				"https://tenor.com/view/synthetic-{index}-gif-{}",
+				1000 + index
+			),
+			preview: format!("https://media.tenor.com/synthetic/{index}/tenor.png"),
+			width: SIZES[index].0,
+			height: SIZES[index].1,
+		})
+		.collect();
+	model::GifPage {
+		gifs,
+		categories: if query.is_none() {
+			[
+				"Agree",
+				"Applause",
+				"Dance",
+				"Excited",
+				"Facepalm",
+				"Hello",
+				"No",
+				"Thank you",
+			]
+			.into_iter()
+			.map(str::to_owned)
+			.collect()
+		} else {
+			Vec::new()
+		},
+	}
+}
+
 pub fn message(id: u64, channel: Id) -> Message {
 	let mut content = match id % 6 {
 		0 => "A short synthetic message.".into(),
@@ -186,6 +259,7 @@ pub fn demo_state() -> State {
 					kind: 0,
 					recipients: vec![],
 					member_list_id: Some("everyone".into()),
+					message_count: None,
 				},
 				Channel {
 					last_message: None,
@@ -197,6 +271,7 @@ pub fn demo_state() -> State {
 					kind: 0,
 					recipients: vec![],
 					member_list_id: Some("everyone".into()),
+					message_count: None,
 				},
 				Channel {
 					last_message: None,
@@ -208,6 +283,7 @@ pub fn demo_state() -> State {
 					kind: 1,
 					recipients: vec![message(1, Id(22)).author],
 					member_list_id: None,
+					message_count: None,
 				},
 				Channel {
 					last_message: None,
@@ -219,6 +295,7 @@ pub fn demo_state() -> State {
 					kind: 4,
 					recipients: vec![],
 					member_list_id: None,
+					message_count: None,
 				},
 				Channel {
 					last_message: None,
@@ -230,6 +307,7 @@ pub fn demo_state() -> State {
 					kind: 4,
 					recipients: vec![],
 					member_list_id: None,
+					message_count: None,
 				},
 				Channel {
 					last_message: None,
@@ -241,6 +319,7 @@ pub fn demo_state() -> State {
 					kind: 2,
 					recipients: vec![],
 					member_list_id: None,
+					message_count: None,
 				},
 				Channel {
 					id: Id(26),
@@ -252,6 +331,7 @@ pub fn demo_state() -> State {
 					recipients: vec![],
 					last_message: None,
 					member_list_id: None,
+					message_count: None,
 				},
 				Channel {
 					id: Id(27),
@@ -261,8 +341,33 @@ pub fn demo_state() -> State {
 					name: "A synthetic forum post".into(),
 					kind: 11,
 					recipients: vec![],
-					last_message: None,
+					last_message: Some(Id(1_542_322_755_993_600_000)),
 					member_list_id: None,
+					message_count: Some(10),
+				},
+				Channel {
+					id: Id(41),
+					guild: Some(Id(10)),
+					parent_id: Some(Id(26)),
+					position: 0,
+					name: "Automatic model retraining on app data".into(),
+					kind: 11,
+					recipients: vec![],
+					last_message: Some(Id(1_546_671_410_380_800_000)),
+					member_list_id: None,
+					message_count: Some(0),
+				},
+				Channel {
+					id: Id(42),
+					guild: Some(Id(10)),
+					parent_id: Some(Id(26)),
+					position: 0,
+					name: "Different model weights for differently powerful phones".into(),
+					kind: 11,
+					recipients: vec![],
+					last_message: Some(Id(1_547_722_335_191_040_000)),
+					member_list_id: None,
+					message_count: Some(6),
 				},
 				Channel {
 					id: Id(28),
@@ -274,6 +379,7 @@ pub fn demo_state() -> State {
 					recipients: vec![],
 					last_message: None,
 					member_list_id: None,
+					message_count: None,
 				},
 			],
 		},
@@ -341,6 +447,7 @@ pub fn voice_demo_state() -> State {
 		kind: 2,
 		recipients: vec![],
 		member_list_id: None,
+		message_count: None,
 		last_message: None,
 	});
 	state.voice.roster = [
@@ -480,6 +587,9 @@ pub fn chat_demo_state() -> State {
 		m.id = Id(((1_788_998_100_000u64 + i as u64 * 60_000 - 1_420_070_400_000) << 22) | 1);
 		m.author = message(if !(3..7).contains(&i) { 1 } else { 2 }, Id(20)).author;
 		m.content = (*text).into();
+		if i == 8 {
+			m.reply_to = state.timeline.iter().nth(6).map(|original| original.id);
+		}
 		if i < 7 {
 			state.timeline.insert(m, false, false).unwrap();
 		} else {

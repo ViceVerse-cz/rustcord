@@ -9,11 +9,14 @@ pub fn show(
 	media: (&mut crate::avatars::Avatars, bool),
 	can_react: impl Fn(&ReactionEmoji, bool) -> bool,
 ) -> Option<Option<ReactionEmoji>> {
-	if reactions.is_some_and(<[Reaction]>::is_empty) && !writing {
+	if reactions.is_some_and(<[Reaction]>::is_empty) {
 		return None;
 	}
 	let mut action = None;
 	ui.horizontal_wrapped(|ui| {
+		ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+		ui.spacing_mut().button_padding = egui::vec2(6.0, 3.0);
+		ui.spacing_mut().interact_size.y = 26.0;
 		let Some(reactions) = reactions else {
 			ui.weak(if refreshing {
 				"Updating reactions…"
@@ -31,6 +34,9 @@ pub fn show(
 			}
 			return;
 		};
+		if writing {
+			ui.visuals_mut().disabled_alpha = 1.0;
+		}
 		for reaction in reactions {
 			let label = format!("{} {}", reaction.emoji.label(), reaction.count);
 			let button = if reaction.emoji.id.is_none() {
@@ -56,7 +62,11 @@ pub fn show(
 				!writing
 					&& reaction.emoji.name.is_some()
 					&& can_react(&reaction.emoji, !reaction.me),
-				button.small().selected(reaction.me),
+				button
+					.gap(4.0)
+					.min_size(egui::vec2(0.0, 26.0))
+					.corner_radius(6)
+					.selected(reaction.me),
 			);
 			response.widget_info(|| {
 				egui::WidgetInfo::selected(
@@ -78,9 +88,6 @@ pub fn show(
 			if response.clicked() {
 				action = Some(Some(reaction.emoji.clone()));
 			}
-		}
-		if writing {
-			ui.weak("Saving reaction…");
 		}
 	});
 	action

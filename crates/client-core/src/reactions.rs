@@ -42,6 +42,8 @@ pub struct Reactions {
 	dirty: BTreeSet<Id>,
 	read: Option<(Id, u64)>,
 	pub writing: Option<(Id, u64)>,
+	// One bounded reaction list before/after the single in-flight write.
+	preview: Option<(Id, Vec<Reaction>, Vec<Reaction>)>,
 	sequence: u64,
 }
 impl Reactions {
@@ -54,7 +56,18 @@ impl Reactions {
 		self.dirty.clear();
 		self.read = None;
 		self.writing = None;
+		self.preview = None;
 		self.sequence = self.sequence.wrapping_add(1);
+	}
+	pub fn busy(&self) -> bool {
+		self.writing.is_some() || self.preview.is_some()
+	}
+	pub fn display<'a>(&'a self, message: &'a model::Message) -> Option<&'a [Reaction]> {
+		self.preview
+			.as_ref()
+			.filter(|(id, _, _)| *id == message.id)
+			.map(|(_, _, after)| after.as_slice())
+			.or(message.reactions.as_deref())
 	}
 	pub fn invalidated(&self, id: Id) -> bool {
 		self.dirty.contains(&id) || self.read.is_some_and(|(message, _)| message == id)
@@ -76,11 +89,21 @@ impl State {
 		self.revision += 1;
 	}
 	pub fn next_reaction_read(&mut self) -> Option<crate::Command> {
+		if self.reactions.writing.is_none()
+			&& self
+				.reactions
+				.preview
+				.as_ref()
+				.is_some_and(|(id, _, _)| self.timeline.get(*id).is_none())
+		{
+			self.reactions.preview = None;
+		}
 		if self.auth != AuthState::Authenticated
 			|| !self.gateway_connected
 			|| self.freshness != Freshness::Fresh
 			|| self.history_pending
 			|| self.reactions.read.is_some()
+			|| self.reactions.writing.is_some()
 		{
 			return None;
 		}
@@ -110,6 +133,7 @@ impl State {
 			|| !self.gateway_connected
 			|| self.freshness != Freshness::Fresh
 			|| self.reactions.writing.is_some()
+			|| self.reactions.preview.is_some()
 			|| !emoji.valid()
 			|| emoji.name.is_none()
 		{
@@ -126,6 +150,27 @@ impl State {
 		if !self.can_react(message, Some(&emoji), add) {
 			return None;
 		}
+		let before = reactions.clone();
+		let mut after = before.clone();
+		if let Some(reaction) = after.iter_mut().find(|r| r.emoji.same(&emoji)) {
+			reaction.count = if add {
+				reaction.count.checked_add(1)?
+			} else {
+				reaction.count.saturating_sub(1)
+			};
+			reaction.me = add;
+		} else {
+			after.push(Reaction {
+				emoji: emoji.clone(),
+				count: 1,
+				me: true,
+				me_burst: false,
+			});
+		}
+		after.retain(|r| r.count > 0);
+		self.reactions.cancel_read();
+		self.reactions.preview = Some((message, before, after));
+		self.revision += 1;
 		self.reactions.sequence = self.reactions.sequence.wrapping_add(1);
 		let request = self.reactions.sequence;
 		self.reactions.writing = Some((message, request));
@@ -167,12 +212,37 @@ impl State {
 				}
 				match result {
 					Ok(reactions) if !self.reactions.dirty.contains(&message) => {
-						self.timeline.set_reactions(message, Some(reactions))?
+						self.timeline.set_reactions(message, Some(reactions))?;
+						if self
+							.reactions
+							.preview
+							.as_ref()
+							.is_some_and(|(id, _, _)| *id == message)
+						{
+							self.reactions.preview = None;
+						}
 					}
 					Ok(_) => {} // A newer invalidation schedules one fresh read, never an old snapshot.
 					Err(failure) => {
+						if self
+							.reactions
+							.preview
+							.as_ref()
+							.is_some_and(|(id, _, _)| *id == message)
+							&& let Some((_, _, after)) = self.reactions.preview.take()
+						{
+							self.timeline.set_reactions(message, Some(after))?;
+						}
 						self.reactions.dirty.remove(&message); // No retry storm on a rejected read.
-						self.status = "Reactions unavailable; use Reload reactions to retry";
+						self.status = if self
+							.timeline
+							.get(message)
+							.is_some_and(|m| m.reactions.is_some())
+						{
+							"Reaction counts could not be refreshed; reload the conversation to retry"
+						} else {
+							"Reactions unavailable; use Reload reactions to retry"
+						};
 						if failure == Failure::Forbidden {
 							self.apply(crate::Envelope {
 								generation: self.generation,
@@ -200,13 +270,22 @@ impl State {
 				match result {
 					Ok(()) => {
 						self.refresh_reactions(message);
-						self.status = "Reaction saved";
 					}
 					Err(failure) => {
+						let before = self.reactions.preview.take().map(|(_, before, _)| before);
 						// A timed-out write may have succeeded. Read back; never repeat the write.
 						if failure == Failure::Ambiguous {
 							self.refresh_reactions(message);
 						}
+						if let Some(before) = before
+							&& self
+								.timeline
+								.get(message)
+								.is_some_and(|m| m.reactions.is_none())
+						{
+							self.timeline.set_reactions(message, Some(before))?;
+						}
+						self.revision += 1;
 						self.status = failure.label();
 						if failure.ends_session() {
 							self.fail(failure);
@@ -254,6 +333,7 @@ mod tests {
 				position: 0,
 				recipients: vec![],
 				member_list_id: None,
+				message_count: None,
 			}],
 			..State::default()
 		};
@@ -334,7 +414,28 @@ mod tests {
 			state.prepare_reaction(Id(50), emoji.clone()),
 			Some(crate::Command::Reactions(Command::Set { add: true, .. }))
 		));
-		state.reactions.writing = None;
+		let visible = state
+			.reactions
+			.display(state.timeline.get(Id(50)).unwrap())
+			.unwrap();
+		assert!(visible[0].me);
+		assert_eq!(visible[0].count, 2);
+		let (_, request) = state.reactions.writing.unwrap();
+		state
+			.apply_reactions(Event::Written {
+				channel: Id(10),
+				message: Id(50),
+				request,
+				result: Err(Failure::Forbidden),
+			})
+			.unwrap();
+		let visible = state
+			.reactions
+			.display(state.timeline.get(Id(50)).unwrap())
+			.unwrap();
+		assert!(!visible[0].me);
+		assert_eq!(visible[0].count, 1);
+		state.reactions.reset();
 		state
 			.timeline
 			.set_reactions(
@@ -351,7 +452,30 @@ mod tests {
 			state.prepare_reaction(Id(50), emoji.clone()),
 			Some(crate::Command::Reactions(Command::Set { add: false, .. }))
 		));
-		state.reactions.writing = None;
+		assert!(
+			state
+				.reactions
+				.display(state.timeline.get(Id(50)).unwrap())
+				.unwrap()
+				.is_empty()
+		);
+		let (_, request) = state.reactions.writing.unwrap();
+		state
+			.apply_reactions(Event::Written {
+				channel: Id(10),
+				message: Id(50),
+				request,
+				result: Err(Failure::RateLimited),
+			})
+			.unwrap();
+		assert!(
+			state
+				.reactions
+				.display(state.timeline.get(Id(50)).unwrap())
+				.unwrap()[0]
+				.me
+		);
+		state.reactions.reset();
 		state.refresh_reactions(Id(50));
 		let Some(crate::Command::Reactions(Command::Read { request, .. })) =
 			state.next_reaction_read()

@@ -12,6 +12,26 @@ Stop, call teardown, changed generation, lost video permission or stream-server 
 
 Owner-operated validation is still required: allow screen-recording permission, join a private call, choose a window, verify viewing in the official client, then test Stop, source closure, permission loss, viewer changes/rekey and both quality presets. No live account/capture was used for agent tests. Native Windows execution and live Discord video interoperability are not established by macOS builds or synthetic tests.
 
+
+User context actions (checked September 11, 2026): Close DM uses the documented
+[Delete/Close Channel route](https://docs.discord.com/developers/resources/channel#deleteclose-channel)
+only for a known one-to-one DM. It closes navigation after successful HTTP completion;
+messages and drafts are not deleted. Pending messages and an active call prevent closing.
+Block/unblock use `PUT` (type 2)/`DELETE /users/@me/relationships/{user}`; mute/unmute use
+`PATCH /users/@me/guilds/@me/settings` with a single channel override. These account routes are
+unofficial and unstable, supported by the public [HTTP implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/http.py)
+and [channel settings implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/settings.py).
+Mute means DM notifications until explicitly unmuted, not voice audio. The response must confirm
+the requested channel and mute value. Block state hydrates from READY relationships and follows
+relationship add/update/remove events, based on the public [gateway implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/state.py).
+Unknown relationship/settings state is distinguished from false. One write is pending at a time;
+rejections, disconnects and ambiguous outcomes remain visible without automatic retries.
+Gateway updates take precedence over late HTTP confirmations. Notification suppression reuses
+the existing account settings and rejects alerts from known blocked authors. Existing timeline
+content is retained; this does not implement Discord's collapsed blocked-message presentation.
+Offline reducer, decoder and local HTTP tests cover these actions; normal-user acceptance,
+cross-device behavior and native interaction remain live-unverified. No accounts were accessed.
+
 Inline spoilers (September 10): Discord's [Spoiler Tags help](https://support.discord.com/hc/en-us/articles/360022320632-Spoiler-Tags)
 documents paired pipe delimiters and exempts code blocks. The native timeline recognizes
 bounded paired literal delimiters outside code, with up to 32 independently revealed text
@@ -482,3 +502,82 @@ categories for these cases and missing dispatch names. Received names and payloa
 diagnostics. This changes observability, not the supported service contract. Offline local-socket
 checks cover continued message delivery and heartbeat cursor advancement; normal-user service
 behavior remains unverified. See storage-policy.md for exact per-run limits and stderr handling.
+
+### Outgoing game IPC Rich Presence (September 11, 2026)
+
+The saved, off-by-default Game Activity setting now hosts a local activity-only IPC endpoint
+instead of polling an executable allowlist. It tries `discord-ipc-0` through `discord-ipc-9`
+without replacing an occupied endpoint. Windows named pipes and Unix runtime/temp sockets
+follow [Discord's RPC transport](https://docs.discord.com/developers/topics/rpc).
+Games must connect to Serein; IPC is point-to-point, not an eavesdropping/subscription feed
+from an already-running Discord instance. Enable sharing before launching the game; another
+Discord client may win the game's connection. Games without IPC integration remain unsupported.
+
+Supported: v1 handshake/READY, SET_ACTIVITY, null or omitted clear, PING/PONG, disconnect cleanup,
+name/application ID, activity type, details/state, timestamps and registered large/small artwork.
+The newest active game's update wins, with fallback to another connected game when it clears.
+Other RPC commands return correlated errors without disconnecting games that subscribe to join
+events. Join/spectate actions, secrets, buttons, party actions and game-provided URLs are omitted.
+Legacy omitted clears and callback subscriptions are verified against Discord's original
+[SDK serializer](https://github.com/discord/discord-rpc/blob/master/src/serialization.cpp) and
+[SDK runtime](https://github.com/discord/discord-rpc/blob/master/src/discord_rpc.cpp).
+Timestamps accept legacy seconds and modern milliseconds (as emitted by
+[discordjs/RPC](https://github.com/discordjs/RPC/blob/master/src/client.js)); values below 10^10
+are interpreted as seconds. This threshold is our contemporary-date heuristic, not a documented
+universal conversion rule.
+
+Public `/applications/{id}/rpc` resolves the application name; the unofficial
+`/oauth2/applications/{id}/assets` route resolves registered asset keys to IDs, following the
+[public HTTP implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/http.py). Both are
+credential-free and bounded, with no redirects or automatic retries; Retry-After cooldowns
+are shared across the session's metadata lookups. Unresolved artwork is
+omitted and application-name lookup failures are visible. These routes and normal-user Gateway
+publication remain unofficial/unstable. The existing [Update Presence](https://docs.discord.com/developers/events/gateway-events#update-presence)
+path waits for READY/RESUMED, coalesces updates and limits attempts (including clears) to one
+per five seconds. The Gateway payload retains the existing online/afk/since behavior.
+
+Offline tests cover native Windows IPC, malformed/oversized frames, handshake/update/clear,
+unsupported subscriptions, shutdown, rich Gateway fields, rate spacing and reconnect.
+Native screenshots use only `--demo`; they demonstrate settings, not IPC or Discord publication.
+No live account/game compatibility was tested. Linux/macOS native execution remains unverified
+on this Windows host; builds/tests or fixtures do not establish normal-user service compatibility.
+
+Reply-framing correction (September 11, 2026): assemble the header and payload before writing.
+The [C# SDK used by osu!](https://github.com/Lachee/discord-rpc-csharp/blob/master/DiscordRPC/IO/ManagedNamedPipeClient.cs)
+parses each completed pipe read as a frame. Against the installed osu! SDK 1.5.0.51,
+isolated synthetic Windows pipes decoded 10/10 combined replies and 0/10 split replies;
+split replies disconnected even without an artificial delay. A native Rust regression
+received only four bytes of a 240-byte READY before the fix and the complete reply after it.
+This verifies local framing, not live game-to-Gateway publication. Byte streams do not
+guarantee whole-frame delivery universally; this SDK also has a 16,384-byte read buffer
+including the header. Normal READY/activity acknowledgements fit comfortably within it;
+a maximum-sized 16 KiB PONG payload remains outside that SDK's single-read capacity.
+
+### Server folders (September 11, 2026)
+
+Server ordering, grouping, folder names and RGB colors use the normal-user
+`GET/PATCH /users/@me/settings-proto/1` endpoint. This is unofficial and live-unverified.
+The bounded adapter patches only the guild-folder subtree, retains unknown fields
+and guild positions, checks the freshly read data version, and requires a confirming
+response before changing the displayed layout. Conflicts and uncertain saves expose
+a refresh/retry action. Other-client changes require the rail context menu's explicit
+refresh; Gateway settings updates are not consumed in this slice.
+
+Primary implementation evidence checked: [settings schema](https://github.com/discord-userdoccers/discord-protos)
+and [discord.py-self HTTP adapter](https://github.com/dolfies/discord.py-self/blob/master/discord/http.py).
+Limits: 200 servers, 200 folder entries, 100 characters/400 bytes per name, 16 KiB
+retained layout, 1 MiB settings response. Oversized settings disable organization
+without hiding normal server navigation. Demo edits stay in memory; live edits persist
+through Discord. No live account actions were performed in fast local validation.
+
+### Invite acceptance (September 11, 2026)
+
+Native invite cards offer a deliberate server join after a valid, bounded preview. The
+normal-user `POST /invites/{code}` with an empty JSON body is unofficial, based on
+[discord.py-self's accept_invite implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/http.py).
+It is single-attempt and uses the existing rate-limit and session-challenge handling.
+A successful response confirms invite acceptance only; gateway guild/channel/permission
+updates supply actual access. New gateway guilds enter the server rail. Expired or rejected
+invites and uncertain writes show errors. Challenges, membership screening, and application
+requirements remain unsupported in the native join flow. No challenge bypass or automatic retry.
+Live acceptance and restricted-server flows remain unverified; offline demo cannot join.

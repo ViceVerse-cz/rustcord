@@ -152,7 +152,8 @@ impl State {
 				..
 			} => Some(message.channel),
 			Event::Patch(patch) => Some(patch.channel),
-			Event::Delete { channel, .. }
+			Event::Edited { channel, .. }
+			| Event::Delete { channel, .. }
 			| Event::DeleteBulk { channel, .. }
 			| Event::Reactions(
 				reactions::Event::Changed { channel, .. }
@@ -227,6 +228,7 @@ mod tests {
 					recipients: vec![],
 					last_message: None,
 					member_list_id: None,
+					message_count: None,
 				})
 				.collect(),
 			..State::default()
@@ -239,10 +241,14 @@ mod tests {
 		});
 	}
 	fn load(state: &mut State, channel: u64) {
-		assert!(matches!(
-			state.select(Id(channel)),
-			Some(Command::History { before: None, .. })
-		));
+		if state.selected == Some(Id(channel)) {
+			assert!(state.history_pending && state.history_before.is_none());
+		} else {
+			assert!(matches!(
+				state.select(Id(channel)),
+				Some(Command::History { before: None, .. })
+			));
+		}
 		let request = state.request;
 		apply(
 			state,
@@ -269,6 +275,33 @@ mod tests {
 			embeds: Patch::Absent,
 			attachments: Patch::Absent,
 			embeds_suppressed: Patch::Absent,
+		}
+	}
+
+	#[test]
+	fn reselecting_current_channel_preserves_history_request_and_composer() {
+		let mut state = state();
+		load(&mut state, 1);
+		state.drafts.insert(Id(1), "Unsent draft".into());
+		state.reply = Some(Id(1001));
+		let content = state.timeline.get(Id(1001)).unwrap().content.as_ptr();
+		for loading in [false, true] {
+			if loading {
+				state.history(Some(Id(1001)));
+			}
+			state.search_target = Some(Id(1001));
+			let before = (state.request, state.revision, state.freshness);
+			assert!(state.select(Id(1)).is_none());
+			assert_eq!((state.request, state.revision, state.freshness), before);
+			assert_eq!(state.history_pending, loading);
+			assert_eq!(state.search_target, Some(Id(1001)));
+			assert_eq!(state.reply, Some(Id(1001)));
+			assert_eq!(state.drafts[&Id(1)], "Unsent draft");
+			assert_eq!(
+				state.timeline.get(Id(1001)).unwrap().content.as_ptr(),
+				content
+			);
+			assert_eq!(state.timeline.row_count(), 50);
 		}
 	}
 
@@ -436,6 +469,7 @@ mod tests {
 				parent_id: Patch::Value(Id(99)),
 				name: Patch::Absent,
 				kind: Patch::Absent,
+				message_count: Patch::Absent,
 				position: Patch::Absent,
 				last_message: Patch::Absent,
 			}),

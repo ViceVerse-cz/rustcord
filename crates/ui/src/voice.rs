@@ -136,7 +136,7 @@ impl MessagingUi {
 			("voice-participant", entry.channel, entry.participant.user),
 			|ui| {
 				ui.horizontal(|ui| {
-					ui.set_min_height(36.0);
+					ui.set_min_height(34.0);
 					ui.spacing_mut().item_spacing.x = 6.0;
 					let avatar = if let Some(user) = user {
 						self.avatars.show(ui, user, 28.0, state.demo)
@@ -145,6 +145,15 @@ impl MessagingUi {
 					};
 					if self.is_speaking(state, entry.channel, &entry.participant) {
 						speaking_avatar(ui, &avatar, name);
+					}
+					if let Some(user) = user {
+						crate::user_menu::show(
+							&avatar,
+							state,
+							user,
+							&mut self.profile,
+							&mut self.user_action,
+						);
 					}
 					if avatar.clicked()
 						&& let Some(user) = user
@@ -188,6 +197,15 @@ impl MessagingUi {
 							)
 							.inner
 							.on_hover_text(name);
+						if let Some(user) = user {
+							crate::user_menu::show(
+								&response,
+								state,
+								user,
+								&mut self.profile,
+								&mut self.user_action,
+							);
+						}
 						if response.clicked()
 							&& let Some(user) = user
 						{
@@ -356,6 +374,15 @@ impl MessagingUi {
 				8,
 				egui::Stroke::new(2.0, design::palette(ui).positive),
 				egui::StrokeKind::Inside,
+			);
+		}
+		if let Some(user) = user {
+			crate::user_menu::show(
+				&avatar,
+				state,
+				user,
+				&mut self.profile,
+				&mut self.user_action,
 			);
 		}
 		if avatar.clicked()
@@ -539,7 +566,7 @@ impl MessagingUi {
 		egui::Popup::menu(&trigger).show(|ui| self.voice_settings_menu(ui, demo, active));
 	}
 
-	fn voice_settings_menu(&mut self, ui: &mut egui::Ui, demo: bool, active: bool) {
+	pub(super) fn voice_settings_menu(&mut self, ui: &mut egui::Ui, demo: bool, active: bool) {
 		ui.set_max_width(300.0);
 		ui.strong("Voice settings");
 		if demo || !self.voice_available {
@@ -984,6 +1011,15 @@ impl MessagingUi {
 								icon,
 								egui::Rect::from_center_size(center, egui::Vec2::splat(16.0)),
 								colors.danger,
+							);
+						}
+						if let Some(user) = user {
+							crate::user_menu::show(
+								&avatar,
+								state,
+								user,
+								&mut self.profile,
+								&mut self.user_action,
 							);
 						}
 						if avatar
@@ -1746,6 +1782,7 @@ mod tests {
 					discriminator: 0,
 				}],
 				member_list_id: None,
+				message_count: None,
 			}],
 			..Default::default()
 		};

@@ -171,8 +171,71 @@ impl Permissions {
 		Ok(())
 	}
 	pub fn update(&mut self, event: Event) -> Result<(), &'static str> {
-		// ponytail: at most 2 MiB is cloned for atomic validation; use scoped rollback if event cost becomes measurable.
-		let mut next = self.clone();
+		let guild_ids: BTreeSet<Id> = match &event {
+			Event::Snapshot(snapshot) => snapshot.guilds.iter().map(|guild| guild.id).collect(),
+			Event::Guild(guild) => [guild.id].into(),
+			Event::Role { guild, .. }
+			| Event::RoleRemoved { guild, .. }
+			| Event::Member { guild, .. }
+			| Event::Owner { guild, .. }
+			| Event::UnavailableGuild(guild) => [*guild].into(),
+			Event::Members(members) => members.iter().map(|(guild, _, _)| *guild).collect(),
+			Event::Channel { .. } => BTreeSet::new(),
+		};
+		let mut channel_ids = BTreeSet::new();
+		if matches!(
+			&event,
+			Event::Snapshot(_) | Event::RoleRemoved { .. } | Event::UnavailableGuild(_)
+		) {
+			channel_ids.extend(
+				self.channels
+					.values()
+					.filter(|channel| guild_ids.contains(&channel.guild))
+					.map(|channel| channel.id),
+			);
+		}
+		match &event {
+			Event::Snapshot(snapshot) => {
+				channel_ids.extend(snapshot.channels.iter().map(|channel| channel.id))
+			}
+			Event::Channel { channel, .. } => {
+				channel_ids.insert(*channel);
+			}
+			_ => {}
+		}
+		// Only touched records need rollback storage; unrelated decisions remain warm.
+		let guilds: Vec<_> = guild_ids
+			.iter()
+			.map(|id| (*id, self.guilds.get(id).cloned()))
+			.collect();
+		let channels: Vec<_> = channel_ids
+			.iter()
+			.map(|id| (*id, self.channels.get(id).cloned()))
+			.collect();
+		if let Err(error) = self.update_in_place(event) {
+			for (id, old) in guilds {
+				if let Some(old) = old {
+					self.guilds.insert(id, old);
+				} else {
+					self.guilds.remove(&id);
+				}
+			}
+			for (id, old) in channels {
+				if let Some(old) = old {
+					self.channels.insert(id, old);
+				} else {
+					self.channels.remove(&id);
+				}
+			}
+			return Err(error);
+		}
+		self.cache.get_mut().retain(|(guild, channel, _), _| {
+			!guild_ids.contains(guild) && !channel_ids.contains(channel)
+		});
+		Ok(())
+	}
+	fn update_in_place(&mut self, event: Event) -> Result<(), &'static str> {
+		let next = self;
 		match event {
 			Event::Snapshot(snapshot) => {
 				let ids: BTreeSet<_> = snapshot.guilds.iter().map(|g| g.id).collect();
@@ -287,7 +350,6 @@ impl Permissions {
 		if !next.valid() {
 			return Err("Permission metadata exceeds safe capacity");
 		}
-		*self = next;
 		Ok(())
 	}
 	fn update_member(&mut self, guild: Id, roles: Patch<Vec<Id>>, timeout_until: Patch<i64>) {
@@ -370,21 +432,16 @@ impl State {
 	}
 
 	pub fn permission(&self, channel: Id, bits: u128) -> Option<bool> {
-		let channel = self.channels.iter().find(|c| c.id == channel)?;
+		let channel = self.channel(channel)?;
 		let Some(guild) = channel.guild else {
 			return matches!(channel.kind, 1 | 3).then_some(true);
 		};
-		if !self.guilds.iter().any(|known| known.id == guild) {
-			return None;
-		}
+		self.guild(guild)?;
 		let guild = self.permissions.guilds.get(&guild)?;
 		let target = if matches!(channel.kind, 10..=12) {
 			let parent = channel.parent_id?;
-			self.channels
-				.iter()
-				.find(|c| {
-					c.id == parent && c.guild == Some(guild.id) && matches!(c.kind, 0 | 5 | 15 | 16)
-				})?
+			self.channel(parent)
+				.filter(|c| c.guild == Some(guild.id) && matches!(c.kind, 0 | 5 | 15 | 16))?
 				.id
 		} else {
 			channel.id
@@ -401,7 +458,15 @@ impl State {
 				guild,
 				self.user.as_ref()?.id,
 				overwrites,
-				Self::permission_time(),
+				if guild
+					.member
+					.as_ref()
+					.is_some_and(|member| member.timeout_until.is_some())
+				{
+					Self::permission_time()
+				} else {
+					0
+				},
 			)
 			.map(|permissions| permissions & bits == bits)
 	}
@@ -420,20 +485,23 @@ impl State {
 		self.auth == AuthState::Authenticated
 			&& self.gateway_connected
 			&& self.selected == Some(channel)
-			&& self.freshness == Freshness::Fresh
-			&& self
-				.channels
-				.iter()
-				.find(|c| c.id == channel && c.supports_text())
-				.is_some_and(|c| {
-					let send = if matches!(c.kind, 10..=12) {
-						p::SEND_MESSAGES_IN_THREADS
-					} else {
-						p::SEND_MESSAGES
-					};
-					self.permission(channel, p::VIEW_CHANNEL | send) == Some(true)
-				})
+			&& matches!(self.freshness, Freshness::Fresh | Freshness::Loading)
+			&& self.can_compose(channel)
 	}
+	/// Permission-only composer availability, including while drafting offline.
+	pub fn can_compose(&self, channel: Id) -> bool {
+		self.channel(channel)
+			.filter(|c| c.supports_text())
+			.is_some_and(|c| {
+				let send = if matches!(c.kind, 10..=12) {
+					p::SEND_MESSAGES_IN_THREADS
+				} else {
+					p::SEND_MESSAGES
+				};
+				self.permission(channel, p::VIEW_CHANNEL | send) == Some(true)
+			})
+	}
+
 	pub fn can_attach(&self, channel: Id) -> bool {
 		self.can_send(channel) && self.permission(channel, p::ATTACH_FILES) == Some(true)
 	}
@@ -472,9 +540,7 @@ impl State {
 			&& (!add || !self.timed_out(channel))
 	}
 	fn timed_out(&self, channel: Id) -> bool {
-		self.channels
-			.iter()
-			.find(|c| c.id == channel)
+		self.channel(channel)
 			.and_then(|c| c.guild)
 			.and_then(|guild| self.permissions.guilds.get(&guild))
 			.is_some_and(|guild| {
@@ -516,9 +582,8 @@ impl State {
 			return false;
 		};
 		let Some(target) = self
-			.channels
-			.iter()
-			.find(|target| target.id == channel && target.supports_text())
+			.channel(channel)
+			.filter(|target| target.supports_text())
 		else {
 			return false;
 		};
@@ -531,6 +596,53 @@ impl State {
 				&& matches!(target.kind, 0 | 5 | 10..=12)
 				&& self.permission(channel, p::MANAGE_MESSAGES) == Some(true))
 	}
+	/// Pinning needs Manage Messages in servers; direct and group messages allow any member.
+	pub fn can_pin(&self, channel: Id, message: Id) -> bool {
+		if self.auth != AuthState::Authenticated
+			|| !self.gateway_connected
+			|| !self.can_view(channel)
+			|| self.user.as_ref().is_none_or(|user| user.id.0 == 0)
+		{
+			return false;
+		}
+		if !self.timeline.get(message).is_some_and(|message| {
+			message.channel == channel && message.id.0 != 0 && matches!(message.kind, 0 | 19)
+		}) {
+			return false;
+		}
+		let Some(target) = self
+			.channel(channel)
+			.filter(|target| target.supports_text())
+		else {
+			return false;
+		};
+		target.guild.is_none() || self.permission(channel, p::MANAGE_MESSAGES) == Some(true)
+	}
+	/// True when the current pins page lists `message`.
+	pub fn is_pinned(&self, channel: Id, message: Id) -> bool {
+		self.message_actions
+			.pin(channel, message)
+			.unwrap_or_else(|| {
+				self.search
+					.as_ref()
+					.filter(|view| view.pins && view.channel == channel)
+					.and_then(|view| view.page.as_ref())
+					.is_some_and(|page| page.hits.iter().any(|hit| hit.id == message))
+			})
+	}
+	pub fn prepare_pin(&mut self, channel: Id, message: Id, pinned: bool) -> Option<Command> {
+		if !self.can_pin(channel, message) {
+			self.status = "This message cannot be pinned with the current access";
+			return None;
+		}
+		let request = self.optimistic_pin(channel, message, pinned)?;
+		Some(Command::Pin {
+			request,
+			channel,
+			message,
+			pinned,
+		})
+	}
 	pub fn prepare_edit(&mut self, channel: Id, message: Id, content: String) -> Option<Command> {
 		if !self.can_edit(channel, message)
 			|| content.trim().is_empty()
@@ -539,7 +651,9 @@ impl State {
 			self.status = "This message cannot be edited with the current access";
 			return None;
 		}
+		let request = self.optimistic_edit(channel, message, &content)?;
 		Some(Command::Edit {
+			request,
 			channel,
 			message,
 			content,

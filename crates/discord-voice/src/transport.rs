@@ -745,6 +745,10 @@ mod tests {
 		let udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
 		let port = udp.local_addr().unwrap().port();
 		let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+		let (captured_tx, mut captured_rx) = tokio::sync::oneshot::channel();
+		let (waiting_tx, waiting_rx) = tokio::sync::oneshot::channel();
+		let (heard_tx, heard_rx) = tokio::sync::oneshot::channel();
+		let (resumed_tx, resumed_rx) = tokio::sync::oneshot::channel();
 		let server = tokio::spawn(async move {
 			let (tcp, _) = listener.accept().await.unwrap();
 			let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
@@ -841,6 +845,7 @@ mod tests {
 				))
 				.await
 				.unwrap();
+				waiting_rx.await.unwrap();
 				// Even queued synthetic capture cannot leave while the empty room lacks media keys.
 				assert!(
 					timeout(Duration::from_millis(80), udp.recv_from(&mut probe))
@@ -870,8 +875,8 @@ mod tests {
 			ws.send(Message::Binary(welcome_frame.into()))
 				.await
 				.unwrap();
-			// Block this current-thread runtime before it can process Ready. This
-			// verifies that its newly queued capture is not discarded as a stale gap.
+			// Exercise media readiness after a scheduling gap while the fixture
+			// supplies continuous capture and fences signaling before UDP.
 			std::thread::sleep(Duration::from_millis(100));
 			ws.send(Message::Text(
 				json!({"op":5,"seq":3,"d":{"user_id":"2","ssrc":43,"speaking":1}})
@@ -889,6 +894,28 @@ mod tests {
 				.await
 				.unwrap();
 			}
+			// Fence the SSRC announcements before UDP can race ahead of signaling.
+			ws.send(Message::Ping(b"announced".to_vec().into()))
+				.await
+				.unwrap();
+			loop {
+				match ws.next().await.unwrap().unwrap() {
+					Message::Pong(data) if data.as_ref() == b"announced" => break,
+					Message::Text(text) => {
+						let event: Value = serde_json::from_str(&text).unwrap();
+						if event["op"] == 3 {
+							ws.send(Message::Text(
+								json!({"op":6,"d":{"t":event["d"]["t"]}}).to_string().into(),
+							))
+							.await
+							.unwrap();
+						} else {
+							assert_eq!(event["op"], 5);
+						}
+					}
+					_ => panic!("unexpected test client frame before SSRC acknowledgement"),
+				}
+			}
 			let (length, _) = udp.recv_from(&mut probe).await.unwrap();
 			let mut transport = Encryption::new(&[7; 32]);
 			let (ssrc, _, ciphertext) = transport.open(&probe[..length]).unwrap();
@@ -904,6 +931,7 @@ mod tests {
 				960
 			);
 			assert!(out.iter().any(|s| s.abs() > 0.01));
+			captured_tx.send(()).unwrap();
 			let mut encoder = Encoder::new(48_000, Channels::Mono, Application::Voip).unwrap();
 			let mut encoded = [0; 1275];
 			let length = encoder.encode_float(&out, &mut encoded).unwrap();
@@ -918,7 +946,8 @@ mod tests {
 				let packet = transport.seal(&header, &encrypted).unwrap();
 				udp.send_to(&packet, client).await.unwrap();
 			}
-			tokio::time::sleep(Duration::from_millis(120)).await;
+			// Resume only after the client has actually played the initial remote audio.
+			heard_rx.await.unwrap();
 			if guild {
 				ws.send(Message::Close(Some(
 					tokio_tungstenite::tungstenite::protocol::CloseFrame {
@@ -947,6 +976,7 @@ mod tests {
 			ws.send(Message::Text(json!({"op":9,"d":null}).to_string().into()))
 				.await
 				.unwrap();
+			resumed_rx.await.unwrap();
 			// A new encrypted frame after resume reuses the live MLS group, never its old nonce.
 			let encrypted = bob.session.encrypt_opus(&encoded[..length]).unwrap();
 			let mut header = header;
@@ -991,19 +1021,12 @@ mod tests {
 			capture,
 			playback,
 			control_rx,
-			move |status| {
-				if matches!(status, Status::Ready { .. }) {
-					capture_tx
-						.try_send(std::array::from_fn(|i| (i as f32 * 0.06).sin() * 0.3))
-						.unwrap();
-				}
-				status_tx.try_send(status).map_err(|_| ())
-			},
+			move |status| status_tx.try_send(status).map_err(|_| ()),
 			Identity::generate(),
 			format!("ws://{address}"),
 			true,
 		));
-		timeout(Duration::from_secs(10), async {
+		let pcm = timeout(Duration::from_secs(10), async {
 			assert!(matches!(
 				status_rx.recv().await.unwrap(),
 				Status::Connecting
@@ -1020,26 +1043,62 @@ mod tests {
 			let mut ready = 0;
 			let mut heard = false;
 			let mut waiting = false;
+			let mut captured = false;
+			let mut resumed_pcm = None;
+			let mut waiting_tx = Some(waiting_tx);
+			let mut heard_tx = Some(heard_tx);
+			let mut resumed_tx = Some(resumed_tx);
+			let mut capture_tick = tokio::time::interval(Duration::from_millis(20));
+			capture_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
 			loop {
-				match status_rx.recv().await.unwrap() {
-					Status::Ready { .. } => ready += 1,
-					Status::RemoteAudio => heard = true,
-					Status::WaitingForPeer => waiting = true,
-					Status::Connecting
-					| Status::Discovering
-					| Status::Securing
-					| Status::TransportReady
-					| Status::Speaking(_) => {}
+				tokio::select! {
+					status = status_rx.recv() => match status.unwrap() {
+						Status::Ready { .. } => {
+							ready += 1;
+							if ready == 2 {
+								// Discard first-session playback before allowing the peer's new frame.
+								for _ in 0..8 {
+									if playback_rx.try_recv().is_err() { break; }
+								}
+								resumed_tx.take().unwrap().send(()).unwrap();
+							}
+						}
+						Status::RemoteAudio => {
+							heard = true;
+							if let Some(sender) = heard_tx.take() { sender.send(()).unwrap(); }
+						}
+						Status::WaitingForPeer => {
+							waiting = true;
+							if let Some(sender) = waiting_tx.take() { sender.send(()).unwrap(); }
+						}
+						Status::Connecting | Status::Discovering | Status::Securing
+						| Status::TransportReady | Status::Speaking(_) => {}
+					},
+					result = &mut captured_rx, if !captured => {
+						result.unwrap();
+						captured = true;
+					},
+					_ = capture_tick.tick(), if ready > 0 => {
+						// Model a bounded continuous microphone, not one frame discarded by a stall.
+						if !captured {
+							match capture_tx.try_send(std::array::from_fn(|i| (i as f32 * 0.06).sin() * 0.3)) {
+								Ok(()) | Err(std::sync::mpsc::TrySendError::Full(_)) => {}
+								Err(std::sync::mpsc::TrySendError::Disconnected(_)) => panic!("test capture stopped before peer receipt"),
+							}
+						}
+						if ready == 2 {
+							resumed_pcm = playback_rx.try_recv().ok();
+						}
+					}
 				}
-				if ready == 2 && heard {
+				if ready == 2 && heard && captured && let Some(pcm) = resumed_pcm.take() {
 					assert_eq!(waiting, guild);
-					break;
+					break pcm;
 				}
 			}
 		})
 		.await
 		.unwrap();
-		let pcm = playback_rx.try_recv().unwrap();
 		assert!(pcm.iter().any(|s| s.abs() > 0.01));
 		if guild {
 			done_tx.send(()).unwrap();

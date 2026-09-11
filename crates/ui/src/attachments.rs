@@ -1,6 +1,265 @@
 //! Inline service attachments; decoded pixels reuse the existing bounded media cache.
-use crate::{avatars::Avatars, markdown::external_url};
+use crate::{
+	avatars::Avatars,
+	design,
+	icons::{self, Icon},
+	markdown::external_url,
+};
+use egui::{Color32, Rect, RichText, Sense, Stroke, StrokeKind};
 use model::{Attachment, Id, Message};
+
+/// Rough content family of a file, chosen from its name and reported type only.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FileKind {
+	Image,
+	Pdf,
+	Archive,
+	Text,
+	Code,
+	Audio,
+	Video,
+	Other,
+}
+pub fn file_kind(filename: &str, content_type: Option<&str>) -> FileKind {
+	let extension = filename
+		.rsplit_once('.')
+		.map(|(_, extension)| extension.to_ascii_lowercase())
+		.unwrap_or_default();
+	let mime = content_type
+		.map(|kind| {
+			kind.split(';')
+				.next()
+				.unwrap_or(kind)
+				.trim()
+				.to_ascii_lowercase()
+		})
+		.unwrap_or_default();
+	match extension.as_str() {
+		"png" | "jpg" | "jpeg" | "gif" | "webp" | "avif" | "bmp" | "tiff" | "heic" | "svg" => {
+			return FileKind::Image;
+		}
+		"pdf" => return FileKind::Pdf,
+		"zip" | "7z" | "rar" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "zst" => {
+			return FileKind::Archive;
+		}
+		"txt" | "md" | "rtf" | "log" | "csv" | "doc" | "docx" | "odt" => return FileKind::Text,
+		"rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "json" | "toml" | "yaml" | "yml" | "html"
+		| "css" | "c" | "h" | "cpp" | "hpp" | "java" | "kt" | "swift" | "go" | "rb" | "sh"
+		| "xml" | "sql" => return FileKind::Code,
+		"mp3" | "wav" | "ogg" | "flac" | "m4a" | "aac" | "opus" => return FileKind::Audio,
+		"mp4" | "mov" | "webm" | "mkv" | "avi" | "m4v" => return FileKind::Video,
+		_ => {}
+	}
+	if mime.starts_with("image/") {
+		FileKind::Image
+	} else if mime == "application/pdf" {
+		FileKind::Pdf
+	} else if mime.starts_with("audio/") {
+		FileKind::Audio
+	} else if mime.starts_with("video/") {
+		FileKind::Video
+	} else if mime.starts_with("text/") {
+		FileKind::Text
+	} else if mime.contains("zip") || mime.contains("compressed") || mime.contains("tar") {
+		FileKind::Archive
+	} else {
+		FileKind::Other
+	}
+}
+impl FileKind {
+	pub fn icon(self) -> Icon {
+		match self {
+			FileKind::Image => Icon::FileImage,
+			FileKind::Pdf => Icon::FilePdf,
+			FileKind::Archive => Icon::FileZip,
+			FileKind::Text => Icon::FileText,
+			FileKind::Code => Icon::FileCode,
+			FileKind::Audio => Icon::FileAudio,
+			FileKind::Video => Icon::FileVideo,
+			FileKind::Other => Icon::File,
+		}
+	}
+	/// Discord-style glyph tint: red documents, amber archives, blurple media, muted text.
+	pub fn tint(self, colors: &design::Palette) -> Color32 {
+		match self {
+			FileKind::Pdf => colors.danger,
+			FileKind::Archive => colors.warning,
+			FileKind::Image | FileKind::Audio | FileKind::Video => colors.accent,
+			FileKind::Code => colors.link,
+			FileKind::Text | FileKind::Other => colors.muted,
+		}
+	}
+}
+/// Human file size in the units Discord shows next to attachments.
+pub fn format_size(bytes: u64) -> String {
+	const UNITS: [&str; 4] = ["KB", "MB", "GB", "TB"];
+	if bytes < 1024 {
+		return format!("{bytes} bytes");
+	}
+	let mut value = bytes as f64 / 1024.0;
+	let mut unit = 0;
+	while value >= 1024.0 && unit + 1 < UNITS.len() {
+		value /= 1024.0;
+		unit += 1;
+	}
+	if value >= 100.0 {
+		format!("{value:.0} {}", UNITS[unit])
+	} else {
+		format!("{value:.2} {}", UNITS[unit])
+	}
+}
+
+/// Card for a file that will be uploaded with the next message. Returns `true` when the user
+/// asks to remove it.
+pub fn pending_card(
+	ui: &mut egui::Ui,
+	filename: &str,
+	bytes: u64,
+	preview: Option<&egui::TextureHandle>,
+	removable: bool,
+) -> bool {
+	const WIDTH: f32 = 176.0;
+	const HEIGHT: f32 = 168.0;
+	// Discord floats the action pill over the card's top edge; reserve that overhang.
+	const OVERHANG: f32 = 10.0;
+	let colors = design::palette(ui);
+	let kind = file_kind(filename, None);
+	let (allocated, _) =
+		ui.allocate_exact_size(egui::vec2(WIDTH + 12.0, HEIGHT + OVERHANG), Sense::hover());
+	let card = Rect::from_min_size(
+		allocated.left_bottom() - egui::vec2(0.0, HEIGHT),
+		egui::vec2(WIDTH, HEIGHT),
+	);
+	ui.painter().rect(
+		card,
+		8,
+		colors.sidebar,
+		Stroke::new(1.0, colors.border),
+		StrokeKind::Inside,
+	);
+	let preview_rect =
+		Rect::from_min_size(card.min + egui::vec2(8.0, 8.0), egui::vec2(160.0, 108.0));
+	ui.painter().rect_filled(preview_rect, 4, colors.base);
+	match preview {
+		Some(texture) => {
+			let size = texture.size_vec2();
+			let scale = (preview_rect.width() / size.x)
+				.min(preview_rect.height() / size.y)
+				.clamp(f32::EPSILON, 1.0);
+			let fitted = Rect::from_center_size(preview_rect.center(), size * scale);
+			ui.put(
+				fitted,
+				egui::Image::from_texture(texture)
+					.fit_to_exact_size(fitted.size())
+					.corner_radius(4),
+			);
+		}
+		None => {
+			icons::paint(
+				ui.painter(),
+				kind.icon(),
+				Rect::from_center_size(preview_rect.center(), egui::Vec2::splat(56.0)),
+				kind.tint(&colors),
+			);
+		}
+	}
+	let name = Rect::from_min_size(
+		preview_rect.left_bottom() + egui::vec2(0.0, 6.0),
+		egui::vec2(preview_rect.width(), 18.0),
+	);
+	ui.put(
+		name,
+		egui::Label::new(design::semibold(ui, filename, 13.0).color(colors.text_strong))
+			.truncate()
+			.selectable(false),
+	)
+	.on_hover_text(filename);
+	let size = Rect::from_min_size(name.left_bottom(), egui::vec2(name.width(), 16.0));
+	ui.put(
+		size,
+		egui::Label::new(
+			RichText::new(format_size(bytes))
+				.size(12.0)
+				.color(colors.muted),
+		)
+		.truncate()
+		.selectable(false),
+	);
+	let pill = Rect::from_min_size(
+		egui::pos2(card.right() - 28.0, card.top() - OVERHANG),
+		egui::vec2(36.0, 36.0),
+	);
+	ui.painter().rect(
+		pill,
+		6,
+		colors.raised,
+		Stroke::new(1.0, colors.border),
+		StrokeKind::Inside,
+	);
+	ui.scope_builder(
+		egui::UiBuilder::new().max_rect(pill.shrink(2.0)).layout(
+			egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+		),
+		|ui| {
+			ui.add_enabled_ui(removable, |ui| {
+				icons::button(ui, Icon::Trash, 32.0, "Remove attachment").clicked()
+			})
+			.inner
+		},
+	)
+	.inner
+}
+
+/// Discord-style row for a received file without an inline preview.
+fn file_card(
+	ui: &mut egui::Ui,
+	attachment: &Attachment,
+	download: &mut DownloadUi,
+	opening: &mut Option<String>,
+	demo: bool,
+) {
+	let colors = design::palette(ui);
+	let kind = file_kind(&attachment.filename, attachment.content_type.as_deref());
+	egui::Frame::new()
+		.fill(colors.raised)
+		.stroke(Stroke::new(1.0, colors.border))
+		.corner_radius(8)
+		.inner_margin(egui::Margin::symmetric(12, 10))
+		.show(ui, |ui| {
+			ui.set_width(ui.available_width().min(432.0));
+			ui.horizontal(|ui| {
+				ui.spacing_mut().item_spacing.x = 10.0;
+				icons::inline(ui, kind.icon(), 32.0, kind.tint(&colors));
+				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+					ui.spacing_mut().item_spacing.x = 6.0;
+					download_button(ui, attachment, download, demo);
+					open_original(ui, attachment, opening);
+					ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+						ui.vertical(|ui| {
+							ui.spacing_mut().item_spacing.y = 0.0;
+							ui.add(
+								egui::Label::new(
+									design::medium(ui, &attachment.filename, 14.0)
+										.color(colors.link),
+								)
+								.truncate()
+								.selectable(false),
+							)
+							.on_hover_text(&attachment.filename);
+							ui.add(
+								egui::Label::new(
+									RichText::new(format_size(attachment.size))
+										.size(12.0)
+										.color(colors.muted),
+								)
+								.selectable(false),
+							);
+						});
+					});
+				});
+			});
+		});
+}
 
 #[allow(clippy::too_many_arguments)]
 pub fn show(
@@ -56,20 +315,13 @@ pub fn show(
 				ui.push_id(("attachment", attachment.id), |ui| {
 					if attachment.is_audio() {
 						audio.show(ui, message, attachment);
+						ui.horizontal_wrapped(|ui| {
+							download_button(ui, attachment, download, demo);
+							open_original(ui, attachment, opening);
+						});
 					} else {
-						ui.add(
-							egui::Label::new(egui::RichText::new(&attachment.filename).small())
-								.wrap(),
-						);
-						ui.small(format!(
-							"{} bytes · inline preview unavailable",
-							attachment.size
-						));
+						file_card(ui, attachment, download, opening, demo);
 					}
-					ui.horizontal_wrapped(|ui| {
-						download_button(ui, attachment, download, demo);
-						open_original(ui, attachment, opening);
-					});
 					ui.add_space(6.0);
 				});
 			}
@@ -133,50 +385,120 @@ fn download_button(
 		download.request = Some(attachment.clone());
 	}
 }
+/// Resolve against the current message every frame: deleted or hidden media cannot linger.
+fn gallery_step(attachments: &[Attachment], current: Id, previous: bool) -> Option<Id> {
+	let images: Vec<_> = attachments.iter().filter(|a| a.is_image()).collect();
+	let index = images.iter().position(|a| a.id == current)?;
+	let index = if previous {
+		(index + images.len() - 1) % images.len()
+	} else {
+		(index + 1) % images.len()
+	};
+	Some(images[index].id)
+}
+
 pub fn viewer(
 	ui: &mut egui::Ui,
-	attachment: &Attachment,
+	attachments: &[Attachment],
+	current: Id,
 	images: &mut Avatars,
 	download: &mut DownloadUi,
 	demo: bool,
-) -> bool {
-	let colors = crate::design::palette(ui);
-	let size = ui.ctx().content_rect().size() - egui::vec2(56.0, 56.0);
+) -> Option<Id> {
+	let mut current = current;
+	if ui
+		.ctx()
+		.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft))
+	{
+		current = gallery_step(attachments, current, true)?;
+	}
+	if ui
+		.ctx()
+		.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight))
+	{
+		current = gallery_step(attachments, current, false)?;
+	}
+	let attachment = attachments
+		.iter()
+		.find(|a| a.id == current && a.is_image())?;
+	let count = attachments.iter().filter(|a| a.is_image()).count();
+	let index = attachments
+		.iter()
+		.filter(|a| a.is_image())
+		.position(|a| a.id == current)?;
+	let size = (ui.ctx().content_rect().size() - egui::vec2(32.0, 32.0)).max(egui::vec2(1.0, 1.0));
 	let mut close = false;
-	let modal = egui::Modal::new(egui::Id::unique("attachment-viewer"))
-		.backdrop_color(egui::Color32::from_black_alpha(235))
-		.frame(
-			egui::Frame::new()
-				.fill(colors.canvas)
-				.inner_margin(16)
-				.corner_radius(10),
-		)
+	// Modal input capture prevents clicks and keys reaching the conversation. No dialog frame.
+	let overlay = egui::Modal::new(egui::Id::unique("attachment-viewer"))
+		.backdrop_color(Color32::from_black_alpha(240))
+		.frame(egui::Frame::NONE)
 		.show(ui.ctx(), |ui| {
-			ui.set_width(size.x.max(240.0));
+			ui.set_min_size(size);
+			ui.set_max_size(size);
+			*ui.visuals_mut() = egui::Visuals::dark();
+			ui.visuals_mut().override_text_color = Some(Color32::WHITE);
 			ui.horizontal(|ui| {
+				if count > 1 {
+					ui.label(format!("{} / {count}", index + 1));
+				}
 				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-					close = ui.button("Close ×").clicked();
+					close = icons::button(ui, Icon::Close, 32.0, "Close image (Esc)").clicked();
 					download_button(ui, attachment, download, demo);
-					ui.add(egui::Label::new(&attachment.filename).truncate());
 				});
 			});
-			ui.separator();
-			let image_size = egui::vec2(ui.available_width(), (size.y - 150.0).max(120.0));
-			ui.vertical_centered(|ui| {
-				images.show_large(ui, &attachment.media, image_size, demo);
-			});
-			ui.add_space(8.0);
-			if let Some(description) = &attachment.description {
-				ui.add(egui::Label::new(description).truncate())
-					.on_hover_text(description);
+			let available = egui::vec2(size.x, (size.y - 80.0).max(1.0));
+			let (rect, _) = ui.allocate_exact_size(available, Sense::hover());
+			let image_rect = rect.shrink2(egui::vec2(if count > 1 { 44.0 } else { 0.0 }, 0.0));
+			ui.scope_builder(
+				egui::UiBuilder::new().max_rect(image_rect).layout(
+					egui::Layout::centered_and_justified(egui::Direction::TopDown),
+				),
+				|ui| {
+					images
+						.show_large(ui, &attachment.media, image_rect.size(), demo)
+						.on_hover_text(
+							attachment
+								.description
+								.as_deref()
+								.unwrap_or(&attachment.filename),
+						);
+				},
+			);
+			if count > 1 {
+				for (previous, center, label) in [
+					(
+						true,
+						rect.left_center() + egui::vec2(18.0, 0.0),
+						"Previous image (←)",
+					),
+					(
+						false,
+						rect.right_center() - egui::vec2(18.0, 0.0),
+						"Next image (→)",
+					),
+				] {
+					ui.scope_builder(
+						egui::UiBuilder::new()
+							.max_rect(Rect::from_center_size(center, egui::vec2(36.0, 44.0))),
+						|ui| {
+							if ui
+								.add_sized(
+									[36.0, 44.0],
+									egui::Button::new(if previous { "←" } else { "→" }),
+								)
+								.on_hover_text(label)
+								.clicked()
+							{
+								current =
+									gallery_step(attachments, current, previous).unwrap_or(current);
+							}
+						},
+					);
+				}
 			}
-			ui.small(format!(
-				"{} × {} · {} bytes",
-				attachment.media.width, attachment.media.height, attachment.size
-			));
 			download.show_status(ui);
 		});
-	!close && !modal.should_close()
+	(!close && !overlay.should_close()).then_some(current)
 }
 pub fn estimated_height(attachments: &[Attachment], width: f32) -> f32 {
 	attachments
@@ -188,7 +510,7 @@ pub fn estimated_height(attachments: &[Attachment], width: f32) -> f32 {
 			} else {
 				group
 					.iter()
-					.map(|attachment| if attachment.is_audio() { 138.0 } else { 70.0 })
+					.map(|attachment| if attachment.is_audio() { 138.0 } else { 62.0 })
 					.sum()
 			}
 		})
@@ -222,6 +544,25 @@ mod tests {
 		file.filename = "synthetic-report.pdf".into();
 		file.content_type = Some("application/pdf".into());
 		message.attachments.push(file);
+		assert_eq!(
+			gallery_step(&message.attachments, Id(10), true),
+			Some(Id(12))
+		);
+		assert_eq!(
+			gallery_step(&message.attachments, Id(12), false),
+			Some(Id(10))
+		);
+		assert_eq!(
+			gallery_step(&message.attachments, Id(10), false),
+			Some(Id(11))
+		);
+		assert_eq!(gallery_step(&message.attachments, Id(20), false), None);
+		assert_eq!(gallery_step(&[], Id(10), false), None);
+		assert_eq!(
+			gallery_step(&message.attachments[..1], Id(10), true),
+			Some(Id(10))
+		);
+
 		for width in [420.0, 240.0] {
 			let ctx = egui::Context::default();
 			let mut images = Avatars::default();

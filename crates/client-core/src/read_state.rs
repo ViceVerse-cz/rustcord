@@ -75,7 +75,7 @@ impl State {
 		})
 	}
 	pub fn unread(&self, channel: Id) -> Option<bool> {
-		self.channel_unread(self.channels.iter().find(|c| c.id == channel)?)
+		self.channel_unread(self.channel(channel)?)
 	}
 	/// Shared unread visibility for sidebar rows and notification badges.
 	pub fn channel_unread(&self, channel: &model::Channel) -> Option<bool> {
@@ -182,7 +182,8 @@ impl State {
 			.get(&channel)
 			.map_or(0, |(_, epoch)| *epoch);
 		self.read_state.pending = Some((channel, message, request, epoch));
-		self.read_state.status = Some("Marking read…");
+		// Routine acknowledgements must not resize the timeline on every incoming message.
+		self.read_state.status = None;
 		Some(crate::Command::MarkRead {
 			channel,
 			message,
@@ -340,7 +341,8 @@ impl State {
 								(Some(message).max(current), self.read_state.revision),
 							);
 						}
-						self.read_state.status = Some("Read marker saved");
+						// Success is silent; only failures deserve a notice line.
+						self.read_state.status = None;
 					}
 					Err(failure) => {
 						self.read_state.status = Some(failure.label());
@@ -407,6 +409,7 @@ mod navigation_tests {
 				recipients: vec![],
 				last_message: Some(Id(500)),
 				member_list_id: None,
+				message_count: None,
 			}],
 			..Default::default()
 		};

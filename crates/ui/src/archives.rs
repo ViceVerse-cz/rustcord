@@ -107,6 +107,7 @@ mod tests {
 			recipients: vec![],
 			last_message: None,
 			member_list_id: None,
+			message_count: None,
 		}
 	}
 	fn frame(ctx: &egui::Context, key: Option<egui::Key>, draw: impl FnMut(&mut egui::Ui)) {
@@ -172,9 +173,12 @@ mod tests {
 				assert!(ui.channel_list(root, &state).is_none());
 			});
 			assert!(ui.archive_parent.is_none());
+			// The forum row is now a destination; the header Threads control opens archives.
 			for key in [egui::Key::Tab, egui::Key::Enter] {
 				frame(&ctx, Some(key), |root| {
-					assert!(ui.channel_list(root, &state).is_none());
+					if ui.channel_list(root, &state) == Some(Id(7)) {
+						ui.archive_parent = Some(Id(7));
+					}
 				});
 			}
 			assert_eq!(ui.archive_parent.take(), Some(Id(7)));

@@ -129,6 +129,18 @@ impl State {
 		if !self.gateway_connected || updates.len() > 100 {
 			return;
 		}
+		let mut retained_bytes = self
+			.direct_presence_bytes
+			.filter(|(count, _)| *count == self.direct_presences.len())
+			.map_or_else(
+				|| {
+					self.direct_presences
+						.iter()
+						.map(MemberPresence::heap_bytes)
+						.sum::<usize>()
+				},
+				|(_, bytes)| bytes,
+			);
 		for update in updates {
 			if !self.known_direct_recipient(update.user) {
 				continue;
@@ -145,23 +157,22 @@ impl State {
 				continue;
 			}
 			if let Some(index) = index {
-				self.direct_presences.remove(index);
+				retained_bytes -= self.direct_presences.remove(index).heap_bytes();
 			}
 			// ponytail: at most 256 records; FIFO eviction avoids a second cache index.
 			while !self.direct_presences.is_empty()
 				&& (self.direct_presences.len() >= MAX_DIRECT_PRESENCES
-					|| self
-						.direct_presences
-						.iter()
-						.map(MemberPresence::heap_bytes)
-						.sum::<usize>() + resolved.heap_bytes()
+					|| retained_bytes
+						+ resolved.heap_bytes()
 						+ MAX_DIRECT_PRESENCES * size_of::<MemberPresence>()
 						> MAX_DIRECT_PRESENCE_BYTES)
 			{
-				self.direct_presences.remove(0);
+				retained_bytes -= self.direct_presences.remove(0).heap_bytes();
 			}
+			retained_bytes += resolved.heap_bytes();
 			self.direct_presences.push(resolved);
 		}
+		self.direct_presence_bytes = Some((self.direct_presences.len(), retained_bytes));
 		if let Some(list) = &mut self.members
 			&& list.guild.is_none()
 			&& list.freshness == Freshness::Fresh
@@ -198,6 +209,7 @@ impl State {
 		}
 	}
 	pub(crate) fn prune_direct_presence(&mut self) {
+		self.direct_presence_bytes = None;
 		let old = std::mem::take(&mut self.direct_presences);
 		self.direct_presences = old
 			.into_iter()
@@ -296,6 +308,7 @@ mod tests {
 				kind: 0,
 				recipients: vec![],
 				member_list_id: Some("everyone".into()),
+				message_count: None,
 				last_message: None,
 			}],
 			members: Some(MemberList {
