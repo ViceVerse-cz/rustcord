@@ -86,6 +86,9 @@ pub struct MessagingUi {
 	pub draft_changes: Vec<Id>,
 	pub draft_restore_pending: bool,
 	pub attachment: Option<(String, u64)>,
+	/// Downscaled pixels of the selected image attachment, produced off the render thread.
+	pub attachment_preview: Option<std::sync::Arc<egui::ColorImage>>,
+	attachment_texture: Option<(usize, egui::TextureHandle)>,
 	pub attach_requested: bool,
 	pub attachment_paste_requested: Option<AttachmentPaste>,
 	pub pasted_text: Option<(Id, egui::Id, String)>,
@@ -137,6 +140,16 @@ impl MessagingUi {
 		self.profile = Some(user);
 	}
 	/// Fixture-only entry point: opens the emoji popout as if the composer button was clicked.
+	/// Fixture-only entry point: stage a synthetic attachment as if it had been selected.
+	pub fn preview_attachment(
+		&mut self,
+		filename: &str,
+		bytes: u64,
+		preview: Option<egui::ColorImage>,
+	) {
+		self.attachment = Some((filename.to_owned(), bytes));
+		self.attachment_preview = preview.map(std::sync::Arc::new);
+	}
 	/// Fixture-only: open the pinned messages popout on the next frame.
 	pub fn preview_pins(&mut self) {
 		self.search.preview_pins();
@@ -550,10 +563,6 @@ impl MessagingUi {
 					egui::Stroke::new(1.0, colors.border),
 				);
 			});
-		egui::Panel::bottom("account-footer")
-			.show_separator_line(false)
-			.frame(egui::Frame::new().inner_margin(8))
-			.show(ui, |ui| self.account_card(ui, state, commands));
 		self.voice_connection_panel(ui, state, commands);
 		egui::Frame::new()
 			.inner_margin(egui::Margin {
@@ -1156,22 +1165,6 @@ impl MessagingUi {
 			});
 			ui.add_space(6.0);
 		}
-		if !editing_here && let Some((filename, bytes)) = &self.attachment {
-			if state.demo {
-				ui.label("Uploads are disabled in offline preview");
-			} else {
-				ui.weak("Not uploaded · Send uploads this file");
-			}
-			ui.horizontal_wrapped(|ui| {
-				ui.label(format!("{filename} · {bytes} bytes"));
-				if ui
-					.add_enabled(!self.upload_busy, egui::Button::new("Remove attachment"))
-					.clicked()
-				{
-					self.remove_attachment_requested = true;
-				}
-			});
-		}
 		if !editing_here && (self.upload_busy || self.upload_status.is_some()) {
 			ui.horizontal_wrapped(|ui| {
 				ui.label(
@@ -1403,6 +1396,9 @@ impl MessagingUi {
             .corner_radius(8)
             .inner_margin(egui::Margin::symmetric(10, 6))
             .show(ui, |ui| {
+                if !editing_here && let Some((filename, bytes)) = self.attachment.clone() {
+                    self.attachment_tray(ui, state, &filename, bytes);
+                }
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
                     let attach = ui
@@ -1622,6 +1618,64 @@ impl MessagingUi {
 			self.edit_sent = false;
 		}
 	}
+	/// Selected-file card above the composer input, in the style of Discord's upload tray.
+	fn attachment_tray(&mut self, ui: &mut egui::Ui, state: &State, filename: &str, bytes: u64) {
+		let colors = design::palette(ui);
+		let texture = match &self.attachment_preview {
+			Some(image) => {
+				let key = std::sync::Arc::as_ptr(image) as usize;
+				if self
+					.attachment_texture
+					.as_ref()
+					.is_none_or(|(k, _)| *k != key)
+				{
+					let handle = ui.ctx().load_texture(
+						"attachment-preview",
+						egui::ImageData::Color(image.clone()),
+						egui::TextureOptions::LINEAR,
+					);
+					self.attachment_texture = Some((key, handle));
+				}
+				self.attachment_texture.as_ref().map(|(_, handle)| handle)
+			}
+			None => {
+				self.attachment_texture = None;
+				None
+			}
+		};
+		ui.add_space(4.0);
+		let remove = ui
+			.horizontal(|ui| {
+				ui.spacing_mut().item_spacing.x = 12.0;
+				ui.add_space(4.0);
+				attachments::pending_card(ui, filename, bytes, texture, !self.upload_busy)
+			})
+			.inner;
+		if remove {
+			self.remove_attachment_requested = true;
+		}
+		ui.add_space(2.0);
+		ui.horizontal(|ui| {
+			ui.add_space(4.0);
+			ui.label(
+				RichText::new(if state.demo {
+					"Uploads are disabled in offline preview"
+				} else if !state.can_attach(state.selected.unwrap_or(Id(0))) {
+					"Attaching files is unavailable here"
+				} else {
+					"Not uploaded yet · Send uploads this file with your message"
+				})
+				.size(12.0)
+				.color(colors.muted),
+			);
+		});
+		ui.add_space(8.0);
+		let line = ui.max_rect().x_range();
+		let y = ui.cursor().top();
+		ui.painter()
+			.hline(line, y, egui::Stroke::new(1.0, colors.border));
+		ui.add_space(6.0);
+	}
 	pub fn show(&mut self, ui: &mut egui::Ui, state: &mut State) -> Vec<Command> {
 		self.timeline.audio.seen = false;
 		let mut commands = Vec::new();
@@ -1675,25 +1729,39 @@ impl MessagingUi {
 			.and_then(|id| state.guilds.iter().find(|g| g.id == id))
 			.map_or_else(|| "Direct Messages".to_owned(), |g| g.name.clone());
 		self.title_bar(ui, state, &title);
-		self.notification_rail(ui, state, &mut commands);
-		// The lists and conversation share one rounded surface beside the rail.
-		let content = ui.available_rect_before_wrap();
-		ui.painter().rect_filled(
-			content,
-			egui::CornerRadius {
-				nw: 8,
-				..Default::default()
-			},
-			colors.sidebar,
-		);
-		let sidebar_max = self.prepare_reading_sidebar(ui);
-		let sidebar = egui::Panel::left("channels")
+		// Server rail and channel list share one resizable column so the account card can
+		// span both, like Discord's bottom-left user pill.
+		let rail = notifications::RAIL_WIDTH;
+		let sidebar_max = self.prepare_reading_sidebar(ui, "navigation", rail);
+		let navigation = egui::Panel::left("navigation")
 			.resizable(true)
-			.default_size(f32::from(self.reading_preferences.sidebar_width).min(sidebar_max))
-			.size_range(190.0..=sidebar_max)
-			.frame(egui::Frame::new().inner_margin(0))
-			.show(ui, |ui| self.sidebar(ui, state, &title, &mut commands));
-		self.record_reading_sidebar(sidebar.response.rect.width());
+			.default_size(rail + f32::from(self.reading_preferences.sidebar_width).min(sidebar_max))
+			.size_range(rail + 190.0..=rail + sidebar_max)
+			.frame(egui::Frame::new().fill(colors.base).inner_margin(0))
+			.show(ui, |ui| {
+				egui::Panel::bottom("account-footer")
+					.show_separator_line(false)
+					.frame(egui::Frame::new().inner_margin(egui::Margin {
+						left: 8,
+						right: 8,
+						top: 8,
+						bottom: 8,
+					}))
+					.show(ui, |ui| self.account_card(ui, state, &mut commands));
+				self.notification_rail(ui, state, &mut commands);
+				// The lists sit on their own rounded surface beside the rail, above the card.
+				ui.painter().rect_filled(
+					ui.available_rect_before_wrap(),
+					egui::CornerRadius {
+						nw: 8,
+						sw: 8,
+						..Default::default()
+					},
+					colors.sidebar,
+				);
+				self.sidebar(ui, state, &title, &mut commands);
+			});
+		self.record_reading_sidebar(navigation.response.rect.width() - rail);
 		let selected_voice = state
 			.channels
 			.iter()

@@ -394,6 +394,35 @@ impl Desktop {
 			messaging.preview_emoji_picker();
 			state.status = "Offline fixture · emoji popout opened at startup";
 		}
+		if demo && std::env::args().any(|arg| arg == "--demo-attachment") {
+			// Synthetic gradient stands in for a decoded photo; no file is read or uploaded.
+			let (width, height) = (320usize, 200usize);
+			let pixels = (0..width * height)
+				.map(|index| {
+					let (x, y) = (
+						(index % width) as f32 / width as f32,
+						(index / width) as f32 / height as f32,
+					);
+					let ring = ((x - 0.65).powi(2) + (y - 0.4).powi(2)).sqrt();
+					if ring < 0.12 {
+						egui::Color32::from_rgb(255, 214, 102)
+					} else {
+						egui::Color32::from_rgb(
+							(40.0 + 120.0 * y) as u8,
+							(110.0 + 90.0 * x) as u8,
+							(190.0 - 60.0 * y) as u8,
+						)
+					}
+				})
+				.collect();
+			let image = egui::ColorImage {
+				size: [width, height],
+				source_size: egui::vec2(width as f32, height as f32),
+				pixels,
+			};
+			messaging.preview_attachment("synthetic-holiday.png", 2_437_120, Some(image));
+			state.status = "Offline fixture · synthetic attachment staged in the composer";
+		}
 		if demo
 			&& let Some(query) = std::env::args()
 				.find_map(|arg| arg.strip_prefix("--demo-search=").map(str::to_owned))
@@ -1851,10 +1880,13 @@ impl eframe::App for Desktop {
 						self.messaging.pasted_text = Some((paste.channel, paste.target, text));
 					}
 					Ok(clipboard::Content::File(source)) if upload_allowed && can_attach => {
-						if let Err(error) =
-							self.uploads
-								.select_pasted(paste.generation, paste.channel, source)
-						{
+						if let Err(error) = self.uploads.select_pasted(
+							paste.generation,
+							paste.channel,
+							source,
+							self.runtime.handle(),
+							&ctx,
+						) {
 							self.state.status = error;
 						}
 					}
@@ -1901,10 +1933,14 @@ impl eframe::App for Desktop {
 					"File not attached; return to a connected conversation and drop it again";
 			}
 		}
-		self.messaging.attachment = self
-			.uploads
-			.selection()
-			.map(|(name, size)| (name.to_owned(), size));
+		// Offline fixtures may stage a synthetic attachment without any upload selection.
+		if !self.state.demo || self.uploads.selection().is_some() {
+			self.messaging.attachment = self
+				.uploads
+				.selection()
+				.map(|(name, size)| (name.to_owned(), size));
+			self.messaging.attachment_preview = self.uploads.preview();
+		}
 		self.messaging.upload_busy = self.uploads.busy() || self.clipboard.is_some();
 		self.messaging.upload_status = self.uploads.status();
 		if self.state.user.is_none() {
@@ -2025,6 +2061,8 @@ impl eframe::App for Desktop {
 			}
 			if std::mem::take(&mut self.messaging.remove_attachment_requested) {
 				self.uploads.remove();
+				self.messaging.attachment = None;
+				self.messaging.attachment_preview = None;
 			}
 			if std::mem::take(&mut self.messaging.cancel_upload_requested) {
 				self.uploads.cancel();

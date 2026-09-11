@@ -16,6 +16,7 @@ const CANCELLED: &str = "Upload cancelled; no message was sent";
 const CHANGED: &str = "Selected file changed or disappeared; select it again";
 
 // Deliberately neither Debug nor Serialize: local paths must not enter logs or session caches.
+#[derive(Clone)]
 pub struct Source {
 	path: PathBuf,
 	bytes: Option<std::sync::Arc<[u8]>>,
@@ -78,6 +79,22 @@ impl Source {
 	}
 	pub fn size(&self) -> u64 {
 		self.size
+	}
+	/// Whole selection bytes for a local preview, only while the file is at most `limit` bytes
+	/// and still matches the inspected metadata. Pasted images reuse their in-memory buffer.
+	pub async fn preview_bytes(&self, limit: u64) -> Option<std::sync::Arc<[u8]>> {
+		if self.size > limit {
+			return None;
+		}
+		if let Some(bytes) = &self.bytes {
+			return Some(bytes.clone());
+		}
+		let metadata = tokio::fs::symlink_metadata(&self.path).await.ok()?;
+		if !self.matches(&metadata) {
+			return None;
+		}
+		let bytes = tokio::fs::read(&self.path).await.ok()?;
+		(bytes.len() as u64 == self.size).then(|| bytes.into())
 	}
 	fn matches(&self, metadata: &std::fs::Metadata) -> bool {
 		metadata.is_file()

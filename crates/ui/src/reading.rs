@@ -61,16 +61,22 @@ impl MessagingUi {
 		}
 	}
 
-	pub(super) fn prepare_reading_sidebar(&mut self, ui: &egui::Ui) -> f32 {
+	/// `panel` is the resizable panel id and `reserved` the fixed width it holds besides the list.
+	pub(super) fn prepare_reading_sidebar(
+		&mut self,
+		ui: &egui::Ui,
+		panel: &str,
+		reserved: f32,
+	) -> f32 {
 		// Preserve space for the conversation at high zoom. Temporary viewport limits
 		// must not replace the user's preferred width on disk.
-		let maximum = (ui.available_width() - 260.0).clamp(190.0, 360.0);
+		let maximum = (ui.available_width() - reserved - 260.0).clamp(190.0, 360.0);
 		let constrained = f32::from(self.reading_preferences.sidebar_width) > maximum;
 		if self.reading_sidebar_applied != Some(self.reading_preferences.sidebar_width)
 			|| self.reading_sidebar_constrained != constrained
 		{
 			ui.ctx()
-				.data_mut(|data| data.remove::<PanelState>(ui.id().with("channels")));
+				.data_mut(|data| data.remove::<PanelState>(ui.id().with(panel)));
 			self.reading_sidebar_applied = Some(self.reading_preferences.sidebar_width);
 		}
 		self.reading_sidebar_constrained = constrained;
@@ -260,7 +266,7 @@ mod tests {
 					..Default::default()
 				},
 				|ui| {
-					let maximum = view.prepare_reading_sidebar(ui);
+					let maximum = view.prepare_reading_sidebar(ui, "channels", 0.0);
 					let panel = egui::Panel::left("channels")
 						.default_size(
 							f32::from(view.reading_preferences.sidebar_width).min(maximum),

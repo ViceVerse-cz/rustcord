@@ -3,10 +3,11 @@
 use crate::{
 	avatars::Avatars,
 	design,
+	icons::{self, Icon},
 	markdown::{Formatted, external_url},
 };
 use client_core::{State, profile::ProfileView};
-use egui::{Color32, CornerRadius, Pos2, Rect, RichText, Stroke, pos2, vec2};
+use egui::{Color32, CornerRadius, Pos2, Rect, RichText, Stroke, UiBuilder, Vec2, pos2, vec2};
 use model::{Id, User};
 
 pub enum Action {
@@ -17,7 +18,7 @@ pub enum Action {
 }
 
 const WIDTH: f32 = 300.0;
-const PAD: f32 = 16.0;
+const PAD: f32 = 12.0;
 const AVATAR: f32 = 80.0;
 const RADIUS: u8 = 8;
 
@@ -94,8 +95,14 @@ struct Theme {
 	gradient: Option<(Color32, Color32)>,
 	text: Color32,
 	muted: Color32,
+	link: Color32,
+	/// Translucent body panel laid over the gradient.
 	panel: Color32,
+	/// Chips and secondary buttons inside the panel.
+	chip: Color32,
+	chip_hover: Color32,
 	border: Color32,
+	divider: Color32,
 	card: Color32,
 }
 impl Theme {
@@ -103,28 +110,50 @@ impl Theme {
 		match theme {
 			Some([top, bottom]) => {
 				let (top, bottom) = (rgb(top), rgb(bottom));
-				let bright = (luma(top) + luma(bottom)) * 0.5 > 0.55;
+				// The body panel is opaque enough that its tint decides contrast: white over a
+				// bright gradient takes dark text, black over a dark one takes light text.
+				let bright = (luma(top) + luma(bottom)) * 0.5 > 0.5;
 				Self {
 					gradient: Some((top, bottom)),
 					text: if bright {
-						Color32::from_rgb(28, 32, 36)
+						Color32::from_rgb(24, 27, 31)
 					} else {
 						Color32::from_rgb(242, 243, 245)
 					},
 					muted: if bright {
-						Color32::from_rgb(64, 70, 76)
+						Color32::from_rgb(70, 76, 84)
 					} else {
-						Color32::from_rgb(196, 201, 206)
+						Color32::from_rgb(190, 195, 201)
+					},
+					link: if bright {
+						Color32::from_rgb(0, 96, 208)
+					} else {
+						Color32::from_rgb(0, 176, 244)
 					},
 					panel: if bright {
-						Color32::from_white_alpha(120)
+						Color32::from_white_alpha(170)
 					} else {
-						Color32::from_black_alpha(110)
+						Color32::from_black_alpha(130)
+					},
+					chip: if bright {
+						Color32::from_black_alpha(18)
+					} else {
+						Color32::from_white_alpha(20)
+					},
+					chip_hover: if bright {
+						Color32::from_black_alpha(36)
+					} else {
+						Color32::from_white_alpha(40)
 					},
 					border: if bright {
-						Color32::from_black_alpha(40)
+						Color32::from_black_alpha(48)
 					} else {
-						Color32::from_white_alpha(28)
+						Color32::from_white_alpha(32)
+					},
+					divider: if bright {
+						Color32::from_black_alpha(30)
+					} else {
+						Color32::from_white_alpha(24)
 					},
 					card: top.lerp_to_gamma(bottom, 0.3),
 				}
@@ -133,39 +162,39 @@ impl Theme {
 				gradient: None,
 				text: colors.text,
 				muted: colors.muted,
+				link: colors.link,
 				panel: colors.raised,
+				chip: colors.hover,
+				chip_hover: colors.selected,
 				border: colors.border,
+				divider: colors.border,
 				card: colors.surface,
 			},
 		}
 	}
-	fn background(&self, rect: Rect, border: Color32) -> egui::Shape {
+	fn background(&self, rect: Rect) -> egui::Shape {
+		let radius = f32::from(RADIUS);
 		let mut shapes = vec![
 			egui::Shape::Rect(
 				egui::epaint::Shadow {
-					offset: [0, 6],
-					blur: 20,
+					offset: [0, 8],
+					blur: 24,
 					spread: 0,
-					color: Color32::from_black_alpha(120),
+					color: Color32::from_black_alpha(140),
 				}
 				.as_shape(rect, RADIUS),
 			),
 			egui::Shape::rect_filled(rect, RADIUS, self.card),
 		];
 		if let Some((top, bottom)) = self.gradient {
-			let band_bottom = rect.bottom() - f32::from(RADIUS);
-			let mut mesh = egui::Mesh::default();
-			mesh.colored_vertex(pos2(rect.left(), rect.top()), top);
-			mesh.colored_vertex(pos2(rect.right(), rect.top()), top);
-			mesh.colored_vertex(pos2(rect.left(), band_bottom), bottom);
-			mesh.colored_vertex(pos2(rect.right(), band_bottom), bottom);
-			mesh.add_triangle(0, 1, 2);
-			mesh.add_triangle(1, 3, 2);
-			// Rounded caps keep the corners while the flat band carries the gradient.
+			// Rounded caps in the end colors, with the flat gradient band between them, so the
+			// corners stay round instead of being squared off by the mesh.
 			shapes.push(egui::Shape::rect_filled(rect, RADIUS, top));
-			shapes.push(egui::Shape::Vec(vec![egui::Shape::mesh(mesh)]));
 			shapes.push(egui::Shape::rect_filled(
-				Rect::from_min_max(pos2(rect.left(), band_bottom), rect.right_bottom()),
+				Rect::from_min_max(
+					pos2(rect.left(), rect.bottom() - radius),
+					rect.right_bottom(),
+				),
 				CornerRadius {
 					nw: 0,
 					ne: 0,
@@ -174,18 +203,98 @@ impl Theme {
 				},
 				bottom,
 			));
+			let band = Rect::from_min_max(
+				pos2(rect.left(), rect.top() + radius),
+				pos2(rect.right(), rect.bottom() - radius),
+			);
+			let mut mesh = egui::Mesh::default();
+			mesh.colored_vertex(band.left_top(), top);
+			mesh.colored_vertex(band.right_top(), top);
+			mesh.colored_vertex(band.left_bottom(), bottom);
+			mesh.colored_vertex(band.right_bottom(), bottom);
+			mesh.add_triangle(0, 1, 2);
+			mesh.add_triangle(1, 3, 2);
+			shapes.push(egui::Shape::mesh(mesh));
 		}
 		shapes.push(egui::Shape::rect_stroke(
 			rect,
 			RADIUS,
-			Stroke::new(1.0, border),
+			Stroke::new(1.0, self.border),
 			egui::StrokeKind::Inside,
 		));
 		egui::Shape::Vec(shapes)
 	}
 }
-fn heading(ui: &mut egui::Ui, theme: &Theme, text: &str) {
-	ui.label(RichText::new(text).size(11.0).strong().color(theme.muted));
+/// Section title; adds breathing room before every section after the first.
+fn section(ui: &mut egui::Ui, theme: &Theme, count: &mut usize, text: &str) {
+	if *count > 0 {
+		ui.add_space(10.0);
+	}
+	*count += 1;
+	ui.label(RichText::new(text).size(12.0).strong().color(theme.muted));
+	ui.add_space(2.0);
+}
+fn divider(ui: &mut egui::Ui, theme: &Theme) {
+	ui.add_space(4.0);
+	let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), egui::Sense::hover());
+	ui.painter().hline(
+		rect.x_range(),
+		rect.center().y,
+		Stroke::new(1.0, theme.divider),
+	);
+	ui.add_space(4.0);
+}
+/// Square secondary button drawn in the card's own colors rather than the window palette.
+fn chip_button(ui: &mut egui::Ui, theme: &Theme, icon: Icon, label: &str) -> egui::Response {
+	let (rect, response) = ui.allocate_exact_size(Vec2::splat(32.0), egui::Sense::click());
+	let lit = response.hovered() || response.has_focus();
+	ui.painter().rect_filled(
+		rect,
+		RADIUS,
+		if lit { theme.chip_hover } else { theme.chip },
+	);
+	icons::paint(
+		ui.painter(),
+		icon,
+		rect.shrink(8.0),
+		if lit { theme.text } else { theme.muted },
+	);
+	response.widget_info(|| {
+		egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+	});
+	response.on_hover_text(label)
+}
+/// Display name and glyph for a connection `type`; unknown kinds keep their raw name.
+fn brand(kind: &str) -> (Option<&'static str>, Icon) {
+	match kind.to_ascii_lowercase().as_str() {
+		"github" => (Some("GitHub"), Icon::GitHub),
+		"twitch" => (Some("Twitch"), Icon::Twitch),
+		"steam" => (Some("Steam"), Icon::Steam),
+		"spotify" => (Some("Spotify"), Icon::Spotify),
+		"youtube" => (Some("YouTube"), Icon::YouTube),
+		"twitter" => (Some("X"), Icon::XLogo),
+		"reddit" => (Some("Reddit"), Icon::Reddit),
+		"facebook" => (Some("Facebook"), Icon::Facebook),
+		"instagram" => (Some("Instagram"), Icon::Instagram),
+		"tiktok" => (Some("TikTok"), Icon::TikTok),
+		"paypal" => (Some("PayPal"), Icon::PayPal),
+		"amazon-music" => (Some("Amazon Music"), Icon::Amazon),
+		"bluesky" => (Some("Bluesky"), Icon::Bluesky),
+		"mastodon" => (Some("Mastodon"), Icon::Mastodon),
+		"skype" => (Some("Skype"), Icon::Skype),
+		"xbox" => (Some("Xbox"), Icon::GameController),
+		"playstation" => (Some("PlayStation"), Icon::GameController),
+		"battlenet" => (Some("Battle.net"), Icon::GameController),
+		"epicgames" => (Some("Epic Games"), Icon::GameController),
+		"leagueoflegends" => (Some("League of Legends"), Icon::GameController),
+		"riotgames" => (Some("Riot Games"), Icon::GameController),
+		"bungie" => (Some("Bungie.net"), Icon::GameController),
+		"roblox" => (Some("Roblox"), Icon::GameController),
+		"crunchyroll" => (Some("Crunchyroll"), Icon::Television),
+		"domain" => (Some("Domain"), Icon::Globe),
+		"ebay" => (Some("eBay"), Icon::Link),
+		_ => (None, Icon::Link),
+	}
 }
 fn creation_date(id: Id) -> Option<String> {
 	let seconds = ((id.0 >> 22) + 1_420_070_400_000) / 1000;
@@ -215,6 +324,11 @@ pub fn show(
 		.and_then(|id| state.channels.iter().find(|c| c.id == id))
 		.and_then(|c| c.guild);
 	let (status, custom, activities) = presence(state, user.id, guild);
+	let dm_channel = state
+		.channels
+		.iter()
+		.find(|c| c.kind == 1 && c.recipients.iter().any(|u| u.id == user.id))
+		.map(|c| c.id);
 	let mut action = None;
 	let x = if anchor.x + 12.0 + WIDTH <= bounds.right() {
 		anchor.x + 12.0
@@ -230,18 +344,33 @@ pub fn show(
 		.show(ui.ctx(), |ui| {
 			ui.set_width(WIDTH);
 			ui.set_max_width(WIDTH);
-			ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
+			ui.spacing_mut().item_spacing = vec2(8.0, 4.0);
 			// Cross-label drag selection paints stray highlights in this dense card.
 			ui.style_mut().interaction.selectable_labels = false;
 			let background = ui.painter().add(egui::Shape::Noop);
-			ui.visuals_mut().override_text_color = Some(theme.text);
-			ui.visuals_mut().hyperlink_color = if theme.gradient.is_some() {
-				theme.text
-			} else {
-				colors.accent
-			};
+			{
+				// egui resolves strong, button and spinner colors from the widget strokes rather
+				// than the override, so a bright theme needs every stroke recolored too.
+				let visuals = ui.visuals_mut();
+				visuals.override_text_color = Some(theme.text);
+				visuals.hyperlink_color = theme.link;
+				let widgets = &mut visuals.widgets;
+				for widget in [
+					&mut widgets.noninteractive,
+					&mut widgets.inactive,
+					&mut widgets.hovered,
+					&mut widgets.active,
+					&mut widgets.open,
+				] {
+					widget.fg_stroke.color = theme.text;
+					widget.bg_stroke = Stroke::NONE;
+				}
+				widgets.inactive.weak_bg_fill = theme.chip;
+				widgets.hovered.weak_bg_fill = theme.chip_hover;
+				widgets.active.weak_bg_fill = theme.chip_hover;
+			}
 
-			// Header: banner or accent strip, overlapping avatar, presence dot, custom status.
+			// Header: banner or accent strip, overlapping avatar with presence, badge pill.
 			let has_banner = data.is_some_and(|d| d.banner_key().is_some());
 			let (banner, _) = ui.allocate_exact_size(
 				vec2(WIDTH, if has_banner { 105.0 } else { 60.0 }),
@@ -259,12 +388,12 @@ pub fn show(
 				ui.painter().rect_filled(banner, top_corners, colors.raised);
 			}
 			let avatar_rect = Rect::from_min_size(
-				banner.left_bottom() + vec2(PAD, -AVATAR * 0.5 - 4.0),
-				egui::Vec2::splat(AVATAR),
+				banner.left_bottom() + vec2(PAD + 4.0, -AVATAR * 0.5 - 6.0),
+				Vec2::splat(AVATAR),
 			);
 			ui.painter()
-				.circle_filled(avatar_rect.center(), AVATAR * 0.5 + 5.0, theme.card);
-			ui.scope_builder(egui::UiBuilder::new().max_rect(avatar_rect), |ui| {
+				.circle_filled(avatar_rect.center(), AVATAR * 0.5 + 6.0, theme.card);
+			ui.scope_builder(UiBuilder::new().max_rect(avatar_rect), |ui| {
 				if let Some(data) = data {
 					avatars.show_profile_avatar(ui, data, AVATAR, state.demo);
 				} else {
@@ -272,36 +401,56 @@ pub fn show(
 				}
 			});
 			if let Some(status) = status {
-				let center = avatar_rect.right_bottom() - vec2(11.0, 11.0);
+				let center = avatar_rect.right_bottom() - vec2(12.0, 12.0);
 				ui.painter().circle_filled(center, 13.0, theme.card);
 				ui.painter()
 					.circle_filled(center, 9.0, presence_color(status));
 				ui.allocate_rect(
-					Rect::from_center_size(center, egui::Vec2::splat(20.0)),
+					Rect::from_center_size(center, Vec2::splat(20.0)),
 					egui::Sense::hover(),
 				)
 				.on_hover_text(presence_label(status));
 			}
 			let mut header_bottom = avatar_rect.bottom();
-			if let Some(custom) = custom {
-				let bubble = Rect::from_min_max(
-					pos2(avatar_rect.right() + 12.0, banner.bottom() - 26.0),
-					pos2(banner.right() - PAD, banner.bottom() + 60.0),
+			let (icon_badges, text_badges): (Vec<_>, Vec<_>) = data
+				.map(|d| d.badges.iter().partition(|b| b.icon.is_some()))
+				.unwrap_or_default();
+			if !icon_badges.is_empty() {
+				const BADGE: f32 = 22.0;
+				let right = banner.right() - PAD;
+				let count = icon_badges.len() as f32;
+				let width = (count * BADGE + (count - 1.0) * 4.0 + 12.0)
+					.min(right - avatar_rect.right() - 12.0);
+				let pill = Rect::from_min_max(
+					pos2(right - width, banner.bottom() + 8.0),
+					pos2(right, banner.bottom() + 200.0),
 				);
-				let response = ui.scope_builder(egui::UiBuilder::new().max_rect(bubble), |ui| {
+				let response = ui.scope_builder(UiBuilder::new().max_rect(pill), |ui| {
 					egui::Frame::new()
 						.fill(theme.panel)
-						.stroke(Stroke::new(1.0, theme.border))
-						.corner_radius(10)
-						.inner_margin(egui::Margin::symmetric(10, 6))
+						.corner_radius(RADIUS)
+						.inner_margin(6)
 						.show(ui, |ui| {
-							ui.set_max_width(bubble.width() - 20.0);
-							ui.add(egui::Label::new(RichText::new(custom).size(13.0)).wrap());
+							ui.set_width(width - 12.0);
+							ui.horizontal_wrapped(|ui| {
+								ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+								for badge in &icon_badges {
+									avatars
+										.show_icon(
+											ui,
+											badge.icon_key(),
+											BADGE,
+											state.demo,
+											&badge.description,
+										)
+										.on_hover_text(&badge.description);
+								}
+							});
 						});
 				});
 				header_bottom = header_bottom.max(response.response.rect.bottom());
 			}
-			ui.add_space((header_bottom - ui.cursor().top() + 10.0).max(0.0));
+			ui.add_space((header_bottom + 10.0 - ui.cursor().top()).max(0.0));
 
 			egui::Frame::new()
 				.inner_margin(egui::Margin {
@@ -311,168 +460,187 @@ pub fn show(
 					bottom: PAD as i8,
 				})
 				.show(ui, |ui| {
-					let display = data
-						.and_then(|p| {
-							p.guild
-								.as_ref()
-								.and_then(|g| g.nick.as_deref())
-								.or(p.global_name.as_deref())
-						})
-						.unwrap_or(&user.name);
-					ui.horizontal_wrapped(|ui| {
-						ui.spacing_mut().item_spacing.x = 8.0;
-						ui.add(
-							egui::Label::new(RichText::new(display).size(20.0).strong()).truncate(),
-						);
-						if let Some(clan) = data.and_then(|d| d.clan.as_ref()) {
-							egui::Frame::new()
-								.fill(theme.panel)
-								.stroke(Stroke::new(1.0, theme.border))
-								.corner_radius(6)
-								.inner_margin(egui::Margin::symmetric(6, 2))
-								.show(ui, |ui| {
-									ui.spacing_mut().item_spacing.x = 4.0;
-									avatars.show_icon(
-										ui,
-										clan.badge_key(),
-										14.0,
-										state.demo,
-										"Server tag badge",
-									);
-									ui.label(RichText::new(&clan.tag).size(12.0).strong());
+					ui.spacing_mut().item_spacing.y = 8.0;
+					let footer = 32.0 + 8.0;
+					egui::Frame::new()
+						.fill(theme.panel)
+						.corner_radius(RADIUS)
+						.inner_margin(12)
+						.show(ui, |ui| {
+							ui.set_width(ui.available_width());
+							ui.spacing_mut().item_spacing = vec2(6.0, 3.0);
+							let display = data
+								.and_then(|p| {
+									p.guild
+										.as_ref()
+										.and_then(|g| g.nick.as_deref())
+										.or(p.global_name.as_deref())
 								})
-								.response
-								.on_hover_text(format!("Server tag · server {}", clan.guild));
-						}
-					});
-					let mut identity = Vec::new();
-					if let Some(data) = data {
-						identity.push(if data.user.discriminator > 0 {
-							format!("{}#{:04}", data.username, data.user.discriminator)
-						} else {
-							data.username.clone()
-						});
-						let pronouns = data
-							.guild
-							.as_ref()
-							.map(|g| g.pronouns.as_str())
-							.filter(|s| !s.is_empty())
-							.unwrap_or(&data.pronouns);
-						if !pronouns.is_empty() {
-							identity.push(pronouns.to_owned());
-						}
-					} else {
-						identity.push(user.name.clone());
-					}
-					ui.add(
-						egui::Label::new(
-							RichText::new(identity.join(" • "))
-								.size(14.0)
-								.color(theme.muted),
-						)
-						.truncate(),
-					);
-					if let Some(data) = data.filter(|d| !d.badges.is_empty()) {
-						ui.add_space(2.0);
-						ui.horizontal_wrapped(|ui| {
-							ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
-							for badge in &data.badges {
-								if badge.icon.is_some() {
-									avatars
-										.show_icon(
-											ui,
-											badge.icon_key(),
-											22.0,
-											state.demo,
-											&badge.description,
-										)
-										.on_hover_text(&badge.description);
-								} else {
+								.unwrap_or(&user.name);
+							ui.horizontal_wrapped(|ui| {
+								ui.spacing_mut().item_spacing.x = 8.0;
+								ui.add(
+									egui::Label::new(RichText::new(display).size(20.0).strong())
+										.truncate(),
+								);
+								if let Some(clan) = data.and_then(|d| d.clan.as_ref()) {
 									egui::Frame::new()
-										.fill(theme.panel)
+										.fill(theme.chip)
 										.corner_radius(6)
 										.inner_margin(egui::Margin::symmetric(6, 2))
 										.show(ui, |ui| {
-											ui.label(RichText::new(&badge.description).size(11.0));
+											ui.spacing_mut().item_spacing.x = 4.0;
+											avatars.show_icon(
+												ui,
+												clan.badge_key(),
+												14.0,
+												state.demo,
+												"Server tag badge",
+											);
+											ui.label(RichText::new(&clan.tag).size(12.0).strong());
 										})
 										.response
-										.on_hover_text(&badge.id);
+										.on_hover_text(format!(
+											"Server tag · server {}",
+											clan.guild
+										));
+								}
+							});
+							let mut identity = Vec::new();
+							if let Some(data) = data {
+								identity.push(if data.user.discriminator > 0 {
+									format!("{}#{:04}", data.username, data.user.discriminator)
+								} else {
+									data.username.clone()
+								});
+								let pronouns = data
+									.guild
+									.as_ref()
+									.map(|g| g.pronouns.as_str())
+									.filter(|s| !s.is_empty())
+									.unwrap_or(&data.pronouns);
+								if !pronouns.is_empty() {
+									identity.push(pronouns.to_owned());
+								}
+							} else {
+								identity.push(user.name.clone());
+							}
+							ui.add(
+								egui::Label::new(
+									RichText::new(identity.join(" • "))
+										.size(14.0)
+										.color(theme.muted),
+								)
+								.truncate(),
+							);
+							if !text_badges.is_empty() {
+								ui.add_space(2.0);
+								ui.horizontal_wrapped(|ui| {
+									ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+									for badge in &text_badges {
+										egui::Frame::new()
+											.fill(theme.chip)
+											.corner_radius(6)
+											.inner_margin(egui::Margin::symmetric(6, 2))
+											.show(ui, |ui| {
+												ui.label(
+													RichText::new(&badge.description).size(11.0),
+												);
+											})
+											.response
+											.on_hover_text(&badge.id);
+									}
+								});
+							}
+							if let Some(custom) = custom {
+								ui.add_space(4.0);
+								ui.add(egui::Label::new(RichText::new(custom).size(13.0)).wrap());
+							}
+							if view.is_none_or(|v| v.loading) {
+								ui.add_space(4.0);
+								ui.horizontal(|ui| {
+									ui.spinner();
+									ui.label(
+										RichText::new("Loading profile…")
+											.size(13.0)
+											.color(theme.muted),
+									);
+								});
+							}
+							if let Some(error) = view.and_then(|v| v.error) {
+								ui.add_space(4.0);
+								ui.label(RichText::new(error).size(12.0).color(theme.muted));
+								if ui.small_button("Retry profile").clicked() {
+									action = Some(Action::Retry);
 								}
 							}
-						});
-					}
-					if view.is_none_or(|v| v.loading) {
-						ui.horizontal(|ui| {
-							ui.spinner();
-							ui.label(RichText::new("Loading profile…").color(theme.muted));
-						});
-					}
-					if let Some(error) = view.and_then(|v| v.error) {
-						ui.label(RichText::new(error).small().color(theme.muted));
-						if ui.small_button("Retry profile").clicked() {
-							action = Some(Action::Retry);
-						}
-					}
-					if data.is_some() || !activities.is_empty() {
-						ui.add_space(4.0);
-						let used = ui.cursor().top() - banner.top();
-						let max_height = (bounds.height() - used - 96.0).max(72.0);
-						egui::Frame::new()
-							.fill(theme.panel)
-							.corner_radius(RADIUS)
-							.inner_margin(12)
-							.show(ui, |ui| {
-								ui.set_width(ui.available_width());
+							if data.is_some() || !activities.is_empty() {
+								divider(ui, &theme);
+								let used = ui.cursor().top() - banner.top();
+								let max_height = (bounds.height() - used - footer - 48.0).max(72.0);
 								egui::ScrollArea::vertical()
 									.id_salt("profile-details")
 									.max_height(max_height)
+									.auto_shrink([false, true])
 									.show(ui, |ui| {
 										ui.spacing_mut().item_spacing.y = 4.0;
+										let mut sections = 0;
 										if !activities.is_empty() {
-											heading(ui, &theme, "ACTIVITY");
+											section(ui, &theme, &mut sections, "ACTIVITY");
 											for activity in activities {
-												ui.horizontal_top(|ui| {
-													if let Some(image) = &activity.image {
-														avatars.show_icon(
-															ui,
-															Some(image.key()),
-															64.0,
-															state.demo,
-															&format!(
-																"{} activity artwork",
-																activity.name
-															),
-														);
-													}
-													ui.vertical(|ui| {
+												egui::Frame::new()
+													.fill(theme.chip)
+													.corner_radius(RADIUS)
+													.inner_margin(8)
+													.show(ui, |ui| {
 														ui.set_width(ui.available_width());
-														ui.add(
-															egui::Label::new(
-																RichText::new(activity.summary())
-																	.strong()
-																	.size(14.0),
-															)
-															.wrap(),
-														);
-														for text in [
-															activity.details.as_deref(),
-															activity.state.as_deref(),
-														]
-														.into_iter()
-														.flatten()
-														{
-															ui.add(
-																egui::Label::new(
-																	RichText::new(text)
-																		.size(13.0)
-																		.color(theme.muted),
-																)
-																.wrap(),
-															);
-														}
+														ui.horizontal_top(|ui| {
+															ui.spacing_mut().item_spacing.x = 10.0;
+															if let Some(image) = &activity.image {
+																avatars.show_icon(
+																	ui,
+																	Some(image.key()),
+																	56.0,
+																	state.demo,
+																	&format!(
+																		"{} activity artwork",
+																		activity.name
+																	),
+																);
+															}
+															ui.vertical(|ui| {
+																ui.set_width(ui.available_width());
+																ui.spacing_mut().item_spacing.y =
+																	2.0;
+																ui.add(
+																	egui::Label::new(
+																		RichText::new(
+																			activity.summary(),
+																		)
+																		.strong()
+																		.size(14.0),
+																	)
+																	.wrap(),
+																);
+																for text in [
+																	activity.details.as_deref(),
+																	activity.state.as_deref(),
+																]
+																.into_iter()
+																.flatten()
+																{
+																	ui.add(
+																		egui::Label::new(
+																			RichText::new(text)
+																				.size(13.0)
+																				.color(theme.muted),
+																		)
+																		.wrap(),
+																	);
+																}
+															});
+														});
 													});
-												});
-												ui.add_space(8.0);
 											}
 										}
 										if let Some(data) = data {
@@ -483,7 +651,7 @@ pub fn show(
 												.filter(|s| !s.is_empty())
 												.unwrap_or(&data.bio);
 											if !bio.is_empty() {
-												heading(ui, &theme, "ABOUT ME");
+												section(ui, &theme, &mut sections, "ABOUT ME");
 												let mut linked_user = None;
 												Formatted::parse(bio).show_with_images(
 													ui,
@@ -496,12 +664,17 @@ pub fn show(
 												if let Some(user) = linked_user {
 													action = Some(Action::Profile(user));
 												}
-												ui.add_space(8.0);
 											}
-											heading(ui, &theme, "MEMBER SINCE");
+											section(ui, &theme, &mut sections, "MEMBER SINCE");
 											ui.horizontal_wrapped(|ui| {
 												ui.spacing_mut().item_spacing.x = 6.0;
 												if let Some(date) = creation_date(user.id) {
+													icons::inline(
+														ui,
+														Icon::Discord,
+														16.0,
+														theme.muted,
+													);
 													ui.label(RichText::new(date).size(13.0));
 												}
 												if let Some(joined) = data
@@ -536,33 +709,65 @@ pub fn show(
 												}
 											});
 											if !data.connections.is_empty() {
-												ui.add_space(8.0);
-												heading(ui, &theme, "CONNECTIONS");
+												section(ui, &theme, &mut sections, "CONNECTIONS");
 												for connection in &data.connections {
-													ui.horizontal_wrapped(|ui| {
-														ui.spacing_mut().item_spacing.x = 6.0;
-														ui.label(
-															RichText::new(&connection.kind)
-																.size(13.0)
-																.strong(),
-														);
-														ui.label(
-															RichText::new(&connection.name)
-																.size(13.0),
-														);
-														if connection.verified {
-															ui.label(
-																RichText::new("✓")
-																	.size(12.0)
-																	.color(theme.muted),
-															)
-															.on_hover_text("Verified connection");
-														}
-													});
+													let (label, icon) = brand(&connection.kind);
+													let label = label
+														.map_or(connection.kind.as_str(), |l| l);
+													let mut hover = label.to_owned();
+													if connection.verified {
+														hover.push_str(" · Verified");
+													}
+													egui::Frame::new()
+														.fill(theme.chip)
+														.corner_radius(6)
+														.inner_margin(egui::Margin::symmetric(8, 6))
+														.show(ui, |ui| {
+															ui.set_width(ui.available_width());
+															ui.horizontal(|ui| {
+																ui.spacing_mut().item_spacing.x =
+																	8.0;
+																icons::inline(
+																	ui, icon, 18.0, theme.text,
+																);
+																ui.add(
+																	egui::Label::new(
+																		RichText::new(
+																			&connection.name,
+																		)
+																		.size(13.0)
+																		.strong(),
+																	)
+																	.truncate(),
+																);
+																if connection.verified {
+																	icons::inline(
+																		ui,
+																		Icon::Verified,
+																		14.0,
+																		theme.muted,
+																	);
+																}
+																ui.with_layout(
+																	egui::Layout::right_to_left(
+																		egui::Align::Center,
+																	),
+																	|ui| {
+																		ui.label(
+																			RichText::new(label)
+																				.size(12.0)
+																				.color(theme.muted),
+																		);
+																	},
+																);
+															});
+														})
+														.response
+														.on_hover_text(hover);
 												}
 											}
 											if !data.mutual_guilds.is_empty() {
-												ui.add_space(8.0);
+												ui.add_space(10.0);
 												let names: Vec<String> = data
 													.mutual_guilds
 													.iter()
@@ -577,15 +782,25 @@ pub fn show(
 															)
 													})
 													.collect();
-												ui.label(
-													RichText::new(format!(
-														"{} Mutual Server{}",
-														names.len(),
-														if names.len() == 1 { "" } else { "s" }
-													))
-													.size(13.0)
-													.strong(),
-												)
+												ui.horizontal(|ui| {
+													ui.spacing_mut().item_spacing.x = 6.0;
+													icons::inline(
+														ui,
+														Icon::People,
+														16.0,
+														theme.muted,
+													);
+													ui.label(
+														RichText::new(format!(
+															"{} Mutual Server{}",
+															names.len(),
+															if names.len() == 1 { "" } else { "s" }
+														))
+														.size(13.0)
+														.strong(),
+													);
+												})
+												.response
 												.on_hover_text(names.join("\n"));
 											}
 											if data.limited {
@@ -600,48 +815,54 @@ pub fn show(
 											}
 										}
 									});
-							});
-					}
-					ui.add_space(6.0);
-					if let Some(channel) = state
-						.channels
-						.iter()
-						.find(|c| c.kind == 1 && c.recipients.iter().any(|u| u.id == user.id))
-						&& ui
+							}
+						});
+					ui.horizontal(|ui| {
+						ui.spacing_mut().item_spacing.x = 8.0;
+						if let Some(channel) = dm_channel {
+							let width = ui.available_width() - 32.0 - 8.0;
+							if ui
+								.add_sized(
+									[width, 32.0],
+									egui::Button::new(
+										RichText::new(format!("Message @{}", user.name))
+											.color(colors.accent_text)
+											.strong(),
+									)
+									.fill(colors.accent)
+									.stroke(Stroke::NONE)
+									.corner_radius(RADIUS),
+								)
+								.clicked()
+							{
+								action = Some(Action::Message(channel));
+							}
+							if chip_button(ui, &theme, Icon::Copy, "Copy user ID").clicked() {
+								ui.ctx().copy_text(user.id.to_string());
+							}
+						} else if ui
 							.add_sized(
 								[ui.available_width(), 32.0],
 								egui::Button::new(
-									RichText::new(format!("Message @{}", user.name))
-										.color(colors.accent_text)
-										.strong(),
+									RichText::new("Copy user ID").size(13.0).strong(),
 								)
-								.fill(colors.accent)
-								.stroke(Stroke::NONE)
 								.corner_radius(RADIUS),
 							)
-							.clicked()
-					{
-						action = Some(Action::Message(channel.id));
-					}
-					ui.horizontal(|ui| {
-						if ui
-							.add(egui::Button::new(RichText::new("Copy user ID").size(12.0)))
 							.clicked()
 						{
 							ui.ctx().copy_text(user.id.to_string());
 						}
-						if state.demo {
-							ui.label(
-								RichText::new("Offline preview · synthetic")
-									.size(11.0)
-									.color(theme.muted),
-							);
-						}
 					});
+					if state.demo {
+						ui.label(
+							RichText::new("Offline preview · synthetic")
+								.size(11.0)
+								.color(theme.muted),
+						);
+					}
 				});
 			let rect = ui.min_rect();
-			ui.painter()
-				.set(background, theme.background(rect, colors.border));
+			ui.painter().set(background, theme.background(rect));
 		});
 	let rect = response.response.rect;
 	let pressed_outside = ui.ctx().input(|i| {
