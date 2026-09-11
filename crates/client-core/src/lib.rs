@@ -1,6 +1,7 @@
 //! Single UI-thread state owner. Adapters deliver generation-tagged typed events.
 pub mod archives;
 pub mod auth;
+pub mod fingerprint;
 pub mod forum;
 pub mod gifs;
 pub mod permissions;
@@ -604,7 +605,7 @@ impl State {
 			.duration_since(std::time::UNIX_EPOCH)
 			.unwrap_or_default()
 			.as_millis();
-		let nonce = format!("{epoch}{:06}", self.send_sequence % 1_000_000);
+		let nonce = fingerprint::nonce(epoch, self.send_sequence);
 		self.pending.push(Pending {
 			channel,
 			content: content.clone(),
@@ -1464,7 +1465,10 @@ impl State {
 						} else {
 							"Message unpinned"
 						};
-						if let Some(view) = self.search.as_mut().filter(|view| view.pins && view.channel == channel)
+						if let Some(view) = self
+							.search
+							.as_mut()
+							.filter(|view| view.pins && view.channel == channel)
 							&& let Some(page) = view.page.as_mut()
 							&& !pinned
 						{
@@ -1476,8 +1480,12 @@ impl State {
 					Err(failure) => {
 						self.status = if pinned {
 							match failure {
-								auth::Failure::Forbidden => "Pinning is unavailable with the current permissions or the pin limit was reached",
-								_ => "Pin was not applied; check the pinned messages before retrying",
+								auth::Failure::Forbidden => {
+									"Pinning is unavailable with the current permissions or the pin limit was reached"
+								}
+								_ => {
+									"Pin was not applied; check the pinned messages before retrying"
+								}
 							}
 						} else {
 							"Unpin was not applied; check the pinned messages before retrying"

@@ -468,8 +468,11 @@ async fn run_inner(
 		let handshake = if let (Some(session), Some(sequence)) = (&state.session, state.sequence) {
 			serde_json::json!({"op":6,"d":{"token":secret.expose(),"session_id":session.as_str(),"seq":sequence}})
 		} else {
-			// Explicitly an unofficial normal-user Identify; no bot intents or spoofed official fingerprint.
-			serde_json::json!({"op":2,"d":{"token":secret.expose(),"compress":false,"properties":{"os":std::env::consts::OS,"browser":"Serein","device":"Serein"},"presence":{"status":"online","since":0,"activities":[],"afk":false}}})
+			// Normal-user Identify with the same browser fingerprint as REST; a mismatched or
+			// custom identity is what gets the account quarantined as spam.
+			let properties: serde_json::Value =
+				serde_json::from_str(&client_core::fingerprint::properties()).unwrap_or_default();
+			serde_json::json!({"op":2,"d":{"token":secret.expose(),"compress":false,"properties":properties,"presence":{"status":"online","since":0,"activities":[],"afk":false}}})
 		};
 		let encoded = Zeroizing::new(handshake.to_string());
 		drop(handshake);
@@ -1191,7 +1194,11 @@ mod tests {
 					} else {
 						assert_eq!(handshake["op"], 2);
 						assert!(handshake["d"].get("session_id").is_none());
-						assert_eq!(handshake["d"]["properties"]["browser"], "Serein");
+						assert_eq!(handshake["d"]["properties"]["browser"], "Chrome");
+						assert_eq!(
+							handshake["d"]["properties"]["browser_user_agent"],
+							client_core::fingerprint::user_agent()
+						);
 						if connection == 0 {
 							send(&mut socket, ready(41, "synthetic-first-session")).await;
 							acknowledge(&mut socket, 41).await;
