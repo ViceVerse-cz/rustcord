@@ -119,11 +119,39 @@ pub(super) fn discord_url(channel: &model::Channel, message: Option<Id>) -> Opti
 	Some(url)
 }
 
-pub(super) fn confirm_external_link(ctx: &egui::Context, opening: &mut Option<String>) {
+pub(super) fn confirm_external_link(
+	ctx: &egui::Context,
+	opening: &mut Option<String>,
+	confirm_links: bool,
+) {
 	let Some(target) = opening.as_deref().and_then(external_url) else {
 		*opening = None;
 		return;
 	};
+	let discord = url::Url::parse(&target).is_ok_and(|url| {
+		url.scheme() == "https"
+			&& url.port().is_none()
+			&& url.host_str().is_some_and(|host| {
+				[
+					"discord.com",
+					"discord.gg",
+					"discordapp.com",
+					"discordapp.net",
+				]
+				.iter()
+				.any(|domain| {
+					host == *domain
+						|| host
+							.strip_suffix(domain)
+							.is_some_and(|prefix| prefix.ends_with('.'))
+				})
+			})
+	});
+	if !confirm_links || discord {
+		ctx.open_url(egui::OpenUrl::new_tab(target));
+		*opening = None;
+		return;
+	}
 	let mut confirm = false;
 	let mut cancel = false;
 	let modal = egui::Modal::new(egui::Id::unique("confirm-external-link")).show(ctx, |ui| {
@@ -856,6 +884,36 @@ mod tests {
 	}
 
 	#[test]
+	fn link_preferences_keep_validation_and_discord_host_boundaries() {
+		for (target, confirm_links, opens) in [
+			("https://discord.com/channels/@me/1", true, true),
+			("https://discord.gg/example", true, true),
+			("https://cdn.discordapp.com/attachments/example", true, true),
+			("https://discord.com.evil.example/", true, false),
+			("https://evildiscord.com/", true, false),
+			("https://discord.com@evil.example/", false, false),
+			("javascript:alert(1)", false, false),
+			("https://example.com/", true, false),
+			("https://example.com/", false, true),
+		] {
+			let ctx = egui::Context::default();
+			let mut opening = Some(target.to_owned());
+			let output = ctx.run_ui(Default::default(), |_| {
+				confirm_external_link(&ctx, &mut opening, confirm_links);
+			});
+			assert_eq!(
+				!output.platform_output.commands.is_empty(),
+				opens,
+				"{target}"
+			);
+			if opens {
+				assert!(opening.is_none());
+			}
+			output.drop_without_applying_deltas();
+		}
+	}
+
+	#[test]
 	fn external_confirmation_requires_explicit_action_and_displays_emitted_target() {
 		fn text_position(shape: &egui::Shape, label: &str) -> Option<egui::Pos2> {
 			match shape {
@@ -882,7 +940,7 @@ mod tests {
 						events,
 						..Default::default()
 					},
-					|_| confirm_external_link(&ctx, opening),
+					|_| confirm_external_link(&ctx, opening, true),
 				)
 			};
 			let mut position = None;
@@ -958,7 +1016,7 @@ mod tests {
 		let ctx = egui::Context::default();
 		let mut invalid = Some("javascript:alert(1)".into());
 		let output = ctx.run_ui(Default::default(), |_| {
-			confirm_external_link(&ctx, &mut invalid)
+			confirm_external_link(&ctx, &mut invalid, true)
 		});
 		assert!(invalid.is_none());
 		assert!(output.platform_output.commands.is_empty());

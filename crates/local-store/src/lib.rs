@@ -177,6 +177,12 @@ impl LocalStore {
 		if !has_hide_media_links {
 			transaction.execute_batch("ALTER TABLE reading_preferences ADD COLUMN hide_media_links INTEGER NOT NULL DEFAULT 1 CHECK(typeof(hide_media_links)='integer' AND hide_media_links IN (0,1));")?;
 		}
+		let has_confirm_external_links: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('reading_preferences') WHERE name='confirm_external_links')", [], |row| row.get(0),
+        )?;
+		if !has_confirm_external_links {
+			transaction.execute_batch("ALTER TABLE reading_preferences ADD COLUMN confirm_external_links INTEGER NOT NULL DEFAULT 1 CHECK(typeof(confirm_external_links)='integer' AND confirm_external_links IN (0,1));")?;
+		}
 		transaction.commit()?;
 		Ok(Self(connection))
 	}
@@ -220,7 +226,7 @@ impl LocalStore {
 		let stored = self
 			.0
 			.query_row(
-				"SELECT zoom_percent,sidebar_width,show_members,animate_gifs,hide_media_links FROM reading_preferences WHERE singleton=1",
+				"SELECT zoom_percent,sidebar_width,show_members,animate_gifs,hide_media_links,confirm_external_links FROM reading_preferences WHERE singleton=1",
 				[],
 				|row| {
 					Ok(match (
@@ -229,6 +235,7 @@ impl LocalStore {
 						row.get_ref(2)?,
 						row.get_ref(3)?,
 						row.get_ref(4)?,
+						row.get_ref(5)?,
 					) {
 						(
 							ValueRef::Integer(zoom @ 80..=150),
@@ -236,12 +243,14 @@ impl LocalStore {
 							ValueRef::Integer(members @ 0..=1),
 							ValueRef::Integer(animate_gifs @ 0..=1),
 							ValueRef::Integer(hide_media_links @ 0..=1),
+							ValueRef::Integer(confirm_external_links @ 0..=1),
 						) => Some(ReadingPreferences {
 							zoom_percent: zoom as u16,
 							sidebar_width: width as u16,
 							show_members: members == 1,
 							animate_gifs: animate_gifs == 1,
 							hide_media_links: hide_media_links == 1,
+							confirm_external_links: confirm_external_links == 1,
 						}),
 						_ => None,
 					})
@@ -263,10 +272,10 @@ impl LocalStore {
 			self.0
 				.execute("DELETE FROM reading_preferences WHERE singleton=1", [])?;
 		} else {
-			self.0.execute("INSERT INTO reading_preferences(singleton,zoom_percent,sidebar_width,show_members,animate_gifs,hide_media_links)
-                VALUES(1,?1,?2,?3,?4,?5) ON CONFLICT(singleton) DO UPDATE SET
-                zoom_percent=excluded.zoom_percent,sidebar_width=excluded.sidebar_width,show_members=excluded.show_members,animate_gifs=excluded.animate_gifs,hide_media_links=excluded.hide_media_links",
-                params![preferences.zoom_percent, preferences.sidebar_width, preferences.show_members, preferences.animate_gifs, preferences.hide_media_links])?;
+			self.0.execute("INSERT INTO reading_preferences(singleton,zoom_percent,sidebar_width,show_members,animate_gifs,hide_media_links,confirm_external_links)
+                VALUES(1,?1,?2,?3,?4,?5,?6) ON CONFLICT(singleton) DO UPDATE SET
+                zoom_percent=excluded.zoom_percent,sidebar_width=excluded.sidebar_width,show_members=excluded.show_members,animate_gifs=excluded.animate_gifs,hide_media_links=excluded.hide_media_links,confirm_external_links=excluded.confirm_external_links",
+                params![preferences.zoom_percent, preferences.sidebar_width, preferences.show_members, preferences.animate_gifs, preferences.hide_media_links, preferences.confirm_external_links])?;
 		}
 		Ok(())
 	}
@@ -818,6 +827,7 @@ mod tests {
 			show_members: false,
 			animate_gifs: false,
 			hide_media_links: true,
+			confirm_external_links: true,
 		};
 		for (name, legacy, expected_kind, expected_markers, expected_preferences) in [
 			(
@@ -1064,6 +1074,7 @@ mod tests {
 			show_members: false,
 			animate_gifs: false,
 			hide_media_links: true,
+			confirm_external_links: true,
 		};
 		store.save_reading_preferences(preferences).unwrap();
 		drop(store);
@@ -1079,6 +1090,7 @@ mod tests {
 				show_members: true,
 				animate_gifs: false,
 				hide_media_links: true,
+				confirm_external_links: true,
 			},
 		] {
 			assert_eq!(
@@ -1207,6 +1219,7 @@ mod tests {
 					show_members,
 					animate_gifs: false,
 					hide_media_links: true,
+					confirm_external_links: true,
 				};
 				store.save_reading_preferences(preferences).unwrap();
 				assert_eq!(store.reading_preferences().unwrap(), preferences);
@@ -1229,6 +1242,7 @@ mod tests {
 					show_members: false,
 					animate_gifs: false,
 					hide_media_links: true,
+					confirm_external_links: true,
 				}),
 				Err(StoreError::Capacity)
 			);
@@ -1242,6 +1256,7 @@ mod tests {
 				show_members: false,
 				animate_gifs: false,
 				hide_media_links: true,
+				confirm_external_links: true,
 			}),
 			Err(StoreError::Unavailable)
 		);

@@ -6,6 +6,7 @@ pub struct ReadingPreferences {
 	pub show_members: bool,
 	pub animate_gifs: bool,
 	pub hide_media_links: bool,
+	pub confirm_external_links: bool,
 }
 impl Default for ReadingPreferences {
 	fn default() -> Self {
@@ -15,6 +16,7 @@ impl Default for ReadingPreferences {
 			show_members: true,
 			animate_gifs: false,
 			hide_media_links: true,
+			confirm_external_links: true,
 		}
 	}
 }
@@ -43,6 +45,7 @@ mod tests {
 						show_members,
 						animate_gifs: false,
 						hide_media_links: true,
+						confirm_external_links: true,
 					};
 					assert_eq!(
 						preferences.is_valid(),

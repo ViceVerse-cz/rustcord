@@ -1939,7 +1939,11 @@ impl MessagingUi {
 			ui.disable();
 		}
 		// Foreground confirmation handles Escape before background search/archive shortcuts.
-		markdown::confirm_external_link(&ctx, &mut self.timeline.opening);
+		markdown::confirm_external_link(
+			&ctx,
+			&mut self.timeline.opening,
+			self.reading_preferences.confirm_external_links,
+		);
 		let colors = crate::design::palette(ui);
 		if !settings_open
 			&& !self.switcher.is_open()
@@ -2367,6 +2371,7 @@ impl MessagingUi {
 				state,
 				&mut self.avatars,
 				&mut self.profile_link,
+				self.reading_preferences.confirm_external_links,
 				anchor,
 			) {
 				Some(profiles::Action::Profile(user)) => {
