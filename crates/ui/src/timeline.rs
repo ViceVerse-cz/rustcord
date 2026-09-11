@@ -1101,6 +1101,20 @@ impl TimelineView {
 							});
 						});
 					let rect = row.response.rect;
+					let mentioned = state.user.as_ref().is_some_and(|user| {
+						message.mentions.iter().any(|mention| mention.id == user.id)
+					});
+					if mentioned {
+						ui.painter().set(
+							background,
+							egui::Shape::rect_filled(rect, 0.0, colors.warning.gamma_multiply(0.10)),
+						);
+						ui.painter().rect_filled(
+							egui::Rect::from_min_size(rect.min, egui::vec2(3.0, rect.height())),
+							0.0,
+							colors.warning,
+						);
+					}
 					let focus = ui.interact(
 						rect,
 						ui.id().with("message-focus"),
@@ -1110,7 +1124,11 @@ impl TimelineView {
 						egui::WidgetInfo::labeled(
 							egui::WidgetType::Label,
 							true,
-							format!("Message by {}. Tab for actions.", message.author.name),
+							format!(
+								"Message by {}. {}Tab for actions.",
+								message.author.name,
+								if mentioned { "Mentions you. " } else { "" },
+							),
 						)
 					});
 					let retained = retained_toolbar.is_some_and(|(active, _)| active == *id);
@@ -1138,7 +1156,15 @@ impl TimelineView {
 					{
 						ui.painter().set(
 							background,
-							egui::Shape::rect_filled(rect, 0.0, colors.hover.gamma_multiply(0.7)),
+							egui::Shape::rect_filled(
+								rect,
+								0.0,
+								if mentioned {
+									colors.warning.gamma_multiply(0.16)
+								} else {
+									colors.hover.gamma_multiply(0.7)
+								},
+							),
 						);
 						if let Some(rect) = time_rect {
 							let time = timestamp(*id);
