@@ -80,13 +80,8 @@ impl SearchUi {
 			}
 		});
 	}
-	/// Query field shown in the conversation header while a text search is open.
-	pub fn header_input(
-		&mut self,
-		ui: &mut egui::Ui,
-		state: &mut State,
-		commands: &mut Vec<Command>,
-	) {
+	/// Query field shown inline in the results pane header; returns true when Enter submits.
+	fn query_input(&mut self, ui: &mut egui::Ui, state: &State) -> bool {
 		let colors = design::palette(ui);
 		let allowed = state.can_search();
 		let mut submit = false;
@@ -99,13 +94,14 @@ impl SearchUi {
 				ui.set_height(28.0);
 				ui.horizontal_centered(|ui| {
 					ui.spacing_mut().item_spacing.x = 6.0;
-					let clear = icons::button(ui, icons::Icon::Close, 22.0, "Close search");
+					icons::inline(ui, icons::Icon::Search, 16.0, colors.muted);
+					let clear_width = if self.query.is_empty() { 0.0 } else { 28.0 };
 					let input = ui.add(
 						egui::TextEdit::singleline(&mut self.query)
 							.char_limit(256)
 							.frame(egui::Frame::NONE)
 							.hint_text("Search")
-							.desired_width(ui.available_width().max(60.0)),
+							.desired_width((ui.available_width() - clear_width).max(60.0)),
 					);
 					input.widget_info(|| {
 						egui::WidgetInfo::labeled(
@@ -123,14 +119,15 @@ impl SearchUi {
 						&& input.lost_focus()
 						&& ui.input(|i| i.key_pressed(egui::Key::Enter))
 						&& !self.ime_frame;
-					if clear.clicked() {
-						self.open = false;
+					if !self.query.is_empty()
+						&& icons::button(ui, icons::Icon::Close, 22.0, "Clear search").clicked()
+					{
+						self.query.clear();
+						self.focus = true;
 					}
 				});
 			});
-		if submit && let Some(command) = state.request_search(self.query.trim().into(), None) {
-			commands.push(command);
-		}
+		submit
 	}
 	/// Anchored pinned-messages popout under the header pin button, like Discord's.
 	pub fn pins_popout(
@@ -281,11 +278,10 @@ impl SearchUi {
 			&& !area.response.rect.contains(
 				ctx.input(|i| i.pointer.interact_pos())
 					.unwrap_or(area.response.rect.center()),
-			)
-			&& !anchor.contains(
-				ctx.input(|i| i.pointer.interact_pos())
-					.unwrap_or(anchor.center()),
-			);
+			) && !anchor.contains(
+			ctx.input(|i| i.pointer.interact_pos())
+				.unwrap_or(anchor.center()),
+		);
 		if clicked_outside {
 			self.open = false;
 		}
@@ -297,12 +293,15 @@ impl SearchUi {
 			.show(ui, |ui| {
 				ui.set_width(ui.available_width());
 				ui.vertical_centered(|ui| {
-					let (rect, _) = ui.allocate_exact_size(egui::Vec2::splat(96.0), egui::Sense::hover());
+					let (rect, _) =
+						ui.allocate_exact_size(egui::Vec2::splat(96.0), egui::Sense::hover());
 					let face = colors.muted.gamma_multiply(0.35);
 					ui.painter().circle_filled(rect.center(), 44.0, face);
 					let eye = colors.sidebar;
-					ui.painter().circle_filled(rect.center() + egui::vec2(-14.0, -4.0), 4.0, eye);
-					ui.painter().circle_filled(rect.center() + egui::vec2(14.0, -4.0), 4.0, eye);
+					ui.painter()
+						.circle_filled(rect.center() + egui::vec2(-14.0, -4.0), 4.0, eye);
+					ui.painter()
+						.circle_filled(rect.center() + egui::vec2(14.0, -4.0), 4.0, eye);
 					// Frown.
 					let mut points = Vec::with_capacity(12);
 					for i in 0..=11 {
@@ -406,9 +405,11 @@ impl SearchUi {
 					});
 				if page.pin_cursor.is_none() && !view.loading && page.partial {
 					ui.label(
-						RichText::new("More pins may exist, but this page has no usable continuation.")
-							.small()
-							.color(colors.muted),
+						RichText::new(
+							"More pins may exist, but this page has no usable continuation.",
+						)
+						.small()
+						.color(colors.muted),
 					);
 				}
 			}
@@ -463,17 +464,9 @@ impl SearchUi {
 		let mut target = None;
 		ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
 		ui.horizontal(|ui| {
-			let title = if self.pins {
-				"Pinned Messages".to_owned()
-			} else {
-				match state.search.as_ref().and_then(|view| view.page.as_ref()) {
-					Some(page) if !state.search.as_ref().is_some_and(|v| v.loading) => {
-						format!("{} Results", page.total)
-					}
-					_ => "Search".to_owned(),
-				}
-			};
-			ui.label(design::semibold(ui, title, 16.0).color(colors.text_strong));
+			if self.pins {
+				ui.label(design::semibold(ui, "Pinned Messages", 16.0).color(colors.text_strong));
+			}
 			ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 				if icons::button(ui, icons::Icon::Close, 28.0, "Close").clicked() {
 					self.open = false;
@@ -485,7 +478,9 @@ impl SearchUi {
 						self.focus = false;
 					}
 					submit = reload.clicked();
-				} else if let Some(view) = &state.search
+					return;
+				}
+				if let Some(view) = &state.search
 					&& let Some(page) = &view.page
 				{
 					if let Some(last) = page.hits.last()
@@ -504,8 +499,24 @@ impl SearchUi {
 						older = Some((view.query.clone(), None));
 					}
 				}
+				// The query field sits inline with the section header, filling what the buttons leave.
+				ui.allocate_ui_with_layout(
+					egui::vec2(ui.available_width().max(120.0), 28.0),
+					egui::Layout::left_to_right(egui::Align::Center),
+					|ui| submit |= self.query_input(ui, state),
+				);
 			});
 		});
+		if !self.pins
+			&& let Some(page) = state.search.as_ref().and_then(|view| view.page.as_ref())
+			&& !state.search.as_ref().is_some_and(|v| v.loading)
+		{
+			ui.label(design::eyebrow(
+				ui,
+				format!("{} Results", page.total),
+				colors.muted,
+			));
+		}
 		if self.pins {
 			if submit && let Some(command) = state.request_pins() {
 				commands.push(command);
@@ -585,9 +596,6 @@ mod tests {
 	fn run(ui: &mut egui::Ui, view: &mut SearchUi, state: &mut State, commands: &mut Vec<Command>) {
 		view.sync(ui.ctx(), state, commands);
 		if view.open {
-			if !view.pins {
-				view.header_input(ui, state, commands);
-			}
 			view.pane(ui, state, commands);
 		}
 	}

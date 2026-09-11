@@ -749,17 +749,9 @@ impl MessagingUi {
 					ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 						ui.spacing_mut().item_spacing.x = 4.0;
 						if state.selected.is_some() && !selected_voice {
-							if self.search.open && !self.search.pins() {
-								ui.allocate_ui_with_layout(
-									egui::vec2(
-										240.0_f32.min(ui.available_width() * 0.5).max(120.0),
-										28.0,
-									),
-									egui::Layout::left_to_right(egui::Align::Center),
-									|ui| self.search.header_input(ui, state, commands),
-								);
-							} else {
-								// Search pill.
+							{
+								// Search pill; the query field itself lives in the results pane.
+								let searching = self.search.open && !self.search.pins();
 								let (pill, response) = ui.allocate_exact_size(
 									egui::vec2(144.0, 28.0),
 									egui::Sense::click(),
@@ -773,6 +765,14 @@ impl MessagingUi {
 									)
 								});
 								ui.painter().rect_filled(pill, 6, colors.raised);
+								if searching {
+									ui.painter().rect_stroke(
+										pill,
+										6,
+										egui::Stroke::new(1.0, colors.accent),
+										egui::StrokeKind::Inside,
+									);
+								}
 								let pill_text = if enabled {
 									colors.muted
 								} else {
@@ -794,9 +794,12 @@ impl MessagingUi {
 									),
 									pill_text,
 								);
-								if enabled
-									&& response.on_hover_text("Search this conversation").clicked()
-								{
+								let hover = if searching {
+									"Close search"
+								} else {
+									"Search this conversation"
+								};
+								if enabled && response.on_hover_text(hover).clicked() {
 									if state.archives.is_some() {
 										commands.push(state.clear_archives());
 									}
