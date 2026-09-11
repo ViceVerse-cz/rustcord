@@ -1,5 +1,21 @@
 # Discord compatibility — checked 2026-09-10
 
+## Embed image galleries — September 11, 2026
+
+Consecutive same-URL image embeds now share one native card: two columns, with a
+tall left image and stacked right images for three items. Image-only continuations
+and repeated card metadata are grouped; distinct metadata, missing/different URLs,
+videos and thumbnail-only entries remain separate. All retained images use the
+existing bounded, credential-free preview path and explicit external-open confirmation.
+
+The single-image wire fields are documented in the
+[message resource](https://github.com/discord/discord-api-docs/blob/main/developers/resources/message.mdx).
+Same-URL gallery behavior is implementation evidence from a
+[Discord API repository discussion](https://github.com/discord/discord-api-docs/discussions/3253),
+not a documented normal-user compatibility guarantee. Offline egui tests cover
+grouping, suppression, tile geometry and individual image actions. Live Discord
+interoperability and native screenshot inspection remain unverified.
+
 ## Existing DM calls — September 11, 2026
 
 Viewing a supported one-to-one DM requests its call state using the existing unofficial
