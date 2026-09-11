@@ -2263,3 +2263,9 @@ budgets and the measured integrated release binaries remain unchanged. Linux int
 already passed both packages; final-head CI is checked on the PR.
 
 The full `cargo xtask check` also passed after the GIF fixture repair (395 tests and policy checks).
+
+
+macOS CI then exposed a temporary-directory naming collision between parallel notice tests:
+the clock returned the same timestamp twice. Fixture names now include a process-local atomic
+sequence in addition to PID/time. This changes only test isolation, and the full local check
+passed again (395 tests); no packaging/runtime limits or release code changed.

@@ -546,12 +546,16 @@ mod tests {
 	struct Fixture(PathBuf);
 	impl Fixture {
 		fn new() -> Self {
+			static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+			let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 			let nonce = std::time::SystemTime::now()
 				.duration_since(std::time::UNIX_EPOCH)
 				.unwrap()
 				.as_nanos();
-			let root =
-				std::env::temp_dir().join(format!("serein-notices-{}-{nonce}", std::process::id()));
+			let root = std::env::temp_dir().join(format!(
+				"serein-notices-{}-{nonce}-{sequence}",
+				std::process::id()
+			));
 			fs::create_dir(&root).unwrap();
 			Self(root.canonicalize().unwrap())
 		}
