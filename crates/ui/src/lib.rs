@@ -146,7 +146,10 @@ pub struct MessagingUi {
 
 impl MessagingUi {
 	pub fn timeline_reflows(&self) -> (u64, u64) {
-		(self.timeline.reflow_frames, self.timeline.consecutive_reflows)
+		(
+			self.timeline.reflow_frames,
+			self.timeline.consecutive_reflows,
+		)
 	}
 	/// Fixture-only entry point: opens People and the profile card for `user` as if clicked.
 	pub fn preview_profile(&mut self, user: model::User) {
@@ -1103,7 +1106,13 @@ impl MessagingUi {
 			self.emoji_picker = emoji_picker::Picker::default();
 		}
 		let mut cancel_edit = false;
-		let mut discard = None;
+		let discard = self.timeline.restore_pending.take().and_then(|nonce| {
+			state.pending.iter().position(|p| {
+				p.channel == channel
+					&& p.nonce == nonce
+					&& matches!(p.delivery, Delivery::Rejected | Delivery::Ambiguous)
+			})
+		});
 		if ctx.input(|input| !input.raw.hovered_files.is_empty()) {
 			ui.label(if self.upload_busy || self.attachment.is_some() {
 				"Remove the current attachment or wait before dropping another file"
@@ -1111,36 +1120,6 @@ impl MessagingUi {
 				"Drop one file up to 20 MB to attach it here; Send starts the upload"
 			} else {
 				"Attaching files is unavailable in this conversation"
-			});
-		}
-		for (index, pending) in state
-			.pending
-			.iter()
-			.enumerate()
-			.filter(|(_, p)| p.channel == channel)
-		{
-			ui.horizontal_wrapped(|ui| {
-				ui.strong(match pending.delivery {
-					Delivery::Sending => "Sending…",
-					Delivery::Confirmed => "Delivered",
-					Delivery::Rejected => "Not sent",
-					Delivery::Ambiguous => "Delivery unknown",
-				});
-				let preview: String = pending.content.chars().take(80).collect();
-				ui.label(preview);
-				if let Some(filename) = &pending.attachment {
-					ui.label(format!("File: {filename}"));
-				}
-				if pending.delivery != Delivery::Sending
-					&& ui
-						.small_button("Restore to draft")
-						.on_hover_text(
-							"For an unknown outcome, check the official client first; sending again can duplicate it.",
-						)
-						.clicked()
-				{
-					discard = Some(index);
-				}
 			});
 		}
 		if let Some(index) = discard {
@@ -1974,6 +1953,15 @@ impl MessagingUi {
 					.show(ui, |ui| {
 						self.composer(ui, state, channel, &ctx, &mut commands);
 					});
+				if commands
+					.iter()
+					.any(|command| matches!(command, Command::Send { .. }))
+				{
+					self.timeline.follow_latest();
+					if state.history_targeted {
+						commands.push(state.history(None));
+					}
+				}
 				let notices: Vec<String> = [
 					match state.freshness {
 						Freshness::Fresh => None,

@@ -2189,3 +2189,48 @@ Separate outstanding spec conflict: incoming `5a6fb8a` advertises a Chrome finge
 avoid spam quarantine, contrary to SPEC section 3.2. This task preserves that separate main
 change without developing, tuning or live-testing it. Offline checks do not resolve the
 product-boundary conflict or validate its anti-spam claims; the full spec goal is incomplete.
+
+
+## Optimistic message rows ? September 11, 2026
+
+Implemented on `feat/optimistic-message-rows` from fetched `origin/main` at
+`ea68e0e9afaa822e64e6bea1e144d48816aab339` in a separate worktree. The original
+checkout's untracked `target-relocation-remainder/` was preserved.
+
+Outgoing messages now appear as gray, full-text rows inside the chat scroll area,
+with the current user's avatar/name and sending status. The existing nonce reconciliation
+replaces them with normal theme-colored server messages after REST or Gateway confirmation,
+in either arrival order, without duplicate rows. Rejected messages are red; unknown
+outcomes retain their warning and explicit restore-to-draft action. Restoring keeps newer
+drafts, capacity guards and attachment reselect guidance, and never automatically resends.
+Sending returns to the bottom; when browsing targeted history it requests the latest page.
+Pending rows use viewport culling and a bounded nonce/height cache; no service, transport,
+persistence or dependency behavior changed. Pending previews show the composed text;
+confirmed rows retain the existing rich-message renderer.
+
+Verification on Windows with Rust 1.98.1 and the locked dependencies:
+
+- Five new headless UI tests pass, including dark/light and narrow long text, both
+  confirmation orders, failure/restore/channel isolation, 40 pending rows, and an observed
+  composer click followed by Enter from ordinary or targeted history.
+- `cargo test --locked -p ui`: 106 passed, 2 pre-existing failures. Both failures reproduce
+  individually on unchanged baseline main: `avatar_artwork_matches_fallback_in_justified_layout`
+  (`avatars.rs:892`, unwrap) and `service_order_orphans_collapsed_selection_and_category_buttons`
+  (`categories.rs:273`, index out of bounds).
+- `cargo test --workspace --all-features --locked` reached the same two UI failures;
+  preceding crate suites passed. The final UI suite was rerun after the follow-latest change.
+- `cargo clippy --locked -p ui --all-targets --no-deps -- -D warnings` and
+  `cargo xtask policy` pass. Changed Rust files are formatted; `git diff --check` passes.
+- `cargo xtask check` is blocked by baseline formatting in `apps/desktop/src/main.rs:1535`.
+  With the mechanical formatting applied temporarily, it also reported the pre-existing
+  `client-core/src/permissions.rs:439` question-mark lint. The unrelated desktop formatting
+  was restored; no unrelated test/lint repairs are included.
+- Baseline and changed `cargo xtask package` / `cargo xtask package-voice` pass.
+  Both executables grow by 25,600 bytes; complete package measurements and methods are in
+  `docs/performance.md`.
+
+Native evidence is blocked: `orca` is unavailable and the bundled Windows Computer Use
+helper cannot connect its native pipe (OS error 2). No before/after screenshot, native
+interaction or process-performance claim is made. Other OSes and live Discord sending
+remain untested; the tests use synthetic offline data. PR remains draft for these evidence
+and pre-existing check blockers. No Discord account actions, calls or microphone use.

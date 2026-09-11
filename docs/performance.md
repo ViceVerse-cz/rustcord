@@ -2092,3 +2092,38 @@ repair has headless keyboard coverage; native focus and full-client UI performan
 unmeasured. Test-only rendering assertions now identify the actual activity texture and
 keyboard navigation reaches the unread button by accessible label. Neither changes shipped
 layout or adds runtime instrumentation.
+
+
+## Optimistic message rows ? September 11, 2026
+
+Baseline `ea68e0e9afaa822e64e6bea1e144d48816aab339`; task branch
+`feat/optimistic-message-rows`. Windows 11 Home 10.0.26200, Rust 1.98.1,
+x86_64-pc-windows-msvc, pinned lockfile and existing release profile. Baseline packages
+were rebuilt before production edits; baseline and changed packages were kept separately.
+Both `cargo xtask package` (text, no default features) and `cargo xtask package-voice`
+passed before and after. One package per variant/revision; these are size measurements,
+not latency or throughput measurements.
+
+| Metric, bytes | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable | 53,986,304 | 54,011,904 | +25,600 (+0.047%) |
+| Text installed, 65 files | 55,106,060 | 55,131,660 | +25,600 (+0.046%) |
+| Text ZIP | 33,243,793 | 33,254,716 | +10,923 (+0.033%) |
+| Voice executable | 59,091,968 | 59,117,568 | +25,600 (+0.043%) |
+| Voice installed, 128 files | 60,515,031 | 60,540,631 | +25,600 (+0.042%) |
+| Voice ZIP | 35,425,347 | 35,434,915 | +9,568 (+0.027%) |
+
+Installed sums include all package files; text excludes nested `voice/`. ZIPs use Python
+`zipfile`, sorted relative paths and DEFLATE level 9. Bundled documentation is the snapshot
+copied during packaging, before this evidence append. No dependencies or network workers
+were added. Pending bodies stay in the existing 64-item / shared 2 MiB input budget;
+the UI retains only up to 64 nonce/height entries, prunes them on confirmation/channel
+changes, and lays out nearby pending rows with 100-point overscan.
+
+Native before/after CPU, memory, renderer/display-scale and frame/startup latency are
+unmeasured: `orca` is not installed and the bundled Windows Computer Use API returned
+`Computer Use native pipe is unavailable: failed to connect native pipe: The system
+cannot find the file specified. (os error 2)`. Native screenshots could not be captured.
+Headless egui tests cover dark/light wrapping and scroll behavior; they are not native
+screenshots or proof of Discord compatibility. No runtime speed or memory improvement
+is claimed. No account, message, microphone or call actions were performed.
