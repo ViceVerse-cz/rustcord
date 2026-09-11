@@ -2021,12 +2021,14 @@ impl MessagingUi {
 				egui::Panel::right("people-pane")
 					.resizable(false)
 					.exact_size(240.0)
-					.frame(egui::Frame::new().inner_margin(egui::Margin {
-						left: 8,
-						right: 8,
-						top: 8,
-						bottom: 8,
-					}))
+					.frame(egui::Frame::new().fill(colors.sidebar).inner_margin(
+						egui::Margin {
+							left: 8,
+							right: 8,
+							top: 8,
+							bottom: 8,
+						},
+					))
 					.show(ui, |ui| {
 						self.member_rows(ui, state);
 					});
