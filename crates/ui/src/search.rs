@@ -281,11 +281,10 @@ impl SearchUi {
 			&& !area.response.rect.contains(
 				ctx.input(|i| i.pointer.interact_pos())
 					.unwrap_or(area.response.rect.center()),
-			)
-			&& !anchor.contains(
-				ctx.input(|i| i.pointer.interact_pos())
-					.unwrap_or(anchor.center()),
-			);
+			) && !anchor.contains(
+			ctx.input(|i| i.pointer.interact_pos())
+				.unwrap_or(anchor.center()),
+		);
 		if clicked_outside {
 			self.open = false;
 		}
@@ -297,12 +296,15 @@ impl SearchUi {
 			.show(ui, |ui| {
 				ui.set_width(ui.available_width());
 				ui.vertical_centered(|ui| {
-					let (rect, _) = ui.allocate_exact_size(egui::Vec2::splat(96.0), egui::Sense::hover());
+					let (rect, _) =
+						ui.allocate_exact_size(egui::Vec2::splat(96.0), egui::Sense::hover());
 					let face = colors.muted.gamma_multiply(0.35);
 					ui.painter().circle_filled(rect.center(), 44.0, face);
 					let eye = colors.sidebar;
-					ui.painter().circle_filled(rect.center() + egui::vec2(-14.0, -4.0), 4.0, eye);
-					ui.painter().circle_filled(rect.center() + egui::vec2(14.0, -4.0), 4.0, eye);
+					ui.painter()
+						.circle_filled(rect.center() + egui::vec2(-14.0, -4.0), 4.0, eye);
+					ui.painter()
+						.circle_filled(rect.center() + egui::vec2(14.0, -4.0), 4.0, eye);
 					// Frown.
 					let mut points = Vec::with_capacity(12);
 					for i in 0..=11 {
@@ -406,9 +408,11 @@ impl SearchUi {
 					});
 				if page.pin_cursor.is_none() && !view.loading && page.partial {
 					ui.label(
-						RichText::new("More pins may exist, but this page has no usable continuation.")
-							.small()
-							.color(colors.muted),
+						RichText::new(
+							"More pins may exist, but this page has no usable continuation.",
+						)
+						.small()
+						.color(colors.muted),
 					);
 				}
 			}

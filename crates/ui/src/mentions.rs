@@ -245,6 +245,7 @@ mod tests {
 			let ctx = egui::Context::default();
 			let mut state = State {
 				selected: Some(Id(1)),
+				user: Some(user(7, "Synthetic owner")),
 				freshness: model::Freshness::Fresh,
 				gateway_connected: true,
 				auth: client_core::auth::AuthState::Authenticated,
@@ -263,8 +264,42 @@ mod tests {
 				message_count: None,
 			});
 			if let Some(guild) = guild {
+				use model::permissions as p;
 				state.channels.push(channel(42, Some(guild), 0, "Zoe"));
+				state.guilds.push(model::Guild {
+					id: guild,
+					name: "Synthetic guild".into(),
+					icon: None,
+					emojis: None,
+				});
+				state
+					.permissions
+					.replace(p::Snapshot {
+						guilds: vec![p::Guild {
+							id: guild,
+							owner: Some(Id(8)),
+							roles: Some(vec![p::Role {
+								id: guild,
+								name: String::new(),
+								color: 0,
+								position: 0,
+								hoist: false,
+								bits: p::VIEW_CHANNEL | p::SEND_MESSAGES,
+							}]),
+							member: Some(p::Member {
+								roles: vec![],
+								timeout_until: None,
+							}),
+						}],
+						channels: vec![p::Channel {
+							id: Id(1),
+							guild,
+							overwrites: Some(vec![]),
+						}],
+					})
+					.unwrap();
 			}
+			assert!(state.can_compose(Id(1)));
 			state.drafts.insert(Id(1), draft.into());
 			let mut view = crate::MessagingUi::default();
 			let mut commands = Vec::new();

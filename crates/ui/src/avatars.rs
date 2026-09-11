@@ -30,6 +30,13 @@ pub(crate) struct Avatars {
 	requests: Vec<String>,
 }
 impl Avatars {
+	#[cfg(test)]
+	pub(crate) fn texture_id(&self, key: &str) -> Option<egui::TextureId> {
+		self.textures
+			.iter()
+			.find(|(stored, _)| stored == key)
+			.map(|(_, texture)| texture.id())
+	}
 	pub fn take_requests(&mut self) -> Vec<String> {
 		std::mem::take(&mut self.requests)
 	}

@@ -284,7 +284,7 @@ impl DiscordApi {
 	pub async fn execute(&self, command: Command) -> Event {
 		match command {
 			Command::Invite { code } => {
-				let result = self.invite(&code).await;
+				let result = self.invite(&code).await.map(Box::new);
 				Event::Invite { code, result }
 			}
 			Command::CreatePost {

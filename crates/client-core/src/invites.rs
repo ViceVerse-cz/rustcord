@@ -12,6 +12,7 @@ pub fn valid_code(code: &str) -> bool {
 			.bytes()
 			.all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
+
 impl State {
 	pub fn request_invite(&mut self, code: String) -> Option<Command> {
 		if self.demo
@@ -52,5 +53,45 @@ impl State {
 			*at = Instant::now();
 			*value = Some(result);
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::{Envelope, Event};
+
+	#[test]
+	fn boxed_invite_charges_payload_and_reaches_the_pending_preview() {
+		let mut title = String::with_capacity(1024);
+		title.push_str("Synthetic invite");
+		let embed = model::Embed {
+			title: Some(title),
+			..Default::default()
+		};
+		let event = Event::Invite {
+			code: "synthetic".into(),
+			result: Ok(Box::new(embed)),
+		};
+		assert!(event.bytes() >= size_of::<Event>() + size_of::<model::Embed>() + 1024);
+		let mut state = State::default();
+		state
+			.invites
+			.insert("synthetic".into(), (Instant::now(), None));
+		state.apply(Envelope {
+			generation: state.generation,
+			event,
+		});
+		assert_eq!(
+			state.invites["synthetic"]
+				.1
+				.as_ref()
+				.unwrap()
+				.as_ref()
+				.unwrap()
+				.title
+				.as_deref(),
+			Some("Synthetic invite")
+		);
 	}
 }

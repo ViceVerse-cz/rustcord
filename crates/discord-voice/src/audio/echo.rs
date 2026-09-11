@@ -36,7 +36,7 @@ impl Echo {
 
 	pub fn render(&mut self, frame: &[f32; 960]) -> Result<(), &'static str> {
 		let mut output = [0.0; 480];
-		for chunk in frame.chunks_exact(480) {
+		for chunk in frame.as_chunks::<480>().0 {
 			self.processor
 				.process_render_f32(&[chunk], &mut [&mut output])
 				.map_err(|_| "Echo cancellation could not process speaker audio")?;
@@ -45,7 +45,7 @@ impl Echo {
 	}
 
 	pub fn capture(&mut self, frame: &mut [f32; 960]) -> Result<(), &'static str> {
-		for chunk in frame.chunks_exact_mut(480) {
+		for chunk in frame.as_chunks_mut::<480>().0 {
 			let mut output = [0.0; 480];
 			// AEC3 estimates the acoustic delay from the actual rendered reference.
 			self.processor

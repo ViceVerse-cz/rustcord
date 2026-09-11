@@ -2011,3 +2011,84 @@ voice directory from text. ZIP uses Python zipfile, sorted paths, DEFLATE level 
 and fixed 2026-09-11 timestamps. Tiny compressed-size differences are not a runtime
 improvement. No dependency or cache was added. Native CPU, RSS and frame latency
 remain unmeasured because Computer Use is owner-paused; no runtime improvement is claimed.
+
+
+## Repeated core lifecycle soak - September 11, 2026
+
+Baseline `c83f973`, branch `test/repeated-session-soak`. Windows 11 Home 10.0.26200,
+Ryzen 7 7800X3D, 31.1 GiB visible RAM, Rust 1.98.1, existing release profile. No UI
+renderer/scale, credentials, network, disk cache, audio device or authentication webview.
+`cargo build --locked --release -p replay-bench`, then direct `replay-bench.exe --soak 120`.
+The workload generated 50-row pages and individual messages across 32 channels, with
+128-byte/16-KiB content, under unchanged production cache and reconciliation budgets.
+
+The completed assertion run reported 120.0218 seconds, 5,546 passes, 177,472 channel visits,
+106,483,200 live inserts and 22 logout cycles. There were 88,736 row-pressure and 88,736
+byte-pressure visits. After the first two passes, aggregate active/dormant history estimates
+ranged from 612,632..9,366,264 bytes during small-message visits and
+5,602,264..13,130,264 bytes during large-message visits, within the existing 16 MiB minus
+66 KiB aggregate budget. Mixed-size dormant windows explain overlap between phases.
+
+An external PowerShell `System.Diagnostics.Process` observer sampled this replay process's
+`PrivateMemorySize64` and `WorkingSet64` every 250 ms after a five-second warmup. Each table
+row covers the next 30 seconds (last row stops at process exit); min/max are sampled values,
+not allocation peaks. Concurrent independent Cargo builds affected host scheduling, so this
+run makes no throughput or timing improvement claim. All assertions reached the final stdout
+summary and stderr was empty; the observer's Process.ExitCode property was unavailable.
+
+| Sample window | Samples | Private bytes min..max | Working-set bytes min..max |
+| --- | ---: | ---: | ---: |
+| 5..35 s | 115 | 16,777,216..18,784,256 | 19,169,280..22,011,904 |
+| 35..65 s | 114 | 15,364,096..18,960,384 | 18,579,456..21,966,848 |
+| 65..95 s | 113 | 16,769,024..18,804,736 | 19,853,312..22,130,688 |
+| 95..120 s | 96 | 17,883,136..18,804,736 | 20,275,200..22,122,496 |
+
+The sampled upper range stabilizes across these windows. This is evidence about this bounded
+synthetic core workload only, not the complete client, permanent leak freedom, UI frame times,
+image/voice teardown, storage policy, other platforms or Discord interoperability. CI's
+five-second smoke checks assertions; it is not a substitute for sustained process measurement.
+
+
+Pre-integration release comparison against clean `c83f973`, each built in its own private target directory.
+These results predate the subsequent profile, attachment, settings and timeline updates from main.
+Existing release profile, text default feature set and optional `voice`; package commands
+passed. ZIP is Python DEFLATE9; text excludes nested voice, and evidence/debug artifacts are
+excluded. There are 65 text and 128 voice files. Sizes include documentation at package time,
+before this final evidence append. No dependency versions or application features changed.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable bytes | 52,111,360 | 52,112,896 | +1,536 (+0.003%) |
+| Text installed bytes | 53,218,876 | 53,224,674 | +5,798 (+0.011%) |
+| Text ZIP bytes | 32,495,285 | 32,496,815 | +1,530 (+0.005%) |
+| Voice executable bytes | 57,218,560 | 57,221,120 | +2,560 (+0.004%) |
+| Voice installed bytes | 58,629,383 | 58,636,205 | +6,822 (+0.012%) |
+| Voice ZIP bytes | 34,679,077 | 34,681,298 | +2,221 (+0.006%) |
+| Existing reducer replay median ms | 40.0000 | 39.6707 | -0.3293 (-0.82%; noise) |
+| Retained timeline estimated bytes / rows | 236,992..237,477 / 500 | Same | 0 |
+
+The existing 100,000-event replay used one warmup and five alternating direct executable runs:
+baseline ms 42.0013, 39.8364, 39.8950, 40.0632, 40.0000; after ms 39.6707, 39.4402,
+39.7760, 39.6746, 39.0214. These small differences do not demonstrate a speedup. Package/CI
+repairs preserve visible behavior; the new soak is development tooling, not bundled client code.
+
+
+Final integrated packages on `4b45c7e` include main `c3f1ba0` and the task repairs. Both
+`cargo xtask package` and `cargo xtask package-voice` passed on the same Windows host and
+private target (1m35s / 1m43s). Absolute sizes below use the same sorted DEFLATE9 method;
+text excludes nested voice. Documentation is measured at packaging time, before this append.
+These totals include later main UI/dependency changes, so their growth against c83 is not
+attributed to the soak workload. No additional replay run is needed for the later UI-only edits.
+
+| Final integrated metric | Text | Voice |
+| --- | ---: | ---: |
+| Executable bytes | 53,339,648 | 58,447,872 |
+| Installed bytes | 54,456,570 | 59,868,101 |
+| DEFLATE9 ZIP bytes | 33,006,303 | 35,190,914 |
+| Files | 65 | 128 |
+
+Native automation remains paused after the owner stopped it with Escape. The edit-focus
+repair has headless keyboard coverage; native focus and full-client UI performance remain
+unmeasured. Test-only rendering assertions now identify the actual activity texture and
+keyboard navigation reaches the unread button by accessible label. Neither changes shipped
+layout or adds runtime instrumentation.

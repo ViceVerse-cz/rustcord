@@ -1060,6 +1060,8 @@ impl MessagingUi {
 			}
 		}
 		if !editing_here && !state.can_compose(channel) {
+			// Returning to an edit must restore its focus after visiting a read-only channel.
+			self.composer_edit = None;
 			self.mention_menu = mentions::Menu::default();
 			self.emoji_picker = emoji_picker::Picker::default();
 			self.ime_active = false;
@@ -3040,17 +3042,15 @@ mod composer_tests {
 			}
 			let labels = frame(&mut view, &mut state, vec![]);
 			if blocked < 2 {
-				assert!(
-					labels
-						.iter()
-						.any(|(text, _)| text == "\u{21b3} Message deleted")
-				);
+				assert!(labels.iter().any(|(text, _)| text == "Message deleted"));
 			}
 			// Activate the visible disabled controls (and the inert deleted label) with real input.
-			for (_, rect) in labels
-				.iter()
-				.filter(|(text, _)| text == "View original" || text.starts_with('\u{21b3}'))
-			{
+			for (_, rect) in labels.iter().filter(|(text, _)| {
+				text == "View original"
+					|| text == "Message deleted"
+					|| text.starts_with("@Alex  ")
+					|| text.starts_with("Earlier message")
+			}) {
 				let pos = rect.center();
 				for pressed in [true, false] {
 					frame(
@@ -3156,8 +3156,10 @@ mod composer_tests {
 			let label_matches = |text: &str| {
 				if composer {
 					text == "View original"
+				} else if loaded {
+					text == "@Alex  Spoiler"
 				} else {
-					text.starts_with("↳")
+					text == "Earlier message \u{b7} View original"
 				}
 			};
 			let (labels, _) = frame(&mut view, &mut state, vec![]);
@@ -3947,13 +3949,24 @@ mod composer_tests {
 					for shape in &output.shapes {
 						collect(&shape.shape, &mut painted);
 					}
+					// Match this activity's actual texture, not unrelated same-sized UI meshes.
+					let activity_texture = messaging.avatars.texture_id(
+						&model::ActivityImage::Asset {
+							application: Id(9001),
+							asset: Id(9002),
+						}
+						.key(),
+					);
 					artwork = ctx
 						.tessellate(output.shapes.clone(), output.pixels_per_point)
 						.iter()
 						.filter_map(|shape| match &shape.primitive {
 							egui::epaint::Primitive::Mesh(mesh)
-								if (mesh.calc_bounds().size() - egui::vec2(64.0, 64.0))
-									.length() < 2.0 =>
+								if Some(mesh.texture_id) == activity_texture
+									&& shape
+										.clip_rect
+										.intersect(mesh.calc_bounds())
+										.is_positive() =>
 							{
 								Some(mesh.calc_bounds())
 							}
