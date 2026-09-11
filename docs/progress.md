@@ -1,5 +1,16 @@
 # Implementation progress — 2026-09-10
 
+## September 11, 2026 — temporarily pause native CI
+
+At the owner's explicit request, commented out the complete `native` matrix job
+in `.github/workflows/ci.yml`, preserving it for easy restoration. This pauses
+the macOS/Windows/Linux checks and packaging on future runs of this branch.
+Security, licenses, and fuzz jobs remain enabled. Existing runs are not canceled.
+Validated that removing comment lines produces exactly the previous workflow
+with only the native job removed; `git diff --check` passed. No application code
+changed in this follow-up, so no new runtime tests, screenshots, or measurements
+were needed. The previously recorded UI-test and native-evidence blockers remain.
+
 ## September 11, 2026 — message right-click menu
 
 Implemented on `fix/message-context-menu` from clean `22e2283` (the fetched
