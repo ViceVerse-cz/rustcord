@@ -829,7 +829,12 @@ mod tests {
 			assert_eq!(message.kind, kind);
 			assert_eq!(message.content, "original text");
 			assert!(message.system_summary().is_some(), "type {kind}");
-			assert!(message.display_text().ends_with("\noriginal text"));
+			if matches!(kind, 4 | 18) {
+				// New channel/thread names are shown inline instead of as a second line.
+				assert!(message.display_text().ends_with(": original text"));
+			} else {
+				assert!(message.display_text().ends_with("\noriginal text"));
+			}
 		}
 		for kind in [0, 19, 20, 23, 222, 255] {
 			let message = decode::<MessageDto>(&serde_json::to_vec(&wire(kind)).unwrap())

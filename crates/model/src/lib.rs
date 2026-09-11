@@ -8,6 +8,7 @@ pub use reading_preferences::ReadingPreferences;
 mod profile;
 mod system_messages;
 pub use profile::*;
+pub use system_messages::{Segment, SystemMessage};
 mod attachments;
 pub use attachments::*;
 mod embeds;
@@ -205,13 +206,25 @@ pub struct Message {
 impl Message {
 	/// A plain-text description, separate from the original service content.
 	pub fn system_summary(&self) -> Option<String> {
-		system_messages::summary(self)
+		self.system_message().map(|system| system.summary())
+	}
+
+	/// Styled runs describing a service-generated message, or `None` for user content.
+	pub fn system_message(&self) -> Option<SystemMessage> {
+		system_messages::describe(self)
+	}
+
+	/// Whether the service, not a user, generated this message.
+	pub fn is_system(&self) -> bool {
+		system_messages::is_system(self.kind)
 	}
 
 	pub fn display_text(&self) -> std::borrow::Cow<'_, str> {
-		match self.system_summary() {
-			Some(summary) if self.content.is_empty() => summary.into(),
-			Some(summary) => format!("{summary}\n{}", self.content).into(),
+		match self.system_message() {
+			Some(system) if system.content_shown || self.content.is_empty() => {
+				system.summary().into()
+			}
+			Some(system) => format!("{}\n{}", system.summary(), self.content).into(),
 			None => self.content.as_str().into(),
 		}
 	}

@@ -101,6 +101,15 @@ ICONS = [
     ("folder-open", "fill/folder-open-fill.svg", "f9e57c3d40ab536915f8302a4390405f5660ee7b7275a3f80b384d977c59373e"),
     ("caret-left", "bold/caret-left-bold.svg", "b78b6f532b53b9847340961848cb9e4f5be7e1da07e9dcf11c60cf64aa3986b7"),
     ("download-simple", "bold/download-simple-bold.svg", "3ca0b8bba15633eb29f9818fe3670d6438bcbc897649c767e491a411e696e2d3"),
+    ("arrow-right", "bold/arrow-right-bold.svg", "aa0f883acecf63d9140ad7cd51910fa4b723671c400772a3c621c9cc16b1687b"),
+    ("image", "fill/image-fill.svg", "4f4dbea3adfc054509fed7f8e0f7d50fbf716904e37fc55387d29018d15b52fd"),
+    ("sparkle", "fill/sparkle-fill.svg", "9872a9255717f4ecc0f01b028b9436042e0f49391e4ce7a57f61aa466684fad1"),
+    ("compass", "fill/compass-fill.svg", "9663ec833384ba767b617ba3c256a3e00a23bd666810e2f2214171896498b6dc"),
+    ("megaphone-simple", "fill/megaphone-simple-fill.svg", "cead45ff02f94b5bd1aa2e59268b884482b43cc54f7b316d69e7030a2bd7196e"),
+    ("shield-warning", "fill/shield-warning-fill.svg", "8c594562a5adfd9fcce1f76514b62e8c626c4c00d742a69aa51214bae0b4037f"),
+    ("crown", "fill/crown-fill.svg", "a285272ce54401826e1458e5437aaa5dd78b5bb92b75092093f091eb024b0a45"),
+    ("chart-bar", "fill/chart-bar-fill.svg", "a417cc075c304374043e7d47f7622606b15f14e4c65663fd7a8a9898d768362a"),
+    ("shopping-cart-simple", "fill/shopping-cart-simple-fill.svg", "679456c02afec984a2ab635443724baca8b891a1bc4f245469f9bcbbf6a13fdb"),
 ]
 LICENSE_SHA256 = "ddbe6082ec3cf979db47e5af549d2849c5d6182b3e005ef91ce1dbb9eb122f11"
 
