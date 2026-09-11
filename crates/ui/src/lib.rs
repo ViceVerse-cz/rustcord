@@ -21,6 +21,7 @@ mod profiles;
 mod reactions;
 mod reading;
 mod search;
+mod settings;
 mod switcher;
 mod timeline;
 mod typing;
@@ -51,6 +52,7 @@ pub struct AttachmentPaste {
 #[derive(Default)]
 pub struct MessagingUi {
 	search: search::SearchUi,
+	settings: settings::Settings,
 	switcher: switcher::Switcher,
 	focus_switched_composer: bool,
 	switcher_frame: bool,
@@ -632,7 +634,10 @@ impl MessagingUi {
 					ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 						ui.spacing_mut().item_spacing.x = 2.0;
 						let settings = icons::button(ui, icons::Icon::Gear, 32.0, "User settings");
-						egui::Popup::menu(&settings).show(|ui| self.settings_menu(ui, state));
+						if settings.clicked() {
+							self.settings.open = true;
+							egui::Popup::close_all(ui.ctx());
+						}
 						self.mute_toggle(ui, state, commands, true, 32.0);
 						self.mute_toggle(ui, state, commands, false, 32.0);
 						ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -673,146 +678,6 @@ impl MessagingUi {
 					});
 				});
 			});
-	}
-	fn settings_menu(&mut self, ui: &mut egui::Ui, state: &State) {
-		let colors = design::palette(ui);
-		ui.set_min_width(260.0);
-		ui.label(design::eyebrow(ui, "Appearance", colors.muted));
-		egui::widgets::global_theme_preference_buttons(ui);
-		ui.add_space(6.0);
-		ui.label(design::eyebrow(ui, "Theme", colors.muted));
-		let current = design::variant();
-		ui.horizontal_wrapped(|ui| {
-			ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-			for variant in design::Variant::ALL {
-				let swatch = design::colors(ui.visuals().dark_mode, variant);
-				let (rect, response) =
-					ui.allocate_exact_size(egui::Vec2::splat(28.0), egui::Sense::click());
-				response.widget_info(|| {
-					egui::WidgetInfo::selected(
-						egui::WidgetType::RadioButton,
-						true,
-						variant == current,
-						variant.label(),
-					)
-				});
-				let painter = ui.painter();
-				match swatch.backdrop {
-					Some([top, bottom]) => {
-						painter.circle_filled(rect.center(), 12.0, bottom);
-						painter.circle_filled(rect.center() - egui::vec2(3.0, 3.0), 7.0, top);
-					}
-					None => {
-						painter.circle_filled(rect.center(), 12.0, swatch.chat);
-						painter.circle_filled(
-							rect.center() + egui::vec2(3.0, 3.0),
-							6.0,
-							swatch.base,
-						);
-					}
-				}
-				painter.circle_stroke(
-					rect.center(),
-					12.0,
-					egui::Stroke::new(
-						if variant == current { 2.0 } else { 1.0 },
-						if variant == current {
-							colors.accent
-						} else {
-							colors.border
-						},
-					),
-				);
-				if response.on_hover_text(variant.label()).clicked() && variant != current {
-					design::set_variant(variant);
-					design::apply(ui.ctx());
-					self.theme_variant_changed = Some(variant);
-				}
-			}
-		});
-		ui.label(
-			RichText::new(format!("{} · saved with your appearance", current.label()))
-				.small()
-				.color(colors.muted),
-		);
-		ui.separator();
-		ui.label(design::eyebrow(ui, "Notifications", colors.muted));
-		ui.add_enabled(
-			!state.demo || self.notification_test_available,
-			egui::Checkbox::new(
-				&mut self.notifications_enabled,
-				"System notifications for this session",
-			),
-		);
-		ui.label(
-			RichText::new(
-				"Message previews are hidden. OS notification history may remain after logout.",
-			)
-			.small()
-			.color(colors.muted),
-		);
-		ui.label(
-			RichText::new(if state.demo && !self.notification_test_available {
-				"Offline preview never sends system notifications."
-			} else {
-				self.notification_status
-			})
-			.small()
-			.color(colors.muted),
-		);
-		if self.notification_test_available
-			&& self.notifications_enabled
-			&& ui.button("Send generic test notification").clicked()
-		{
-			self.notification_test_requested = true;
-		}
-		if !state.demo && !state.notification_preferences_known() {
-			ui.label(
-				RichText::new("Alerts wait for your Discord notification preferences.")
-					.small()
-					.color(colors.muted),
-			);
-		}
-		ui.separator();
-		self.reading_settings(ui, state.demo);
-		ui.separator();
-		ui.label(design::eyebrow(ui, "Local storage", colors.muted));
-		ui.label(
-			RichText::new(if state.demo {
-				"Preview uses session memory only."
-			} else {
-				self.storage_status
-			})
-			.small()
-			.color(colors.muted),
-		);
-		if ui
-			.add_enabled(!state.demo, egui::Button::new("Clear cache"))
-			.clicked()
-		{
-			self.clear_cache_requested = true;
-			ui.close();
-		}
-		ui.separator();
-		if ui
-			.button(
-				RichText::new(if state.demo {
-					"Exit preview"
-				} else {
-					"Log out"
-				})
-				.color(colors.danger),
-			)
-			.clicked()
-		{
-			self.logout_requested = true;
-			ui.close();
-		}
-		ui.label(
-			RichText::new("Unofficial · not endorsed by Discord")
-				.small()
-				.color(colors.muted),
-		);
 	}
 	/// Conversation header: channel identity on the left, tools and search on the right.
 	fn channel_header(
@@ -1734,10 +1599,16 @@ impl MessagingUi {
 		self.timeline.audio.seen = false;
 		let mut commands = Vec::new();
 		let ctx = ui.ctx().clone();
+		let settings_open = self.settings.open;
+		if settings_open {
+			self.show_settings(&ctx, state);
+			ui.disable();
+		}
 		// Foreground confirmation handles Escape before background search/archive shortcuts.
 		markdown::confirm_external_link(&ctx, &mut self.timeline.opening);
 		let colors = crate::design::palette(ui);
-		if !self.switcher.is_open()
+		if !settings_open
+			&& !self.switcher.is_open()
 			&& !self.ime_active
 			&& ctx.input(|input| {
 				input.focused
@@ -2084,6 +1955,7 @@ impl MessagingUi {
 			}
 		}
 		if let Some(message) = self.timeline.mark_read.take()
+			&& !settings_open
 			&& state.search_target.is_none()
 			&& !state.history_targeted
 			&& let Some(command) = state.prepare_mark_read(message)

@@ -374,6 +374,9 @@ impl Desktop {
 		if messaging.notification_test_available {
 			state.status = "Offline fixture · explicit system notification test";
 		}
+		if demo && std::env::args().any(|arg| arg == "--demo-settings") {
+			messaging.preview_settings();
+		}
 		if demo && std::env::args().any(|arg| arg == "--demo-profile") {
 			// Presence for the fixture card comes from the same synthetic People rows.
 			let _ = state.request_members();

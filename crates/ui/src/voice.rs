@@ -533,7 +533,7 @@ impl MessagingUi {
 		egui::Popup::menu(&trigger).show(|ui| self.voice_settings_menu(ui, demo, active));
 	}
 
-	fn voice_settings_menu(&mut self, ui: &mut egui::Ui, demo: bool, active: bool) {
+	pub(super) fn voice_settings_menu(&mut self, ui: &mut egui::Ui, demo: bool, active: bool) {
 		ui.set_max_width(300.0);
 		ui.strong("Voice settings");
 		if demo || !self.voice_available {
