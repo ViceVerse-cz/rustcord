@@ -30,6 +30,7 @@ pub struct TimelineView {
 	pub(super) mark_read: Option<Id>,
 	auto_read_attempt: Option<Id>,
 	at_current_latest: bool,
+	pub(super) reaction_picker: Option<(Id, egui::Rect, egui::Id)>,
 	pub(super) reaction: Option<(Id, Option<model::ReactionEmoji>)>,
 	/// Requested pin change: channel, message, pinned.
 	pub(super) pin_request: Option<(Id, Id, bool)>,
@@ -1223,13 +1224,12 @@ impl TimelineView {
 									.iter()
 									.any(|r| state.can_react(*id, Some(&r.emoji), true))
 							});
-						if let Some(action) = crate::reactions::add_button(
+						if let Some((anchor, trigger)) = crate::reactions::add_button(
 							&mut toolbar,
 							react,
 							state.reactions.busy(),
-							|emoji| state.can_react(*id, Some(emoji), true),
 						) {
-							self.reaction = Some((*id, action));
+							self.reaction_picker = Some((*id, anchor, trigger));
 						}
 						let can_reply = state.can_send(message.channel);
 						let can_edit = !message.unsupported && state.can_edit(message.channel, *id);
