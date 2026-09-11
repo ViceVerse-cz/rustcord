@@ -508,15 +508,21 @@ impl DiscordApi {
 				Event::SendResult { nonce, result }
 			}
 			Command::Edit {
+				request,
 				channel,
 				message,
 				content,
 			} => {
 				if content.trim().is_empty() || content.chars().count() > client_core::MAX_CONTENT {
-					return Event::Failure(Failure::Capacity);
+					return Event::Edited {
+						request,
+						channel,
+						message,
+						result: Err(Failure::Capacity),
+					};
 				}
 				let body = serde_json::json!({"content": content, "allowed_mentions": allowed_mentions(&content)});
-				match self
+				let result = self
 					.request(
 						Method::PATCH,
 						&format!("/channels/{channel}/messages/{message}"),
@@ -527,10 +533,12 @@ impl DiscordApi {
 						decode::<MessageDto>(&bytes)
 							.map(MessageDto::into_model)
 							.map_err(|_| Failure::Ambiguous)
-					}) {
-					Ok(m) => Event::Message(m),
-					Err(Failure::Forbidden) => Event::Unavailable(channel),
-					Err(f) => Event::Failure(f),
+					});
+				Event::Edited {
+					request,
+					channel,
+					message,
+					result,
 				}
 			}
 			Command::Delete { channel, message } => {
@@ -551,6 +559,7 @@ impl DiscordApi {
 				}
 			}
 			Command::Pin {
+				request,
 				channel,
 				message,
 				pinned,
@@ -565,6 +574,7 @@ impl DiscordApi {
 					.await
 					.map(|_| ());
 				Event::Pinned {
+					request,
 					channel,
 					message,
 					pinned,

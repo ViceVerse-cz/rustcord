@@ -152,7 +152,8 @@ impl State {
 				..
 			} => Some(message.channel),
 			Event::Patch(patch) => Some(patch.channel),
-			Event::Delete { channel, .. }
+			Event::Edited { channel, .. }
+			| Event::Delete { channel, .. }
 			| Event::DeleteBulk { channel, .. }
 			| Event::Reactions(
 				reactions::Event::Changed { channel, .. }

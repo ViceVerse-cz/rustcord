@@ -842,3 +842,106 @@ fn history_loading_does_not_disable_authorized_sending() {
 	state.permissions.guilds.clear();
 	assert!(!state.can_send(Id(20)) && !state.can_attach(Id(20)));
 }
+
+#[test]
+fn optimistic_edits_and_pins_roll_back_without_overwriting_newer_content() {
+	let mut state = state();
+	let original = state.timeline.get(Id(100)).unwrap().content.clone();
+	let Some(Command::Edit { request, .. }) =
+		state.prepare_edit(Id(20), Id(100), "Local edit".into())
+	else {
+		panic!()
+	};
+	assert_eq!(state.timeline.get(Id(100)).unwrap().content, "Local edit");
+	state.apply_edit_result(
+		Id(20),
+		Id(100),
+		request,
+		Err(crate::auth::Failure::Forbidden),
+	);
+	assert_eq!(state.timeline.get(Id(100)).unwrap().content, original);
+	assert_eq!(
+		state.message_actions.failed_edits.pop().unwrap().2,
+		"Local edit"
+	);
+	let Some(Command::Edit { request, .. }) =
+		state.prepare_edit(Id(20), Id(100), "Second edit".into())
+	else {
+		panic!()
+	};
+	let mut newer = state.timeline.get(Id(100)).unwrap().clone();
+	newer.content = "Newer server edit".into();
+	newer.edited_at = Some(2);
+	newer.edited = true;
+	apply(&mut state, Event::Message(newer));
+	state.apply_edit_result(
+		Id(20),
+		Id(100),
+		request,
+		Err(crate::auth::Failure::Forbidden),
+	);
+	assert_eq!(
+		state.timeline.get(Id(100)).unwrap().content,
+		"Newer server edit"
+	);
+	let request = state.optimistic_pin(Id(20), Id(100), true).unwrap();
+	assert!(state.is_pinned(Id(20), Id(100)));
+	state.apply_pin_result(
+		Id(20),
+		Id(100),
+		true,
+		request,
+		Err(crate::auth::Failure::Forbidden),
+	);
+	assert!(!state.is_pinned(Id(20), Id(100)));
+	let Some(Command::Edit { request: old, .. }) =
+		state.prepare_edit(Id(20), Id(100), "Interrupted edit".into())
+	else {
+		panic!()
+	};
+	apply(&mut state, Event::Disconnected);
+	assert_eq!(
+		state.timeline.get(Id(100)).unwrap().content,
+		"Newer server edit"
+	);
+	assert_eq!(
+		state.message_actions.failed_edits.pop().unwrap().2,
+		"Interrupted edit"
+	);
+	state.gateway_connected = true;
+	state.freshness = Freshness::Fresh;
+	let Some(Command::Edit { request: new, .. }) =
+		state.prepare_edit(Id(20), Id(100), "Retry".into())
+	else {
+		panic!()
+	};
+	assert_ne!(old, new);
+	state.apply_edit_result(Id(20), Id(100), old, Err(crate::auth::Failure::Forbidden));
+	assert!(state.message_actions.edit_pending(Id(20), Id(100)));
+	assert_eq!(state.timeline.get(Id(100)).unwrap().content, "Retry");
+	state.apply_edit_result(Id(20), Id(100), new, Err(crate::auth::Failure::Forbidden));
+	assert_eq!(
+		state.timeline.get(Id(100)).unwrap().content,
+		"Newer server edit"
+	);
+	let old = state.optimistic_pin(Id(20), Id(100), true).unwrap();
+	state.cancel_message_actions();
+	let new = state.optimistic_pin(Id(20), Id(100), true).unwrap();
+	state.apply_pin_result(
+		Id(20),
+		Id(100),
+		true,
+		old,
+		Err(crate::auth::Failure::Forbidden),
+	);
+	assert!(state.is_pinned(Id(20), Id(100)));
+	assert!(state.message_actions.pin_pending(Id(20), Id(100)));
+	state.apply_pin_result(
+		Id(20),
+		Id(100),
+		true,
+		new,
+		Err(crate::auth::Failure::Forbidden),
+	);
+	assert!(!state.is_pinned(Id(20), Id(100)));
+}

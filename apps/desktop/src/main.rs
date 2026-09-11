@@ -284,7 +284,9 @@ fn changes_active_history(state: &State, event: &Event) -> bool {
 			..
 		} => &message.channel,
 		Event::Patch(patch) => &patch.channel,
-		Event::Delete { channel, .. } | Event::DeleteBulk { channel, .. } => channel,
+		Event::Edited { channel, .. }
+		| Event::Delete { channel, .. }
+		| Event::DeleteBulk { channel, .. } => channel,
 		_ => return false,
 	};
 	state.selected == Some(*channel)
@@ -1103,7 +1105,7 @@ impl Desktop {
 								});
 							}
 							reactions.retain(|r| r.count > 0);
-							self.state.reactions.writing = None;
+							self.state.reactions.reset();
 							let _ = self.state.timeline.set_reactions(message, Some(reactions));
 							// The fixture has no service readback; it updates synthetic RAM only.
 							E::Written {
@@ -1331,30 +1333,42 @@ impl Desktop {
 					}
 				}
 				Command::Edit {
+					request,
 					channel,
 					message,
 					content,
-				} => Event::Patch(model::MessagePatch {
-					extra_content: Default::default(),
-					reactions: model::Patch::Absent,
-					embeds: model::Patch::Absent,
-					attachments: model::Patch::Absent,
-					mentions: model::Patch::Absent,
-					embeds_suppressed: model::Patch::Absent,
-					id: message,
-					channel,
-					content: model::Patch::Value(content),
-					edited: model::Patch::Value(1),
-				}),
+				} => {
+					let result = self
+						.state
+						.timeline
+						.get(message)
+						.cloned()
+						.ok_or(Failure::Protocol)
+						.map(|mut updated| {
+							updated.content = content;
+							updated.edited = true;
+							updated.edited_at =
+								Some(updated.edited_at.unwrap_or(0).saturating_add(1));
+							updated
+						});
+					Event::Edited {
+						request,
+						channel,
+						message,
+						result,
+					}
+				}
 				Command::Delete { channel, message } => Event::Delete {
 					channel,
 					id: message,
 				},
 				Command::Pin {
+					request,
 					channel,
 					message,
 					pinned,
 				} => Event::Pinned {
+					request,
 					channel,
 					message,
 					pinned,
@@ -1932,6 +1946,9 @@ impl Desktop {
 						..
 					} => {
 						changed_messages.insert(message.id);
+					}
+					Event::Edited { message, .. } => {
+						changed_messages.insert(*message);
 					}
 					Event::Patch(patch) => {
 						changed_messages.insert(patch.id);

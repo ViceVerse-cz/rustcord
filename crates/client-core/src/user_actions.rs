@@ -46,11 +46,36 @@ impl Actions {
 }
 impl State {
 	pub fn user_blocked(&self, user: Id) -> Option<bool> {
+		if let Some((
+			Action::Block {
+				user: target,
+				blocked,
+			},
+			_,
+			false,
+		)) = self.user_actions.pending
+			&& target == user
+		{
+			return Some(blocked);
+		}
 		self.user_actions
 			.relationships
 			.get(&user)
 			.copied()
 			.or_else(|| (self.demo || self.user_actions.known).then_some(false))
+	}
+	pub(crate) fn pending_dm_muted(&self, channel: Id) -> Option<bool> {
+		match self.user_actions.pending {
+			Some((
+				Action::Mute {
+					channel: target,
+					muted,
+				},
+				_,
+				false,
+			)) if target == channel => Some(muted),
+			_ => None,
+		}
 	}
 	pub fn user_action_pending(&self) -> bool {
 		self.user_actions.pending.is_some()
@@ -107,8 +132,7 @@ impl State {
 		self.user_actions.sequence = self.user_actions.sequence.wrapping_add(1);
 		let request = self.user_actions.sequence;
 		self.user_actions.pending = Some((action, request, false));
-		self.user_actions.status = Some("Updating user settings…");
-		self.status = self.user_actions.status.unwrap();
+		self.user_actions.status = None;
 		Some(Command::UserAction { action, request })
 	}
 	pub(crate) fn cancel_user_action(&mut self) {
@@ -125,14 +149,11 @@ impl State {
 		}
 	}
 	pub(crate) fn observe_dm_settings(&mut self, event: &crate::notifications::Event) {
-		if let Some((Action::Mute { channel, .. }, _, observed)) = &mut self.user_actions.pending {
+		if let Some((Action::Mute { .. }, _, observed)) = &mut self.user_actions.pending {
 			*observed |= match event {
 				crate::notifications::Event::Invalidate => true,
 				crate::notifications::Event::Settings { entries, replace } => {
-					*replace
-						|| entries.iter().any(|s| {
-							s.guild.is_none() && s.channels.iter().any(|(id, ..)| id == channel)
-						})
+					*replace || entries.iter().any(|s| s.guild.is_none())
 				}
 				_ => false,
 			};
@@ -141,6 +162,9 @@ impl State {
 	pub(crate) fn apply_user_action(&mut self, event: Event) -> Result<(), &'static str> {
 		match event {
 			Event::Relationships(entries) => {
+				if let Some((Action::Block { .. }, _, observed)) = &mut self.user_actions.pending {
+					*observed = true;
+				}
 				self.user_actions.relationships.clear();
 				self.user_actions.known = false;
 				if let Some(entries) = entries {
@@ -286,13 +310,14 @@ mod tests {
 		});
 	}
 	#[test]
-	fn user_actions_wait_for_success_preserve_drafts_and_reject_stale_results() {
+	fn user_actions_update_immediately_rollback_and_reject_stale_results() {
 		let mut state = state();
 		assert_eq!(state.user_blocked(Id(2)), None);
 		assert!(state.set_user_blocked(Id(1), true).is_none());
 		assert!(state.set_user_blocked(Id(2), false).is_none());
 		let block = state.set_user_blocked(Id(2), true).unwrap();
-		assert_eq!(state.user_blocked(Id(2)), None);
+		assert_eq!(state.user_blocked(Id(2)), Some(true));
+		assert_eq!(state.user_action_status(), None);
 		assert!(state.close_dm(Id(10)).is_none());
 		finish(&mut state, block, Err(Failure::Forbidden));
 		assert!(!state.user_action_pending());
@@ -302,6 +327,7 @@ mod tests {
 		finish(&mut state, block, Ok(()));
 		assert_eq!(state.user_blocked(Id(2)), Some(true));
 		let unblock = state.set_user_blocked(Id(2), false).unwrap();
+		assert_eq!(state.user_blocked(Id(2)), Some(false));
 		finish(&mut state, unblock, Ok(()));
 		assert_eq!(state.user_blocked(Id(2)), Some(false));
 		state.drafts.insert(Id(10), "Keep my draft".into());
@@ -343,7 +369,7 @@ mod tests {
 		let new = state.set_user_blocked(Id(2), true).unwrap();
 		finish(&mut state, old, Ok(()));
 		assert!(state.user_action_pending());
-		assert_eq!(state.user_blocked(Id(2)), None);
+		assert_eq!(state.user_blocked(Id(2)), Some(true));
 		finish(&mut state, new, Ok(()));
 		assert_eq!(state.user_blocked(Id(2)), Some(true));
 	}
@@ -369,7 +395,10 @@ mod tests {
 		finish(&mut state, block, Ok(()));
 		assert_eq!(state.user_blocked(Id(2)), Some(false));
 		let mute = state.set_dm_muted(Id(10), true).unwrap();
+		assert_eq!(state.dm_muted(Id(10)), Some(true));
+		finish(&mut state, mute, Err(Failure::Forbidden));
 		assert_eq!(state.dm_muted(Id(10)), None);
+		let mute = state.set_dm_muted(Id(10), true).unwrap();
 		finish(&mut state, mute, Ok(()));
 		assert_eq!(state.dm_muted(Id(10)), Some(true));
 		let unmute = state.set_dm_muted(Id(10), false).unwrap();

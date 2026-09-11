@@ -616,18 +616,24 @@ impl State {
 	}
 	/// True when the current pins page lists `message`.
 	pub fn is_pinned(&self, channel: Id, message: Id) -> bool {
-		self.search
-			.as_ref()
-			.filter(|view| view.pins && view.channel == channel)
-			.and_then(|view| view.page.as_ref())
-			.is_some_and(|page| page.hits.iter().any(|hit| hit.id == message))
+		self.message_actions
+			.pin(channel, message)
+			.unwrap_or_else(|| {
+				self.search
+					.as_ref()
+					.filter(|view| view.pins && view.channel == channel)
+					.and_then(|view| view.page.as_ref())
+					.is_some_and(|page| page.hits.iter().any(|hit| hit.id == message))
+			})
 	}
 	pub fn prepare_pin(&mut self, channel: Id, message: Id, pinned: bool) -> Option<Command> {
 		if !self.can_pin(channel, message) {
 			self.status = "This message cannot be pinned with the current access";
 			return None;
 		}
+		let request = self.optimistic_pin(channel, message, pinned)?;
 		Some(Command::Pin {
+			request,
 			channel,
 			message,
 			pinned,
@@ -641,7 +647,9 @@ impl State {
 			self.status = "This message cannot be edited with the current access";
 			return None;
 		}
+		let request = self.optimistic_edit(channel, message, &content)?;
 		Some(Command::Edit {
+			request,
 			channel,
 			message,
 			content,

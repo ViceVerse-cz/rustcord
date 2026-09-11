@@ -235,7 +235,11 @@ impl SearchUi {
 						);
 						let view = state.search.as_ref().filter(|view| view.pins);
 						let empty = view.map_or(state.can_search(), |view| {
-							view.page.as_ref().is_some_and(|page| page.hits.is_empty())
+							view.page.as_ref().is_some_and(|page| {
+								page.hits
+									.iter()
+									.all(|hit| !state.is_pinned(hit.channel, hit.id))
+							})
 						});
 						if empty {
 							Self::pins_empty(ui, dm);
@@ -401,6 +405,9 @@ impl SearchUi {
 					.show(ui, |ui| {
 						ui.spacing_mut().item_spacing.y = 8.0;
 						for hit in &page.hits {
+							if view.pins && !state.is_pinned(hit.channel, hit.id) {
+								continue;
+							}
 							ui.push_id(hit.id, |ui| {
 								Self::hit_card(ui, hit, allowed, &mut target);
 							});
@@ -559,6 +566,9 @@ impl SearchUi {
 					.show(ui, |ui| {
 						ui.spacing_mut().item_spacing.y = 8.0;
 						for hit in &page.hits {
+							if view.pins && !state.is_pinned(hit.channel, hit.id) {
+								continue;
+							}
 							ui.push_id(hit.id, |ui| {
 								Self::hit_card(ui, hit, allowed, &mut target);
 							});

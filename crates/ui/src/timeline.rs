@@ -95,6 +95,49 @@ pub fn visible_range(rows: &[(Id, f32)], min: f32, max: f32) -> (usize, usize, f
 	}
 	(first, end, top)
 }
+fn loading_messages(ui: &mut egui::Ui, fill_viewport: bool) {
+	let colors = crate::design::palette(ui);
+	let height = if fill_viewport {
+		ui.available_height()
+	} else {
+		ui.available_height().min(144.0)
+	};
+	let (rect, response) = ui.allocate_exact_size(
+		egui::vec2(ui.available_width(), height),
+		egui::Sense::hover(),
+	);
+	response.widget_info(|| {
+		egui::WidgetInfo::labeled(egui::WidgetType::Label, false, "Loading messages")
+	});
+	let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(rect));
+	let fill = colors.muted.gamma_multiply(0.22);
+	let text_width = (rect.width() - 88.0).clamp(0.0, 480.0);
+	let rows = if fill_viewport {
+		(height / 68.0).ceil().clamp(0.0, 128.0) as usize
+	} else {
+		2
+	};
+	for (index, length) in [0.85, 0.65, 0.95, 0.55]
+		.into_iter()
+		.cycle()
+		.take(rows)
+		.enumerate()
+	{
+		let origin = rect.min + egui::vec2(16.0, 12.0 + index as f32 * 68.0);
+		painter.circle_filled(origin + egui::vec2(20.0, 20.0), 20.0, fill);
+		for (y, width, height) in [
+			(0.0, text_width.min(96.0), 12.0),
+			(22.0, text_width * length, 10.0),
+			(40.0, text_width * length * 0.7, 10.0),
+		] {
+			painter.rect_filled(
+				egui::Rect::from_min_size(origin + egui::vec2(56.0, y), egui::vec2(width, height)),
+				4,
+				fill,
+			);
+		}
+	}
+}
 fn anchor_offset(rows: &[(Id, f32)], id: Id, inset: f32) -> f32 {
 	if rows.is_empty() {
 		return 0.0;
@@ -521,7 +564,17 @@ impl TimelineView {
 		if !history_available {
 			ui.weak("Message history is unavailable with current permission information.");
 		}
-		if state.timeline.row_count() == 0
+		if history_available && state.freshness == model::Freshness::Loading {
+			let empty = state.timeline.row_count() == 0
+				&& !state
+					.pending
+					.iter()
+					.any(|p| Some(p.channel) == state.selected);
+			loading_messages(ui, empty);
+			if empty {
+				return;
+			}
+		} else if state.timeline.row_count() == 0
 			&& history_available
 			&& !state
 				.pending
@@ -1024,11 +1077,11 @@ impl TimelineView {
 									}
 									if let Some(action) = crate::reactions::show(
 										ui,
-										message.reactions.as_deref(),
+										state.reactions.display(message),
 										state.gateway_connected
 											&& state.freshness == model::Freshness::Fresh
 											&& state.can_read_history(message.channel),
-										state.reactions.writing.is_some(),
+										state.reactions.busy(),
 										state.reactions.invalidated(message.id),
 										(avatars, state.demo),
 										|emoji, add| state.can_react(*id, Some(emoji), add),
@@ -1129,7 +1182,7 @@ impl TimelineView {
 						if let Some(action) = crate::reactions::add_button(
 							&mut toolbar,
 							react,
-							state.reactions.writing.is_some(),
+							state.reactions.busy(),
 							|emoji| state.can_react(*id, Some(emoji), true),
 						) {
 							self.reaction = Some((*id, action));

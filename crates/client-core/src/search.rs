@@ -142,6 +142,8 @@ impl State {
 						!page.hits.is_empty() && view.pin_before.is_none_or(|b| cursor < b)
 					}) =>
 			{
+				self.message_actions
+					.reconcile_pins(channel, &page, view.pin_before.is_none());
 				view.page = Some(page);
 				view.error = None;
 			}

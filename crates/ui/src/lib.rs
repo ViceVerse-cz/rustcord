@@ -1879,6 +1879,19 @@ impl MessagingUi {
 		ui.add_space(6.0);
 	}
 	pub fn show(&mut self, ui: &mut egui::Ui, state: &mut State) -> Vec<Command> {
+		if self.editing.is_none()
+			&& let Some(index) = state
+				.message_actions
+				.failed_edits
+				.iter()
+				.position(|(channel, _, _)| Some(*channel) == state.selected)
+		{
+			let (channel, message, content) = state.message_actions.failed_edits.remove(index);
+			self.editing = Some((channel, message, content));
+			self.edit_modified = Some((channel, message, true));
+			self.edit_sent = false;
+		}
+
 		if self
 			.pending_upload
 			.as_ref()
@@ -2118,8 +2131,7 @@ impl MessagingUi {
 				}
 				let notices: Vec<String> = [
 					match state.freshness {
-						Freshness::Fresh => None,
-						Freshness::Loading => Some("Loading history…"),
+						Freshness::Fresh | Freshness::Loading => None,
 						Freshness::Stale => Some("Cached history · awaiting sync"),
 						Freshness::Unavailable => Some("Conversation unavailable"),
 					}
@@ -2389,6 +2401,9 @@ impl MessagingUi {
 			&& !state.demo
 			&& !ctx.egui_wants_keyboard_input()
 			&& ctx.input(|input| input.focused && input.key_down(egui::Key::V));
+		if !commands.is_empty() {
+			ctx.request_repaint();
+		}
 		commands
 	}
 }
@@ -2843,7 +2858,7 @@ mod composer_tests {
 	}
 
 	#[test]
-	fn inline_edit_uses_mentions_ime_and_preserves_draft_until_confirmed() {
+	fn inline_edit_uses_mentions_ime_and_preserves_draft_with_optimistic_updates() {
 		let ctx = egui::Context::default();
 		let mut state = edit_state();
 		let mut view = MessagingUi {
@@ -2889,65 +2904,45 @@ mod composer_tests {
 			vec![edit_key(egui::Key::Enter)],
 		);
 		assert!(
-			matches!(commands.as_slice(), [Command::Edit { channel: Id(10), message: Id(20), content }] if content.trim_end() == "Original <@1> 語")
+			matches!(commands.as_slice(), [Command::Edit { channel: Id(10), message: Id(20), content, .. }] if content.trim_end() == "Original <@1> 語")
 		);
-		assert!(view.has_edit(), "keep text until the service confirms it");
+		assert!(!view.has_edit(), "accepted edits close immediately");
+		assert_eq!(
+			state.timeline.get(Id(20)).unwrap().content,
+			"Original <@1> 語\n"
+		);
 		state.command_rejected(commands.into_iter().next().unwrap());
-		edit_frame(&ctx, &mut view, &mut state, vec![]);
-		assert_eq!(view.editing.as_ref().unwrap().2, "Original <@1> 語\n");
+		assert_eq!(state.timeline.get(Id(20)).unwrap().content, "Original");
+		assert_eq!(
+			state.message_actions.failed_edits[0].2,
+			"Original <@1> 語\n"
+		);
 		assert_eq!(state.drafts[&Id(10)], "Unsent draft 👋");
 		assert!(
 			view.draft_changes.is_empty(),
-			"edits must not overwrite persisted unsent drafts"
+			"edits must not overwrite unsent drafts"
 		);
-		let mut confirmed = state.timeline.get(Id(20)).unwrap().clone();
-		confirmed.content = view.editing.as_ref().unwrap().2.clone();
-		confirmed.edited = true;
-		edit_frame(
-			&ctx,
-			&mut view,
-			&mut state,
-			vec![egui::Event::Text("newer".into())],
-		);
-		state.timeline.insert(confirmed, false, false).unwrap();
-		edit_frame(&ctx, &mut view, &mut state, vec![]);
-		assert!(
-			view.has_edit(),
-			"an earlier acknowledgement must not discard newer input"
-		);
-		state.freshness = Freshness::Fresh;
+		let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+			view.show(ui, &mut state);
+		});
+		output.drop_without_applying_deltas();
+		assert_eq!(view.editing.as_ref().unwrap().2, "Original <@1> 語\n");
+		assert!(state.message_actions.failed_edits.is_empty());
 		let commands = edit_frame(
 			&ctx,
 			&mut view,
 			&mut state,
 			vec![edit_key(egui::Key::Enter)],
 		);
-		assert!(matches!(commands.as_slice(), [Command::Edit { .. }]));
-		let mut confirmed = state.timeline.get(Id(20)).unwrap().clone();
-		confirmed.content = view.editing.as_ref().unwrap().2.clone();
-		state.timeline.insert(confirmed, false, false).unwrap();
-		edit_frame(
-			&ctx,
-			&mut view,
-			&mut state,
-			vec![egui::Event::Text("same-frame".into())],
-		);
-		assert!(
-			view.has_edit(),
-			"input arriving with confirmation still belongs to the edit"
-		);
-		let commands = edit_frame(
-			&ctx,
-			&mut view,
-			&mut state,
-			vec![edit_key(egui::Key::Enter)],
-		);
-		assert!(matches!(commands.as_slice(), [Command::Edit { .. }]));
-		let mut confirmed = state.timeline.get(Id(20)).unwrap().clone();
-		confirmed.content = view.editing.as_ref().unwrap().2.clone();
-		state.timeline.insert(confirmed, false, false).unwrap();
-		edit_frame(&ctx, &mut view, &mut state, vec![]);
+		let [Command::Edit { request, .. }] = commands.as_slice() else {
+			panic!()
+		};
 		assert!(!view.has_edit());
+		let confirmed = state.timeline.get(Id(20)).unwrap().clone();
+		view.editing = Some((Id(10), Id(20), "Newer input".into()));
+		state.apply_edit_result(Id(10), Id(20), *request, Ok(confirmed));
+		edit_frame(&ctx, &mut view, &mut state, vec![]);
+		assert_eq!(view.editing.as_ref().unwrap().2, "Newer input");
 		assert_eq!(state.drafts[&Id(10)], "Unsent draft 👋");
 	}
 

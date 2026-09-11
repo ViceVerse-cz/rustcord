@@ -142,6 +142,9 @@ pub struct Preferences {
 impl State {
 	/// Per-DM notification override; absent settings remain unknown outside the fixture.
 	pub fn dm_muted(&self, channel: Id) -> Option<bool> {
+		if let Some(muted) = self.pending_dm_muted(channel) {
+			return Some(muted);
+		}
 		let Some(setting) = self.notification_preferences.settings.get(&None) else {
 			return self.demo.then_some(false);
 		};
@@ -273,7 +276,9 @@ impl State {
 		{
 			return false;
 		}
-		if setting.muted != Some(false) {
+		if setting.muted != Some(false)
+			|| (channel.guild.is_none() && self.pending_dm_muted(channel.id) == Some(true))
+		{
 			return false;
 		}
 		let mut level = setting.level;
@@ -281,7 +286,12 @@ impl State {
 			if let Some((_, muted, override_level)) =
 				setting.channels.iter().find(|(c, ..)| *c == id)
 			{
-				if *muted != Some(false) {
+				let muted = if channel.guild.is_none() && id == channel.id {
+					self.pending_dm_muted(id).or(*muted)
+				} else {
+					*muted
+				};
+				if muted != Some(false) {
 					return false;
 				}
 				if override_level.is_some_and(|l| l != 3) {
@@ -592,7 +602,18 @@ mod tests {
 			.unwrap();
 		state.observe_notification(&incoming);
 		assert!(state.take_notification().is_some());
+		let mute = state.set_dm_muted(Id(20), true).unwrap();
+		assert_eq!(state.dm_muted(Id(20)), Some(true));
+		assert!(!state.notification_allowed(Id(20)));
+		state.command_rejected(mute);
+		assert_eq!(state.dm_muted(Id(20)), Some(false));
+		assert!(state.notification_allowed(Id(20)));
 		state.confirm_dm_muted(Id(20), true).unwrap();
+		let unmute = state.set_dm_muted(Id(20), false).unwrap();
+		assert_eq!(state.dm_muted(Id(20)), Some(false));
+		assert!(state.notification_allowed(Id(20)));
+		state.command_rejected(unmute);
+		assert!(!state.notification_allowed(Id(20)));
 		incoming.id = Id(101);
 		state.observe_notification(&incoming);
 		assert!(state.take_notification().is_none());

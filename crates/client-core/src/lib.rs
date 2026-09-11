@@ -10,6 +10,7 @@ pub mod permissions;
 mod permissions_tests;
 
 pub mod invites;
+pub mod message_actions;
 pub mod notifications;
 pub mod presence;
 pub mod profile;
@@ -109,6 +110,7 @@ pub enum Command {
 		reply: Option<Id>,
 	},
 	Edit {
+		request: u64,
 		channel: Id,
 		message: Id,
 		content: String,
@@ -118,6 +120,7 @@ pub enum Command {
 		message: Id,
 	},
 	Pin {
+		request: u64,
 		channel: Id,
 		message: Id,
 		pinned: bool,
@@ -226,7 +229,14 @@ pub enum Event {
 		ids: Vec<Id>,
 	},
 	/// A pin or unpin request finished; `Err` carries the service failure label.
+	Edited {
+		request: u64,
+		channel: Id,
+		message: Id,
+		result: Result<Message, auth::Failure>,
+	},
 	Pinned {
+		request: u64,
 		channel: Id,
 		message: Id,
 		pinned: bool,
@@ -279,6 +289,7 @@ pub struct State {
 	pub gifs: gifs::Gifs,
 	/// A pin changed in this channel; the pins view should be reloaded once.
 	pub pins_changed: Option<Id>,
+	pub message_actions: message_actions::MessageActions,
 	pub search_target: Option<Id>,
 	/// The active range was fetched around a target, independently of its consumed scroll cue.
 	pub history_targeted: bool,
@@ -339,6 +350,7 @@ impl Default for State {
 			search_request: 0,
 			gifs: gifs::Gifs::default(),
 			pins_changed: None,
+			message_actions: Default::default(),
 			search_target: None,
 			history_targeted: false,
 			reply_deletions: ReplyDeletions::default(),
@@ -781,7 +793,18 @@ impl State {
 			self.apply_gifs(request, Err(auth::Failure::Capacity));
 			return;
 		}
+		if let Command::Edit {
+			channel,
+			message,
+			request,
+			..
+		} = command
+		{
+			self.apply_edit_result(channel, message, request, Err(auth::Failure::Capacity));
+			return;
+		}
 		if let Command::Pin {
+			request,
 			channel,
 			message,
 			pinned,
@@ -790,6 +813,7 @@ impl State {
 			self.apply(Envelope {
 				generation: self.generation,
 				event: Event::Pinned {
+					request,
 					channel,
 					message,
 					pinned,
@@ -1518,6 +1542,12 @@ impl State {
 				Ok(())
 			}
 			Event::Message(mut m) => {
+				if self.timeline.get(m.id).is_some_and(|old| {
+					old.edited_at
+						.is_none_or(|at| m.edited_at.is_some_and(|new| new >= at))
+				}) {
+					self.message_actions.observe_content(m.channel, m.id);
+				}
 				self.typing_message(&m);
 				if let Some(post) = self
 					.channels
@@ -1563,6 +1593,12 @@ impl State {
 				}
 			}
 			Event::Patch(mut p) => {
+				if !matches!(p.content, Patch::Absent)
+					&& self.timeline.get(p.id).is_some_and(
+						|old| !matches!(p.edited, Patch::Value(at) if old.edited_at.is_some_and(|old| at < old)),
+					) {
+					self.message_actions.observe_content(p.channel, p.id);
+				}
 				if self.selected == Some(p.channel)
 					&& self.reactions.invalidated(p.id)
 					&& !matches!(p.reactions, Patch::Absent)
@@ -1600,46 +1636,23 @@ impl State {
 					Ok(())
 				}
 			}
+			Event::Edited {
+				channel,
+				message,
+				request,
+				result,
+			} => {
+				self.apply_edit_result(channel, message, request, result);
+				Ok(())
+			}
 			Event::Pinned {
 				channel,
 				message,
 				pinned,
+				request,
 				result,
 			} => {
-				match result {
-					Ok(()) => {
-						self.status = if pinned {
-							"Message pinned"
-						} else {
-							"Message unpinned"
-						};
-						if let Some(view) = self
-							.search
-							.as_mut()
-							.filter(|view| view.pins && view.channel == channel)
-							&& let Some(page) = view.page.as_mut()
-							&& !pinned
-						{
-							page.hits.retain(|hit| hit.id != message);
-						}
-						self.pins_changed = Some(channel);
-					}
-					Err(failure) if failure.ends_session() => self.fail(failure),
-					Err(failure) => {
-						self.status = if pinned {
-							match failure {
-								auth::Failure::Forbidden => {
-									"Pinning is unavailable with the current permissions or the pin limit was reached"
-								}
-								_ => {
-									"Pin was not applied; check the pinned messages before retrying"
-								}
-							}
-						} else {
-							"Unpin was not applied; check the pinned messages before retrying"
-						};
-					}
-				}
+				self.apply_pin_result(channel, message, pinned, request, result);
 				Ok(())
 			}
 			Event::DeleteBulk { channel, ids } => {
@@ -1738,6 +1751,7 @@ impl State {
 				Ok(())
 			}
 			Event::Disconnected => {
+				self.cancel_message_actions();
 				self.cancel_user_action();
 				self.read_state.cancel();
 				self.clear_profile();
@@ -1760,6 +1774,7 @@ impl State {
 				Ok(())
 			}
 			Event::Resync | Event::PermissionsChanged => {
+				self.cancel_message_actions();
 				self.cancel_user_action();
 				self.direct_presences.clear();
 				self.direct_presence_bytes = None;
@@ -1896,6 +1911,7 @@ impl State {
 			_ => {}
 		}
 		if failure.ends_session() {
+			self.cancel_message_actions();
 			if self.folders_pending {
 				self.folders_pending = false;
 				self.folders_error = Some(failure.label());
@@ -1958,6 +1974,7 @@ impl Event {
 	pub fn bytes(&self) -> usize {
 		size_of::<Self>()
 			+ match self {
+				Self::Edited { result, .. } => result.as_ref().map_or(0, Message::bytes),
 				Self::GuildFolders(result) => result
 					.as_ref()
 					.map_or(0, model::guild_folders::Settings::heap_bytes),
