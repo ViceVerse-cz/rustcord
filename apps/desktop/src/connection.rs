@@ -113,6 +113,7 @@ impl Connection {
                 }));
                 let mut history:Option<AbortTask>=None;
                 let mut profile:Option<AbortTask>=None;
+                let mut invite:Option<AbortTask>=None;
                 let mut search:Option<AbortTask>=None;
                 let mut reaction_read:Option<AbortTask>=None;
                 let mut ringing:Option<AbortTask>=None;
@@ -204,6 +205,17 @@ impl Connection {
                                         }
                                     })));
                                 }
+                                continue;
+                            }
+                            if matches!(command, Command::Invite {..}) {
+                                drop(invite.take());
+                                let api=api.clone(); let emit=emit.clone(); let finished=finished.clone(); let wake=wake.clone();
+                                invite=Some(AbortTask(tokio::spawn(async move {
+                                    let event=api.execute(command).await;
+                                    let failure=match &event {Event::Invite{result:Err(f),..} if f.ends_session()=>Some(*f),_=>None};
+                                    if let Some(error)=emit(event).err().or(failure) {api.stop();let _=finished.send(Some(error));}
+                                    wake.request_repaint();
+                                })));
                                 continue;
                             }
                             if matches!(command,Command::CancelProfile) {drop(profile.take());continue;}

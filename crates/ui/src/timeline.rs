@@ -9,6 +9,7 @@ use std::{
 
 #[derive(Default)]
 pub struct TimelineView {
+	pub(super) invite_requests: Vec<String>,
 	pub(super) edit_started: bool,
 	pub(super) channel_reference: Option<Id>,
 	pub(super) reply_target: Option<Id>,
@@ -420,6 +421,7 @@ impl TimelineView {
 						0.0
 					} else {
 						crate::embeds::estimated_height(&m.embeds)
+							+ crate::invites::estimated_height(m)
 					}) + crate::attachments::estimated_height(
 						&m.attachments,
 						(width - 88.0).max(1.0),
@@ -788,6 +790,15 @@ impl TimelineView {
 											media = true;
 										}
 									} else {
+										crate::invites::show(
+											ui,
+											message,
+											&state.invites,
+											avatars,
+											&mut self.opening,
+											&mut self.invite_requests,
+											state.demo,
+										);
 										crate::embeds::show(
 											ui,
 											message,

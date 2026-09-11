@@ -421,19 +421,23 @@ impl State {
 			&& self.gateway_connected
 			&& self.selected == Some(channel)
 			&& self.freshness == Freshness::Fresh
-			&& self
-				.channels
-				.iter()
-				.find(|c| c.id == channel && c.supports_text())
-				.is_some_and(|c| {
-					let send = if matches!(c.kind, 10..=12) {
-						p::SEND_MESSAGES_IN_THREADS
-					} else {
-						p::SEND_MESSAGES
-					};
-					self.permission(channel, p::VIEW_CHANNEL | send) == Some(true)
-				})
+			&& self.can_compose(channel)
 	}
+	/// Permission-only composer availability, including while drafting offline.
+	pub fn can_compose(&self, channel: Id) -> bool {
+		self.channels
+			.iter()
+			.find(|c| c.id == channel && c.supports_text())
+			.is_some_and(|c| {
+				let send = if matches!(c.kind, 10..=12) {
+					p::SEND_MESSAGES_IN_THREADS
+				} else {
+					p::SEND_MESSAGES
+				};
+				self.permission(channel, p::VIEW_CHANNEL | send) == Some(true)
+			})
+	}
+
 	pub fn can_attach(&self, channel: Id) -> bool {
 		self.can_send(channel) && self.permission(channel, p::ATTACH_FILES) == Some(true)
 	}
@@ -536,11 +540,9 @@ impl State {
 		{
 			return false;
 		}
-		if !self
-			.timeline
-			.get(message)
-			.is_some_and(|message| message.channel == channel && message.id.0 != 0 && matches!(message.kind, 0 | 19))
-		{
+		if !self.timeline.get(message).is_some_and(|message| {
+			message.channel == channel && message.id.0 != 0 && matches!(message.kind, 0 | 19)
+		}) {
 			return false;
 		}
 		let Some(target) = self

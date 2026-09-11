@@ -237,8 +237,27 @@ impl DiscordApi {
 		.await
 		.map(|_| ())
 	}
+	// https://docs.discord.com/developers/resources/invite#get-invite
+	async fn invite(&self, code: &str) -> Result<model::Embed, Failure> {
+		if !client_core::invites::valid_code(code) {
+			return Err(Failure::Protocol);
+		}
+		let bytes = self
+			.request_limited(
+				Method::GET,
+				&format!("/invites/{code}?with_counts=true"),
+				None,
+				64 * 1024,
+			)
+			.await?;
+		discord_protocol::invites::decode(&bytes).map_err(|_| Failure::Protocol)
+	}
 	pub async fn execute(&self, command: Command) -> Event {
 		match command {
+			Command::Invite { code } => {
+				let result = self.invite(&code).await;
+				Event::Invite { code, result }
+			}
 			Command::CreatePost {
 				parent,
 				guild,

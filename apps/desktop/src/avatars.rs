@@ -228,7 +228,7 @@ fn embed_url(source: &str) -> Option<String> {
 			&& parts.next().is_some_and(|domain| !domain.is_empty())
 	} else {
 		let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
-		matches!(parts.as_slice(), ["avatars" | "icons", id, hash]
+		matches!(parts.as_slice(), ["avatars" | "icons" | "banners", id, hash]
             if id.parse::<Id>().is_ok() && hash.rsplit_once('.').is_some_and(|(hash, _)| model::valid_avatar_hash(hash)))
 			|| matches!(parts.as_slice(), ["embed", "avatars", index]
                 if matches!(*index, "0.png" | "1.png" | "2.png" | "3.png" | "4.png" | "5.png"))

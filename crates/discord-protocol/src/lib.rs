@@ -3,6 +3,7 @@ pub mod archives;
 mod attachments;
 mod embeds;
 mod extra_content;
+pub mod invites;
 pub mod notifications;
 pub mod permissions;
 pub mod pins;

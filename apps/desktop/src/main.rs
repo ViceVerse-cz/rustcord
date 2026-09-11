@@ -1011,6 +1011,10 @@ impl Desktop {
 						})),
 					}
 				}
+				Command::Invite { code } => Event::Invite {
+					code,
+					result: Err(Failure::Protocol),
+				},
 				Command::Profile {
 					user,
 					guild,

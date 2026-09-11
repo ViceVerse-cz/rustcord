@@ -14,6 +14,7 @@ mod emoji_picker;
 pub mod fonts;
 mod forum;
 pub mod icons;
+mod invites;
 mod markdown;
 mod mentions;
 mod notifications;
@@ -281,7 +282,10 @@ impl MessagingUi {
 								.corner_radius(10)
 								.inner_margin(egui::Margin::symmetric(8, 3))
 								.show(ui, |ui| {
-									ui.label(design::semibold(ui, "OFFLINE PREVIEW", 10.0).color(colors.muted));
+									ui.label(
+										design::semibold(ui, "OFFLINE PREVIEW", 10.0)
+											.color(colors.muted),
+									);
 								})
 								.response
 								.on_hover_text("Synthetic data · no network or local storage");
@@ -1004,6 +1008,27 @@ impl MessagingUi {
 				}
 				self.edit_undo_cleared = true;
 			}
+		}
+		if !editing_here && !state.can_compose(channel) {
+			self.mention_menu = mentions::Menu::default();
+			self.emoji_picker = emoji_picker::Picker::default();
+			self.ime_active = false;
+			self.focus_switched_composer = false;
+			egui::Frame::new()
+				.fill(colors.raised)
+				.corner_radius(8)
+				.inner_margin(12)
+				.show(ui, |ui| {
+					let mut hint =
+						"You don't have permission to send messages in this channel.".to_owned();
+					ui.add_enabled(
+						false,
+						TextEdit::singleline(&mut hint)
+							.desired_width(f32::INFINITY)
+							.frame(egui::Frame::NONE),
+					);
+				});
+			return;
 		}
 		let keyboard_enabled = !self.switcher_frame
 			&& !self.switcher.is_open()
@@ -1873,6 +1898,11 @@ impl MessagingUi {
 							&mut self.avatars,
 							&mut self.profile,
 						);
+						for code in std::mem::take(&mut self.timeline.invite_requests) {
+							if let Some(command) = state.request_invite(code) {
+								commands.push(command);
+							}
+						}
 						if std::mem::take(&mut self.timeline.edit_started) {
 							self.edit_modified = None;
 							self.edit_undo_cleared = false;

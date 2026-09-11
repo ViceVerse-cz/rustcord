@@ -6,6 +6,7 @@ pub mod permissions;
 #[cfg(test)]
 mod permissions_tests;
 
+pub mod invites;
 pub mod notifications;
 pub mod presence;
 pub mod profile;
@@ -31,6 +32,9 @@ pub const EVENT_SLOTS: usize = 8; // UI drain batch; reliable events share a 32 
 pub const COMMAND_SLOTS: usize = 16; // each admitted command <= 16 KiB
 
 pub enum Command {
+	Invite {
+		code: String,
+	},
 	CreatePost {
 		parent: Id,
 		guild: Id,
@@ -105,6 +109,10 @@ pub enum Command {
 	},
 }
 pub enum Event {
+	Invite {
+		code: String,
+		result: Result<model::Embed, auth::Failure>,
+	},
 	Typing(typing::Signal),
 	PostCreated {
 		parent: Id,
@@ -247,6 +255,7 @@ pub struct State {
 	pub profile: Option<profile::ProfileView>,
 	pub profile_request: u64,
 	pub profile_cache: profile::ProfileCache,
+	pub invites: invites::Cache,
 	pub voice: voice::State,
 	pub generation: u64,
 	pub auth: auth::AuthState,
@@ -296,6 +305,7 @@ impl Default for State {
 			profile: None,
 			profile_request: 0,
 			profile_cache: Default::default(),
+			invites: Default::default(),
 			voice: voice::State::default(),
 			generation: 1,
 			auth: auth::AuthState::Unauthenticated,
@@ -687,6 +697,10 @@ impl State {
 			self.status = "Work queue full; reaction action was not sent";
 			return;
 		}
+		if let Command::Invite { code } = command {
+			self.apply_invite(code, Err(auth::Failure::Capacity));
+			return;
+		}
 		if let Command::Profile {
 			user,
 			guild,
@@ -924,6 +938,10 @@ impl State {
 				removed,
 			} => self.apply_threads_sync(guild, parents, threads, removed),
 			Event::Reactions(event) => self.apply_reactions(event),
+			Event::Invite { code, result } => {
+				self.apply_invite(code, result);
+				Ok(())
+			}
 			Event::Profile {
 				user,
 				guild,
@@ -1768,6 +1786,9 @@ impl Event {
 				}
 				Self::Reactions(reactions::Event::Read { result, .. }) => {
 					result.as_ref().map_or(0, |r| model::reaction_bytes(r))
+				}
+				Self::Invite { code, result } => {
+					code.capacity() + result.as_ref().map_or(0, model::Embed::bytes)
 				}
 				Self::Profile { result, .. } => result.as_ref().map_or(0, |p| p.bytes()),
 				Self::Voice(event) => event.bytes(),
