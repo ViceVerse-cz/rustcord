@@ -9,6 +9,27 @@ use serde::{
 };
 
 pub const MAX_PROFILE_WIRE: usize = 256 * 1024;
+
+/// Unofficial current-user PATCH fields; omit untouched fields, retain explicit nulls.
+pub fn encode_edit(changes: &model::ProfileEdit) -> Result<serde_json::Value, DecodeError> {
+	if !changes.valid() {
+		return Err(DecodeError);
+	}
+	let mut fields = serde_json::Map::new();
+	if let Some(name) = &changes.global_name {
+		fields.insert("global_name".into(), serde_json::json!(name));
+	}
+	if let Some(bio) = &changes.bio {
+		fields.insert("bio".into(), serde_json::json!(bio));
+	}
+	if let Some(pronouns) = &changes.pronouns {
+		fields.insert("pronouns".into(), serde_json::json!(pronouns));
+	}
+	if let Some(color) = changes.accent_color {
+		fields.insert("accent_color".into(), serde_json::json!(color));
+	}
+	Ok(serde_json::Value::Object(fields))
+}
 #[derive(Deserialize)]
 struct ProfileDto {
 	user: ProfileUser,

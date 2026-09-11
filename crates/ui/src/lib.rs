@@ -23,6 +23,11 @@ mod mentions;
 mod notifications;
 mod pending;
 mod profiles;
+/// Synthetic global profile used exclusively by the desktop's offline command adapter.
+pub fn synthetic_own_profile(user: &model::User) -> model::UserProfile {
+	profiles::synthetic(user, None)
+}
+mod profile_edit;
 mod reactions;
 mod reading;
 pub mod screen;
@@ -1976,7 +1981,7 @@ impl MessagingUi {
 		let ctx = ui.ctx().clone();
 		let settings_open = self.settings.open;
 		if settings_open {
-			self.show_settings(&ctx, state);
+			self.show_settings(&ctx, state, &mut commands);
 			ui.disable();
 		}
 		// Foreground confirmation handles Escape before background search/archive shortcuts.
@@ -2394,7 +2399,15 @@ impl MessagingUi {
 						request: 0,
 						loading: false,
 						error: None,
-						data: Some(profiles::synthetic(user, profile_guild)),
+						data: Some(
+							state
+								.own_profile
+								.data
+								.as_ref()
+								.filter(|data| data.user.id == user.id)
+								.cloned()
+								.unwrap_or_else(|| profiles::synthetic(user, profile_guild)),
+						),
 					});
 				} else if let Some(command) = state.request_profile(user.id, profile_guild) {
 					commands.push(command);
@@ -2420,6 +2433,13 @@ impl MessagingUi {
 				self.reading_preferences.confirm_external_links,
 				anchor,
 			) {
+				Some(profiles::Action::Edit) => {
+					self.profile = None;
+					self.profile_link = None;
+					self.profile_anchor = None;
+					commands.push(state.clear_profile());
+					self.preview_settings("profile");
+				}
 				Some(profiles::Action::Profile(user)) => {
 					self.profile = Some(user);
 					self.profile_link = None;

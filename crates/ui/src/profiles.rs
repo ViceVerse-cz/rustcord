@@ -11,6 +11,7 @@ use egui::{Color32, CornerRadius, Pos2, Rect, RichText, Stroke, UiBuilder, Vec2,
 use model::{Id, User};
 
 pub enum Action {
+	Edit,
 	Close,
 	Retry,
 	Message(Id),
@@ -867,7 +868,20 @@ pub fn show(
 						});
 					ui.horizontal(|ui| {
 						ui.spacing_mut().item_spacing.x = 8.0;
-						if let Some(channel) = dm_channel {
+						if state.user.as_ref().is_some_and(|own| own.id == user.id) {
+							if ui
+								.add_sized(
+									[ui.available_width(), 32.0],
+									egui::Button::new(
+										RichText::new("Edit profile").color(colors.accent_text),
+									)
+									.fill(colors.accent),
+								)
+								.clicked()
+							{
+								action = Some(Action::Edit);
+							}
+						} else if let Some(channel) = dm_channel {
 							let width = ui.available_width() - 32.0 - 8.0;
 							if ui
 								.add_sized(

@@ -1,5 +1,15 @@
 # Discord compatibility — checked 2026-09-10
 
+## Own profile editing — September 11, 2026
+
+The native editor updates global display name, bio, pronouns and accent color through
+the unofficial normal-user `PATCH /users/@me` route, then verifies a fresh global
+profile read. Only deliberate changed fields are sent; failures remain visible and
+uncertain saves require reload. Mock HTTP and reducer/UI tests pass; no live profile
+was read or changed. Avatar/banner uploads, username, guild profiles and security
+settings remain outside this editor. Sources, limits and reproduction are in
+[profiles.md](profiles.md#editing-your-profile--september-11-2026).
+
 ## Outgoing screen sharing — September 11, 2026
 
 The optional voice build adds macOS 14+ ScreenCaptureKit and Windows Graphics Capture senders for an existing connected DM/server voice call. Share opens a native egui source/settings dialog first. It exposes 720p/1080p and 15/30/60 fps to all accounts, plus cursor visibility; only the explicit Share screen action creates a stream. No subscription fields are changed. Camera video, receiving streams and system/desktop audio remain unsupported.

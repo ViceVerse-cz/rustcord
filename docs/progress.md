@@ -1,5 +1,52 @@
 # Implementation progress — 2026-09-10
 
+## Own profile editing — September 11, 2026
+
+Added Settings → Profile, My Account → Edit profile, and Edit profile on your own
+card. The editor loads the global profile before accepting display name, pronouns,
+About Me and accent color changes. It has a bounded session-only draft, preview,
+character counts, Save/Cancel, loading/errors and confirmed-save feedback. Avatar,
+banner and security settings remain managed in Discord. The offline command path
+is available with `--demo --demo-settings=profile`.
+
+One bounded current-user PATCH sends only changed fields, followed by a confirming
+profile read. Account/request/session gates reject stale results and duplicate saves.
+Unconfirmed writes preserve the draft and require reload, without automatic retries.
+Reload adopts refreshed untouched fields while preserving edits. Confirmed identity
+changes update retained users and invalidate stale profile views. No new dependencies,
+schema changes, credentials or live account actions.
+
+Focused model/core/API/profile tests and both new editor tests pass. Headless egui
+checks exercise keyboard text entry and mouse Save/Cancel at 320/720 points in dark
+and light themes. `cargo xtask check` passed formatting and strict all-feature Clippy,
+then failed in unchanged `pending_full_body_turns_into_one_confirmed_row_in_either_arrival_order`
+(`crates/ui/src/pending_tests.rs:113`, confirmed text retains pending gray). The same
+failure was reproduced on clean baseline `22e2283`. The full parallel UI test process
+also aborted with Windows `0xc0000409`; the isolated test reports its assertion.
+This is not a full-check success.
+
+Work is isolated in `feat/profile-edit`, based on fetched `origin/main` `22e2283`,
+Rust 1.98.1/Windows 11. Original-checkout timeline edits were preserved. Baseline
+packages were rebuilt in a detached worktree after those edits appeared. A stale
+shared-target model artifact was invalidated before checking; reducer comparisons
+use separate targets. Package/performance results are in `docs/performance.md`.
+
+The final editor follows the existing Discord-style settings: two columns at wide
+sizes, filled inputs, the shared pill switch, an overlapping-avatar preview and a
+compact save bar. Narrow windows put Save/Cancel before the scrollable preview.
+After the design revision, all-target/all-feature strict Clippy, focused profile
+tests and the policy check were rerun. Native dark/light/narrow PNGs were captured
+and inspected using the offline `profile_preview` example's real wgpu framebuffer
+callback. `before.png` shows the baseline's read-only My Account page; `after.png`
+shows the new Profile page at the same viewport and native scale. The example
+renders the real UI with synthetic state and no adapters; it is not a live-session
+or main-binary interaction test. The desktop automation pipe remains unavailable,
+so keyboard/mouse behavior is covered by headless egui tests, not native automation.
+Screen readers and other OSes remain unverified. Normal-user writes are unofficial
+and live-unverified; see `docs/profiles.md`. Voice packaging encounters baseline missing
+`openh264-sys2 0.9.8` / `openh264 0.9.8` license text overrides. Delivery stays draft
+with these exact limitations.
+
 ## September 11, 2026 — outgoing screen sharing
 
 Implemented on `feat/screen-sharing` from clean `609f8bf` (origin/main at task start). The connected-call screen button now opens source, 720p/1080p, 15/30/60 fps and cursor settings. Every quality option is exposed without a local Nitro gate. Explicit Share starts a separate DAVE-encrypted Discord stream using native macOS 14+ ScreenCaptureKit or Windows Graphics Capture and source-built OpenH264. The microphone remains on its existing transport and controls. Stop, permission/session loss, source closure and server replacement cancel sharing; cleanup waits for native retirement and Discord deletion before restart. Source lists, frames and queues are bounded and memory-only. Sharing status starts after the first keyframe is sent.

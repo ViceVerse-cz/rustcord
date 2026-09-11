@@ -2,6 +2,7 @@
 mod activity_sharing;
 mod archives;
 mod guild_folders;
+mod profile_edit;
 pub mod rpc;
 pub mod upload;
 mod user_actions;
@@ -490,6 +491,15 @@ impl DiscordApi {
 					result,
 				}
 			}
+			Command::EditProfile {
+				user,
+				request,
+				changes,
+			} => Event::ProfileEdited {
+				user,
+				request,
+				result: self.edit_profile(user, changes).await,
+			},
 			Command::CancelProfile => Event::Failure(Failure::Protocol),
 			Command::Voice(_) | Command::Members { .. } => Event::Failure(Failure::Protocol),
 			Command::History {
