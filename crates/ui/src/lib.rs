@@ -2179,6 +2179,11 @@ impl MessagingUi {
 						if let Some(gif) = self.timeline.gif_favorite.take() {
 							state.toggle_gif_favorite(&gif);
 						}
+						if let Some(code) = self.timeline.invite_join.take()
+							&& let Some(command) = state.join_invite(code)
+						{
+							commands.push(command);
+						}
 						for code in std::mem::take(&mut self.timeline.invite_requests) {
 							if let Some(command) = state.request_invite(code) {
 								commands.push(command);

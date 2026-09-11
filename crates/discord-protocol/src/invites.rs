@@ -13,7 +13,7 @@ struct Guild {
 	icon: Option<String>,
 	banner: Option<String>,
 }
-pub fn decode(bytes: &[u8]) -> Result<model::Embed, crate::DecodeError> {
+pub fn decode(bytes: &[u8]) -> Result<model::InvitePreview, crate::DecodeError> {
 	if bytes.len() > 64 * 1024 {
 		return Err(crate::DecodeError);
 	}
@@ -42,12 +42,15 @@ pub fn decode(bytes: &[u8]) -> Result<model::Embed, crate::DecodeError> {
 		(_, Some(members)) => Some(format!("{members} members")),
 		_ => None,
 	};
-	Ok(model::Embed {
-		kind: "discord-invite".into(),
-		title: Some(guild.name),
-		description: counts,
-		thumbnail: media(guild.icon, "icons"),
-		image: media(guild.banner, "banners"),
-		..Default::default()
+	Ok(model::InvitePreview {
+		guild: guild.id,
+		embed: model::Embed {
+			kind: "discord-invite".into(),
+			title: Some(guild.name),
+			description: counts,
+			thumbnail: media(guild.icon, "icons"),
+			image: media(guild.banner, "banners"),
+			..Default::default()
+		},
 	})
 }

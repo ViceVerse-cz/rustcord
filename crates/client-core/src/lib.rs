@@ -43,6 +43,10 @@ pub enum Command {
 		action: user_actions::Action,
 		request: u64,
 	},
+	JoinInvite {
+		code: String,
+		request: u64,
+	},
 	Invite {
 		code: String,
 	},
@@ -127,11 +131,16 @@ pub enum Command {
 	},
 }
 pub enum Event {
+	JoinInvite {
+		request: u64,
+		result: Result<Id, auth::Failure>,
+	},
+	GuildJoined(Guild),
 	GuildFolders(Result<model::guild_folders::Settings, auth::Failure>),
 	UserAction(user_actions::Event),
 	Invite {
 		code: String,
-		result: Result<Box<model::Embed>, auth::Failure>,
+		result: Result<Box<model::InvitePreview>, auth::Failure>,
 	},
 	Typing(typing::Signal),
 	PostCreated {
@@ -301,6 +310,7 @@ pub struct State {
 	pub profile_request: u64,
 	pub profile_cache: profile::ProfileCache,
 	pub invites: invites::Cache,
+	pub invite_join: invites::Join,
 	pub voice: voice::State,
 	pub generation: u64,
 	pub auth: auth::AuthState,
@@ -361,6 +371,7 @@ impl Default for State {
 			profile_request: 0,
 			profile_cache: Default::default(),
 			invites: Default::default(),
+			invite_join: Default::default(),
 			voice: voice::State::default(),
 			generation: 1,
 			auth: auth::AuthState::Unauthenticated,
@@ -865,6 +876,15 @@ impl State {
 			self.status = "Work queue full; reaction action was not sent";
 			return;
 		}
+		if let Command::JoinInvite { request, .. } = command {
+			self.apply_invite_join(
+				request,
+				Err(auth::Failure::ProtocolAt(
+					"Join was not sent · work queue full",
+				)),
+			);
+			return;
+		}
 		if let Command::Invite { code } = command {
 			self.apply_invite(code, Err(auth::Failure::Capacity));
 			return;
@@ -1120,6 +1140,26 @@ impl State {
 				removed,
 			} => self.apply_threads_sync(guild, parents, threads, removed),
 			Event::Reactions(event) => self.apply_reactions(event),
+			Event::JoinInvite { request, result } => {
+				self.apply_invite_join(request, result);
+				Ok(())
+			}
+			Event::GuildJoined(guild) => {
+				if !self.guilds.iter().any(|g| g.id == guild.id) {
+					let bytes = self.navigation_bytes() + guild.bytes();
+					if guild.id.0 == 0
+						|| guild.name.len() > 512
+						|| self.guilds.len() + self.channels.len() >= MAX_NAV
+						|| bytes > MAX_EVENT_BYTES
+					{
+						self.fail(auth::Failure::Capacity);
+						return;
+					}
+					self.guilds.push(guild);
+					self.set_navigation_bytes(bytes);
+				}
+				Ok(())
+			}
 			Event::Invite { code, result } => {
 				self.apply_invite(code, result.map(|embed| *embed));
 				Ok(())
@@ -1434,6 +1474,7 @@ impl State {
 				self.read_state.reset();
 				self.notification_preferences = notifications::Preferences::default();
 				self.cancel_user_action();
+				self.cancel_invite_join();
 				self.user_actions.reset();
 				self.user = Some(user);
 				self.guilds = guilds;
@@ -1753,6 +1794,7 @@ impl State {
 			Event::Disconnected => {
 				self.cancel_message_actions();
 				self.cancel_user_action();
+				self.cancel_invite_join();
 				self.read_state.cancel();
 				self.clear_profile();
 				let roster = std::mem::take(&mut self.voice.roster);
@@ -1776,6 +1818,7 @@ impl State {
 			Event::Resync | Event::PermissionsChanged => {
 				self.cancel_message_actions();
 				self.cancel_user_action();
+				self.cancel_invite_join();
 				self.direct_presences.clear();
 				self.direct_presence_bytes = None;
 				self.permissions = permissions::Permissions::default();
@@ -1917,6 +1960,7 @@ impl State {
 				self.folders_error = Some(failure.label());
 			}
 			self.cancel_user_action();
+			self.cancel_invite_join();
 			self.direct_presences.clear();
 			self.direct_presence_bytes = None;
 			self.clear_cached_history();
@@ -2002,6 +2046,7 @@ impl Event {
 				Self::Reactions(reactions::Event::Read { result, .. }) => {
 					result.as_ref().map_or(0, |r| model::reaction_bytes(r))
 				}
+				Self::GuildJoined(guild) => guild.bytes(),
 				Self::Invite { code, result } => {
 					code.capacity() + result.as_ref().map_or(0, |embed| embed.bytes())
 				}

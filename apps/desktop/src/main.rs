@@ -1286,6 +1286,10 @@ impl Desktop {
 					result: Ok(test_support::gif_page(query.as_deref())),
 				},
 				Command::CancelGifs => return,
+				Command::JoinInvite { request, .. } => Event::JoinInvite {
+					request,
+					result: Err(Failure::ProtocolAt("Server joining unavailable offline")),
+				},
 				Command::Invite { code } => Event::Invite {
 					code,
 					result: Err(Failure::Protocol),

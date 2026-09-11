@@ -528,3 +528,15 @@ Limits: 200 servers, 200 folder entries, 100 characters/400 bytes per name, 16 K
 retained layout, 1 MiB settings response. Oversized settings disable organization
 without hiding normal server navigation. Demo edits stay in memory; live edits persist
 through Discord. No live account actions were performed in fast local validation.
+
+### Invite acceptance (September 11, 2026)
+
+Native invite cards offer a deliberate server join after a valid, bounded preview. The
+normal-user `POST /invites/{code}` with an empty JSON body is unofficial, based on
+[discord.py-self's accept_invite implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/http.py).
+It is single-attempt and uses the existing rate-limit and session-challenge handling.
+A successful response confirms invite acceptance only; gateway guild/channel/permission
+updates supply actual access. New gateway guilds enter the server rail. Expired or rejected
+invites and uncertain writes show errors. Challenges, membership screening, and application
+requirements remain unsupported in the native join flow. No challenge bypass or automatic retry.
+Live acceptance and restricted-server flows remain unverified; offline demo cannot join.

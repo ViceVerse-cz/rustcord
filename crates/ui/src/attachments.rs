@@ -385,50 +385,120 @@ fn download_button(
 		download.request = Some(attachment.clone());
 	}
 }
+/// Resolve against the current message every frame: deleted or hidden media cannot linger.
+fn gallery_step(attachments: &[Attachment], current: Id, previous: bool) -> Option<Id> {
+	let images: Vec<_> = attachments.iter().filter(|a| a.is_image()).collect();
+	let index = images.iter().position(|a| a.id == current)?;
+	let index = if previous {
+		(index + images.len() - 1) % images.len()
+	} else {
+		(index + 1) % images.len()
+	};
+	Some(images[index].id)
+}
+
 pub fn viewer(
 	ui: &mut egui::Ui,
-	attachment: &Attachment,
+	attachments: &[Attachment],
+	current: Id,
 	images: &mut Avatars,
 	download: &mut DownloadUi,
 	demo: bool,
-) -> bool {
-	let colors = crate::design::palette(ui);
-	let size = ui.ctx().content_rect().size() - egui::vec2(56.0, 56.0);
+) -> Option<Id> {
+	let mut current = current;
+	if ui
+		.ctx()
+		.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft))
+	{
+		current = gallery_step(attachments, current, true)?;
+	}
+	if ui
+		.ctx()
+		.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight))
+	{
+		current = gallery_step(attachments, current, false)?;
+	}
+	let attachment = attachments
+		.iter()
+		.find(|a| a.id == current && a.is_image())?;
+	let count = attachments.iter().filter(|a| a.is_image()).count();
+	let index = attachments
+		.iter()
+		.filter(|a| a.is_image())
+		.position(|a| a.id == current)?;
+	let size = (ui.ctx().content_rect().size() - egui::vec2(32.0, 32.0)).max(egui::vec2(1.0, 1.0));
 	let mut close = false;
-	let modal = egui::Modal::new(egui::Id::unique("attachment-viewer"))
-		.backdrop_color(egui::Color32::from_black_alpha(235))
-		.frame(
-			egui::Frame::new()
-				.fill(colors.canvas)
-				.inner_margin(16)
-				.corner_radius(10),
-		)
+	// Modal input capture prevents clicks and keys reaching the conversation. No dialog frame.
+	let overlay = egui::Modal::new(egui::Id::unique("attachment-viewer"))
+		.backdrop_color(Color32::from_black_alpha(240))
+		.frame(egui::Frame::NONE)
 		.show(ui.ctx(), |ui| {
-			ui.set_width(size.x.max(240.0));
+			ui.set_min_size(size);
+			ui.set_max_size(size);
+			*ui.visuals_mut() = egui::Visuals::dark();
+			ui.visuals_mut().override_text_color = Some(Color32::WHITE);
 			ui.horizontal(|ui| {
+				if count > 1 {
+					ui.label(format!("{} / {count}", index + 1));
+				}
 				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-					close = ui.button("Close ×").clicked();
+					close = icons::button(ui, Icon::Close, 32.0, "Close image (Esc)").clicked();
 					download_button(ui, attachment, download, demo);
-					ui.add(egui::Label::new(&attachment.filename).truncate());
 				});
 			});
-			ui.separator();
-			let image_size = egui::vec2(ui.available_width(), (size.y - 150.0).max(120.0));
-			ui.vertical_centered(|ui| {
-				images.show_large(ui, &attachment.media, image_size, demo);
-			});
-			ui.add_space(8.0);
-			if let Some(description) = &attachment.description {
-				ui.add(egui::Label::new(description).truncate())
-					.on_hover_text(description);
+			let available = egui::vec2(size.x, (size.y - 80.0).max(1.0));
+			let (rect, _) = ui.allocate_exact_size(available, Sense::hover());
+			let image_rect = rect.shrink2(egui::vec2(if count > 1 { 44.0 } else { 0.0 }, 0.0));
+			ui.scope_builder(
+				egui::UiBuilder::new().max_rect(image_rect).layout(
+					egui::Layout::centered_and_justified(egui::Direction::TopDown),
+				),
+				|ui| {
+					images
+						.show_large(ui, &attachment.media, image_rect.size(), demo)
+						.on_hover_text(
+							attachment
+								.description
+								.as_deref()
+								.unwrap_or(&attachment.filename),
+						);
+				},
+			);
+			if count > 1 {
+				for (previous, center, label) in [
+					(
+						true,
+						rect.left_center() + egui::vec2(18.0, 0.0),
+						"Previous image (←)",
+					),
+					(
+						false,
+						rect.right_center() - egui::vec2(18.0, 0.0),
+						"Next image (→)",
+					),
+				] {
+					ui.scope_builder(
+						egui::UiBuilder::new()
+							.max_rect(Rect::from_center_size(center, egui::vec2(36.0, 44.0))),
+						|ui| {
+							if ui
+								.add_sized(
+									[36.0, 44.0],
+									egui::Button::new(if previous { "←" } else { "→" }),
+								)
+								.on_hover_text(label)
+								.clicked()
+							{
+								current =
+									gallery_step(attachments, current, previous).unwrap_or(current);
+							}
+						},
+					);
+				}
 			}
-			ui.small(format!(
-				"{} × {} · {} bytes",
-				attachment.media.width, attachment.media.height, attachment.size
-			));
 			download.show_status(ui);
 		});
-	!close && !modal.should_close()
+	(!close && !overlay.should_close()).then_some(current)
 }
 pub fn estimated_height(attachments: &[Attachment], width: f32) -> f32 {
 	attachments
@@ -474,6 +544,25 @@ mod tests {
 		file.filename = "synthetic-report.pdf".into();
 		file.content_type = Some("application/pdf".into());
 		message.attachments.push(file);
+		assert_eq!(
+			gallery_step(&message.attachments, Id(10), true),
+			Some(Id(12))
+		);
+		assert_eq!(
+			gallery_step(&message.attachments, Id(12), false),
+			Some(Id(10))
+		);
+		assert_eq!(
+			gallery_step(&message.attachments, Id(10), false),
+			Some(Id(11))
+		);
+		assert_eq!(gallery_step(&message.attachments, Id(20), false), None);
+		assert_eq!(gallery_step(&[], Id(10), false), None);
+		assert_eq!(
+			gallery_step(&message.attachments[..1], Id(10), true),
+			Some(Id(10))
+		);
+
 		for width in [420.0, 240.0] {
 			let ctx = egui::Context::default();
 			let mut images = Avatars::default();

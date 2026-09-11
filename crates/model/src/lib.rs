@@ -100,6 +100,16 @@ pub fn valid_avatar_hash(hash: &str) -> bool {
 	let hash = hash.strip_prefix("a_").unwrap_or(hash);
 	hash.len() == 32 && hash.bytes().all(|b| b.is_ascii_hexdigit())
 }
+#[derive(Clone)]
+pub struct InvitePreview {
+	pub guild: Id,
+	pub embed: Embed,
+}
+impl InvitePreview {
+	pub fn bytes(&self) -> usize {
+		size_of::<Self>() - size_of::<Embed>() + self.embed.bytes()
+	}
+}
 #[derive(Clone, PartialEq, Eq)]
 pub struct Guild {
 	pub emojis: Option<Vec<CustomEmoji>>,

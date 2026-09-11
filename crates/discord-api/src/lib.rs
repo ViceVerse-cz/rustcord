@@ -269,7 +269,7 @@ impl DiscordApi {
 		.map(|_| ())
 	}
 	// https://docs.discord.com/developers/resources/invite#get-invite
-	async fn invite(&self, code: &str) -> Result<model::Embed, Failure> {
+	async fn invite(&self, code: &str) -> Result<model::InvitePreview, Failure> {
 		if !client_core::invites::valid_code(code) {
 			return Err(Failure::Protocol);
 		}
@@ -283,8 +283,35 @@ impl DiscordApi {
 			.await?;
 		discord_protocol::invites::decode(&bytes).map_err(|_| Failure::Protocol)
 	}
+	// Unofficial user endpoint; observed in discord.py-self/http.py accept_invite (2026-09-11).
+	// No challenge solving or retry. An unreadable success body is an uncertain write.
+	async fn join_invite(&self, code: &str) -> Result<model::Id, Failure> {
+		if !client_core::invites::valid_code(code) {
+			return Err(Failure::Protocol);
+		}
+		let bytes = self
+			.request_limited(
+				Method::POST,
+				&format!("/invites/{code}"),
+				Some(serde_json::json!({})),
+				64 * 1024,
+			)
+			.await
+			.map_err(|f| {
+				f.protocol_at(
+					"Invite rejected · it may be expired, invalid, or require joining in Discord",
+				)
+			})?;
+		discord_protocol::invites::decode(&bytes)
+			.map(|p| p.guild)
+			.map_err(|_| Failure::Ambiguous)
+	}
 	pub async fn execute(&self, command: Command) -> Event {
 		match command {
+			Command::JoinInvite { code, request } => Event::JoinInvite {
+				request,
+				result: self.join_invite(&code).await,
+			},
 			Command::GuildFolders(settings) => Event::GuildFolders(match settings {
 				Some(settings) => self.save_guild_folders(settings).await,
 				None => self.guild_folders().await,

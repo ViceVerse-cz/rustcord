@@ -1,6 +1,6 @@
 //! Fixed-height native invite cards; only visible cards request bounded metadata.
 use crate::avatars::Avatars;
-use client_core::invites::{Cache, valid_code};
+use client_core::invites::valid_code;
 use model::Message;
 fn code(raw: &str) -> Option<String> {
 	let normalized;
@@ -73,69 +73,89 @@ fn codes(message: &Message) -> Vec<String> {
 	found
 }
 pub fn estimated_height(message: &Message) -> f32 {
-	codes(message).len() as f32 * 264.0
+	codes(message).len() as f32 * 284.0
 }
 pub fn show(
 	ui: &mut egui::Ui,
 	message: &Message,
-	cache: &Cache,
+	state: &client_core::State,
 	images: &mut Avatars,
-	opening: &mut Option<String>,
 	requests: &mut Vec<String>,
-	demo: bool,
+	join: &mut Option<String>,
 ) {
+	let demo = state.demo;
 	for code in codes(message) {
 		ui.push_id(("invite", &code), |ui| {
 			let colors = crate::design::palette(ui);
 			let width = ui.available_width().min(360.0);
 			ui.allocate_ui_with_layout(
-				egui::vec2(width, 260.0),
+				egui::vec2(width, 280.0),
 				egui::Layout::top_down(egui::Align::Min),
 				|ui| {
 					egui::Frame::new()
 						.fill(colors.raised)
-						.corner_radius(10)
-						.inner_margin(12)
+						.corner_radius(8)
+						.stroke(egui::Stroke::new(1.0, colors.border))
+						.inner_margin(0)
 						.show(ui, |ui| {
-							ui.set_width((width - 24.0).max(1.0));
-							ui.set_min_height(232.0);
-							let entry = cache
+							ui.set_width(width);
+
+							let entry = state
+								.invites
 								.get(&code)
 								.filter(|(at, _)| at.elapsed().as_secs() < 300);
 							let embed = entry
 								.and_then(|(_, value)| value.as_ref())
 								.and_then(|r| r.as_ref().ok());
+							let member = embed.is_some_and(|p| state.guild(p.guild).is_some());
+							let embed = embed.map(|p| &p.embed);
 							if !demo
 								&& entry.is_none() && requests.len() < 8
 								&& !requests.contains(&code)
 							{
 								requests.push(code.clone());
 							}
-							if let Some(banner) = embed.and_then(|e| e.image.as_ref()) {
-								images.show_embed(
-									ui,
-									banner,
-									egui::vec2(ui.available_width(), 64.0),
-									demo,
-								);
+							let banner_size = egui::vec2(ui.available_width(), 88.0);
+							let banner_rect =
+								if let Some(banner) = embed.and_then(|e| e.image.as_ref()) {
+									images.show_banner(ui, banner, banner_size, demo).rect
+								} else {
+									let (rect, _) =
+										ui.allocate_exact_size(banner_size, egui::Sense::hover());
+									ui.painter().rect_filled(
+										rect,
+										egui::CornerRadius {
+											nw: 8,
+											ne: 8,
+											sw: 0,
+											se: 0,
+										},
+										colors.accent.gamma_multiply(0.12),
+									);
+									rect
+								};
+							let icon_rect = egui::Rect::from_min_size(
+								banner_rect.left_bottom() + egui::vec2(12.0, -24.0),
+								egui::vec2(48.0, 48.0),
+							);
+							ui.painter()
+								.rect_filled(icon_rect.expand(4.0), 10, colors.raised);
+							if let Some(icon) = embed.and_then(|e| e.thumbnail.as_ref()) {
+								let mut icon_ui =
+									ui.new_child(egui::UiBuilder::new().max_rect(icon_rect));
+								images.show_embed(&mut icon_ui, icon, icon_rect.size(), demo);
 							} else {
-								let (rect, _) = ui.allocate_exact_size(
-									egui::vec2(ui.available_width(), 64.0),
-									egui::Sense::hover(),
-								);
-								ui.painter().rect_filled(
-									rect,
-									6,
-									colors.accent.gamma_multiply(0.35),
-								);
+								ui.painter().rect_filled(icon_rect, 8, colors.sidebar);
 							}
-							ui.add_space(6.0);
-							ui.horizontal(|ui| {
-								if let Some(icon) = embed.and_then(|e| e.thumbnail.as_ref()) {
-									images.show_embed(ui, icon, egui::vec2(44.0, 44.0), demo);
-								}
+							egui::Frame::new().inner_margin(12).show(ui, |ui| {
+								ui.set_width((width - 24.0).max(1.0));
+								ui.add_space(24.0);
 								ui.vertical(|ui| {
-									ui.small("DISCORD SERVER INVITE");
+									ui.label(
+										egui::RichText::new("SERVER INVITE")
+											.size(10.0)
+											.color(colors.muted),
+									);
 									ui.add(
 										egui::Label::new(
 											egui::RichText::new(
@@ -149,37 +169,66 @@ pub fn show(
 										.truncate(),
 									);
 								});
-							});
-							ui.add_space(6.0);
-							if let Some(embed) = embed {
-								ui.add(
-									egui::Label::new(
-										embed
-											.description
-											.as_deref()
-											.unwrap_or("Member counts unavailable"),
-									)
-									.truncate(),
-								);
-							} else {
-								ui.weak(if demo {
-									"Preview unavailable offline"
-								} else if entry.is_some_and(|(_, v)| matches!(v, Some(Err(_)))) {
-									"Invite expired or preview unavailable"
+								ui.add_space(6.0);
+								if let Some(embed) = embed {
+									ui.add(
+										egui::Label::new(
+											embed
+												.description
+												.as_deref()
+												.unwrap_or("Member counts unavailable"),
+										)
+										.truncate(),
+									);
 								} else {
-									"Loading server preview…"
+									ui.weak(if demo {
+										"Preview unavailable offline"
+									} else if entry.is_some_and(|(_, v)| matches!(v, Some(Err(_))))
+									{
+										"Invite expired or preview unavailable"
+									} else {
+										"Loading server preview…"
+									});
+								}
+								ui.add_space(12.0);
+								let current = state.invite_join.code == code;
+								let pending = current && state.invite_join.pending;
+								let accepted =
+									current && matches!(state.invite_join.result, Some(Ok(_)));
+								let label = if member {
+									"Already joined"
+								} else if pending {
+									"Joining…"
+								} else if accepted {
+									"Invite accepted"
+								} else {
+									"Join server"
+								};
+								ui.add_enabled_ui(state.can_join_invite(&code), |ui| {
+									if ui
+										.add_sized(
+											[ui.available_width(), 36.0],
+											egui::Button::new(
+												egui::RichText::new(label)
+													.strong()
+													.color(egui::Color32::WHITE),
+											)
+											.fill(colors.accent)
+											.corner_radius(6),
+										)
+										.clicked()
+									{
+										*join = Some(code.clone());
+									}
 								});
-							}
-							ui.add_space(12.0);
-							if ui
-								.add_sized(
-									[ui.available_width(), 32.0],
-									egui::Button::new("Open invite").fill(colors.positive),
-								)
-								.clicked()
-							{
-								*opening = Some(format!("https://discord.gg/{code}"));
-							}
+								if current && let Some(Err(f)) = state.invite_join.result {
+									ui.add(
+										egui::Label::new(egui::RichText::new(f.label()).small())
+											.truncate(),
+									)
+									.on_hover_text(f.label());
+								}
+							});
 						});
 				},
 			);

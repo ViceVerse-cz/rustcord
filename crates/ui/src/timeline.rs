@@ -17,6 +17,7 @@ pub struct TimelineView {
 	applied_hide_media_links: bool,
 	pub(super) gif_favorite: Option<model::Gif>,
 	pub(super) invite_requests: Vec<String>,
+	pub(super) invite_join: Option<String>,
 	pub(super) edit_started: bool,
 	pub(super) channel_reference: Option<Id>,
 	pub(super) reply_target: Option<Id>,
@@ -981,11 +982,10 @@ impl TimelineView {
 										crate::invites::show(
 											ui,
 											message,
-											&state.invites,
+											state,
 											avatars,
-											&mut self.opening,
 											&mut self.invite_requests,
-											state.demo,
+											&mut self.invite_join,
 										);
 										if let Some(gif) = crate::embeds::show(
 											ui,
@@ -1536,26 +1536,24 @@ impl TimelineView {
 			}
 		}
 		if let Some((message_id, attachment_id)) = self.viewing {
-			let attachment = state
-				.timeline
-				.get(message_id)
-				.filter(|m| {
-					!crate::embeds::has_media_spoilers(m)
-						|| self
-							.revealed
-							.get(&m.id)
-							.is_some_and(|reveal| reveal.media && reveal.matches(m))
-				})
-				.and_then(|m| {
-					m.attachments
-						.iter()
-						.find(|a| a.id == attachment_id && a.is_image())
-				});
-			if attachment.is_none_or(|a| {
-				!crate::attachments::viewer(ui, a, avatars, &mut self.download, state.demo)
-			}) {
-				self.viewing = None;
-			}
+			let message = state.timeline.get(message_id).filter(|m| {
+				!crate::embeds::has_media_spoilers(m)
+					|| self
+						.revealed
+						.get(&m.id)
+						.is_some_and(|reveal| reveal.media && reveal.matches(m))
+			});
+			self.viewing = message.and_then(|m| {
+				crate::attachments::viewer(
+					ui,
+					&m.attachments,
+					attachment_id,
+					avatars,
+					&mut self.download,
+					state.demo,
+				)
+				.map(|id| (message_id, id))
+			});
 		}
 	}
 }

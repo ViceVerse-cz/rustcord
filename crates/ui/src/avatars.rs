@@ -413,6 +413,16 @@ impl Avatars {
 		}
 	}
 	fn paint(&mut self, ui: &mut egui::Ui, key: &str, rect: egui::Rect, radius: u8) -> bool {
+		self.paint_fitted(ui, key, rect, radius, false)
+	}
+	fn paint_fitted(
+		&mut self,
+		ui: &mut egui::Ui,
+		key: &str,
+		rect: egui::Rect,
+		radius: u8,
+		cover: bool,
+	) -> bool {
 		self.advance_animation(ui.ctx(), key);
 		let Some(entry) = self.textures.get_mut(key) else {
 			return false;
@@ -421,11 +431,25 @@ impl Avatars {
 		entry.0 = self.clock;
 		// paint_at stretches to its rectangle; fit actual pixels inside the stable layout slot.
 		let source = entry.1.size_vec2();
-		let scale = (rect.width() / source.x).min(rect.height() / source.y);
-		let fitted = egui::Rect::from_center_size(rect.center(), source * scale);
-		egui::Image::new(&entry.1)
-			.corner_radius(radius)
-			.paint_at(ui, fitted);
+		if cover {
+			let scale = (rect.width() / source.x).max(rect.height() / source.y);
+			let uv_size = rect.size() / (source * scale);
+			egui::Image::new(&entry.1)
+				.uv(egui::Rect::from_center_size(egui::pos2(0.5, 0.5), uv_size))
+				.corner_radius(egui::CornerRadius {
+					nw: radius,
+					ne: radius,
+					sw: 0,
+					se: 0,
+				})
+				.paint_at(ui, rect);
+		} else {
+			let scale = (rect.width() / source.x).min(rect.height() / source.y);
+			let fitted = egui::Rect::from_center_size(rect.center(), source * scale);
+			egui::Image::new(&entry.1)
+				.corner_radius(radius)
+				.paint_at(ui, fitted);
+		}
 		true
 	}
 	pub fn show_guild(
@@ -525,6 +549,7 @@ impl Avatars {
 			size,
 			demo,
 			false,
+			false,
 		)
 	}
 
@@ -535,7 +560,7 @@ impl Avatars {
 		max_size: egui::Vec2,
 		demo: bool,
 	) -> egui::Response {
-		self.show_media(ui, media, max_size, demo, false)
+		self.show_media(ui, media, max_size, demo, false, false)
 	}
 	pub fn show_large(
 		&mut self,
@@ -544,8 +569,18 @@ impl Avatars {
 		max_size: egui::Vec2,
 		demo: bool,
 	) -> egui::Response {
-		self.show_media(ui, media, max_size, demo, true)
+		self.show_media(ui, media, max_size, demo, true, false)
 	}
+	pub fn show_banner(
+		&mut self,
+		ui: &mut egui::Ui,
+		media: &model::EmbedMedia,
+		size: egui::Vec2,
+		demo: bool,
+	) -> egui::Response {
+		self.show_media(ui, media, size, demo, false, true)
+	}
+	#[allow(clippy::too_many_arguments)]
 	fn show_media(
 		&mut self,
 		ui: &mut egui::Ui,
@@ -553,6 +588,7 @@ impl Avatars {
 		max_size: egui::Vec2,
 		demo: bool,
 		large: bool,
+		cover: bool,
 	) -> egui::Response {
 		// Reserve geometry from bounded metadata so image arrivals do not move the reading anchor.
 		let max_size = egui::vec2(
@@ -573,7 +609,11 @@ impl Avatars {
 		let scale = (max_size.x / original.x)
 			.min(max_size.y / original.y)
 			.min(if large { f32::INFINITY } else { 1.0 });
-		let size = (original * scale).max(egui::vec2(1.0, 1.0));
+		let size = if cover {
+			max_size
+		} else {
+			(original * scale).max(egui::vec2(1.0, 1.0))
+		};
 		let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
 		if ui.is_rect_visible(rect) {
 			let original_gif = media.url.as_deref().filter(|url| {
@@ -631,9 +671,9 @@ impl Avatars {
 				self.attempts.insert(key.clone(), (Instant::now(), false));
 				self.accept(ui.ctx(), key.clone(), Some(image));
 			}
-			let painted = key
-				.as_deref()
-				.is_some_and(|key| self.paint(ui, key, rect, 5));
+			let painted = key.as_deref().is_some_and(|key| {
+				self.paint_fitted(ui, key, rect, if cover { 8 } else { 5 }, cover)
+			});
 			if !painted {
 				let colors = crate::design::palette(ui);
 				ui.painter().rect_filled(rect, 5, colors.canvas);
