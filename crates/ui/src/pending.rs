@@ -12,6 +12,7 @@ pub struct Upload {
 pub fn show(
 	ui: &mut egui::Ui,
 	pending: &Pending,
+	compact: bool,
 	state: &State,
 	avatars: &mut crate::avatars::Avatars,
 	upload: Option<&Upload>,
@@ -21,32 +22,36 @@ pub fn show(
 	let colors = crate::design::palette(ui);
 	let upload = upload.filter(|upload| upload.nonce == pending.nonce);
 	egui::Frame::NONE
-		.inner_margin(egui::Margin { left: 16, right: 16, top: 14, bottom: 6 })
+		.inner_margin(egui::Margin { left: 16, right: 16, top: if compact { 1 } else { 14 }, bottom: 1 })
 		.show(ui, |ui| {
 			ui.spacing_mut().item_spacing = egui::vec2(16.0, 4.0);
 			ui.horizontal_top(|ui| {
-				ui.scope(|ui| {
+				if compact {
+					ui.allocate_exact_size(egui::vec2(40.0, 22.0), egui::Sense::hover());
+				} else { ui.scope(|ui| {
 					ui.set_opacity(0.55);
 					if let Some(user) = &state.user {
 						avatars.show(ui, user, 40.0, state.demo);
 					} else {
 						ui.allocate_exact_size(egui::vec2(40.0, 40.0), egui::Sense::hover());
 					}
-				});
+				}); }
 				ui.vertical(|ui| {
 					ui.set_width(ui.available_width());
+					if !compact || matches!(pending.delivery, Delivery::Rejected | Delivery::Ambiguous) {
 					ui.horizontal_wrapped(|ui| {
 						ui.spacing_mut().item_spacing.x = 8.0;
-						ui.label(crate::design::medium(ui, state.user.as_ref().map_or("You", |u| &u.name), 15.5).color(colors.muted));
+						if !compact { ui.label(crate::design::medium(ui, state.user.as_ref().map_or("You", |u| &u.name), 15.5).color(colors.muted)); }
 						ui.label(RichText::new(match pending.delivery {
 							Delivery::Sending => "Sending…",
 							Delivery::Ambiguous => "Delivery unknown",
 							Delivery::Rejected => "Not sent",
 							Delivery::Confirmed => "Sent",
 						}).size(12.0).color(if pending.delivery == Delivery::Rejected { colors.danger } else { colors.muted }));
-					});
+					}); }
 					if !pending.content.is_empty() {
-						ui.add(egui::Label::new(RichText::new(&pending.content).color(colors.muted)).wrap());
+						ui.add(egui::Label::new(RichText::new(&pending.content).color(colors.muted)).wrap()).on_hover_text(match pending.delivery {
+ Delivery::Sending => "Sending…", Delivery::Ambiguous => "Delivery unknown", Delivery::Rejected => "Not sent", Delivery::Confirmed => "Sent", });
 					}
 					if let Some(filename) = &pending.attachment {
 						ui.scope(|ui| {
@@ -139,6 +144,7 @@ mod tests {
 						show(
 							ui,
 							&pending,
+							true,
 							&state,
 							&mut crate::avatars::Avatars::default(),
 							Some(&upload),

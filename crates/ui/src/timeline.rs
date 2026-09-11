@@ -1164,7 +1164,23 @@ impl TimelineView {
 			}
 			let used: f32 = self.rows[..end].iter().map(|(_, height)| *height).sum();
 			ui.add_space((total - used).max(0.0));
-			for (pending, height) in &pending_rows {
+			for (index, (pending, height)) in pending_rows.iter().enumerate() {
+				let compact = index > 0
+					|| state
+						.timeline
+						.row_ids()
+						.last()
+						.and_then(|id| state.timeline.get(id))
+						.is_some_and(|previous| {
+							let now = time::OffsetDateTime::now_utc();
+							state
+								.user
+								.as_ref()
+								.is_some_and(|user| user.id == previous.author.id)
+								&& !previous.unsupported && !previous.extra_content.any()
+								&& timestamp(previous.id).date() == now.date()
+								&& (now - timestamp(previous.id)).whole_seconds() < 300
+						});
 				let top = ui.cursor().top() - content_top;
 				if top + height < viewport.min.y - 100.0 || top > viewport.max.y + 100.0 {
 					ui.add_space(*height);
@@ -1174,6 +1190,7 @@ impl TimelineView {
 					crate::pending::show(
 						ui,
 						pending,
+						compact,
 						state,
 						avatars,
 						upload,
@@ -1183,6 +1200,7 @@ impl TimelineView {
 				});
 				let measured = response.response.rect.height();
 				if (measured - height).abs() > 1.0 {
+					ui.ctx().request_discard("Pending message height settled");
 					ui.ctx().request_repaint();
 				}
 				self.pending_heights.insert(pending.nonce.clone(), measured);
@@ -1207,8 +1225,9 @@ impl TimelineView {
 			.get(anchor)
 			.map(|(id, _)| (*id, output.state.offset.y - anchor_top));
 		state.reply = selected_reply;
-		let at_bottom =
-			output.state.offset.y + output.inner_rect.height() >= output.content_size.y - 3.0;
+		let distance_from_bottom =
+			(output.content_size.y - output.state.offset.y - output.inner_rect.height()).max(0.0);
+		let at_bottom = distance_from_bottom <= 3.0;
 		if at_bottom
 			&& !self.unread_browsing
 			&& ui.input(|input| {
@@ -1259,6 +1278,7 @@ impl TimelineView {
 			self.reflow_frames = self.reflow_frames.saturating_add(1);
 			self.consecutive_reflows = self.consecutive_reflows.saturating_add(1);
 			self.revision = u64::MAX;
+			ui.ctx().request_discard("Timeline row heights settled");
 			ui.ctx().request_repaint();
 		}
 		if !reflow {
@@ -1337,7 +1357,10 @@ impl TimelineView {
 		let browsing_history = state.history_targeted
 			|| state.history_before.is_some()
 			|| state.history_after.is_some();
-		if !self.following || browsing_history {
+		if (!self.following && distance_from_bottom > 120.0)
+			|| self.target_browsing
+			|| browsing_history
+		{
 			let unread = state
 				.selected
 				.is_some_and(|channel| state.unread(channel) == Some(true));
