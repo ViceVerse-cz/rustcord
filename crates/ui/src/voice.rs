@@ -132,10 +132,14 @@ impl MessagingUi {
 		}
 		let colors = design::palette(ui);
 		let (user, name) = resolve_member(state, entry);
+		let speaking = self.is_speaking(state, entry.channel, &entry.participant);
 		ui.push_id(
 			("voice-participant", entry.channel, entry.participant.user),
 			|ui| {
-				ui.horizontal(|ui| {
+				// Reserve a shape slot so the speaking highlight paints behind the row
+				// once its final rect is known.
+				let highlight = ui.painter().add(egui::Shape::Noop);
+				let row = ui.horizontal(|ui| {
 					ui.set_min_height(36.0);
 					ui.spacing_mut().item_spacing.x = 6.0;
 					let avatar = if let Some(user) = user {
@@ -143,8 +147,8 @@ impl MessagingUi {
 					} else {
 						design::avatar(ui, name, 28.0)
 					};
-					if self.is_speaking(state, entry.channel, &entry.participant) {
-						speaking_avatar(ui, &avatar, name);
+					if speaking {
+						speaking_label(&avatar, name);
 					}
 					if avatar.clicked()
 						&& let Some(user) = user
@@ -195,6 +199,16 @@ impl MessagingUi {
 						}
 					});
 				});
+				if speaking {
+					ui.painter().set(
+						highlight,
+						egui::Shape::rect_filled(
+							row.response.rect.shrink2(egui::vec2(0.0, 1.0)),
+							8,
+							colors.selected,
+						),
+					);
+				}
 			},
 		);
 	}
@@ -1199,27 +1213,20 @@ const STAGE_MUTED: egui::Color32 = egui::Color32::from_rgb(0x9a, 0x9b, 0xa1);
 const STAGE_MARGIN: f32 = 16.0;
 const TILE_GAP: f32 = 8.0;
 
-/// Ring plus sound glyph keeps activity legible without relying on color alone.
+/// Green ring around the avatar, like Discord's speaking indicator; the hover text and
+/// accessibility label carry the state for anyone who cannot rely on color.
 fn speaking_avatar(ui: &egui::Ui, avatar: &egui::Response, name: &str) {
-	let colors = design::palette(ui);
 	ui.painter().circle_stroke(
 		avatar.rect.center(),
 		avatar.rect.width() * 0.5 + 2.0,
-		egui::Stroke::new(2.0, colors.positive),
+		egui::Stroke::new(2.0, design::palette(ui).positive),
 	);
-	let size = (avatar.rect.width() * 0.3).clamp(10.0, 18.0);
-	let badge = egui::Rect::from_center_size(
-		avatar.rect.right_bottom() - egui::Vec2::splat(size * 0.4),
-		egui::Vec2::splat(size),
-	);
-	ui.painter()
-		.circle_filled(badge.center(), size * 0.65, colors.raised);
-	crate::icons::paint(
-		ui.painter(),
-		crate::icons::Icon::Speaker,
-		badge,
-		colors.positive,
-	);
+	speaking_label(avatar, name);
+}
+
+/// Exposes the speaking state without drawing anything, for call sites that highlight
+/// the surrounding box instead of the avatar itself.
+fn speaking_label(avatar: &egui::Response, name: &str) {
 	let label = format!("{name} · Speaking");
 	avatar.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Image, true, &label));
 	avatar.clone().on_hover_text(label);

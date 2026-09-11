@@ -252,6 +252,18 @@ impl Voice {
 	) -> Option<Command> {
 		self.reap();
 		ui.voice_speaking.clear();
+		// Fixture-only: `--demo --demo-voice --demo-speaking` lights up the unmuted
+		// participants so the speaking indicator can be inspected without audio.
+		if state.demo && std::env::args().any(|arg| arg == "--demo-speaking") {
+			ui.voice_speaking.extend(
+				state
+					.voice
+					.roster
+					.iter()
+					.filter(|entry| !entry.participant.muted && !entry.participant.deafened)
+					.map(|entry| entry.participant.user),
+			);
+		}
 		if ui.voice_refresh_devices {
 			ui.voice_refresh_devices = false;
 			if !state.demo && self.device_scan.is_none() {
