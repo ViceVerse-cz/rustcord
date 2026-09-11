@@ -2127,3 +2127,9 @@ cannot find the file specified. (os error 2)`. Native screenshots could not be c
 Headless egui tests cover dark/light wrapping and scroll behavior; they are not native
 screenshots or proof of Discord compatibility. No runtime speed or memory improvement
 is claimed. No account, message, microphone or call actions were performed.
+
+
+The later owner-requested integration with main `d8cb031` preserves #68's shared
+pending/upload renderer and removes this branch's duplicate implementation. The table
+above remains historical evidence for the pre-integration revision; no size or native
+performance delta is attributed to the combined implementation.

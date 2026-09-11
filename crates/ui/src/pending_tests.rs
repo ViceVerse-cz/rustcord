@@ -1,5 +1,6 @@
 use super::*;
 use client_core::{Command, Envelope, Event, auth::Failure};
+use model::Delivery;
 
 fn send(state: &mut State, text: &str) -> String {
 	state.drafts.insert(state.selected.unwrap(), text.into());
@@ -46,7 +47,17 @@ fn render(
 				events: std::mem::take(&mut events),
 				..Default::default()
 			},
-			|ui| view.show(ui, state, &mut None, &mut None, &mut avatars, &mut None),
+			|ui| {
+				view.show(
+					ui,
+					state,
+					&mut None,
+					&mut None,
+					&mut avatars,
+					&mut None,
+					None,
+				)
+			},
 		);
 		painted.clear();
 		for shape in &output.shapes {
@@ -143,7 +154,7 @@ fn pending_failures_keep_restore_action_and_other_channels_stay_hidden() {
 		assert!(!painted.iter().any(|(s, _, _)| s == "Other channel body"));
 		let position = painted
 			.iter()
-			.find(|(s, _, _)| s == "Restore to draft")
+			.find(|(s, _, _)| s == "Restore to composer")
 			.unwrap()
 			.1
 			.center();
@@ -218,17 +229,7 @@ fn restore_processing_preserves_existing_drafts_and_ignores_late_confirmations()
 			}
 		}
 		let mut messaging = crate::MessagingUi::default();
-		messaging.timeline.restore_pending = Some(nonce);
-		let mut commands = Vec::new();
-		ctx.run_ui(egui::RawInput::default(), |ui| {
-			messaging.composer(ui, &mut state, channel, &ctx, &mut commands);
-		})
-		.drop_without_applying_deltas();
-		assert!(
-			commands.is_empty(),
-			"restore must never resend an uncertain message"
-		);
-		assert!(messaging.timeline.restore_pending.is_none());
+		messaging.restore_pending(&mut state, channel, &nonce);
 		match scenario {
 			0 => {
 				assert_eq!(state.drafts[&channel], "Text to recover");

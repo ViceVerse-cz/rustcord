@@ -280,6 +280,13 @@ impl Uploads {
 	pub fn has_unsent(&self) -> bool {
 		self.selected.is_some() || self.busy()
 	}
+	pub fn transfer_progress(&self) -> (Option<(u64, u64)>, bool) {
+		match self.last {
+			Some(Status::Uploading { sent, total }) => (Some((sent, total)), false),
+			Some(Status::Sending | Status::Finished) => (None, true),
+			_ => (None, false),
+		}
+	}
 	pub fn status(&self) -> Option<String> {
 		if let Some(choosing) = &self.choosing {
 			return Some(
@@ -355,6 +362,20 @@ impl Drop for Uploads {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[test]
+	fn progress_distinguishes_streamed_bytes_from_message_confirmation() {
+		let mut uploads = Uploads::default();
+		assert_eq!(uploads.transfer_progress(), (None, false));
+		uploads.last = Some(Status::Uploading {
+			sent: 42,
+			total: 100,
+		});
+		assert_eq!(uploads.transfer_progress(), (Some((42, 100)), false));
+		uploads.last = Some(Status::Sending);
+		assert_eq!(uploads.transfer_progress(), (None, true));
+		uploads.last = Some(Status::Failed("rejected"));
+		assert_eq!(uploads.transfer_progress(), (None, false));
+	}
 	#[tokio::test]
 	async fn file_drop_is_single_scoped_selection_and_never_reads_handle_bytes() {
 		struct SyntheticDrop(std::path::PathBuf);

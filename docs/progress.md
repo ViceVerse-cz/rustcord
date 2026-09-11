@@ -2234,3 +2234,27 @@ helper cannot connect its native pipe (OS error 2). No before/after screenshot, 
 interaction or process-performance claim is made. Other OSes and live Discord sending
 remain untested; the tests use synthetic offline data. PR remains draft for these evidence
 and pre-existing check blockers. No Discord account actions, calls or microphone use.
+
+
+### Owner-requested main integration
+
+The owner explicitly requested pushing this change to main after the draft handoff.
+Main had advanced to `d8cb031` (#68) with overlapping gray pending rows, grouping,
+attachment previews and upload progress. Conflict resolution retains that renderer and
+its restore/upload lifecycle, plus this task's targeted-history return, clamped bottom
+scroll offset, selectable/red failed text, and regression coverage. No duplicate pending
+renderer or queue remains. The upstream culling test now checks that distant/middle rows
+remain unmeasured instead of assuming a count based on the old ungrouped row height.
+
+Integrated `cargo test --locked -p ui pending`: all 9 tests pass. The all-feature desktop
+`cargo check` passes. `cargo xtask check` passes formatting but remains blocked by the
+existing `permissions.rs:439` lint; UI-only strict Clippy also finds the two 8-argument
+render functions introduced by #68. The whole UI suite additionally aborts in the upstream
+`underestimated_leading_row_does_not_hide_history_or_inflate_scroll_extent` test: its
+visible-row assertion panics, then an unapplied texture-delta drop panics while unwinding.
+This reproduces with the exact `origin/main` timeline source, independently of this task's
+timeline edits. It is not a passing suite; the existing avatar/category failures remain.
+Native evidence is still unavailable. The earlier package measurements describe the
+pre-integration implementation, not the combined #68 tree.
+
+Both integrated release builds pass: text (cargo build --locked --release -p serein --no-default-features, 1m32s) and voice (same command plus --features voice, 1m45s). No live launch was performed. The owner-requested main merge retains the check limitations above.
