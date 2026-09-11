@@ -113,9 +113,10 @@ pub struct MessagingUi {
 	pub attachment: Option<(String, u64)>,
 	pub attachment_files: Vec<(String, u64)>,
 	pub remove_attachment_index: Option<usize>,
-	/// Downscaled pixels of the selected image attachment, produced off the render thread.
-	pub attachment_preview: Option<std::sync::Arc<egui::ColorImage>>,
-	attachment_texture: Option<(usize, egui::TextureHandle)>,
+	/// Downscaled pixels per selected file (`None` for non-images), produced off the render thread.
+	pub attachment_previews: Vec<Option<std::sync::Arc<egui::ColorImage>>>,
+	/// GPU copies of `attachment_previews`, keyed by the pixel buffer they were uploaded from.
+	attachment_textures: Vec<Option<(usize, egui::TextureHandle)>>,
 	pub attach_requested: bool,
 	pub attachment_paste_requested: Option<AttachmentPaste>,
 	pub pasted_text: Option<(Id, egui::Id, String)>,
@@ -179,26 +180,78 @@ impl MessagingUi {
 	}
 	/// Fixture-only entry point: opens the emoji popout as if the composer button was clicked.
 	/// Fixture-only entry point: stage a synthetic attachment as if it had been selected.
+	/// Repeated calls build up a batch, like choosing several files.
 	pub fn preview_attachment(
 		&mut self,
 		filename: &str,
 		bytes: u64,
 		preview: Option<egui::ColorImage>,
 	) {
-		self.attachment = Some((filename.to_owned(), bytes));
-		self.attachment_preview = preview.map(std::sync::Arc::new);
+		if self.attachment.is_none() {
+			self.attachment = Some((filename.to_owned(), bytes));
+		}
+		self.attachment_files.push((filename.to_owned(), bytes));
+		self.attachment_previews
+			.resize(self.attachment_files.len() - 1, None);
+		self.attachment_previews
+			.push(preview.map(std::sync::Arc::new));
 	}
-	fn stage_pending_upload(&mut self, command: &Command) {
+	/// Every selected file; older callers and tests may stage only the first one.
+	fn selected_files(&self) -> Vec<(String, u64)> {
+		if self.attachment_files.is_empty() {
+			self.attachment.iter().cloned().collect()
+		} else {
+			self.attachment_files.clone()
+		}
+	}
+	/// Textures for `attachment_previews`, uploaded once per pixel buffer and reused per frame.
+	fn attachment_textures(&mut self, ctx: &egui::Context) -> Vec<Option<egui::TextureHandle>> {
+		let count = self.selected_files().len();
+		self.attachment_textures.resize(count, None);
+		(0..count)
+			.map(|index| {
+				let image = self.attachment_previews.get(index).cloned().flatten();
+				let Some(image) = image else {
+					self.attachment_textures[index] = None;
+					return None;
+				};
+				let key = std::sync::Arc::as_ptr(&image) as usize;
+				if self.attachment_textures[index]
+					.as_ref()
+					.is_none_or(|(k, _)| *k != key)
+				{
+					let handle = ctx.load_texture(
+						format!("attachment-preview-{index}"),
+						egui::ImageData::Color(image),
+						egui::TextureOptions::LINEAR,
+					);
+					self.attachment_textures[index] = Some((key, handle));
+				}
+				self.attachment_textures[index]
+					.as_ref()
+					.map(|(_, handle)| handle.clone())
+			})
+			.collect()
+	}
+	fn stage_pending_upload(&mut self, ctx: &egui::Context, command: &Command) {
+		let files = self.selected_files();
 		if let Command::Send { nonce, .. } = command
-			&& let Some((_, bytes)) = self.attachment.take()
+			&& !files.is_empty()
 		{
+			let textures = self.attachment_textures(ctx);
 			self.pending_upload = Some(pending::Upload {
 				nonce: nonce.clone(),
-				bytes,
-				preview: self.attachment_texture.take().map(|(_, texture)| texture),
+				files: files
+					.into_iter()
+					.zip(textures)
+					.map(|((_, bytes), preview)| pending::UploadFile { bytes, preview })
+					.collect(),
 				progress: None,
 			});
-			self.attachment_preview = None;
+			self.attachment = None;
+			self.attachment_files.clear();
+			self.attachment_previews.clear();
+			self.attachment_textures.clear();
 			self.upload_busy = true;
 		}
 	}
@@ -213,22 +266,13 @@ impl MessagingUi {
 		state
 			.drafts
 			.insert(channel, "Here’s the attachment — sending it now.".into());
-		if let Some(image) = &self.attachment_preview {
-			self.attachment_texture = Some((
-				std::sync::Arc::as_ptr(image) as usize,
-				ctx.load_texture(
-					"synthetic-pending",
-					egui::ImageData::Color(image.clone()),
-					egui::TextureOptions::LINEAR,
-				),
-			));
-		}
-		if let Some(command) = state
-			.prepare_send_with_attachment(self.attachment.as_ref().map(|(name, _)| name.as_str()))
-		{
-			self.stage_pending_upload(&command);
+		let files = self.selected_files();
+		let names: Vec<&str> = files.iter().map(|(name, _)| name.as_str()).collect();
+		if let Some(command) = state.prepare_send_with_attachments(&names) {
+			self.stage_pending_upload(ctx, &command);
 			if let Some(upload) = &mut self.pending_upload {
-				upload.progress = Some((upload.bytes * 42 / 100, upload.bytes));
+				let bytes = upload.bytes();
+				upload.progress = Some((bytes * 42 / 100, bytes));
 			}
 		}
 	}
@@ -236,7 +280,7 @@ impl MessagingUi {
 	pub fn update_upload_progress(&mut self, progress: Option<(u64, u64)>, sending: bool) {
 		if let Some(upload) = &mut self.pending_upload {
 			upload.progress = if sending {
-				Some((upload.bytes, upload.bytes))
+				Some((upload.bytes(), upload.bytes()))
 			} else {
 				progress
 			};
@@ -1154,7 +1198,7 @@ impl MessagingUi {
 					"Draft budget full. Clear an existing draft before restoring pending text";
 			} else if state.drafts.get(&channel).is_none_or(String::is_empty) {
 				let pending = state.pending.remove(index);
-				if pending.attachment.is_some() {
+				if !pending.attachments.is_empty() {
 					state.status = "Text restored; reselect the attachment before sending again";
 				}
 				state.drafts.insert(channel, pending.content);
@@ -1570,8 +1614,8 @@ impl MessagingUi {
                     egui::pos2(ui.max_rect().left() - 10.0, ui.max_rect().top() - 6.0),
                     egui::pos2(ui.max_rect().right() + 10.0, ui.max_rect().top()),
                 );
-                if !editing_here && let Some((filename, bytes)) = self.attachment.clone() {
-                    self.attachment_tray(ui, state, &filename, bytes);
+                if !editing_here && self.attachment.is_some() {
+                    self.attachment_tray(ui, state);
                 }
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
@@ -1801,10 +1845,10 @@ impl MessagingUi {
                                     state.status = "Edit kept. Wait for your current message and connection, and enter nonempty text.";
                                 }
                             } else if !self.upload_busy && !(state.demo && self.attachment.is_some())
-                                && let Some(command) = state.prepare_send_with_attachment(self.attachment.as_ref().map(|(name, _)| name.as_str())) {
+                                && let Some(command) = state.prepare_send_with_attachments(&self.selected_files().iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>()) {
                                 // Consume the selection in this UI pass, before desktop dispatch.
                                 // A second render or Send gesture must not enqueue it again.
-                                self.stage_pending_upload(&command);
+                                self.stage_pending_upload(ctx, &command);
                                 self.timeline.follow_latest();
                                 commands.push(command);
                             }
@@ -1836,37 +1880,12 @@ impl MessagingUi {
 			self.edit_sent = false;
 		}
 	}
-	/// Selected-file card above the composer input, in the style of Discord's upload tray.
-	fn attachment_tray(&mut self, ui: &mut egui::Ui, state: &State, filename: &str, bytes: u64) {
+	/// Selected-file cards above the composer input, in the style of Discord's upload tray.
+	fn attachment_tray(&mut self, ui: &mut egui::Ui, state: &State) {
 		let colors = design::palette(ui);
-		let texture = match &self.attachment_preview {
-			Some(image) => {
-				let key = std::sync::Arc::as_ptr(image) as usize;
-				if self
-					.attachment_texture
-					.as_ref()
-					.is_none_or(|(k, _)| *k != key)
-				{
-					let handle = ui.ctx().load_texture(
-						"attachment-preview",
-						egui::ImageData::Color(image.clone()),
-						egui::TextureOptions::LINEAR,
-					);
-					self.attachment_texture = Some((key, handle));
-				}
-				self.attachment_texture.as_ref().map(|(_, handle)| handle)
-			}
-			None => {
-				self.attachment_texture = None;
-				None
-			}
-		};
+		let textures = self.attachment_textures(ui.ctx());
 		ui.add_space(4.0);
-		let files = if self.attachment_files.is_empty() {
-			vec![(filename.to_owned(), bytes)]
-		} else {
-			self.attachment_files.clone()
-		};
+		let files = self.selected_files();
 		egui::ScrollArea::horizontal()
 			.id_salt("pending-attachments")
 			.show(ui, |ui| {
@@ -1878,7 +1897,7 @@ impl MessagingUi {
 								ui,
 								filename,
 								*bytes,
-								if index == 0 { texture } else { None },
+								textures.get(index).and_then(Option::as_ref),
 								!self.upload_busy,
 							) {
 								self.remove_attachment_index = Some(index);
@@ -4330,7 +4349,11 @@ mod composer_tests {
 		);
 		view.preview_sending(&ctx, &mut state);
 		let nonce = state.pending.last().unwrap().nonce.clone();
-		assert!(view.pending_upload.as_ref().unwrap().preview.is_some());
+		assert!(
+			view.pending_upload.as_ref().unwrap().files[0]
+				.preview
+				.is_some()
+		);
 		assert!(view.attachment.is_none());
 		view.update_upload_progress(None, true);
 		assert_eq!(
@@ -4436,10 +4459,7 @@ mod composer_tests {
 				assert!(
 					matches!(&commands[0], Command::Send { content, .. } if content.is_empty())
 				);
-				assert_eq!(
-					state.pending[0].attachment.as_deref(),
-					Some("synthetic.txt")
-				);
+				assert_eq!(state.pending[0].attachments, ["synthetic.txt"]);
 				assert!(messaging.attachment.is_none());
 				assert!(messaging.upload_busy);
 				let mut release = edit_key(egui::Key::Enter);

@@ -22,6 +22,13 @@ struct Choosing {
 	result: mpsc::Receiver<Result<Option<Vec<Selected>>, &'static str>>,
 	cancelled: Arc<AtomicBool>,
 }
+/// One chosen file with its composer thumbnail; `key` survives removals while a thumbnail
+/// is still decoding for it.
+struct Chosen {
+	key: u64,
+	source: Source,
+	preview: Option<Arc<egui::ColorImage>>,
+}
 /// Longest edge of the composer thumbnail; the full decode stays bounded by `image::Limits`.
 const PREVIEW_EDGE: u32 = 320;
 const PREVIEW_ALLOC: u64 = 64 * 1024 * 1024;
@@ -71,9 +78,10 @@ struct Uploading {
 #[derive(Default)]
 pub struct Uploads {
 	scope: Option<(u64, Id)>,
-	selected: Vec<Source>,
-	preview: Option<Arc<egui::ColorImage>>,
-	previewing: Option<mpsc::Receiver<Option<egui::ColorImage>>>,
+	selected: Vec<Chosen>,
+	next_key: u64,
+	/// Thumbnails still decoding for pasted files, by `Chosen::key`; at most `MAX_FILES`.
+	previewing: Vec<(u64, mpsc::Receiver<Option<egui::ColorImage>>)>,
 	choosing: Option<Choosing>,
 	uploading: Option<Uploading>,
 	last: Option<Status>,
@@ -93,21 +101,23 @@ impl Uploads {
 		self.admit(&source)?;
 		self.scope = Some((generation, channel));
 		self.last = None;
-		let (send, receive) = mpsc::sync_channel(1);
-		let context = context.clone();
-		let copy = source.first().cloned();
-		if self.selected.is_empty() {
-			runtime.spawn(async move {
-				let thumbnail = match copy {
-					Some(source) => preview(&source).await,
-					None => None,
-				};
-				let _ = send.send(thumbnail);
-				context.request_repaint();
-			});
-			self.previewing = Some(receive);
+		for source in source {
+			let key = self.push(source, None);
+			if previewable(self.selected.last().map_or("", |c| c.source.filename())) {
+				let (send, receive) = mpsc::sync_channel(1);
+				let context = context.clone();
+				let copy = self.selected.last().map(|c| c.source.clone());
+				runtime.spawn(async move {
+					let thumbnail = match copy {
+						Some(source) => preview(&source).await,
+						None => None,
+					};
+					let _ = send.send(thumbnail);
+					context.request_repaint();
+				});
+				self.previewing.push((key, receive));
+			}
 		}
-		self.selected.extend(source);
 		Ok(())
 	}
 	pub fn start_choose(
@@ -189,11 +199,7 @@ impl Uploads {
 					if total > discord_api::upload::MAX_TOTAL_BYTES {
 						return Err("Attachments must total at most 20 MB");
 					}
-					let thumbnail = if selected.is_empty() {
-						preview(&source).await
-					} else {
-						None
-					};
+					let thumbnail = preview(&source).await;
 					selected.push((source, thumbnail));
 				}
 				Ok(Some(selected))
@@ -238,15 +244,13 @@ impl Uploads {
 				} else {
 					match result {
 						Ok(Some(selected)) => {
-							let (sources, thumbnails): (Vec<_>, Vec<_>) =
-								selected.into_iter().unzip();
+							let sources: Vec<_> =
+								selected.iter().map(|(source, _)| source.clone()).collect();
 							match self.admit(&sources) {
 								Ok(()) => {
-									if self.selected.is_empty() {
-										self.preview =
-											thumbnails.into_iter().next().flatten().map(Arc::new);
+									for (source, thumbnail) in selected {
+										self.push(source, thumbnail);
 									}
-									self.selected.extend(sources);
 									self.last = None;
 								}
 								Err(error) => self.last = Some(Status::Failed(error)),
@@ -258,18 +262,17 @@ impl Uploads {
 				}
 			}
 		}
-		if let Some(previewing) = &self.previewing {
-			match previewing.try_recv() {
+		self.previewing
+			.retain(|(key, receive)| match receive.try_recv() {
 				Ok(thumbnail) => {
-					self.preview = thumbnail
-						.filter(|_| !self.selected.is_empty())
-						.map(Arc::new);
-					self.previewing = None;
+					if let Some(chosen) = self.selected.iter_mut().find(|c| c.key == *key) {
+						chosen.preview = thumbnail.map(Arc::new);
+					}
+					false
 				}
-				Err(mpsc::TryRecvError::Disconnected) => self.previewing = None,
-				Err(mpsc::TryRecvError::Empty) => {}
-			}
-		}
+				Err(mpsc::TryRecvError::Disconnected) => false,
+				Err(mpsc::TryRecvError::Empty) => true,
+			});
 		if let Some(uploading) = &mut self.uploading {
 			let status = uploading.progress.borrow_and_update().clone();
 			let closed = uploading.progress.has_changed().is_err();
@@ -298,6 +301,16 @@ impl Uploads {
 			context.request_repaint_after(std::time::Duration::from_millis(100));
 		}
 	}
+	fn push(&mut self, source: Source, preview: Option<egui::ColorImage>) -> u64 {
+		let key = self.next_key;
+		self.next_key += 1;
+		self.selected.push(Chosen {
+			key,
+			source,
+			preview: preview.map(Arc::new),
+		});
+		key
+	}
 	fn admit(&self, sources: &[Source]) -> Result<(), &'static str> {
 		if sources.is_empty()
 			|| self.selected.len() + sources.len() > discord_api::upload::MAX_FILES
@@ -307,6 +320,7 @@ impl Uploads {
 		if self
 			.selected
 			.iter()
+			.map(|chosen| &chosen.source)
 			.chain(sources)
 			.map(Source::size)
 			.sum::<u64>()
@@ -319,26 +333,24 @@ impl Uploads {
 	pub fn files(&self) -> Vec<(String, u64)> {
 		self.selected
 			.iter()
-			.map(|s| (s.filename().to_owned(), s.size()))
+			.map(|c| (c.source.filename().to_owned(), c.source.size()))
 			.collect()
 	}
 	pub fn remove_at(&mut self, index: usize) {
 		if !self.busy() && index < self.selected.len() {
-			self.selected.remove(index);
-			if index == 0 {
-				self.preview = None;
-				self.previewing = None;
-			}
+			let removed = self.selected.remove(index);
+			self.previewing.retain(|(key, _)| *key != removed.key);
 		}
 	}
 
 	pub fn selection(&self) -> Option<(&str, u64)> {
 		self.selected
 			.first()
-			.map(|source| (source.filename(), source.size()))
+			.map(|c| (c.source.filename(), c.source.size()))
 	}
-	pub fn preview(&self) -> Option<Arc<egui::ColorImage>> {
-		self.selected.first().and(self.preview.clone())
+	/// One thumbnail slot per file in `files()` order; non-images and pending decodes are `None`.
+	pub fn previews(&self) -> Vec<Option<Arc<egui::ColorImage>>> {
+		self.selected.iter().map(|c| c.preview.clone()).collect()
 	}
 	pub fn busy(&self) -> bool {
 		self.choosing.is_some() || self.uploading.is_some()
@@ -380,8 +392,7 @@ impl Uploads {
 	}
 	pub fn remove(&mut self) {
 		self.selected.clear();
-		self.preview = None;
-		self.previewing = None;
+		self.previewing.clear();
 		self.cancel();
 	}
 	pub fn cancel(&mut self) {
@@ -397,9 +408,13 @@ impl Uploads {
 		if self.scope != Some((generation, channel)) || self.busy() {
 			return None;
 		}
-		self.preview = None;
-		self.previewing = None;
-		(!self.selected.is_empty()).then(|| std::mem::take(&mut self.selected))
+		self.previewing.clear();
+		(!self.selected.is_empty()).then(|| {
+			std::mem::take(&mut self.selected)
+				.into_iter()
+				.map(|c| c.source)
+				.collect()
+		})
 	}
 	pub fn begin_upload(
 		&mut self,
@@ -556,8 +571,8 @@ mod tests {
 				cancelled: cancelled.clone(),
 			}),
 			selected: vec![],
-			preview: None,
-			previewing: None,
+			next_key: 0,
+			previewing: vec![],
 			uploading: None,
 			last: None,
 		};

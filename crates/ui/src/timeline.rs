@@ -649,7 +649,7 @@ impl TimelineView {
 									.ceil()
 									.max(1.0) * 20.0
 							})
-							.sum::<f32>() + if p.attachment.is_some() { 320.0 } else { 0.0 }
+							.sum::<f32>() + if p.attachments.is_empty() { 0.0 } else { 320.0 }
 					});
 				self.pending_heights
 					.entry(p.nonce.clone())
@@ -1598,7 +1598,7 @@ mod tests {
 				channel: Id(20),
 				nonce: i.to_string(),
 				content: format!("Pending message {i}"),
-				attachment: None,
+				attachments: vec![],
 				delivery: model::Delivery::Sending,
 				confirmed: None,
 			})
@@ -2794,6 +2794,7 @@ mod tests {
 						unit: egui::MouseWheelUnit::Point,
 						delta: egui::vec2(0.0, -600.0),
 						modifiers: egui::Modifiers::NONE,
+						phase: egui::TouchPhase::Move,
 					},
 				],
 			);
