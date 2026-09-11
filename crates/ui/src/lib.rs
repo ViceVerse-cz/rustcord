@@ -4111,7 +4111,12 @@ mod composer_tests {
 			.guild
 			.unwrap();
 		let user = test_support::message(499, channel).author;
-		state.timeline.clear(); // No read acknowledgement is part of this presence-only scenario.
+		// No read acknowledgement is part of this presence-only scenario: clear the page and
+		// the latest-message metadata that an empty live edge would otherwise acknowledge.
+		state.timeline.clear();
+		if let Some(channel) = state.channels.iter_mut().find(|c| c.id == channel) {
+			channel.last_message = None;
+		}
 		state.members = Some(model::MemberList {
 			channel,
 			guild: Some(guild),
