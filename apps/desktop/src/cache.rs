@@ -16,6 +16,8 @@ pub enum Operation {
 	LoadReadingPreferences,
 	SaveReadingPreferences(model::ReadingPreferences),
 	LoadDrafts,
+	LoadGifFavorites,
+	SaveGifFavorites(Vec<model::Gif>),
 	LoadChannel { channel: Id, request: u64 },
 	SaveDraft { channel: Id, content: String },
 	SaveChannel { channel: Id, messages: Vec<Message> },
@@ -29,6 +31,7 @@ pub enum Outcome {
 	ReadingPreferences(Result<model::ReadingPreferences, StoreError>),
 	ReadingPreferencesSaved(Result<(), StoreError>),
 	Drafts(BTreeMap<Id, String>),
+	GifFavorites(Vec<model::Gif>),
 	Channel {
 		channel: Id,
 		request: u64,
@@ -222,6 +225,10 @@ fn execute(
 		}
 		Operation::SaveChannel { .. } => "Could not save cached history",
 		Operation::LoadDrafts => "Could not restore drafts from local storage",
+		Operation::LoadGifFavorites => "Could not restore GIF favorites from local storage",
+		Operation::SaveGifFavorites(_) => {
+			"Could not save GIF favorites; the change exists only in this session"
+		}
 		Operation::LoadChannel { .. } => "Could not read cached history",
 		Operation::LoadReadingPreferences | Operation::SaveReadingPreferences(_) => unreachable!(),
 	};
@@ -240,6 +247,10 @@ fn execute(
 				.save_theme_variant(variant.as_deref())
 				.map(|_| Outcome::Saved),
 			Operation::LoadDrafts => store.load_drafts(account).map(Outcome::Drafts),
+			Operation::LoadGifFavorites => store.gif_favorites(account).map(Outcome::GifFavorites),
+			Operation::SaveGifFavorites(favorites) => store
+				.save_gif_favorites(account, &favorites)
+				.map(|_| Outcome::Saved),
 			Operation::LoadChannel { channel, request } => store
 				.load_channel(account, channel)
 				.map(|messages| Outcome::Channel {

@@ -433,6 +433,22 @@ impl Desktop {
 			messaging.preview_attachment("synthetic-holiday.png", 2_437_120, Some(image));
 			state.status = "Offline fixture · synthetic attachment staged in the composer";
 		}
+		// `--demo-gifs`, `--demo-gifs=favorites`, `--demo-gifs=trending` or `--demo-gifs=<query>`.
+		if demo
+			&& let Some(section) = std::env::args().find_map(|arg| {
+				arg.strip_prefix("--demo-gifs")
+					.map(|rest| rest.strip_prefix('=').unwrap_or("").to_owned())
+			}) {
+			let favorites: Vec<_> = test_support::gif_page(None)
+				.gifs
+				.into_iter()
+				.skip(2)
+				.take(5)
+				.collect();
+			state.restore_gif_favorites(favorites);
+			messaging.preview_gif_picker(&section);
+			state.status = "Offline fixture · GIF popout opened at startup";
+		}
 		if demo
 			&& let Some(query) = std::env::args()
 				.find_map(|arg| arg.strip_prefix("--demo-search=").map(str::to_owned))
@@ -1065,6 +1081,11 @@ impl Desktop {
 						})),
 					}
 				}
+				Command::Gifs { query, request } => Event::Gifs {
+					request,
+					result: Ok(test_support::gif_page(query.as_deref())),
+				},
+				Command::CancelGifs => return,
 				Command::Invite { code } => Event::Invite {
 					code,
 					result: Err(Failure::Protocol),
@@ -1507,6 +1528,9 @@ impl Desktop {
 				continue;
 			}
 			match outcome {
+				cache::Outcome::GifFavorites(favorites) => {
+					self.state.restore_gif_favorites(favorites);
+				}
 				cache::Outcome::Drafts(drafts) => {
 					for (channel, content) in drafts {
 						if !self
@@ -1713,6 +1737,7 @@ impl Desktop {
 				if !self.messaging.draft_restore_pending {
 					self.messaging.draft_restore_pending =
 						self.queue_cache(cache::Operation::LoadDrafts);
+					self.queue_cache(cache::Operation::LoadGifFavorites);
 				}
 				if let Some(secret) = self.pending_save.take()
 					&& let Some(store) = &self.store
@@ -2194,6 +2219,10 @@ impl eframe::App for Desktop {
 				egui::ThemePreference::Dark => local_store::Appearance::Dark,
 			};
 			self.queue_cache_for(model::Id(0), cache::Operation::SaveAppearance(preference));
+		}
+		if std::mem::take(&mut self.state.gifs.favorites_changed) {
+			let favorites = self.state.gifs.favorites.clone();
+			self.queue_cache(cache::Operation::SaveGifFavorites(favorites));
 		}
 		if let Some(variant) = self.messaging.theme_variant_changed.take() {
 			self.variant_changed = true;

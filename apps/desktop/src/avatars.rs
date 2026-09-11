@@ -165,6 +165,10 @@ fn cdn_url(key: &str) -> Option<String> {
 	if let Some(source) = key.strip_prefix("embed:") {
 		return embed_url(source);
 	}
+	// Tenor previews arrive only inside a service GIF result; the address is used verbatim.
+	if let Some(source) = key.strip_prefix("gif:") {
+		return model::valid_gif_preview(source).then(|| source.to_owned());
+	}
 	// Profile badge and server-tag artwork hashes arrive only inside a requested profile.
 	if let Some(hash) = key.strip_prefix("badge-") {
 		return model::valid_avatar_hash(hash)
@@ -281,7 +285,7 @@ fn application_icon_url(key: &str, bytes: &[u8]) -> Option<String> {
 
 fn disk_key(key: &str) -> Option<String> {
 	cdn_url(key)?;
-	if key.starts_with("embed:") {
+	if key.starts_with("embed:") || key.starts_with("gif:") {
 		Some(format!("embed-{:x}", Sha256::digest(key.as_bytes())))
 	} else {
 		Some(key.to_owned())
@@ -325,6 +329,7 @@ async fn run(
 			}
 		});
 		let embed = key.starts_with("embed:")
+			|| key.starts_with("gif:")
 			|| key.starts_with("banner-")
 			|| key.starts_with("member-banner-");
 		let mut image = cached.as_deref().and_then(|bytes| decode(bytes, embed));

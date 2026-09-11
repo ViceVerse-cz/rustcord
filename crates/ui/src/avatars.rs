@@ -38,26 +38,21 @@ impl Avatars {
 		if !self.attempts.contains_key(&key) {
 			return;
 		}
+		let limit = if key.starts_with("embed:")
+			|| key.starts_with("gif:")
+			|| key.starts_with("banner-")
+			|| key.starts_with("member-banner-")
+		{
+			512
+		} else {
+			128
+		};
 		let Some(image) = image.filter(|image| {
 			image.size[0] > 0
 				&& image.size[1] > 0
-				&& image.size[0]
-					<= if key.starts_with("embed:")
-						|| key.starts_with("banner-")
-						|| key.starts_with("member-banner-")
-					{
-						512
-					} else {
-						128
-					} && image.size[1]
-				<= if key.starts_with("embed:")
-					|| key.starts_with("banner-")
-					|| key.starts_with("member-banner-")
-				{
-					512
-				} else {
-					128
-				} && image.pixels.len() == image.size[0] * image.size[1]
+				&& image.size[0] <= limit
+				&& image.size[1] <= limit
+				&& image.pixels.len() == image.size[0] * image.size[1]
 		}) else {
 			if let Some(attempt) = self.attempts.get_mut(&key) {
 				attempt.1 = true;
@@ -112,6 +107,33 @@ impl Avatars {
 			let image = egui::Image::new(&entry.1).fit_to_exact_size(egui::Vec2::splat(size));
 			self.textures.push_back(entry);
 			Some(image)
+		} else {
+			if !demo {
+				self.request(key);
+			}
+			None
+		}
+	}
+	/// Static Tenor preview texture for the GIF picker. Synthetic previews are painted locally.
+	pub(crate) fn gif_texture(
+		&mut self,
+		ctx: &egui::Context,
+		gif: &model::Gif,
+		demo: bool,
+	) -> Option<(egui::TextureId, [usize; 2])> {
+		let key = format!("gif:{}", gif.preview);
+		if demo
+			&& gif.preview.contains("/synthetic/")
+			&& !self.textures.iter().any(|(stored, _)| stored == &key)
+		{
+			self.attempts.insert(key.clone(), (Instant::now(), false));
+			self.accept(ctx, key.clone(), Some(synthetic_gif(gif)));
+		}
+		if let Some(index) = self.textures.iter().position(|(stored, _)| stored == &key) {
+			let entry = self.textures.remove(index).expect("located gif texture");
+			let texture = (entry.1.id(), entry.1.size());
+			self.textures.push_back(entry);
+			Some(texture)
 		} else {
 			if !demo {
 				self.request(key);
@@ -531,6 +553,42 @@ impl Avatars {
 		});
 		response
 	}
+}
+
+/// Offline fixture artwork: a soft two-tone gradient with a highlight, sized like the GIF.
+fn synthetic_gif(gif: &model::Gif) -> ColorImage {
+	let seed = gif.id.bytes().fold(7usize, |acc, b| {
+		acc.wrapping_mul(31).wrapping_add(b as usize)
+	});
+	let width = 256usize;
+	let height = ((256.0 * gif.height as f32 / gif.width.max(1) as f32) as usize).clamp(64, 512);
+	let hue = ((seed % 97) as f32 * 0.618_034) % 1.0;
+	let a = egui::ecolor::Hsva::new(hue, 0.62, 0.78, 1.0).to_rgba_premultiplied();
+	let b = egui::ecolor::Hsva::new((hue + 0.12) % 1.0, 0.58, 0.42, 1.0).to_rgba_premultiplied();
+	let (cx, cy) = (
+		0.3 + (seed % 5) as f32 * 0.1,
+		0.35 + (seed % 3) as f32 * 0.12,
+	);
+	let mut image = ColorImage::filled([width, height], egui::Color32::BLACK);
+	for y in 0..height {
+		for x in 0..width {
+			let (u, v) = (x as f32 / width as f32, y as f32 / height as f32);
+			let t = ((u + v) * 0.5).clamp(0.0, 1.0);
+			let mut rgb = [0.0f32; 3];
+			for (i, channel) in rgb.iter_mut().enumerate() {
+				*channel = a[i] * (1.0 - t) + b[i] * t;
+			}
+			let d = ((u - cx).powi(2) + ((v - cy) * height as f32 / width as f32).powi(2)).sqrt();
+			let glow = (1.0 - d / 0.5).clamp(0.0, 1.0).powi(2) * 0.3;
+			let band = (((u * 3.0 - v * 2.0) * std::f32::consts::PI).sin() * 0.5 + 0.5) * 0.06;
+			image.pixels[y * width + x] = egui::Color32::from_rgb(
+				((rgb[0] + glow + band) * 255.0).min(255.0) as u8,
+				((rgb[1] + glow + band) * 255.0).min(255.0) as u8,
+				((rgb[2] + glow + band) * 255.0).min(255.0) as u8,
+			);
+		}
+	}
+	image
 }
 
 #[cfg(test)]

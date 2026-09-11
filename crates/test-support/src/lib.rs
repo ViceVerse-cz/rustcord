@@ -1,6 +1,79 @@
 //! Handcrafted synthetic data. No network imports; never evidence of live compatibility.
 use client_core::{Envelope, Event, State};
 use model::*;
+/// Synthetic Tenor-shaped results. Previews under `/synthetic/` are painted locally; no request.
+pub fn gif_page(query: Option<&str>) -> model::GifPage {
+	const TITLES: [&str; 12] = [
+		"Excited wave",
+		"Slow clap",
+		"Thumbs up",
+		"Happy dance",
+		"Mind blown",
+		"Popcorn time",
+		"Cat typing",
+		"High five",
+		"Facepalm",
+		"Confetti",
+		"Nodding",
+		"Shrug",
+	];
+	const SIZES: [(u32, u32); 12] = [
+		(498, 280),
+		(498, 498),
+		(320, 240),
+		(498, 372),
+		(498, 210),
+		(400, 500),
+		(498, 280),
+		(360, 360),
+		(498, 320),
+		(498, 260),
+		(300, 420),
+		(498, 280),
+	];
+	let needle = query.map(str::to_lowercase);
+	let gifs = TITLES
+		.iter()
+		.enumerate()
+		.filter(|(_, title)| {
+			needle
+				.as_deref()
+				.is_none_or(|needle| title.to_lowercase().contains(needle) || needle.len() <= 3)
+		})
+		.map(|(index, title)| model::Gif {
+			id: format!("synthetic-{index}"),
+			title: (*title).to_owned(),
+			url: format!(
+				"https://tenor.com/view/synthetic-{index}-gif-{}",
+				1000 + index
+			),
+			preview: format!("https://media.tenor.com/synthetic/{index}/tenor.png"),
+			width: SIZES[index].0,
+			height: SIZES[index].1,
+		})
+		.collect();
+	model::GifPage {
+		gifs,
+		categories: if query.is_none() {
+			[
+				"Agree",
+				"Applause",
+				"Dance",
+				"Excited",
+				"Facepalm",
+				"Hello",
+				"No",
+				"Thank you",
+			]
+			.into_iter()
+			.map(str::to_owned)
+			.collect()
+		} else {
+			Vec::new()
+		},
+	}
+}
+
 pub fn message(id: u64, channel: Id) -> Message {
 	let mut content = match id % 6 {
 		0 => "A short synthetic message.".into(),

@@ -93,6 +93,11 @@ ICONS = [
     ("arrow-down", "bold/arrow-down-bold.svg", "193222b87a796f1c56336f51cb041cfd2a6c899ae0a027248a63fc183758a364"),
     ("arrow-up", "bold/arrow-up-bold.svg", "87dade5b87b48190dae13370375e2d84f6c22548eebac93ff2f46d091882fb78"),
     ("check", "bold/check-bold.svg", "d0ca4e324ff5bb3a1a3bacb9f7580359b8e03cc6862a614d5ed14458db64bedf"),
+    ("gif", "bold/gif-bold.svg", "cbdd66cdfbe9f084d2ecc7e7a27686830b5230cc0a18f9765fb9c147ac8e0647"),
+    ("star", "bold/star-bold.svg", "e456b195ce0f28235d63c0612b835fd120c747a8132d2be984863e2125674240"),
+    ("star-fill", "fill/star-fill.svg", "42451b34121b695bdaab88fdcf3eacec9cda9ac36d222349609426dcb9f04b48"),
+    ("fire", "fill/fire-fill.svg", "512355fb2a156f0c39485a28bc6f81cf1df3de35faed9c5ad62c30cec5d8d63c"),
+    ("arrow-left", "bold/arrow-left-bold.svg", "7588792d7824e7c5337bca7b5de96ad0685ddea0a5732dfb62701d163a076563"),
 ]
 LICENSE_SHA256 = "ddbe6082ec3cf979db47e5af549d2849c5d6182b3e005ef91ce1dbb9eb122f11"
 

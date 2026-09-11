@@ -157,6 +157,10 @@ impl MessagingUi {
 	pub fn preview_emoji_picker(&mut self) {
 		self.emoji_picker.preview();
 	}
+	/// Fixture-only: opens the GIFs tab at `section` (`""`, `favorites`, `trending` or a query).
+	pub fn preview_gif_picker(&mut self, section: &str) {
+		self.emoji_picker.preview_gifs(section);
+	}
 	/// Fixture-only entry point: opens the search pane and submits `query` on the first frame.
 	pub fn preview_search(&mut self, query: &str) {
 		self.search.preview(query);
@@ -1431,9 +1435,36 @@ impl MessagingUi {
                         let pick = ui
                             .add_enabled_ui(!self.ime_active && !ime_this_frame, |ui| {
                                 self.emoji_picker
-                                    .show(ui, state, channel, &mut self.avatars)
+                                    .show(ui, state, channel, &mut self.avatars, commands)
                             })
                             .inner;
+                        // A chosen GIF is its own message; the typed draft stays untouched.
+                        let pick = match pick {
+                            Some(emoji_picker::Pick::Insert(text)) => Some(text),
+                            Some(emoji_picker::Pick::Send(url)) => {
+                                if editing_here {
+                                    state.status = "Finish or cancel the edit before sending a GIF.";
+                                } else if self.upload_busy || !state.can_send(channel) {
+                                    state.status = "Sending is unavailable with the current connection or permissions";
+                                } else {
+                                    let saved = state.drafts.insert(channel, url);
+                                    let command = state.prepare_send();
+                                    match saved {
+                                        Some(saved) => {
+                                            state.drafts.insert(channel, saved);
+                                        }
+                                        None => {
+                                            state.drafts.remove(&channel);
+                                        }
+                                    }
+                                    if let Some(command) = command {
+                                        commands.push(command);
+                                    }
+                                }
+                                None
+                            }
+                            None => None,
+                        };
                         let edit = ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                             ui.vertical(|ui| {
                                 ui.set_width(ui.available_width());

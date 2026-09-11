@@ -313,6 +313,11 @@ impl DiscordApi {
 				}
 			}
 			Command::CancelSearch => Event::Failure(Failure::Protocol),
+			Command::Gifs { query, request } => Event::Gifs {
+				request,
+				result: self.gifs(query.as_deref()).await,
+			},
+			Command::CancelGifs => Event::Failure(Failure::Protocol),
 			Command::MarkRead {
 				channel,
 				message,
@@ -625,6 +630,48 @@ impl DiscordApi {
 			.into_page(channel, before)
 			.map(client_core::search::Outcome::Page)
 			.map_err(|_| Failure::Protocol)
+	}
+	/// Unofficial normal-client relay of Tenor search/trending. Only the query text is encoded
+	/// into a fixed route; previews stay static and are loaded by the credential-free worker.
+	async fn gifs(&self, query: Option<&str>) -> Result<model::GifPage, Failure> {
+		const OPTIONS: &str = "media_format=tinygif&provider=tenor&locale=en-US";
+		match query {
+			Some(query) => {
+				if !model::valid_search_query(query) {
+					return Err(Failure::Protocol);
+				}
+				let encoded: String = query.bytes().map(|b| format!("%{b:02X}")).collect();
+				let bytes = self
+					.request_limited(
+						Method::GET,
+						&format!(
+							"/gifs/search?q={encoded}&limit={}&{OPTIONS}",
+							model::GIF_PAGE_SIZE
+						),
+						None,
+						gifs::MAX_WIRE,
+					)
+					.await?;
+				decode::<gifs::SearchReply>(&bytes)
+					.map_err(|_| Failure::Protocol)?
+					.into_page()
+					.map_err(|_| Failure::Protocol)
+			}
+			None => {
+				let bytes = self
+					.request_limited(
+						Method::GET,
+						&format!("/gifs/trending?limit={}&{OPTIONS}", model::GIF_PAGE_SIZE),
+						None,
+						gifs::MAX_WIRE,
+					)
+					.await?;
+				decode::<gifs::TrendingReply>(&bytes)
+					.map_err(|_| Failure::Protocol)?
+					.into_page()
+					.map_err(|_| Failure::Protocol)
+			}
+		}
 	}
 	async fn send_message(
 		&self,
