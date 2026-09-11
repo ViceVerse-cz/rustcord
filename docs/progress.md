@@ -2132,8 +2132,8 @@ timeout; its isolated pre-fix retry passed in 0.56 seconds. Inspection found one
 could be discarded by intentional stale-audio handling under load, and UDP/resume phases raced
 unacknowledged signaling/playback. The test now feeds a bounded continuous synthetic source
 until peer receipt, fences signaling with acknowledgments and waits for observed playback.
-Existing deadlines and production transport behavior are unchanged. Final suite/repeated voice
-verification and release comparisons are in progress.
+Existing deadlines and production transport behavior are unchanged. The repaired scenarios
+passed repeated verification, and the full check passed on cec173b before the next main update.
 Native scrolling/images, storage tracing, physical audio, platform accessibility and owner-
 controlled live interoperability remain separate incomplete spec gates.
 
@@ -2154,5 +2154,16 @@ The integrated run also reproduced a Gateway fixture close race: dropping TCP im
 after 4004 could reset unread heartbeat data and lose the close frame. It now reuses the
 neighboring fixture's client-completion barrier, deliberately racing a heartbeat while keeping
 the original deadline, dispatch cursor and exact event assertions. The profile artwork test
-was updated from 64 to 56 pixels to match main's intentional restyle; it still requires one
-rendered image before presence clears and zero afterward. No artwork renderer was removed.
+now identifies the expected activity texture rather than matching mesh dimensions, which
+confused font meshes with artwork and broke with antialiasing. It still requires one visible
+clipped image before presence clears and zero afterward. No artwork renderer was removed.
+
+
+`cargo xtask check` and `node tests/xtask-workspace.cjs` passed on cec173b (98 UI tests).
+The fuzz target also now initializes the optional Channel.message_count field added by main.
+GitHub combined-main checks exposed formatting failures from c3f1ba0; that settings/timeline
+update was merged and formatted without changing its behavior. Combined verification follows.
+The text release package passed before this second integration; the superseded voice build
+was stopped to avoid measuring a stale tree. Native automation remains paused after the owner
+stopped it with Escape; edit focus is covered by the headless pointer/keyboard regression,
+with native focus behavior and full-client UI performance unmeasured.

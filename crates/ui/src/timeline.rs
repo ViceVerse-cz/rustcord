@@ -286,7 +286,8 @@ fn overlay_bar(
 	if radius.sw == 0 {
 		// Bottom bars cast a soft shadow upward onto the messages behind them.
 		ui.painter().rect_filled(
-			rect.expand2(egui::vec2(1.0, 0.0)).translate(egui::vec2(0.0, -1.0)),
+			rect.expand2(egui::vec2(1.0, 0.0))
+				.translate(egui::vec2(0.0, -1.0)),
 			egui::CornerRadius {
 				nw: 9,
 				ne: 9,

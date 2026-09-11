@@ -378,8 +378,7 @@ impl Desktop {
 			&& let Some(page) = std::env::args().find_map(|arg| {
 				arg.strip_prefix("--demo-settings")
 					.map(|rest| rest.trim_start_matches('=').to_lowercase())
-			})
-		{
+			}) {
 			// `--demo-settings` or `--demo-settings=account` etc.
 			messaging.preview_settings(&page);
 		}

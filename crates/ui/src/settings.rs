@@ -418,8 +418,16 @@ impl MessagingUi {
 					ui.set_width((ui.available_width() - 140.0).max(120.0));
 					ui.spacing_mut().item_spacing.y = 2.0;
 					ui.label(
-						design::medium(ui, if state.demo { "Exit preview" } else { "Log out" }, 15.0)
-							.color(colors.text_strong),
+						design::medium(
+							ui,
+							if state.demo {
+								"Exit preview"
+							} else {
+								"Log out"
+							},
+							15.0,
+						)
+						.color(colors.text_strong),
 					);
 					ui.label(
 						RichText::new(if state.demo {
@@ -437,7 +445,11 @@ impl MessagingUi {
 							egui::Button::new(
 								design::medium(
 									ui,
-									if state.demo { "Exit preview" } else { "Log out" },
+									if state.demo {
+										"Exit preview"
+									} else {
+										"Log out"
+									},
 									14.0,
 								)
 								.color(egui::Color32::WHITE),
@@ -468,10 +480,8 @@ impl MessagingUi {
 				for variant in design::Variant::ALL {
 					let swatch = design::colors(ui.visuals().dark_mode, variant);
 					let selected = variant == current;
-					let (rect, response) = ui.allocate_exact_size(
-						egui::vec2(76.0, 70.0),
-						egui::Sense::click(),
-					);
+					let (rect, response) =
+						ui.allocate_exact_size(egui::vec2(76.0, 70.0), egui::Sense::click());
 					response.widget_info(|| {
 						egui::WidgetInfo::selected(
 							egui::WidgetType::RadioButton,
@@ -614,9 +624,11 @@ impl MessagingUi {
 					ui.spacing_mut().item_spacing.y = 2.0;
 					ui.label(design::medium(ui, "Clear cache", 15.0).color(colors.text_strong));
 					ui.label(
-						RichText::new("Removes cached messages and media. Drafts and your login stay.")
-							.size(13.0)
-							.color(colors.muted),
+						RichText::new(
+							"Removes cached messages and media. Drafts and your login stay.",
+						)
+						.size(13.0)
+						.color(colors.muted),
 					);
 				});
 				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -697,8 +709,7 @@ fn nav_item(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
 /// Discord's round close button with the "ESC" hint underneath.
 fn close_control(ui: &mut egui::Ui) -> egui::Response {
 	let colors = design::palette(ui);
-	let (rect, response) =
-		ui.allocate_exact_size(egui::vec2(40.0, 56.0), egui::Sense::click());
+	let (rect, response) = ui.allocate_exact_size(egui::vec2(40.0, 56.0), egui::Sense::click());
 	response.widget_info(|| {
 		egui::WidgetInfo::labeled(
 			egui::WidgetType::Button,
@@ -711,14 +722,22 @@ fn close_control(ui: &mut egui::Ui) -> egui::Response {
 	ui.painter().circle(
 		center,
 		18.0,
-		if hot { colors.hover } else { egui::Color32::TRANSPARENT },
+		if hot {
+			colors.hover
+		} else {
+			egui::Color32::TRANSPARENT
+		},
 		egui::Stroke::new(2.0, if hot { colors.text } else { colors.muted }),
 	);
 	icons::paint(
 		ui.painter(),
 		icons::Icon::Close,
 		egui::Rect::from_center_size(center, egui::Vec2::splat(16.0)),
-		if hot { colors.text_strong } else { colors.muted },
+		if hot {
+			colors.text_strong
+		} else {
+			colors.muted
+		},
 	);
 	ui.painter().text(
 		egui::pos2(rect.center().x, rect.bottom() - 6.0),
@@ -768,7 +787,10 @@ fn theme_preference_cards(ui: &mut egui::Ui) {
 				),
 				egui::StrokeKind::Inside,
 			);
-			let swatch = egui::Rect::from_min_size(rect.min + egui::vec2(12.0, 12.0), egui::vec2(52.0, 34.0));
+			let swatch = egui::Rect::from_min_size(
+				rect.min + egui::vec2(12.0, 12.0),
+				egui::vec2(52.0, 34.0),
+			);
 			let variant = design::variant();
 			let (left, right) = match preference {
 				egui::ThemePreference::Dark => {

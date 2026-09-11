@@ -626,7 +626,6 @@ pub fn build_badge(ui: &mut egui::Ui, build: Build) -> Option<egui::Response> {
 	Some(response.on_hover_text(hint))
 }
 
-
 /// Discord-style settings row with a pill switch on the right. Clicking anywhere on the row
 /// toggles `enabled`; the accessible label is `label`.
 pub fn switch(
@@ -645,8 +644,12 @@ pub fn switch(
 		text_width,
 	);
 	let detail = description.map(|text| {
-		ui.painter()
-			.layout(text.to_owned(), FontId::proportional(13.0), p.muted, text_width)
+		ui.painter().layout(
+			text.to_owned(),
+			FontId::proportional(13.0),
+			p.muted,
+			text_width,
+		)
 	});
 	let text_height = title.size().y + detail.as_ref().map_or(0.0, |d| d.size().y + 4.0);
 	let (rect, mut response) = ui.allocate_exact_size(
@@ -658,12 +661,7 @@ pub fn switch(
 		response.mark_changed();
 	}
 	response.widget_info(|| {
-		egui::WidgetInfo::selected(
-			egui::WidgetType::Checkbox,
-			ui.is_enabled(),
-			*enabled,
-			label,
-		)
+		egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *enabled, label)
 	});
 	let painter = ui.painter();
 	if response.hovered() && ui.is_enabled() {

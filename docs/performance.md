@@ -2049,7 +2049,8 @@ image/voice teardown, storage policy, other platforms or Discord interoperabilit
 five-second smoke checks assertions; it is not a substitute for sustained process measurement.
 
 
-Release comparison against clean `c83f973`, each built in its own private target directory.
+Pre-integration release comparison against clean `c83f973`, each built in its own private target directory.
+These results predate the subsequent profile, attachment, settings and timeline updates from main.
 Existing release profile, text default feature set and optional `voice`; package commands
 passed. ZIP is Python DEFLATE9; text excludes nested voice, and evidence/debug artifacts are
 excluded. There are 65 text and 128 voice files. Sizes include documentation at package time,
