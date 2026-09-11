@@ -6,6 +6,7 @@ mod clipboard;
 mod connection;
 mod credentials;
 mod downloads;
+mod game_activity;
 mod reading_settings;
 mod uploads;
 #[cfg(feature = "voice")]
@@ -136,6 +137,7 @@ struct Desktop {
 	appearance: egui::ThemePreference,
 	appearance_changed: bool,
 	reading: reading_settings::ReadingSettings,
+	game_activity: game_activity::Settings,
 	variant_changed: bool,
 	pending_save: Option<Arc<SessionSecret>>,
 	credential_status: &'static str,
@@ -447,6 +449,18 @@ impl Desktop {
 			)
 		}));
 		let mut reading = reading_settings::ReadingSettings::default();
+		let mut game_activity = game_activity::Settings::default();
+		if cache.as_ref().is_some_and(|cache| {
+			cache.queue(
+				state.generation,
+				model::Id(0),
+				cache::Operation::LoadGameActivity,
+			)
+		}) {
+			cache_pending += 1;
+		} else if !demo {
+			game_activity.failed = true;
+		}
 		if let Some(cache) = &cache {
 			if cache.queue(
 				state.generation,
@@ -464,6 +478,10 @@ impl Desktop {
 			.last()
 			.map_or(10_000, |m| m.id.0.max(10_000));
 		let mut messaging = ui::MessagingUi::default();
+		if demo && std::env::args().any(|arg| arg == "--demo-game-activity") {
+			messaging.share_game_activity = true;
+			messaging.own_game = Some("osu!");
+		}
 		messaging.build = ui::design::Build {
 			channel: if cfg!(debug_assertions) {
 				ui::design::Channel::Dev
@@ -621,6 +639,7 @@ impl Desktop {
 			appearance: egui::ThemePreference::System,
 			appearance_changed: false,
 			reading,
+			game_activity,
 			variant_changed: false,
 			pending_save: None,
 			credential_status: if demo {
@@ -701,6 +720,7 @@ impl Desktop {
 			}
 		}
 		self.messaging.clear();
+		self.messaging.share_game_activity = self.game_activity.enabled;
 		ctx.memory_mut(|m| *m = egui::Memory::default());
 		ui::design::apply(ctx);
 		ctx.set_theme(self.appearance);
@@ -790,6 +810,56 @@ impl Desktop {
 			ctx.request_repaint_after(delay);
 		}
 		self.messaging.reading_status = self.reading.status();
+	}
+	fn sync_game_activity(&mut self, ctx: &egui::Context) {
+		let previous = (self.messaging.own_game, self.messaging.game_activity_status);
+		if self.state.demo {
+			self.messaging.own_game = self.messaging.share_game_activity.then_some("osu!");
+			self.messaging.game_activity_status =
+				"Offline preview: synthetic activity, never shared or saved.";
+			if previous != (self.messaging.own_game, self.messaging.game_activity_status) {
+				ctx.request_repaint();
+			}
+			return;
+		}
+		if self.fixture_only {
+			return;
+		}
+		self.game_activity
+			.observe(self.messaging.share_game_activity);
+		if self.game_activity.dirty && !self.game_activity.saving {
+			let accepted = self.cache.as_ref().is_some_and(|cache| {
+				cache.queue(
+					self.state.generation,
+					model::Id(0),
+					cache::Operation::SaveGameActivity(self.game_activity.enabled),
+				)
+			});
+			self.game_activity.dirty = false;
+			self.game_activity.saving = accepted;
+			self.game_activity.failed = !accepted;
+			self.cache_pending += usize::from(accepted);
+		}
+		self.messaging.own_game = None;
+		self.messaging.game_activity_status = self.game_activity.status();
+		if let Some(connection) = &self.connection {
+			connection.share_activity.send_if_modified(|enabled| {
+				if *enabled == self.game_activity.enabled {
+					return false;
+				}
+				*enabled = self.game_activity.enabled;
+				true
+			});
+			if self.game_activity.enabled && self.state.gateway_connected {
+				match *connection.game_activity.borrow() {
+					Ok(game) => self.messaging.own_game = game,
+					Err(error) => self.messaging.game_activity_status = error,
+				}
+			}
+		}
+		if previous != (self.messaging.own_game, self.messaging.game_activity_status) {
+			ctx.request_repaint();
+		}
 	}
 	fn request_history_clear(&mut self, account: model::Id) {
 		if self.state.demo || self.fixture_only {
@@ -1631,6 +1701,18 @@ impl Desktop {
 			self.cache_pending = self.cache_pending.saturating_sub(1);
 			// Settings are global; account removal/write failures still matter after logout.
 			match &outcome {
+				cache::Outcome::GameActivity(result) => {
+					self.game_activity.restore(*result);
+					if !self.state.demo && !self.fixture_only {
+						self.messaging.share_game_activity = self.game_activity.enabled;
+					}
+					continue;
+				}
+				cache::Outcome::GameActivitySaved(result) => {
+					self.game_activity.saving = false;
+					self.game_activity.failed = result.is_err();
+					continue;
+				}
 				cache::Outcome::ReadingPreferences(result) => {
 					if let Some(value) = self.reading.restore(*result)
 						&& !self.state.demo
@@ -1732,6 +1814,8 @@ impl Desktop {
 					}
 				}
 				cache::Outcome::Appearance(..)
+				| cache::Outcome::GameActivity(_)
+				| cache::Outcome::GameActivitySaved(_)
 				| cache::Outcome::ReadingPreferences(_)
 				| cache::Outcome::ReadingPreferencesSaved(_)
 				| cache::Outcome::HistoryCleared
@@ -2234,6 +2318,7 @@ impl eframe::App for Desktop {
 				|| self.cache_pending > 0
 				|| self.cache_clears.pending()
 				|| (!self.fixture_only && self.reading.needs_attention())
+				|| (!self.fixture_only && self.game_activity.needs_attention())
 				|| self.cache_error)
 		{
 			ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -2471,6 +2556,7 @@ impl eframe::App for Desktop {
 		}
 		let appearance = ctx.options(|options| options.theme_preference);
 		self.save_reading_preferences(&ctx);
+		self.sync_game_activity(&ctx);
 		if appearance != self.appearance {
 			self.appearance = appearance;
 			self.appearance_changed = true;
@@ -2496,6 +2582,7 @@ impl eframe::App for Desktop {
                 if self.forgetting{ui.label("Wait for saved-login removal to finish.");}
                 if self.cache_clears.pending(){ui.label("Cached history cleanup is pending; closing now may leave deleted messages on disk.");}
                 if !self.fixture_only && self.reading.needs_attention(){ui.label(self.reading.status());}
+				if !self.fixture_only && self.game_activity.needs_attention(){ui.label(self.game_activity.status());}
                 ui.horizontal(|ui|{
                     if ui.button("Keep working").clicked(){self.confirming_close=false;self.confirming_logout=false;self.download_close_pending=false;}
                     if ui.add_enabled(!self.forgetting,egui::Button::new("Discard and continue")).clicked(){

@@ -158,6 +158,10 @@ impl LocalStore {
                 zoom_percent INTEGER NOT NULL CHECK(typeof(zoom_percent)='integer' AND zoom_percent BETWEEN 80 AND 150),
                 sidebar_width INTEGER NOT NULL CHECK(typeof(sidebar_width)='integer' AND sidebar_width BETWEEN 190 AND 360),
                 show_members INTEGER NOT NULL CHECK(typeof(show_members)='integer' AND show_members IN (0,1))
+            );
+            CREATE TABLE IF NOT EXISTS game_activity(
+                singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                enabled INTEGER NOT NULL CHECK(typeof(enabled)='integer' AND enabled IN (0,1))
             ); PRAGMA user_version=12;")?;
 		let has_animate_gifs: bool = transaction.query_row(
 			"SELECT EXISTS(SELECT 1 FROM pragma_table_info('reading_preferences') WHERE name='animate_gifs')",
@@ -175,6 +179,40 @@ impl LocalStore {
 		}
 		transaction.commit()?;
 		Ok(Self(connection))
+	}
+	/// Application-wide opt-in; an absent override never enables activity sharing.
+	pub fn game_activity_enabled(&self) -> Result<bool> {
+		let stored = self
+			.0
+			.query_row(
+				"SELECT enabled FROM game_activity WHERE singleton=1",
+				[],
+				|row| {
+					Ok(match row.get_ref(0)? {
+						rusqlite::types::ValueRef::Integer(enabled @ 0..=1) => Some(enabled == 1),
+						_ => None,
+					})
+				},
+			)
+			.optional()?;
+		match stored {
+			None => Ok(false),
+			Some(Some(enabled)) => Ok(enabled),
+			Some(None) => Err(StoreError::Incompatible),
+		}
+	}
+	pub fn save_game_activity_enabled(&self, enabled: bool) -> Result<()> {
+		if enabled {
+			self.0.execute(
+				"INSERT INTO game_activity(singleton,enabled) VALUES(1,1)
+                ON CONFLICT(singleton) DO UPDATE SET enabled=1",
+				[],
+			)?;
+		} else {
+			self.0
+				.execute("DELETE FROM game_activity WHERE singleton=1", [])?;
+		}
+		Ok(())
 	}
 	/// Application-wide settings survive account logout; missing override means defaults.
 	pub fn reading_preferences(&self) -> Result<ReadingPreferences> {
@@ -916,6 +954,82 @@ mod tests {
 		let store = LocalStore::initialize(store.0).unwrap();
 		assert_eq!(store.load_channel(Id(1), Id(2)).unwrap()[0].kind, 255);
 	}
+	#[test]
+	fn game_activity_defaults_migrates_reopens_and_survives_logout() {
+		let root = std::env::temp_dir().join(format!(
+			"serein-synthetic-game-activity-{}",
+			std::process::id()
+		));
+		std::fs::create_dir_all(&root).unwrap();
+		let path = root.join("test.sqlite3");
+		let mut store = LocalStore::open(&path).unwrap();
+		assert!(!store.game_activity_enabled().unwrap());
+		store.save_draft(Id(1), Id(2), "Synthetic draft").unwrap();
+		store.0.execute_batch("DROP TABLE game_activity;").unwrap();
+		drop(store);
+
+		let store = LocalStore::open(&path).unwrap();
+		assert!(!store.game_activity_enabled().unwrap());
+		store.save_game_activity_enabled(true).unwrap();
+		drop(store);
+		let mut store = LocalStore::open(&path).unwrap();
+		assert!(store.game_activity_enabled().unwrap());
+		store.forget_account(Id(1)).unwrap();
+		assert!(store.game_activity_enabled().unwrap());
+		assert!(store.load_drafts(Id(1)).unwrap().is_empty());
+		store.0.execute_batch("PRAGMA query_only=ON;").unwrap();
+		assert_eq!(
+			store.save_game_activity_enabled(false),
+			Err(StoreError::Unavailable)
+		);
+		assert!(store.game_activity_enabled().unwrap());
+		store.0.execute_batch("PRAGMA query_only=OFF;").unwrap();
+		store.save_game_activity_enabled(false).unwrap();
+		let count: u32 = store
+			.0
+			.query_row("SELECT count(*) FROM game_activity", [], |row| row.get(0))
+			.unwrap();
+		assert_eq!(count, 0);
+		drop(store);
+		let store = LocalStore::open(&path).unwrap();
+		assert!(!store.game_activity_enabled().unwrap());
+		drop(store);
+		std::fs::remove_dir_all(root).unwrap();
+	}
+
+	#[test]
+	fn game_activity_rejects_corrupt_values_and_storage_failure() {
+		let store = LocalStore::initialize(Connection::open_in_memory().unwrap()).unwrap();
+		store.save_game_activity_enabled(true).unwrap();
+		assert!(
+			store
+				.0
+				.execute("INSERT INTO game_activity VALUES(2,1)", [])
+				.is_err()
+		);
+		assert!(
+			store
+				.0
+				.execute("UPDATE game_activity SET enabled=2", [])
+				.is_err()
+		);
+		store
+			.0
+			.execute_batch("PRAGMA ignore_check_constraints=ON;")
+			.unwrap();
+		for invalid in ["2", "-1", "0.5", "'invalid'", "x'01'"] {
+			store
+				.0
+				.execute(&format!("UPDATE game_activity SET enabled={invalid}"), [])
+				.unwrap();
+			assert_eq!(store.game_activity_enabled(), Err(StoreError::Incompatible));
+		}
+		store.save_game_activity_enabled(false).unwrap();
+		assert!(!store.game_activity_enabled().unwrap());
+		store.0.execute_batch("DROP TABLE game_activity;").unwrap();
+		assert_eq!(store.game_activity_enabled(), Err(StoreError::Unavailable));
+	}
+
 	#[test]
 	fn schema_seven_reading_preferences_migrate_reopen_reset_and_survive_logout() {
 		let root = std::env::temp_dir().join(format!(

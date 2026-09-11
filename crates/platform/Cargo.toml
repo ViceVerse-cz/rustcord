@@ -18,11 +18,12 @@ rfd = { version = "=0.17.2", default-features = false, features = ["xdg-portal",
 gtk4 = { version = "=0.11.4", features = ["v4_10"] }
 webkit6 = "=0.6.1"
 
-[lints]
-workspace = true
+[lints.rust]
+# Native process enumeration permits unsafe only inside its audited Windows function.
+unsafe_code = "deny"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "=0.61.3", features = ["UI_Notifications"] }
+windows = { version = "=0.61.3", features = ["UI_Notifications", "Win32_System_Diagnostics_ToolHelp"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 futures-lite = "=2.6.1"

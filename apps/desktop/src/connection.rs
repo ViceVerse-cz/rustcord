@@ -24,6 +24,8 @@ pub struct Connection {
 	pub events: ReliableEvents,
 	pub typing: mpsc::Receiver<Envelope>,
 	pub terminal: watch::Receiver<Option<Failure>>,
+	pub share_activity: watch::Sender<bool>,
+	pub game_activity: watch::Receiver<crate::game_activity::Detection>,
 	typing_channel: Arc<AtomicU64>,
 	task: JoinHandle<()>,
 }
@@ -55,6 +57,8 @@ impl Connection {
 		let (send, events) = reliable_events(ctx.clone());
 		let (typing_send, typing) = mpsc::channel(8);
 		let (finished, terminal) = watch::channel(None);
+		let (share_activity, share_receive) = watch::channel(false);
+		let (game_report, game_activity) = watch::channel(Ok(None));
 		let wake = ctx.clone();
 		let typing_channel = Arc::new(AtomicU64::new(0));
 		let active_typing = typing_channel.clone();
@@ -76,13 +80,15 @@ impl Connection {
                 let emit=Arc::new(emit);
                 let (member_send,member_receive)=watch::channel(None);
                 let (voice_send,voice_receive)=mpsc::channel(8);
+				let (activity_send,activity_receive)=watch::channel(None);
+				let _activity_task=AbortTask(tokio::spawn(crate::game_activity::run(share_receive,activity_send,game_report,wake.clone())));
                 let dm_channels=Arc::new(Mutex::new(BTreeSet::new()));
                 let gateway_channels=dm_channels.clone();
                 let (voice_online,mut voice_availability)=watch::channel(false);
                 let gateway_api=api.clone();let gateway_emit=emit.clone();let terminal_send=finished.clone();
                 let gateway_wake=wake.clone();
                 let mut gateway_task=AbortTask(tokio::spawn(async move {
-                    let error=discord_gateway::run_with_voice(secret,gateway,member_receive,voice_receive,|event|{
+                    let error=discord_gateway::run_with_activity(secret,gateway,member_receive,voice_receive,activity_receive,|event|{
                         if let Event::Ready{user:ready_user,channels,..}=&event {
                             if ready_user.id!=user.id {return Err(Failure::InvalidCredential);}
                             *gateway_channels.lock().map_err(|_|Failure::Protocol)?=channels.iter().filter(|c|c.guild.is_none()&&c.kind==1&&c.recipients.len()==1).map(|c|c.id).collect();
@@ -278,6 +284,8 @@ impl Connection {
 			events,
 			typing,
 			terminal,
+			share_activity,
+			game_activity,
 			typing_channel,
 			task,
 		}

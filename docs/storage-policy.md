@@ -326,3 +326,28 @@ are persisted. Playback stops when its card leaves view, the attachment changes,
 the conversation changes, the window is minimized/occluded, or the session ends.
 An atomic generation gate mutes obsolete output; the single worker releases its
 stream/buffers on cancellation. Pausing retains the current bounded decoded clip.
+
+### Own game activity (September 11, 2026)
+
+Sharing is off by default. The application-wide `game_activity` SQLite singleton stores
+one constrained boolean; disabling deletes the override. The independent additive table
+is created even for existing schema-10/12 databases, requires no message migration, and survives
+account logout like appearance. A failed load stays off; failed writes are visible in settings.
+Preview controls never load or save this preference.
+
+While enabled in an authenticated connection, one worker checks executable basenames every
+15 seconds. The exact allowlist recognizes osu!, Counter-Strike 2, Dota 2, Terraria and
+Stardew Valley; renamed or unknown executables are ignored. Multiple matches choose the
+alphabetically first game title. Windows holds one ToolHelp snapshot and one fixed-size
+PROCESSENTRY32W, visiting at most 4096 processes; Linux streams at most 4096 /proc entries
+and reads at most 128 bytes from each comm file. No process paths, command lines, windows,
+process memory, credentials or process-name history are read or retained. A snapshot itself
+is allocated by Windows; its kernel memory is OS-managed, outside the Rust entry buffer.
+
+Only one static recognized title leaves the scanner. Watch channels retain one latest toggle,
+one result and one bounded game name; the Gateway retains current/last names of at most
+128 UTF-8 bytes each. Detection failure clears the outgoing activity. Disable wakes a sleeping
+worker immediately; a running bounded scan finishes before clearing. Gateway clears remain
+subject to the same five-second update interval.
+Teardown aborts the connection worker; an already-started bounded blocking scan may finish,
+but cannot publish after its async owner is aborted. No activity history or telemetry is stored.

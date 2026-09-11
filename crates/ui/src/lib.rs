@@ -85,6 +85,9 @@ pub struct MessagingUi {
 	pub reading_preferences: model::ReadingPreferences,
 	pub reading_status: &'static str,
 	pub reading_save_requested: bool,
+	pub share_game_activity: bool,
+	pub own_game: Option<&'static str>,
+	pub game_activity_status: &'static str,
 	reading_sidebar_applied: Option<u16>,
 	reading_sidebar_constrained: bool,
 	reading_zoom_pending: bool,
@@ -802,13 +805,19 @@ impl MessagingUi {
 								);
 								ui.add(
 									egui::Label::new(
-										RichText::new(if state.demo {
-											"Offline preview"
-										} else if state.gateway_connected {
-											"Online"
-										} else {
-											"Reconnecting…"
-										})
+										RichText::new(
+											if let Some(game) =
+												self.own_game.filter(|_| self.share_game_activity)
+											{
+												format!("Playing {game}")
+											} else if state.demo {
+												"Offline preview".to_owned()
+											} else if state.gateway_connected {
+												"Online".to_owned()
+											} else {
+												"Reconnecting…".to_owned()
+											},
+										)
 										.size(12.0)
 										.color(colors.muted),
 									)

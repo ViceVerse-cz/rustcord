@@ -15,6 +15,8 @@ pub enum Operation {
 	SaveThemeVariant(Option<String>),
 	LoadReadingPreferences,
 	SaveReadingPreferences(model::ReadingPreferences),
+	LoadGameActivity,
+	SaveGameActivity(bool),
 	LoadDrafts,
 	LoadGifFavorites,
 	SaveGifFavorites(Vec<model::Gif>),
@@ -47,6 +49,8 @@ pub enum Outcome {
 	Appearance(Appearance, Option<String>),
 	ReadingPreferences(Result<model::ReadingPreferences, StoreError>),
 	ReadingPreferencesSaved(Result<(), StoreError>),
+	GameActivity(Result<bool, StoreError>),
+	GameActivitySaved(Result<(), StoreError>),
 	Drafts(BTreeMap<Id, String>),
 	GifFavorites(Vec<model::Gif>),
 	Channel {
@@ -198,6 +202,18 @@ fn execute(
 ) -> Outcome {
 	// Settings completions are account-independent and have their own pending/error state.
 	match &operation {
+		Operation::LoadGameActivity => {
+			return Outcome::GameActivity(match store {
+				Ok(store) => store.game_activity_enabled(),
+				Err(error) => Err(*error),
+			});
+		}
+		Operation::SaveGameActivity(value) => {
+			return Outcome::GameActivitySaved(match store {
+				Ok(store) => store.save_game_activity_enabled(*value),
+				Err(error) => Err(*error),
+			});
+		}
 		Operation::LoadReadingPreferences => {
 			return Outcome::ReadingPreferences(match store {
 				Ok(store) => store.reading_preferences(),
@@ -253,11 +269,17 @@ fn execute(
 			"Could not save GIF favorites; the change exists only in this session"
 		}
 		Operation::LoadChannel { .. } => "Could not read cached history",
-		Operation::LoadReadingPreferences | Operation::SaveReadingPreferences(_) => unreachable!(),
+		Operation::LoadReadingPreferences
+		| Operation::SaveReadingPreferences(_)
+		| Operation::LoadGameActivity
+		| Operation::SaveGameActivity(_) => unreachable!(),
 	};
 	let result = match store {
 		Ok(store) => match operation {
-			Operation::LoadReadingPreferences | Operation::SaveReadingPreferences(_) => {
+			Operation::LoadReadingPreferences
+			| Operation::SaveReadingPreferences(_)
+			| Operation::LoadGameActivity
+			| Operation::SaveGameActivity(_) => {
 				unreachable!()
 			}
 			Operation::LoadAppearance => store
@@ -321,6 +343,52 @@ fn execute(
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn game_activity_operations_keep_their_own_results_even_when_history_is_blocked() {
+		let safety = HistorySafety::default();
+		safety.block();
+		let mut store = Ok(LocalStore::open(std::path::Path::new(":memory:")).unwrap());
+		assert!(matches!(
+			execute(&mut store, &safety, Id(0), 0, Operation::LoadGameActivity),
+			Outcome::GameActivity(Ok(false))
+		));
+		assert!(matches!(
+			execute(
+				&mut store,
+				&safety,
+				Id(0),
+				0,
+				Operation::SaveGameActivity(true)
+			),
+			Outcome::GameActivitySaved(Ok(()))
+		));
+		assert!(matches!(
+			execute(&mut store, &safety, Id(9), 0, Operation::LoadGameActivity),
+			Outcome::GameActivity(Ok(true))
+		));
+		let mut unavailable = Err(StoreError::Unavailable);
+		assert!(matches!(
+			execute(
+				&mut unavailable,
+				&safety,
+				Id(0),
+				0,
+				Operation::LoadGameActivity
+			),
+			Outcome::GameActivity(Err(StoreError::Unavailable))
+		));
+		assert!(matches!(
+			execute(
+				&mut unavailable,
+				&safety,
+				Id(0),
+				0,
+				Operation::SaveGameActivity(false)
+			),
+			Outcome::GameActivitySaved(Err(StoreError::Unavailable))
+		));
+	}
 
 	#[test]
 	fn reading_operations_report_their_own_results_without_touching_account_history() {
