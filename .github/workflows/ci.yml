@@ -13,38 +13,38 @@ jobs:
         os: [macos-latest, windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - name: Linux native dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libxrandr-dev libxcursor-dev libvulkan-dev libasound2-dev cmake python3 dpkg-dev desktop-file-utils
       - uses: dtolnay/rust-toolchain@1.98.1
         with:
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.2
         with:
           cache-on-failure: true
       - run: cargo xtask check
-      - uses: actions/setup-node@v4
+      - uses: oven-sh/setup-bun@v2.2.0
         with:
-          node-version: 22
-      - run: node tests/login-handoff.cjs
-      - run: node tests/xtask-workspace.cjs
+          bun-version: 1.4.2
+      - run: bun tests/login-handoff.cjs
+      - run: bun tests/xtask-workspace.cjs
       - run: cargo replay
       - run: cargo replay --soak 5
       - name: Linux package regression
         if: runner.os == 'Linux'
         run: PYTHONDONTWRITEBYTECODE=1 python3 packaging/linux/test_package.py
       - run: cargo xtask package
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.1
         with:
           name: serein-${{ runner.os }}-unsigned
           path: dist/
   security:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@1.98.1
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.2
         with:
           key: cargo-audit-0.22.2
           cache-targets: false
@@ -54,9 +54,9 @@ jobs:
   licenses:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@1.98.1
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.2
         with:
           key: cargo-deny-0.20.2
           cache-on-failure: true
@@ -64,20 +64,20 @@ jobs:
       - run: cargo fetch --locked
       - run: cargo fetch --locked --manifest-path fuzz/Cargo.toml
       - run: cargo xtask licenses
-      - uses: actions/setup-node@v4
+      - uses: oven-sh/setup-bun@v2.2.0
         with:
-          node-version: 22
-      - run: node tests/license-policy.cjs
+          bun-version: 1.4.2
+      - run: bun tests/license-policy.cjs
   fuzz:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@1.98.1
         with:
           components: rustfmt
       - run: rustup toolchain install nightly-2026-09-09 --profile minimal
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.2
         with:
           key: cargo-fuzz-0.13.2
           cache-on-failure: true
@@ -88,7 +88,7 @@ jobs:
       - run: cargo fetch --locked --manifest-path fuzz/Cargo.toml
       - run: cargo fmt --manifest-path fuzz/Cargo.toml --all -- --check
       - run: cargo xtask fuzz
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.1
         if: failure()
         with:
           name: synthetic-fuzz-failures
