@@ -464,6 +464,7 @@ impl Desktop {
 			assert_eq!(call.error, Some(reason));
 			assert_eq!(call.phase, client_core::voice::Phase::Failed);
 		}
+		#[cfg(feature = "demo")]
 		if demo {
 			let fixture = demo_members(None, model::Id(22), 0);
 			state.direct_presences = fixture
