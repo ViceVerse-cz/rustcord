@@ -3053,3 +3053,34 @@ or persistent cache was added. One native picker reads at most 8 MiB and decodes
 off the rendering thread under 4096x4096 / 64 MiB allocation limits. The upload
 is normalized to at most 256x256 / 256 KiB PNG. Only one icon picker and one group
 write can be pending; core pending state retains no image payload.
+
+
+### Inline Windows attachment video (September 12, 2026)
+
+Baseline `96d9428` in a clean detached worktree; after `fix/video-attachment-playback`.
+Windows x86_64, pinned Rust 1.98.1; standard `cargo xtask package` release builds,
+including voice, without demo/developer features. Separate output directories;
+213 installed files in each snapshot. ZIP via PowerShell `Compress-Archive` Optimal.
+These package snapshots precede appending this measurement note to the bundled docs.
+
+| Metric | Base 96d9428 | Inline video | Delta |
+| --- | ---: | ---: | ---: |
+| Executable bytes | 62,018,048 | 62,219,264 | +201,216 (+0.324%) |
+| Installed package bytes (213 files) | 66,503,839 | 66,707,110 | +203,271 (+0.306%) |
+| ZIP bytes (Optimal) | 39,642,870 | 39,701,109 | +58,239 (+0.147%) |
+
+Native screenshot/interaction service was unavailable (native pipe Windows error 2).
+No CPU/RSS, GPU memory, startup/frame percentiles or visual timing comparison is claimed.
+The baseline has no inline video player. Synthetic native MOV decoder and muted local
+output-device checks pass, including portrait, pause/seek/cancel and video tails after
+short/absent audio. This proves the local fixture path, not live Discord interoperability.
+Application retention: two 1080p queued frames, one replaceable display frame and texture,
+one second of PCM and a bounded pending packet, with a 16 KiB encoded range cache.
+OS decoder/GPU allocations are additional. No runtime codec bundle was added.
+
+Release native decode: one warmup and five direct test-executable runs, 40.275,
+40.616, 41.409, 40.266, 40.774 ms; median **40.616 ms** for all 72 frames and AAC
+samples of the three-second 320x180/24fps synthetic MOV. AMD Ryzen 7 7800X3D,
+16 logical CPUs. Includes in-memory decoding and RGBA conversion; excludes
+Decoder::open, seek, portrait check, network, GUI, audio output and playback timing.
+The baseline lacks this player, so no comparable decode delta is asserted.

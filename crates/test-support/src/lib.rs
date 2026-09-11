@@ -834,6 +834,35 @@ pub fn system_demo_state() -> State {
 	state
 }
 
+/// Offline video attachment. Desktop substitutes its generated MOV fixture only in --demo.
+pub fn video_demo_state() -> State {
+	let mut state = chat_demo_state();
+	state.timeline.clear();
+	let mut message = message(601, Id(20));
+	message.content =
+		"Synthetic video attachment: three seconds of animated test colors and a tone.".into();
+	message.embeds.clear();
+	message.attachments = vec![Attachment {
+		id: Id(801),
+		filename: "synthetic-video.mov".into(),
+		description: None,
+		content_type: Some("video/quicktime".into()),
+		size: 120000,
+		duration_ms: Some(3000),
+		waveform: Vec::new(),
+		spoiler: false,
+		media: EmbedMedia {
+			url: Some("https://cdn.discordapp.com/attachments/20/801/synthetic-video.mov".into()),
+			width: 320,
+			height: 180,
+			..Default::default()
+		},
+	}];
+	state.timeline.insert(message, false, false).unwrap();
+	state.revision += 1;
+	state
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;

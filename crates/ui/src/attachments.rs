@@ -270,6 +270,7 @@ pub fn show(
 	opening: &mut Option<String>,
 	download: &mut DownloadUi,
 	audio: &mut crate::audio::AudioUi,
+	video: &mut crate::video::VideoUi,
 	demo: bool,
 ) {
 	for group in message
@@ -313,7 +314,13 @@ pub fn show(
 		} else {
 			for attachment in group {
 				ui.push_id(("attachment", attachment.id), |ui| {
-					if attachment.is_audio() {
+					if attachment.is_video() {
+						video.show(ui, message, attachment);
+						ui.horizontal_wrapped(|ui| {
+							download_button(ui, attachment, download, demo);
+							open_original(ui, attachment, opening);
+						});
+					} else if attachment.is_audio() {
 						let response = audio.show(ui, message, attachment);
 						if attachment.is_voice_message() {
 							response.context_menu(|ui| {
@@ -724,7 +731,9 @@ pub fn estimated_height(attachments: &[Attachment], width: f32) -> f32 {
 				group
 					.iter()
 					.map(|attachment| {
-						if attachment.is_voice_message() {
+						if attachment.is_video() {
+							crate::video::estimated_height(attachment, width)
+						} else if attachment.is_voice_message() {
 							88.0
 						} else if attachment.is_audio() {
 							138.0
@@ -812,6 +821,7 @@ mod tests {
 							&mut opening,
 							&mut download,
 							&mut crate::audio::AudioUi::default(),
+							&mut crate::video::VideoUi::default(),
 							true,
 						);
 					},
@@ -1047,6 +1057,7 @@ mod tests {
 				&mut opening,
 				&mut download,
 				&mut crate::audio::AudioUi::default(),
+				&mut crate::video::VideoUi::default(),
 				false,
 			)
 		});
@@ -1062,6 +1073,7 @@ mod tests {
 					&mut opening,
 					&mut download,
 					&mut crate::audio::AudioUi::default(),
+					&mut crate::video::VideoUi::default(),
 					false,
 				)
 			});

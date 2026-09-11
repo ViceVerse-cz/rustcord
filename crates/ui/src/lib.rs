@@ -3,6 +3,8 @@ mod account_menu;
 mod archives;
 mod audio;
 pub use audio::{AudioCommand, AudioState, AudioUi};
+mod video;
+pub use video::{VideoCommand, VideoState, VideoUi};
 mod attachments;
 pub use attachments::DownloadUi;
 mod avatars;
@@ -382,6 +384,9 @@ impl MessagingUi {
 	}
 	pub fn audio(&mut self) -> &mut AudioUi {
 		&mut self.timeline.audio
+	}
+	pub fn video(&mut self) -> &mut VideoUi {
+		&mut self.timeline.video
 	}
 	pub fn clear_avatars(&mut self) {
 		self.avatars = avatars::Avatars::default();
@@ -2139,6 +2144,7 @@ impl MessagingUi {
 			self.pending_upload = None;
 		}
 		self.timeline.audio.seen = false;
+		self.timeline.video.seen = false;
 		let mut commands = Vec::new();
 		let ctx = ui.ctx().clone();
 		let settings_open = self.settings.open;
