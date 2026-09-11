@@ -184,6 +184,32 @@ fn timestamp(id: Id) -> time::OffsetDateTime {
 	time::OffsetDateTime::from_unix_timestamp(((id.0 >> 22) / 1000) as i64 + 1_420_070_400)
 		.expect("snowflake timestamp is in range")
 }
+/// Discord's Nitro boost pink; not part of any theme palette.
+const BOOST: egui::Color32 = egui::Color32::from_rgb(0xff, 0x73, 0xfa);
+/// Gutter glyph and tint for a system message type, mirroring Discord's system rows.
+fn system_icon(kind: u8, colors: &crate::design::Palette) -> (crate::icons::Icon, egui::Color32) {
+	use crate::icons::Icon;
+	match kind {
+		1 | 7 => (Icon::ArrowRight, colors.positive),
+		2 => (Icon::ArrowLeft, colors.danger),
+		3 => (Icon::Phone, colors.positive),
+		4 => (Icon::Pencil, colors.muted),
+		5 => (Icon::Image, colors.muted),
+		6 => (Icon::Pin, colors.muted),
+		8..=11 => (Icon::Sparkle, BOOST),
+		12 | 27..=31 => (Icon::Megaphone, colors.muted),
+		14 | 15 => (Icon::Compass, colors.positive),
+		16 | 17 => (Icon::Compass, colors.warning),
+		18 | 21 => (Icon::Threads, colors.muted),
+		22 => (Icon::AddPeople, colors.muted),
+		24 | 36 | 38 => (Icon::ShieldWarning, colors.danger),
+		37 | 39 => (Icon::ShieldWarning, colors.positive),
+		25 | 26 | 32 => (Icon::Crown, colors.warning),
+		44 => (Icon::ShoppingCart, colors.accent),
+		46 => (Icon::ChartBar, colors.muted),
+		_ => (Icon::Help, colors.muted),
+	}
+}
 fn grouped(previous: Option<&Message>, message: &Message, boundary: Option<Id>) -> bool {
 	previous.is_some_and(|previous| {
 		previous.author.id == message.author.id
@@ -381,6 +407,47 @@ fn bar_button(
 	}
 	ui.spacing_mut().item_spacing.x = 12.0;
 	response
+}
+/// Discord-style system row: muted sentence, strong clickable names, inline timestamp.
+fn show_system(
+	ui: &mut egui::Ui,
+	system: &model::SystemMessage,
+	time: time::OffsetDateTime,
+	state: &State,
+	profile: &mut Option<model::User>,
+	user_action: &mut Option<crate::user_menu::Action>,
+) {
+	{
+		let colors = crate::design::palette(ui);
+		ui.horizontal_wrapped(|ui| {
+			ui.spacing_mut().item_spacing = egui::vec2(0.0, 2.0);
+			for segment in &system.segments {
+				if !segment.strong {
+					ui.label(RichText::new(&segment.text).color(colors.muted));
+					continue;
+				}
+				let text = crate::design::medium(ui, &segment.text, 15.0).color(colors.text_strong);
+				let Some(user) = &segment.user else {
+					ui.add(egui::Label::new(text));
+					continue;
+				};
+				let response = ui
+					.add(egui::Label::new(text).sense(egui::Sense::click()))
+					.on_hover_cursor(egui::CursorIcon::PointingHand);
+				crate::user_menu::show(&response, state, user, profile, user_action);
+				if response.clicked() {
+					*profile = Some(user.clone());
+				}
+			}
+			ui.add_space(8.0);
+			ui.label(
+				RichText::new(format!("{:02}:{:02}", time.hour(), time.minute()))
+					.size(12.0)
+					.color(colors.muted),
+			)
+			.on_hover_text(format!("{time} UTC"));
+		});
+	}
 }
 impl TimelineView {
 	/// Fixture-only: open the media viewer on one attachment.
@@ -876,8 +943,24 @@ impl TimelineView {
 									}
 								});
 							}
+							let system = message.system_message();
 							ui.horizontal_top(|ui| {
-								if compact {
+								if system.is_some() {
+									let (gutter, _) = ui.allocate_exact_size(
+										egui::vec2(40.0, 22.0),
+										egui::Sense::hover(),
+									);
+									let (icon, tint) = system_icon(message.kind, &colors);
+									crate::icons::paint(
+										ui.painter(),
+										icon,
+										egui::Rect::from_center_size(
+											gutter.center() + egui::vec2(0.0, 1.5),
+											egui::Vec2::splat(18.0),
+										),
+										tint,
+									);
+								} else if compact {
 									time_rect = Some(
 										ui.allocate_exact_size(
 											egui::vec2(40.0, 22.0),
@@ -901,7 +984,7 @@ impl TimelineView {
 								}
 								ui.vertical(|ui| {
 									ui.set_width(ui.available_width());
-									if !compact {
+									if !compact && system.is_none() {
 										ui.allocate_ui_with_layout(
 											egui::vec2(ui.available_width(), 22.0),
 											egui::Layout::left_to_right(egui::Align::Center),
@@ -943,8 +1026,15 @@ impl TimelineView {
 											},
 										);
 									}
-									if let Some(summary) = message.system_summary() {
-										ui.label(RichText::new(summary).color(colors.muted));
+									if let Some(system) = &system {
+										show_system(
+											ui,
+											system,
+											timestamp(*id),
+											state,
+											profile,
+											&mut self.user_action,
+										);
 									}
 									let formatted = self.formatted.get(*id, &message.content);
 									let reveal = self
@@ -955,8 +1045,11 @@ impl TimelineView {
 										.map_or((0, false), |reveal| (reveal.text, reveal.media));
 									let mut text = if formatted.spoilers { before.0 } else { 0 };
 									let mut media = before.1;
-									if !(self.hide_media_links
-										&& crate::embeds::standalone_media_links(message))
+									let content_shown =
+										system.as_ref().is_some_and(|s| s.content_shown);
+									if !content_shown
+										&& !(self.hide_media_links
+											&& crate::embeds::standalone_media_links(message))
 									{
 										formatted.show_references(
 											ui,
@@ -2324,17 +2417,13 @@ mod tests {
 				}
 				output.drop_without_applying_deltas();
 			}
-			assert!(
-				painted
-					.iter()
-					.any(|s| s == "Welcome, Robin! Joined the server.")
-			);
-			assert!(
-				painted
-					.iter()
-					.any(|s| s == "Robin changed the channel name.")
-			);
-			assert!(painted.iter().any(|s| s.contains("new channel name")));
+			// System rows paint the sentence as styled runs with the member name strong.
+			assert!(painted.iter().any(|s| s == "Welcome, "));
+			assert!(painted.iter().any(|s| s == "! Joined the server."));
+			assert!(painted.iter().any(|s| s == " changed the channel name"));
+			assert!(painted.iter().any(|s| s == "new channel name"));
+			// Two system rows show a name run each; only the unknown type paints an author header.
+			assert_eq!(painted.iter().filter(|s| *s == "Robin").count(), 3);
 			assert_eq!(
 				painted
 					.iter()
