@@ -185,7 +185,7 @@ impl InviteDialog {
 			.collect();
 		let list_height =
 			(ui.ctx().content_rect().height() - (ui.cursor().top() - ui.min_rect().top()) - 300.0)
-				.clamp(40.0, 620.0);
+				.clamp(40.0, 240.0);
 		let enabled = state.created_invite(guild).is_some()
 			&& !state.server_invite_pending()
 			&& !state.server_action_pending();
@@ -387,19 +387,14 @@ impl InviteDialog {
 				ui.horizontal(|ui| {
 					let link = state.created_invite(guild);
 					let pending = state.server_action_pending();
-					let mut text = link.unwrap_or(if pending {
+					let text = link.unwrap_or(if pending {
 						"Creating invite link…"
 					} else {
 						"Create a link to share"
 					});
 					ui.add_sized(
 						[(ui.available_width() - 100.0).max(24.0), 38.0],
-						egui::TextEdit::singleline(&mut text)
-							.font(egui::FontId::proportional(18.0))
-							.desired_width(f32::INFINITY)
-							.align(egui::Align2::LEFT_CENTER)
-							.frame(egui::Frame::NONE)
-							.margin(egui::Margin::symmetric(8, 0)),
+						egui::Label::new(egui::RichText::new(text).size(18.0)).truncate(),
 					);
 					let label = if link.is_some() {
 						if self.copied { "Copied" } else { "Copy" }

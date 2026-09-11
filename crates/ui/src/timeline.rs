@@ -88,7 +88,7 @@ impl Revealed {
 pub fn visible_range(rows: &[(Id, f32)], min: f32, max: f32) -> (usize, usize, f32) {
 	let mut top = 0.0;
 	let mut first = 0;
-	while first < rows.len() && top + rows[first].1 < min {
+	while first < rows.len() && top + rows[first].1 <= min {
 		top += rows[first].1;
 		first += 1;
 	}
@@ -3670,10 +3670,10 @@ mod tests {
 			}
 			assert_eq!(
 				view.anchor.unwrap().0,
-				anchor.0,
-				"Deleting the anchored row retains its ID"
+				Id(anchor.0.0 + 1),
+				"Deleting the anchored row keeps the next surviving message at the top"
 			);
-			assert!(view.anchor.unwrap().1 <= view.heights[&anchor.0].1);
+			assert!(!view.heights.contains_key(&anchor.0));
 			view.jump = true;
 			view.following = true;
 			for _ in 0..8 {
@@ -3858,6 +3858,7 @@ mod tests {
 		assert!(top <= 1000.0);
 		assert_eq!(visible_range(&[], 0.0, 100.0), (0, 0, 0.0));
 		let neighbors = [(Id(1), 40.0), (Id(3), 100.0), (Id(4), 60.0)];
+		assert_eq!(visible_range(&neighbors, 40.0, 100.0), (1, 2, 40.0));
 		assert_eq!(anchor_offset(&neighbors, Id(2), 25.0), 40.0);
 		assert_eq!(anchor_offset(&neighbors, Id(5), 25.0), 140.0);
 		assert_eq!(anchor_offset(&neighbors, Id(3), 25.0), 65.0);
@@ -4375,7 +4376,10 @@ mod tests {
 		let shown = render(&mut view, &mut state, &mut images);
 		assert!(shown.contains("SPOILER_hidden.png"));
 		assert!(shown.contains("Open in browser"));
-		assert_eq!(images.take_requests().len(), 1);
+		let requests = images.take_requests();
+		assert_eq!(requests.len(), 2);
+		assert!(requests.iter().any(|key| key.starts_with("embed:")));
+		assert!(requests.iter().any(|key| key.starts_with("large:")));
 		let previous_key = layout_key(&message);
 		message.attachments[0].description = Some("Changed attachment".into());
 		assert_ne!(previous_key, layout_key(&message));
