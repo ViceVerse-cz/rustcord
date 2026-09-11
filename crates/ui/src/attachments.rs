@@ -397,12 +397,44 @@ fn gallery_step(attachments: &[Attachment], current: Id, previous: bool) -> Opti
 	Some(images[index].id)
 }
 
+/// Translucent round control floating over the viewer backdrop; always light-on-dark.
+fn glass_button(ui: &mut egui::Ui, icon: Icon, diameter: f32, label: &str) -> egui::Response {
+	let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(diameter), Sense::click());
+	let enabled = ui.is_enabled();
+	let hot = enabled && (response.hovered() || response.has_focus());
+	ui.painter().circle_filled(
+		rect.center(),
+		diameter / 2.0,
+		if hot {
+			Color32::from_white_alpha(40)
+		} else {
+			Color32::from_black_alpha(150)
+		},
+	);
+	icons::paint(
+		ui.painter(),
+		icon,
+		Rect::from_center_size(rect.center(), egui::Vec2::splat(diameter * 0.5)),
+		if !enabled {
+			Color32::from_gray(120)
+		} else if hot {
+			Color32::WHITE
+		} else {
+			Color32::from_gray(220)
+		},
+	);
+	response.on_hover_text(label)
+}
+
+/// Full-window media viewer. Returns the attachment to keep showing, or `None` once closed by
+/// the close control, Escape, or a click anywhere outside the image and its controls.
 pub fn viewer(
 	ui: &mut egui::Ui,
 	attachments: &[Attachment],
 	current: Id,
 	images: &mut Avatars,
 	download: &mut DownloadUi,
+	opening: &mut Option<String>,
 	demo: bool,
 ) -> Option<Id> {
 	let mut current = current;
@@ -418,44 +450,56 @@ pub fn viewer(
 	{
 		current = gallery_step(attachments, current, false)?;
 	}
-	let attachment = attachments
-		.iter()
-		.find(|a| a.id == current && a.is_image())?;
-	let count = attachments.iter().filter(|a| a.is_image()).count();
-	let index = attachments
-		.iter()
-		.filter(|a| a.is_image())
-		.position(|a| a.id == current)?;
-	let size = (ui.ctx().content_rect().size() - egui::vec2(32.0, 32.0)).max(egui::vec2(1.0, 1.0));
+	let gallery: Vec<&Attachment> = attachments.iter().filter(|a| a.is_image()).collect();
+	let index = gallery.iter().position(|a| a.id == current)?;
+	let attachment = gallery[index];
+	let count = gallery.len();
+	let size = ui.ctx().content_rect().size().max(egui::vec2(1.0, 1.0));
 	let mut close = false;
 	// Modal input capture prevents clicks and keys reaching the conversation. No dialog frame.
 	let overlay = egui::Modal::new(egui::Id::unique("attachment-viewer"))
-		.backdrop_color(Color32::from_black_alpha(240))
+		.backdrop_color(Color32::from_black_alpha(236))
 		.frame(egui::Frame::NONE)
 		.show(ui.ctx(), |ui| {
 			ui.set_min_size(size);
 			ui.set_max_size(size);
 			*ui.visuals_mut() = egui::Visuals::dark();
 			ui.visuals_mut().override_text_color = Some(Color32::WHITE);
-			ui.horizontal(|ui| {
-				if count > 1 {
-					ui.label(format!("{} / {count}", index + 1));
-				}
-				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-					close = icons::button(ui, Icon::Close, 32.0, "Close image (Esc)").clicked();
-					download_button(ui, attachment, download, demo);
-				});
-			});
-			let available = egui::vec2(size.x, (size.y - 80.0).max(1.0));
-			let (rect, _) = ui.allocate_exact_size(available, Sense::hover());
-			let image_rect = rect.shrink2(egui::vec2(if count > 1 { 44.0 } else { 0.0 }, 0.0));
+			// Everything not covered by a later control is "away": clicking it closes the viewer.
+			let (full, backdrop) = ui.allocate_exact_size(size, Sense::click());
+			const TOP: f32 = 56.0;
+			let bottom = if count > 1 { 116.0 } else { 60.0 };
+			let side = if count > 1 { 84.0 } else { 24.0 };
+			let stage = Rect::from_min_max(
+				full.min + egui::vec2(side, TOP),
+				full.max - egui::vec2(side, bottom),
+			)
+			.intersect(full);
+			let stage = if stage.is_positive() {
+				stage
+			} else {
+				Rect::from_center_size(full.center(), egui::vec2(1.0, 1.0))
+			};
+			// Image, centered on the stage, sized from bounded metadata.
+			let original = if attachment.media.width > 0 && attachment.media.height > 0 {
+				egui::vec2(
+					attachment.media.width.min(16384) as f32,
+					attachment.media.height.min(16384) as f32,
+				)
+			} else {
+				egui::vec2(320.0, 180.0)
+			};
+			let scale = (stage.width() / original.x).min(stage.height() / original.y);
+			let fitted = (original * scale).max(egui::vec2(1.0, 1.0));
+			let image_rect = Rect::from_center_size(stage.center(), fitted);
 			ui.scope_builder(
 				egui::UiBuilder::new().max_rect(image_rect).layout(
 					egui::Layout::centered_and_justified(egui::Direction::TopDown),
 				),
 				|ui| {
 					images
-						.show_large(ui, &attachment.media, image_rect.size(), demo)
+						.show_large(ui, &attachment.media, fitted, demo)
+						.interact(Sense::click())
 						.on_hover_text(
 							attachment
 								.description
@@ -464,31 +508,68 @@ pub fn viewer(
 						);
 				},
 			);
+			// Top bar: position counter on the left, actions on the right.
+			let bar = Rect::from_min_size(full.min, egui::vec2(full.width(), TOP));
 			if count > 1 {
-				for (previous, center, label) in [
+				let pill = Rect::from_center_size(
+					egui::pos2(bar.center().x, bar.min.y + 28.0),
+					egui::vec2(60.0, 28.0),
+				);
+				ui.painter()
+					.rect_filled(pill, 14, Color32::from_black_alpha(150));
+				ui.painter().text(
+					pill.center(),
+					egui::Align2::CENTER_CENTER,
+					format!("{} / {count}", index + 1),
+					egui::FontId::proportional(13.0),
+					Color32::from_gray(230),
+				);
+			}
+			ui.scope_builder(
+				egui::UiBuilder::new()
+					.max_rect(bar.shrink2(egui::vec2(16.0, 8.0)))
+					.layout(egui::Layout::right_to_left(egui::Align::Center)),
+				|ui| {
+					ui.spacing_mut().item_spacing.x = 8.0;
+					close = glass_button(ui, Icon::Close, 40.0, "Close (Esc)").clicked();
+					let idle = !demo && !download.active && download.request.is_none();
+					if ui
+						.add_enabled_ui(idle, |ui| {
+							glass_button(ui, Icon::Download, 40.0, "Download")
+						})
+						.inner
+						.on_disabled_hover_text(if demo {
+							"Downloads are disabled for synthetic attachments"
+						} else {
+							"A download is already active"
+						})
+						.clicked()
+					{
+						download.request = Some(attachment.clone());
+					}
+				},
+			);
+			// Previous / next controls hug the stage edges.
+			if count > 1 {
+				for (previous, center, icon, label) in [
 					(
 						true,
-						rect.left_center() + egui::vec2(18.0, 0.0),
-						"Previous image (←)",
+						egui::pos2(full.left() + side / 2.0, stage.center().y),
+						Icon::CaretLeft,
+						"Previous (←)",
 					),
 					(
 						false,
-						rect.right_center() - egui::vec2(18.0, 0.0),
-						"Next image (→)",
+						egui::pos2(full.right() - side / 2.0, stage.center().y),
+						Icon::ChevronRight,
+						"Next (→)",
 					),
 				] {
 					ui.scope_builder(
 						egui::UiBuilder::new()
-							.max_rect(Rect::from_center_size(center, egui::vec2(36.0, 44.0))),
+							.max_rect(Rect::from_center_size(center, egui::Vec2::splat(48.0))),
 						|ui| {
-							if ui
-								.add_sized(
-									[36.0, 44.0],
-									egui::Button::new(if previous { "←" } else { "→" }),
-								)
-								.on_hover_text(label)
-								.clicked()
-							{
+							if glass_button(ui, icon, 48.0, label).clicked() {
 								current =
 									gallery_step(attachments, current, previous).unwrap_or(current);
 							}
@@ -496,7 +577,132 @@ pub fn viewer(
 					);
 				}
 			}
-			download.show_status(ui);
+			// Caption: file name, size and dimensions, plus the browser link.
+			let caption_width = image_rect.width().max(360.0).min(stage.width());
+			let caption = Rect::from_min_size(
+				egui::pos2(
+					image_rect.left().min(stage.right() - caption_width),
+					(image_rect.bottom() + 8.0).min(stage.bottom()),
+				),
+				egui::vec2(caption_width, 44.0),
+			);
+			ui.scope_builder(
+				egui::UiBuilder::new()
+					.max_rect(caption)
+					.layout(egui::Layout::left_to_right(egui::Align::Center)),
+				|ui| {
+					ui.spacing_mut().item_spacing.x = 10.0;
+					ui.add(
+						egui::Label::new(
+							design::semibold(ui, &attachment.filename, 14.0).color(Color32::WHITE),
+						)
+						.truncate()
+						.selectable(false),
+					);
+					let mut meta = format_size(attachment.size);
+					if attachment.media.width > 0 && attachment.media.height > 0 {
+						meta = format!(
+							"{meta} · {}×{}",
+							attachment.media.width, attachment.media.height
+						);
+					}
+					ui.add(
+						egui::Label::new(
+							RichText::new(meta)
+								.size(13.0)
+								.color(Color32::from_gray(170)),
+						)
+						.selectable(false),
+					);
+					if let Some(target) = attachment.media.url.as_deref().and_then(external_url)
+						&& ui
+							.add(
+								egui::Label::new(
+									design::medium(ui, "Open in browser", 13.0)
+										.color(Color32::from_rgb(0, 168, 252)),
+								)
+								.sense(Sense::click())
+								.selectable(false),
+							)
+							.on_hover_cursor(egui::CursorIcon::PointingHand)
+							.clicked()
+					{
+						*opening = Some(target);
+					}
+					if download.active || !download.status.is_empty() {
+						ui.add(
+							egui::Label::new(
+								RichText::new(&download.status)
+									.size(13.0)
+									.color(Color32::from_gray(170)),
+							)
+							.truncate()
+							.selectable(false),
+						);
+						if download.active
+							&& ui
+								.add(
+									egui::Label::new(
+										design::medium(ui, "Cancel", 13.0)
+											.color(Color32::from_rgb(0, 168, 252)),
+									)
+									.sense(Sense::click())
+									.selectable(false),
+								)
+								.clicked()
+						{
+							download.cancel_requested = true;
+						}
+					}
+				},
+			);
+			// Thumbnail strip: the whole gallery at a glance, current one highlighted.
+			if count > 1 {
+				const THUMB: f32 = 48.0;
+				const GAP: f32 = 8.0;
+				let strip_width = count as f32 * THUMB + (count - 1) as f32 * GAP;
+				let strip = Rect::from_center_size(
+					egui::pos2(full.center().x, full.bottom() - 36.0),
+					egui::vec2(strip_width.min(full.width() - 32.0), THUMB),
+				);
+				ui.scope_builder(
+					egui::UiBuilder::new()
+						.max_rect(strip)
+						.layout(egui::Layout::left_to_right(egui::Align::Center)),
+					|ui| {
+						ui.spacing_mut().item_spacing.x = GAP;
+						for thumb in &gallery {
+							ui.push_id(("thumb", thumb.id), |ui| {
+								let response = images
+									.show_banner(ui, &thumb.media, egui::Vec2::splat(THUMB), demo)
+									.interact(Sense::click())
+									.on_hover_text(&thumb.filename);
+								let rect = response.rect;
+								if thumb.id == current {
+									ui.painter().rect_stroke(
+										rect.expand(2.0),
+										10,
+										Stroke::new(2.0, Color32::WHITE),
+										StrokeKind::Outside,
+									);
+								} else if !response.hovered() {
+									ui.painter().rect_filled(
+										rect,
+										8,
+										Color32::from_black_alpha(110),
+									);
+								}
+								if response.clicked() {
+									current = thumb.id;
+								}
+							});
+						}
+					},
+				);
+			}
+			if backdrop.clicked() {
+				close = true;
+			}
 		});
 	(!close && !overlay.should_close()).then_some(current)
 }
@@ -656,6 +862,88 @@ mod tests {
 			estimated_height(&message.attachments, 420.0)
 				< estimated_height(&message.attachments, 240.0)
 		);
+	}
+
+	#[test]
+	fn viewer_closes_on_click_away_but_not_on_image_or_controls() {
+		let attachments: Vec<_> = (0..2)
+			.map(|id| Attachment {
+				id: Id(id + 10),
+				filename: format!("synthetic-image-{id}.png"),
+				description: None,
+				content_type: Some("image/png".into()),
+				size: 512,
+				spoiler: false,
+				media: model::EmbedMedia {
+					width: 640,
+					height: 360,
+					..Default::default()
+				},
+			})
+			.collect();
+		let ctx = egui::Context::default();
+		let mut images = Avatars::default();
+		let mut download = DownloadUi::default();
+		let mut opening = None;
+		let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0));
+		let mut frame = |events, current| {
+			let mut result = None;
+			ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(screen),
+					events,
+					..Default::default()
+				},
+				|ui| {
+					result = viewer(
+						ui,
+						&attachments,
+						current,
+						&mut images,
+						&mut download,
+						&mut opening,
+						true,
+					);
+				},
+			)
+			.drop_without_applying_deltas();
+			result
+		};
+		let click = |pos: egui::Pos2| {
+			[true, false].map(|pressed| egui::Event::PointerButton {
+				pos,
+				button: egui::PointerButton::Primary,
+				pressed,
+				modifiers: egui::Modifiers::NONE,
+			})
+		};
+		// Modal sizing pass, then a settled frame.
+		assert_eq!(frame(vec![], Id(10)), Some(Id(10)));
+		assert_eq!(frame(vec![], Id(10)), Some(Id(10)));
+		// The image is centered on the stage and must swallow its own clicks.
+		let center = screen.center();
+		frame(vec![egui::Event::PointerMoved(center)], Id(10));
+		let [down, up] = click(center);
+		frame(vec![down], Id(10));
+		assert_eq!(frame(vec![up], Id(10)), Some(Id(10)));
+		// The next control sits on the right edge at the stage's vertical center (top bar 56,
+		// thumbnail strip 116) and advances the gallery instead of closing.
+		let next = egui::pos2(
+			screen.right() - 42.0,
+			56.0 + (screen.height() - 172.0) / 2.0,
+		);
+		frame(vec![egui::Event::PointerMoved(next)], Id(10));
+		let [down, up] = click(next);
+		frame(vec![down], Id(10));
+		assert_eq!(frame(vec![up], Id(10)), Some(Id(11)));
+		// Anywhere else on the dimmed backdrop closes the viewer; the bottom-left corner is
+		// outside the image, the edge controls and the centered thumbnail strip.
+		let away = egui::pos2(screen.left() + 40.0, screen.bottom() - 40.0);
+		frame(vec![egui::Event::PointerMoved(away)], Id(11));
+		let [down, up] = click(away);
+		frame(vec![down], Id(11));
+		assert_eq!(frame(vec![up], Id(11)), None);
+		assert!(opening.is_none() && download.request.is_none());
 	}
 
 	#[test]

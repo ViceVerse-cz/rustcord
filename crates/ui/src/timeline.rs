@@ -48,6 +48,8 @@ pub struct TimelineView {
 	// Pruned with the active window: at most its 500 records / 4 MiB content budget.
 	revealed: BTreeMap<Id, Revealed>,
 	viewing: Option<(Id, Id)>,
+	/// Fixture-only: viewer to open once its message has arrived in the timeline.
+	pending_viewer: Option<(Id, Id)>,
 	pub(super) download: crate::attachments::DownloadUi,
 	pub(super) audio: crate::audio::AudioUi,
 	pub(super) opening: Option<String>,
@@ -387,6 +389,10 @@ fn bar_button(
 	response
 }
 impl TimelineView {
+	/// Fixture-only: open the media viewer on one attachment.
+	pub(super) fn preview_image_viewer(&mut self, message: Id, attachment: Id) {
+		self.pending_viewer = Some((message, attachment));
+	}
 	pub(super) fn viewing_latest(&self, channel: Id) -> bool {
 		self.channel == Some(channel) && self.following && self.at_current_latest
 	}
@@ -423,6 +429,7 @@ impl TimelineView {
 				following: true,
 				download: std::mem::take(&mut self.download),
 				opening: self.opening.take(),
+				pending_viewer: self.pending_viewer.take(),
 				jump: true,
 				..Self::default()
 			};
@@ -1107,7 +1114,11 @@ impl TimelineView {
 					if mentioned {
 						ui.painter().set(
 							background,
-							egui::Shape::rect_filled(rect, 0.0, colors.warning.gamma_multiply(0.10)),
+							egui::Shape::rect_filled(
+								rect,
+								0.0,
+								colors.warning.gamma_multiply(0.10),
+							),
 						);
 						ui.painter().rect_filled(
 							egui::Rect::from_min_size(rect.min, egui::vec2(3.0, rect.height())),
@@ -1535,6 +1546,12 @@ impl TimelineView {
 				ui.ctx().request_repaint();
 			}
 		}
+		if let Some((message_id, attachment_id)) = self.pending_viewer
+			&& state.timeline.get(message_id).is_some()
+		{
+			self.pending_viewer = None;
+			self.viewing = Some((message_id, attachment_id));
+		}
 		if let Some((message_id, attachment_id)) = self.viewing {
 			let message = state.timeline.get(message_id).filter(|m| {
 				!crate::embeds::has_media_spoilers(m)
@@ -1550,6 +1567,7 @@ impl TimelineView {
 					attachment_id,
 					avatars,
 					&mut self.download,
+					&mut self.opening,
 					state.demo,
 				)
 				.map(|id| (message_id, id))
@@ -3855,7 +3873,7 @@ mod tests {
 		render(&mut view, &mut state, &mut images); // Modal sizing pass precedes visible paint.
 		let shown = render(&mut view, &mut state, &mut images);
 		assert!(shown.contains("SPOILER_hidden.png"));
-		assert!(shown.contains("Download"));
+		assert!(shown.contains("Open in browser"));
 		assert_eq!(images.take_requests().len(), 1);
 		let previous_key = layout_key(&message);
 		message.attachments[0].description = Some("Changed attachment".into());

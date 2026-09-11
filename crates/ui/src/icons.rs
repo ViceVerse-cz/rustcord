@@ -104,10 +104,12 @@ pub enum Icon {
 	Ebay,
 	Folder,
 	FolderOpen,
+	CaretLeft,
+	Download,
 }
 
 impl Icon {
-	pub const ALL: [Icon; 88] = [
+	pub const ALL: [Icon; 90] = [
 		Icon::ChevronDown,
 		Icon::ChevronRight,
 		Icon::Gear,
@@ -196,6 +198,8 @@ impl Icon {
 		Icon::Ebay,
 		Icon::Folder,
 		Icon::FolderOpen,
+		Icon::CaretLeft,
+		Icon::Download,
 	];
 	/// Upstream icon name recorded in `index.tsv`.
 	fn asset(self) -> &'static str {
@@ -288,6 +292,8 @@ impl Icon {
 			Icon::Roblox => "roblox",
 			Icon::Crunchyroll => "crunchyroll",
 			Icon::Ebay => "ebay",
+			Icon::CaretLeft => "caret-left",
+			Icon::Download => "download-simple",
 		}
 	}
 	fn cell(self) -> usize {

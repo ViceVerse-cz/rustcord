@@ -1000,7 +1000,7 @@ mod tests {
 					let mut slot = egui::Rect::NOTHING;
 					let output = ctx.run_ui(Default::default(), |ui| {
 						slot = images
-							.show_media(ui, &media, egui::vec2(280.0, 180.0), false, large)
+							.show_media(ui, &media, egui::vec2(280.0, 180.0), false, large, false)
 							.rect;
 					});
 					output.drop_without_applying_deltas();
@@ -1015,7 +1015,14 @@ mod tests {
 						assert_eq!(
 							slot,
 							images
-								.show_media(ui, &media, egui::vec2(280.0, 180.0), false, large)
+								.show_media(
+									ui,
+									&media,
+									egui::vec2(280.0, 180.0),
+									false,
+									large,
+									false
+								)
 								.rect
 						);
 					});

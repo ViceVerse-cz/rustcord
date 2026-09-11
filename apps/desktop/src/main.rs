@@ -524,6 +524,11 @@ impl Desktop {
 			messaging.preview_emoji_picker();
 			state.status = "Offline fixture · emoji popout opened at startup";
 		}
+		if demo && std::env::args().any(|arg| arg == "--demo-viewer") {
+			// Opens the full-window media viewer on the fixture gallery message.
+			messaging.preview_image_viewer(model::Id(500), model::Id(700));
+			state.status = "Offline fixture · media viewer opened at startup";
+		}
 		if demo && std::env::args().any(|arg| arg == "--demo-attachment=file") {
 			// Non-image variant: exercises the file-kind glyph and extension badge.
 			messaging.preview_attachment("quarterly-report.pdf", 1_482_311, None);

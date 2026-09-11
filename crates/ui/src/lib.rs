@@ -240,6 +240,10 @@ impl MessagingUi {
 	pub fn preview_emoji_picker(&mut self) {
 		self.emoji_picker.preview();
 	}
+	/// Fixture-only: open the media viewer on `attachment` of `message` at startup.
+	pub fn preview_image_viewer(&mut self, message: model::Id, attachment: model::Id) {
+		self.timeline.preview_image_viewer(message, attachment);
+	}
 	/// Fixture-only: opens the GIFs tab at `section` (`""`, `favorites`, `trending` or a query).
 	pub fn preview_gif_picker(&mut self, section: &str) {
 		self.emoji_picker.preview_gifs(section);
