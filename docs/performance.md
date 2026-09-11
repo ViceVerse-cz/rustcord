@@ -2574,3 +2574,39 @@ Runtime bounds: one native icon/menu, three coalesced event bits, no tray timer/
 one cancellable preference operation and one queued boolean action; 1 MiB HTTP
 response / 16 KiB retained status subtree; 64 KiB borrowed session projection and
 16 entries per session/activity list. These limits are not whole-process memory.
+
+## Mention highlighting - September 11, 2026
+
+Compared clean baseline `0c1a43d` with `fix/mention-highlights` on Windows 11 Home,
+AMD Ryzen 7 7800X3D (16 logical CPUs), 32,627,616 KiB visible RAM, Rust 1.98.1
+x86_64-pc-windows-msvc. Default release text build, no default features, configured
+wgpu renderer; GPU adapter and display scale unverified because native capture failed.
+Package snapshots precede these documentation appends and exclude nested voice staging.
+ZIP uses PowerShell `Compress-Archive -CompressionLevel Optimal` on each package.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable bytes | 55,043,584 | 55,044,608 | +1,024 (+0.0019%) |
+| Text installed package bytes | 59,961,138 | 59,962,162 | +1,024 (+0.0017%) |
+| Text ZIP bytes | 35,539,850 | 35,540,776 | +926 (+0.0026%) |
+| Settled working set bytes | 167,333,888 | 167,071,744 | -262,144 (-0.16%) |
+| Peak working set bytes | 194,613,248 | 194,650,112 | +36,864 (+0.019%) |
+| Settled private bytes | 395,259,904 | 395,378,688 | +118,784 (+0.030%) |
+| CPU seconds over nominal 10-second sample | 0 | 0.0625 | +0.0625 |
+
+Idle sampling: one process/run, explicit `--demo`, `Start-Process -WindowStyle Hidden`,
+10-second warmup, 20 Get-Process samples spaced 500 ms apart. No scripted interaction:
+the native Computer Use pipe is unavailable. These are limited idle process samples,
+not proof of foreground rendering, typing latency, p95 frames, startup latency, or
+GPU memory. Both runs overlapped build/test work; tiny differences are noise, not an
+improvement or established regression. No helper process accounting was performed.
+Raw task samples remain in the isolated worktree's ignored `target/mention-baseline`
+and `target/mention-after` directories. Existing UI caches and input limits unchanged;
+one background color is stored per existing composer inline slot.
+
+Voice release compilation succeeded before and after: executable 61,057,024 ->
+61,058,560 bytes (+1,536; +0.0025%). `cargo xtask package-voice` fails after compilation
+on both revisions because exact license texts for openh264-sys2 0.9.8 and openh264
+0.9.8 are missing. The realfft 3.5.0 incomplete upstream license-evidence warning also
+remains. Full voice installed/ZIP comparison is unavailable; partial staging is not
+reported as a complete package. Voice was never activated during measurement.

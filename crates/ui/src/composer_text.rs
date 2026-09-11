@@ -14,6 +14,7 @@ struct Inline {
 	projected: usize,
 	width: f32,
 	label: Option<Arc<egui::Galley>>,
+	background: Color32,
 	image: Option<Image<'static>>,
 }
 
@@ -44,6 +45,8 @@ impl Layout {
 		let colors = crate::design::palette(ui);
 		colors.text.hash(&mut key);
 		colors.accent.hash(&mut key);
+		colors.mention_text.hash(&mut key);
+		colors.mention_bg.hash(&mut key);
 		colors.muted.hash(&mut key);
 		avatars.revision.hash(&mut key);
 		emoji::ready(ui.ctx()).hash(&mut key);
@@ -82,12 +85,16 @@ impl Layout {
 		while byte < text.len() {
 			let tail = &text[byte..];
 			let mut label = None;
+			let mut background = colors.accent.gamma_multiply(0.12);
 			let mut image = None;
 			let mut artwork = false;
-			let length = if let Some((id, len)) = model::user_mention_prefix(tail)
-				&& let Some(user) = users.iter().find(|u| u.id == id)
-			{
-				label = Some((format!("@{}", user.name), colors.accent));
+			let length = if let Some((id, len)) = model::user_mention_prefix(tail) {
+				let name = users
+					.iter()
+					.find(|u| u.id == id)
+					.map_or_else(|| id.to_string(), |user| user.name.clone());
+				label = Some((format!("@{name}"), colors.mention_text));
+				background = colors.mention_bg;
 				len
 			} else if let Some((id, len)) = emoji::custom_prefix(tail) {
 				image = avatars.custom_image(ui.ctx(), id, size, demo);
@@ -135,6 +142,7 @@ impl Layout {
 					projected,
 					width: slot,
 					label,
+					background,
 					image,
 				});
 				projected += 1;
@@ -209,11 +217,7 @@ impl Layout {
 				continue;
 			}
 			if let Some(label) = &inline.label {
-				painter.rect_filled(
-					rect,
-					3,
-					crate::design::palette(ui).accent.gamma_multiply(0.12),
-				);
+				painter.rect_filled(rect, 3, inline.background);
 				painter.galley(
 					egui::pos2(rect.left() + 3.0, rect.center().y - label.size().y / 2.0),
 					label.clone(),
@@ -322,6 +326,68 @@ mod tests {
 			avatar: None,
 			discriminator: 0,
 		}]
+	}
+
+	#[test]
+	fn mention_highlights_follow_theme_and_preserve_wire_text() {
+		let ctx = egui::Context::default();
+		let mut layout = Layout::default();
+		let mut avatars = Avatars::default();
+		let mut text = "<@42> <@!43> <:missing:9001>".to_owned();
+		for dark in [true, false] {
+			ctx.set_visuals(if dark {
+				egui::Visuals::dark()
+			} else {
+				egui::Visuals::light()
+			});
+			for width in [80.0, 300.0] {
+				let output = ctx.run_ui(Default::default(), |ui| {
+					let colors = crate::design::palette(ui);
+					let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, _| {
+						layout.galley(ui, buffer.as_str(), width, &users(), &mut avatars, false)
+					};
+					let edit = egui::TextEdit::multiline(&mut text)
+						.layouter(&mut layouter)
+						.show(ui);
+					layout.paint(ui, &edit);
+					assert_eq!(edit.galley.job.text, text);
+					assert_eq!(layout.inlines.len(), 3);
+					for (inline, label) in layout.inlines.iter().zip(["@Zoë", "@43", ":missing:"])
+					{
+						let mention = label.starts_with('@');
+						let galley = inline.label.as_ref().unwrap();
+						assert_eq!(galley.job.text, label);
+						assert_eq!(
+							galley.job.sections[0].format.color,
+							if mention {
+								colors.mention_text
+							} else {
+								colors.muted
+							}
+						);
+						assert_eq!(
+							inline.background,
+							if mention {
+								colors.mention_bg
+							} else {
+								colors.accent.gamma_multiply(0.12)
+							}
+						);
+					}
+				});
+				let colors = crate::design::palette_for(&ctx);
+				assert_eq!(
+					output
+						.shapes
+						.iter()
+						.filter(|s| matches!(&s.shape,
+					egui::Shape::Rect(rect) if rect.fill == colors.mention_bg))
+						.count(),
+					2
+				);
+				output.drop_without_applying_deltas();
+			}
+		}
 	}
 
 	#[test]

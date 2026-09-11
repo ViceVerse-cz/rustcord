@@ -2744,3 +2744,49 @@ Discord message/call, microphone or camera was used. Linux/macOS tray unsupporte
 The owner subsequently requested fixing Clippy and pushing directly to main, with
 voice license-text packaging not a delivery gate. Existing license checks/files remain
 intact. Final integration checks and push evidence follow below.
+
+## Mention highlighting - September 11, 2026
+
+Mentions selected from autocomplete now use the existing mention foreground and
+background in both the composer/inline editor and formatted messages (including
+pending rows). Valid unresolved user IDs display as highlighted `@id` tokens.
+Profile actions, source text, copying, cursor snapping, undo, IME, and custom-emoji
+fallback styling retain their existing paths. Literal `@name` text is not converted
+into a ping; code, escaped tokens, and concealed spoilers retain parser protections.
+No new dependency, fetch, cache, or persistence behavior was added.
+
+Baseline: `0c1a43d32a3072de2621d5aa8286c7d7e7b6ab39` from fetched `origin/main`.
+Task branch: `fix/mention-highlights`, isolated worktree; original main checkout clean
+at `381e178` and left untouched. Rust 1.98.1, Windows x86_64 MSVC.
+
+Verification:
+
+- `cargo test --locked -p ui mention -- --skip inline_edit_uses_mentions_ime_and_preserves_draft_with_optimistic_updates`:
+  8 passed, including two new rendering checks across dark/light and 80/300-point
+  widths. Also passed with `--all-features`. The excluded test failed before edits.
+- `cargo clippy --locked -p ui --all-targets -- -D warnings`, `cargo xtask policy`,
+  `cargo fmt --all`, and `git diff --check` passed.
+- `cargo xtask check` failed in the UI test executable (Windows abort 0xc0000409).
+  Named failures: inline-edit IME/save fixture, link-confirmation fixture, and pending
+  gray-to-confirmed fixture. All three were reproduced separately on the untouched
+  baseline. Full workspace verification is therefore not green.
+- `cargo xtask package` passed before and after; text executable +1,024 bytes.
+- Independent read-only review found no blocking issues in the two changed UI files.
+
+Native before/after screenshots and pointer interaction are blocked: `orca` is not
+installed, and bundled Computer Use `sky.list_windows()` reports "Computer Use native
+pipe is unavailable: failed to connect native pipe: The system cannot find the file
+specified. (os error 2)" after retry and session reset. No screenshots were fabricated.
+Headless egui rendering checks are not native screenshot or accessibility evidence.
+A limited synthetic idle process comparison is recorded in performance.md; no live
+Discord messages, calls, microphone, authenticated session, or other OS validation.
+
+Manual reproduction: run `cargo run --locked -p serein -- --demo`, type `@`, select a
+synthetic person with Tab, inspect the mention, then inspect the existing `Hey <@2>`
+fixture message and open its profile. Repeat with `--demo-light` and a narrow window.
+Keep the PR draft until missing visual evidence and repository-wide gates are resolved.
+
+Final voice release compilation also passed (+1,536 executable bytes), but
+`cargo xtask package-voice` failed on both baseline and after: missing exact license
+texts for openh264-sys2 0.9.8 and openh264 0.9.8, plus the existing realfft evidence
+warning. No notices or policy checks were bypassed; complete voice packages unavailable.
