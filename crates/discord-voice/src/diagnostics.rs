@@ -15,6 +15,7 @@ pub(crate) enum Scope {
 pub(crate) enum Stage {
 	EchoRender,
 	EchoCapture,
+	Noise,
 	Encode,
 	Mix,
 	Receive,
@@ -25,7 +26,7 @@ struct Report {
 	scope: Scope,
 	window_ms: u64,
 	// Each stage: calls, total elapsed microseconds, maximum elapsed microseconds.
-	stages: [[u64; 3]; 5],
+	stages: [[u64; 3]; 6],
 	wakes: u64,
 	resets: u64,
 	drops: u64,
@@ -66,7 +67,7 @@ impl Metrics {
 			report: Report {
 				scope,
 				window_ms: 0,
-				stages: [[0; 3]; 5],
+				stages: [[0; 3]; 6],
 				wakes: 0,
 				resets: 0,
 				drops: 0,
@@ -82,12 +83,20 @@ impl Metrics {
 
 	pub fn finish(&mut self, stage: Stage, start: Option<Instant>) {
 		if let Some(start) = start {
-			let micros = start.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
-			let [calls, total, max] = &mut self.report.stages[stage as usize];
-			*calls = calls.saturating_add(1);
-			*total = total.saturating_add(micros);
-			*max = (*max).max(micros);
+			self.add(stage, start.elapsed());
 		}
+	}
+
+	/// Records one call measured elsewhere; ignored while diagnostics are off.
+	pub fn add(&mut self, stage: Stage, elapsed: Duration) {
+		if self.send.is_none() {
+			return;
+		}
+		let micros = elapsed.as_micros().min(u128::from(u64::MAX)) as u64;
+		let [calls, total, max] = &mut self.report.stages[stage as usize];
+		*calls = calls.saturating_add(1);
+		*total = total.saturating_add(micros);
+		*max = (*max).max(micros);
 	}
 
 	pub fn poll(&mut self, reset: bool, drops: u64, stalled: bool, noise_frames: u64) {
@@ -111,7 +120,7 @@ impl Metrics {
 			self.send = None;
 		}
 		self.since = Instant::now();
-		self.report.stages = [[0; 3]; 5];
+		self.report.stages = [[0; 3]; 6];
 		self.report.wakes = 0;
 		self.report.resets = 0;
 		self.report.drops = 0;
@@ -128,7 +137,7 @@ impl Drop for Metrics {
 
 fn write_report(report: Report, bytes: &mut usize, writer: &mut impl Write) -> bool {
 	let line = format!(
-		"[Serein voice {:?}] debug={} window_ms={} wakes={} resets={} drops={} stalls={} noise_frames={} stages(calls,total_us,max_us): echo_render={:?} echo_capture={:?} encode={:?} mix={:?} receive={:?}\n",
+		"[Serein voice {:?}] debug={} window_ms={} wakes={} resets={} drops={} stalls={} noise_frames={} stages(calls,total_us,max_us): echo_render={:?} echo_capture={:?} noise={:?} encode={:?} mix={:?} receive={:?}\n",
 		report.scope,
 		cfg!(debug_assertions),
 		report.window_ms,
@@ -142,6 +151,7 @@ fn write_report(report: Report, bytes: &mut usize, writer: &mut impl Write) -> b
 		report.stages[2],
 		report.stages[3],
 		report.stages[4],
+		report.stages[5],
 	);
 	if line.len() > *bytes {
 		return false;

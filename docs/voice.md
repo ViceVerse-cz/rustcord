@@ -161,8 +161,8 @@ summary. Remove the environment variables to disable diagnostics on the next lau
 
 Each voice stage reports `[calls, total_us, max_us]` over `window_ms`:
 `echo_render` processes speaker reference; `echo_capture` includes AEC and optional
-noise suppression; `encode` includes Opus and outgoing encryption; `mix` includes
-remote Opus decoding; `receive` measures accepted packet decryption/queueing.
+noise suppression; `noise` isolates the RNNoise suppression part of `echo_capture`;
+`encode` includes Opus and outgoing encryption; `mix` includes remote Opus decoding; `receive` measures accepted packet decryption/queueing.
 `noise_frames` identifies capture frames processed with suppression enabled.
 Audio `wakes` counts worker iterations; Transport `wakes` counts 20 ms timer ticks.
 `resets` counts AEC resets from mute transitions or callback overruns; `drops` counts
@@ -170,8 +170,8 @@ full capture/playback worker queues; `stalls` counts transport gaps of at least 
 Stage timings exclude device callbacks, socket waits, device opening and UI rendering.
 These are elapsed times, including scheduler preemption, **not process CPU percentages**.
 `debug=true` identifies a build with debug assertions. Development builds optimize the
-existing Sonora echo-processing crates while keeping application code unoptimized and
-debuggable; release builds remain the reference for overall performance. Rebuild and
+Sonora echo-processing crates, RNNoise (`nnnoiseless` and its FFT chain) and libopus
+while keeping application code unoptimized and debuggable; release builds remain the reference for overall performance. Rebuild and
 restart to apply this change. Compare speaking, muted and noise-suppression-on/off windows to narrow
 the cause; UI frame diagnostics help identify excessive rendering separately.
 

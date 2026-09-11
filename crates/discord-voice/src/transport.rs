@@ -238,7 +238,8 @@ async fn run_inner(
 	let mut heard = false;
 	let mut speaking = false;
 	let mut silence = 0u8;
-	let mut encoder = Encoder::new(48_000, Channels::Stereo, Application::Voip)
+	// Capture is mono; a mono stream halves Opus work and decodes identically on stereo receivers.
+	let mut encoder = Encoder::new(48_000, Channels::Mono, Application::Voip)
 		.map_err(|_| "Opus encoder initialization failed")?;
 	encoder
 		.set_bitrate(Bitrate::Bits(64_000))
@@ -249,7 +250,7 @@ async fn run_inner(
 	let mut timestamp = u32::from_be_bytes(random[2..].try_into().unwrap());
 	let mut packet = [0u8; MAX_PACKET + 1];
 	let mut encoded = [0u8; 1275];
-	let mut stereo = [0.0f32; 1920];
+	let mut mono = [0.0f32; 960];
 	let mut tick = tokio::time::interval(Duration::from_millis(20));
 	tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
 	let mut signal_window = Instant::now();
@@ -327,8 +328,8 @@ async fn run_inner(
 					let start = metrics.start();
 					let data=if active {
 						let frame=latest.unwrap();
-						for (sample,pair) in frame.iter().zip(stereo.as_chunks_mut::<2>().0.iter_mut()) {pair.fill(if sample.is_finite(){sample.clamp(-1.0,1.0)}else{0.0});}
-						let length=encoder.encode_float(&stereo,&mut encoded).map_err(|_|"Opus encoding failed")?;
+						for (sample,out) in frame.iter().zip(mono.iter_mut()) {*out=if sample.is_finite(){sample.clamp(-1.0,1.0)}else{0.0};}
+						let length=encoder.encode_float(&mono,&mut encoded).map_err(|_|"Opus encoding failed")?;
 						dave.session.encrypt_opus(&encoded[..length]).map_err(|_|"DAVE audio encryption failed")?.into_owned()
 					} else {silence-=1;davey::OPUS_SILENCE_PACKET.to_vec()};
 					let mut header=[0;12];header[0]=0x80;header[1]=120;header[2..4].copy_from_slice(&sequence.to_be_bytes());header[4..8].copy_from_slice(&timestamp.to_be_bytes());header[8..12].copy_from_slice(&ssrc.to_be_bytes());
