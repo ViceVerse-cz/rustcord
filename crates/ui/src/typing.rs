@@ -94,9 +94,8 @@ fn label(state: &State, channel: Id, now: Instant) -> Option<String> {
 }
 
 pub(super) fn show(ui: &mut egui::Ui, state: &State, channel: Id, now: Instant) {
-	let Some(label) = label(state, channel, now) else {
-		return;
-	};
+	// Keep one text row even when idle so typing never resizes the conversation.
+	let label = label(state, channel, now).unwrap_or_else(|| " ".into());
 	let response = ui.add(
 		egui::Label::new(
 			egui::RichText::new(label)
@@ -192,6 +191,7 @@ mod tests {
 		assert!(label(&state, Id(11), now).is_none());
 		for width in [160.0, 760.0] {
 			let ctx = egui::Context::default();
+			let mut row_height = None;
 			for expired in [false, true] {
 				let instant = if expired {
 					now + Duration::from_secs(11)
@@ -210,6 +210,9 @@ mod tests {
 						|ui| {
 							show(ui, &state, Id(10), instant);
 							assert!(ui.min_rect().width() <= width);
+							let height = ui.min_rect().height();
+							assert!(height > 0.0);
+							assert_eq!(*row_height.get_or_insert(height), height);
 						},
 					);
 					assert!(output.platform_output.commands.is_empty());

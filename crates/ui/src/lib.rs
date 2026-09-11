@@ -1167,7 +1167,6 @@ impl MessagingUi {
 			ctx.request_repaint();
 			return;
 		}
-		typing::show(ui, state, channel, std::time::Instant::now());
 		let colors = crate::design::palette(ui);
 		let editing_key = self
 			.editing
@@ -2121,6 +2120,7 @@ impl MessagingUi {
 					)
 					.show(ui, |ui| {
 						self.composer(ui, state, channel, &ctx, &mut commands);
+						typing::show(ui, state, channel, std::time::Instant::now());
 					});
 				if commands
 					.iter()

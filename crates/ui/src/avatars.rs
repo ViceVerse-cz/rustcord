@@ -15,7 +15,8 @@ struct Animation {
 	bytes: usize,
 }
 
-const TEXTURES: usize = 64;
+// A visible server emoji grid plus avatars/icons must fit without evicting each other.
+const TEXTURES: usize = 256;
 const TEXTURE_BYTES: usize = 16 * 1024 * 1024;
 const REQUESTS: usize = 128;
 const RETRY: Duration = Duration::from_secs(60);
@@ -1019,7 +1020,11 @@ mod tests {
 			Some(ColorImage::filled([129, 128], egui::Color32::WHITE)),
 		);
 		assert!(avatars.textures.is_empty());
-		for i in 0..128 {
+		for i in 0..TEXTURES * 2 {
+			if i >= REQUESTS {
+				avatars.request(i.to_string());
+				avatars.take_requests();
+			}
 			avatars.accept(
 				&ctx,
 				i.to_string(),
@@ -1033,7 +1038,7 @@ mod tests {
 				.values()
 				.map(|(_, texture)| texture.byte_size())
 				.sum::<usize>(),
-			4 * 1024 * 1024
+			TEXTURES * 128 * 128 * 4
 		);
 		avatars.accept(
 			&ctx,

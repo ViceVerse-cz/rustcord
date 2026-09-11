@@ -182,7 +182,8 @@ impl State {
 			.get(&channel)
 			.map_or(0, |(_, epoch)| *epoch);
 		self.read_state.pending = Some((channel, message, request, epoch));
-		self.read_state.status = Some("Marking read…");
+		// Routine acknowledgements must not resize the timeline on every incoming message.
+		self.read_state.status = None;
 		Some(crate::Command::MarkRead {
 			channel,
 			message,

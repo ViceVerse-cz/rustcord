@@ -446,11 +446,19 @@ impl TimelineView {
 				self.mark_read = None;
 			}
 		}
-		let can_jump_unread = state.can_jump_unread();
 		let can_load_newer = state.can_load_newer();
 		if self.unread_jump || self.load_newer {
 			self.browse_away();
 		}
+		// Incoming messages being watched at the live edge are not a new unread section.
+		// Keep service read state unchanged while its acknowledgement is in flight.
+		let watching_latest = self.following
+			&& self.at_current_latest
+			&& !state.history_targeted
+			&& state.history_before.is_none()
+			&& state.history_after.is_none()
+			&& ui.input(|input| input.focused);
+		let can_jump_unread = state.can_jump_unread() && !watching_latest;
 		let boundary = state
 			.selected
 			.and_then(|channel| state.read_marker(channel))
@@ -460,7 +468,8 @@ impl TimelineView {
 					.iter()
 					.find(|m| read.is_none_or(|id| m.id > id))
 					.map(|m| m.id)
-			});
+			})
+			.filter(|_| !watching_latest || self.unread_boundary.is_some());
 		if self.unread_boundary != boundary {
 			self.unread_boundary = boundary;
 			self.revision = u64::MAX;
@@ -1352,6 +1361,10 @@ impl TimelineView {
 			self.reflow_frames = self.reflow_frames.saturating_add(1);
 			self.consecutive_reflows = self.consecutive_reflows.saturating_add(1);
 			self.revision = u64::MAX;
+			if self.following {
+				self.jump = true;
+				ui.ctx().request_discard("Timeline message heights settled");
+			}
 			ui.ctx().request_repaint();
 		}
 		if !reflow {
@@ -3054,6 +3067,16 @@ mod tests {
 			assert!(
 				view.heights.len() < 60,
 				"Only visible rows and overscan are measured"
+			);
+			state
+				.timeline
+				.insert(text_message(501), false, false)
+				.unwrap();
+			state.revision += 1;
+			render(&mut view, &mut state);
+			assert!(
+				view.following,
+				"An arriving message must keep the live edge sticky"
 			);
 			view.following = false;
 			view.anchor = Some((Id(200), 5.0));
