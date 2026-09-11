@@ -2527,3 +2527,44 @@ the verified identical-tree replay executable from the prior build; after was re
 This workload does not exercise local game publication or UI; its noisy delta is not a
 performance improvement claim. The local view adds one activity capped at 4 KiB retained
 heap; selectors borrow it and equal activity reports do not invalidate the timeline.
+
+
+## Unread/history banner fix — September 11, 2026
+
+Baseline `690ce91`, clean task branch `t3code/fix-unread-message-banner`, Rust 1.98.1
+locked release builds. macOS 27.0 (26A428), Apple M1 Pro, 16 GiB RAM. Text-only native
+`--demo`, default synthetic getting-started channel, wgpu; adapter/display scale
+unmeasured. Raw samples and executable/source hashes are in
+`docs/pr-evidence/unread-message-banner/measurements.json`.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable (bytes) | 51,620,640 | 51,620,704 | +64 (+0.0001%) |
+| Text installed package (bytes) | 58,850,069 | 58,850,133 | +64 (+0.0001%) |
+| Text ZIP (bytes) | 36,630,393 | 36,631,068 | +675 (+0.0018%) |
+| Median sampled RSS (KiB) | 161,328 | 157,616 | -3,712 (-2.30%) |
+| Median sampled `ps %CPU` | 0.0% | 0.0% | 0 percentage points |
+
+Packages contain 686 files each, excluding `dist/voice`; ZIP uses sorted relative paths
+and Python DEFLATE level 9. Package docs were copied before these final evidence appends.
+Binary/installed growth is 64 bytes; compressed variation also includes ZIP/signature
+metadata. No dependencies or persistent runtime state were added.
+
+Process sampling: separate fresh launches with 10 seconds warmup, ten samples about
+one second apart via `ps -o rss=,%cpu=`; no task Cargo build during the reported samples.
+Baseline sampled maximum/final RSS: 164,816 / 161,328 KiB; after: 161,104 / 157,632 KiB.
+These are interval observations, not lifetime peaks or OS physical footprint. Earlier
+exploratory samples during compilation and on intermediate code varied substantially;
+the reported after samples use the final implementation. Foreground input and other
+machine work were uncontrolled, and native viewport equality could not be verified.
+The small RSS difference is not an improvement claim. Child/helper memory, compressed
+memory, GPU allocation, startup/frame p95, live load and scroll latency remain unmeasured.
+
+Both release executables build. Final voice executable is 57,249,216 bytes. Baseline
+voice build terminated with signal 15 before package evidence; no voice delta is claimed.
+Final voice packaging fails on existing missing exact-version license texts for
+`objc2-core-media 0.3.2`, `objc2-core-video 0.3.2`, `openh264-sys2 0.9.8`, and
+`openh264 0.9.8`; its complete installed/archive sizes are therefore unavailable.
+Native before/after interaction evidence is blocked by ineffective input and Computer
+Use `-10005: noWindowsAvailable`. The focused synthetic UI tests are separate evidence;
+no live Discord compatibility or native scroll-performance claim is made.
