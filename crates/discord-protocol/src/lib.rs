@@ -15,6 +15,7 @@ mod reactions;
 pub mod read_state;
 pub mod ready;
 pub mod relationships;
+pub mod rpc;
 pub mod search;
 pub mod threads;
 pub mod typing;

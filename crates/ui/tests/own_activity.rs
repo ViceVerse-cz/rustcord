@@ -13,7 +13,7 @@ fn own_activity_panel_and_setting_render_and_clear() {
 			ui::design::apply(&ctx);
 			let mut state = test_support::demo_state();
 			let mut view = MessagingUi::default();
-			view.own_game = Some("osu!");
+			view.own_game = Some("Playing osu!".into());
 			for settings in [false, true] {
 				if settings {
 					view.preview_settings("activity");
@@ -47,7 +47,7 @@ fn own_activity_panel_and_setting_render_and_clear() {
 						if frame == 2 {
 							assert_eq!(text.contains("Playing osu!"), enabled, "{text}");
 							if settings {
-								assert!(text.contains("Share detected games"), "{text}");
+								assert!(text.contains("Share game activity"), "{text}");
 							}
 						}
 					}

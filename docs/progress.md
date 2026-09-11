@@ -1,5 +1,45 @@
 # Implementation progress — 2026-09-10
 
+
+## Game-provided IPC Rich Presence - September 11, 2026
+
+Isolated `fix/game-presence-ipc` from fetched `origin/main` `9d4b222`, preserving the
+original checkout at `10d6367` and its untracked target-relocation remainder. Rust 1.98.1,
+Windows 11 Home 10.0.26200, text-only and optional voice configurations.
+
+Replaced the fixed executable allowlist/15-second scans with opt-in Discord IPC. The native
+listener accepts bounded game activity, resolves public application names/registered assets,
+and sends typed rich activity through the existing rate-limited Gateway path. Details, state,
+timestamps and artwork survive; multiple games use most-recent update with disconnect fallback.
+Sharing disable/session teardown closes listeners, clients and lookup work. Windows teardown
+explicitly disconnects blocked writers; its regression fails without that fix. Activity received
+after a game disconnects during metadata lookup is rejected before publication. Unsupported
+RPC subscriptions receive correlated errors without disconnecting the game. Credentials,
+chat/account access, calls, join actions, arbitrary URLs and activity history are not exposed.
+
+Validation: native Windows pipe roundtrip/contention/blocked-write teardown passed;
+desktop IPC handshake/update/clear/PING/unsupported-subscription/frame-bounds/disable tests,
+metadata validation/cooldown/redirect limits, and rich Gateway/coalescing/reconnect tests passed.
+`cargo xtask policy` passed. Full workspace tests crash in the existing UI test
+`incoming_custom_status_updates_people_and_open_profile_without_refetch` with Windows
+`0xc0000409 STATUS_STACK_BUFFER_OVERRUN`, including with one test thread; the isolated test
+also crashes on the unmodified baseline. `cargo xtask check` cannot pass existing formatting
+in `crates/ui/src/timeline.rs` and strict Clippy findings in `client-core/message_actions.rs`,
+`discord-protocol/guild_folders.rs`, and `ui/categories.rs`. A diagnostic Clippy run allowing
+only those four inherited lint categories passes; repository lint settings were not relaxed.
+
+The settings panel contains only the sharing toggle and current activity; technical
+explanations were removed at the owner's request, and errors use plain language.
+
+Native before/after evidence uses only `--demo --demo-settings=activity --demo-game-activity`.
+The native computer-use pipe was unavailable, so actual per-window Win32 PrintWindow captures
+were used; no generated/stitched UI. Both final release packages passed (text 54,823,424 bytes; voice 59,923,456 bytes).
+The Game Activity UI matrix test passed after removing the technical copy. The final native
+images were inspected. Package/process/reducer measurements and raw samples are recorded in
+`docs/performance.md`; small timing/memory differences are noise, not a performance claim. Linux/macOS native execution and live Discord/game publication remain
+unverified. Games need IPC integration and must connect to Serein; another Discord instance
+may own their connection. This slice is not proof of universal game or normal-user compatibility.
+
 ## Emoji size and loading flicker — September 11, 2026
 
 Based on fetched `origin/main` at `bd7d26a`, in isolated branch

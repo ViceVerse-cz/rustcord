@@ -482,7 +482,7 @@ impl Desktop {
 		let mut messaging = ui::MessagingUi::default();
 		if demo && std::env::args().any(|arg| arg == "--demo-game-activity") {
 			messaging.share_game_activity = true;
-			messaging.own_game = Some("osu!");
+			messaging.own_game = Some("Playing osu!".into());
 		}
 		messaging.build = ui::design::Build {
 			channel: if cfg!(debug_assertions) {
@@ -814,12 +814,22 @@ impl Desktop {
 		self.messaging.reading_status = self.reading.status();
 	}
 	fn sync_game_activity(&mut self, ctx: &egui::Context) {
-		let previous = (self.messaging.own_game, self.messaging.game_activity_status);
+		let previous = (
+			self.messaging.own_game.clone(),
+			self.messaging.game_activity_status,
+		);
 		if self.state.demo {
-			self.messaging.own_game = self.messaging.share_game_activity.then_some("osu!");
+			self.messaging.own_game = self
+				.messaging
+				.share_game_activity
+				.then(|| "Playing osu!".to_owned());
 			self.messaging.game_activity_status =
 				"Offline preview: synthetic activity, never shared or saved.";
-			if previous != (self.messaging.own_game, self.messaging.game_activity_status) {
+			if previous
+				!= (
+					self.messaging.own_game.clone(),
+					self.messaging.game_activity_status,
+				) {
 				ctx.request_repaint();
 			}
 			return;
@@ -853,13 +863,17 @@ impl Desktop {
 				true
 			});
 			if self.game_activity.enabled && self.state.gateway_connected {
-				match *connection.game_activity.borrow() {
-					Ok(game) => self.messaging.own_game = game,
+				match &*connection.game_activity.borrow() {
+					Ok(game) => self.messaging.own_game = game.clone(),
 					Err(error) => self.messaging.game_activity_status = error,
 				}
 			}
 		}
-		if previous != (self.messaging.own_game, self.messaging.game_activity_status) {
+		if previous
+			!= (
+				self.messaging.own_game.clone(),
+				self.messaging.game_activity_status,
+			) {
 			ctx.request_repaint();
 		}
 	}

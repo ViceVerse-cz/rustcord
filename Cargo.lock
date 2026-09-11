@@ -4546,6 +4546,7 @@ dependencies = [
  "keyring",
  "notify-rust",
  "rfd",
+ "tokio",
  "url",
  "webkit6",
  "windows 0.61.3",

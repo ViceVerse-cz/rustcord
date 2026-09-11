@@ -1,6 +1,7 @@
 // Direct, origin-fixed REST adapter. No cookies, redirects, logging, persistence or bot SDK.
 mod archives;
 mod guild_folders;
+pub mod rpc;
 pub mod upload;
 mod user_actions;
 use client_core::{

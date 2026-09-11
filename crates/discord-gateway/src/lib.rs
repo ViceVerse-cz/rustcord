@@ -410,7 +410,7 @@ pub async fn run_with_activity(
 	initial_url: String,
 	subscriptions: watch::Receiver<Option<MemberSubscription>>,
 	controls: mpsc::Receiver<client_core::voice::Command>,
-	activity: watch::Receiver<Option<String>>,
+	activity: watch::Receiver<Option<discord_protocol::rpc::Activity>>,
 	emit: impl Fn(Event) -> Result<(), Failure>,
 ) -> Result<(), Failure> {
 	run_inner(
@@ -430,7 +430,7 @@ async fn run_inner(
 	initial_url: String,
 	mut subscriptions: watch::Receiver<Option<MemberSubscription>>,
 	mut voice_controls: mpsc::Receiver<client_core::voice::Command>,
-	activity: Option<watch::Receiver<Option<String>>>,
+	activity: Option<watch::Receiver<Option<discord_protocol::rpc::Activity>>>,
 	emit: impl Fn(Event) -> Result<(), Failure>,
 	#[cfg(test)] test_endpoint: Option<&str>,
 ) -> Result<(), Failure> {
@@ -1006,7 +1006,8 @@ mod tests {
 		timeout(Duration::from_secs(25), async {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let endpoint = format!("ws://{}/", listener.local_addr().unwrap());
-            let (activity, receiver) = watch::channel(Some("osu!".to_owned()));
+            let game = |name: &str| discord_protocol::rpc::ActivityFields::default().into_activity(Id(42), name.into()).unwrap();
+            let (activity, receiver) = watch::channel(Some(game("osu!")));
             let (finished, done) = tokio::sync::oneshot::channel();
             let server = async {
                 let mut previous = None;
@@ -1038,7 +1039,7 @@ mod tests {
                         };
                         assert_eq!(value["op"], 3);
                         assert_eq!(value["d"], json!({"since":null,"status":"online","afk":false,
-                            "activities": name.map_or_else(||json!([]), |name|json!([{"name":name,"type":0}]))}));
+                            "activities": name.map_or_else(||json!([]), |name|json!([{"name":name,"type":0,"application_id":"42"}]))}));
                         let now = Instant::now();
                         if let Some(previous) = previous {
                             assert!(now.duration_since(previous) >= Duration::from_millis(4900));
@@ -1046,8 +1047,8 @@ mod tests {
                         previous = Some(now);
                         match name {
                             Some("osu!") => {
-                                activity.send(Some("Skipped intermediate".into())).unwrap();
-                                activity.send(Some("Minecraft".into())).unwrap();
+                                activity.send(Some(game("Skipped intermediate"))).unwrap();
+                                activity.send(Some(game("Minecraft"))).unwrap();
                             }
                             Some(_) => activity.send(None).unwrap(),
                             None => {}
