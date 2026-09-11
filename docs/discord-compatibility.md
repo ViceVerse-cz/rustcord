@@ -529,6 +529,17 @@ Native screenshots use only `--demo`; they demonstrate settings, not IPC or Disc
 No live account/game compatibility was tested. Linux/macOS native execution remains unverified
 on this Windows host; builds/tests or fixtures do not establish normal-user service compatibility.
 
+Reply-framing correction (September 11, 2026): assemble the header and payload before writing.
+The [C# SDK used by osu!](https://github.com/Lachee/discord-rpc-csharp/blob/master/DiscordRPC/IO/ManagedNamedPipeClient.cs)
+parses each completed pipe read as a frame. Against the installed osu! SDK 1.5.0.51,
+isolated synthetic Windows pipes decoded 10/10 combined replies and 0/10 split replies;
+split replies disconnected even without an artificial delay. A native Rust regression
+received only four bytes of a 240-byte READY before the fix and the complete reply after it.
+This verifies local framing, not live game-to-Gateway publication. Byte streams do not
+guarantee whole-frame delivery universally; this SDK also has a 16,384-byte read buffer
+including the header. Normal READY/activity acknowledgements fit comfortably within it;
+a maximum-sized 16 KiB PONG payload remains outside that SDK's single-read capacity.
+
 ### Server folders (September 11, 2026)
 
 Server ordering, grouping, folder names and RGB colors use the normal-user
