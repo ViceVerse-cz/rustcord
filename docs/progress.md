@@ -1,5 +1,54 @@
 # Implementation progress — 2026-09-10
 
+## September 11, 2026 — temporarily pause native CI
+
+At the owner's explicit request, commented out the complete `native` matrix job
+in `.github/workflows/ci.yml`, preserving it for easy restoration. This pauses
+the macOS/Windows/Linux checks and packaging on future runs of this branch.
+Security, licenses, and fuzz jobs remain enabled. Existing runs are not canceled.
+Validated that removing comment lines produces exactly the previous workflow
+with only the native job removed; `git diff --check` passed. No application code
+changed in this follow-up, so no new runtime tests, screenshots, or measurements
+were needed. The previously recorded UI-test and native-evidence blockers remain.
+
+## September 11, 2026 — message right-click menu
+
+Implemented on `fix/message-context-menu` from clean `22e2283` (the fetched
+`origin/main` baseline). Right-clicking message text or row whitespace opens the
+existing three-dot action menu at the pointer. Both entry points render the same
+actions and permission gates; the pointer anchor remains fixed while choosing an
+action. Shift+right-click also opens the menu instead of the quick-delete control.
+Existing keyboard actions and row layout remain unchanged.
+
+Verification: `cargo test --locked -p ui timeline::tests` passed all 22 tests;
+the extended hover/menu regression also passed after its final modifier-event
+update. It exercises both entry points, text/whitespace, Shift, correct Reply
+targeting, menu dismissal after selection, stable heights, and dark 900px/light
+360px layouts. `cargo clippy --locked -p ui --all-targets -- -D warnings`,
+`cargo xtask policy`, formatting, and diff checks passed.
+
+`cargo xtask check` passed strict workspace Clippy, then failed during UI tests.
+Serial execution and isolated tests identified two failures, reproduced in a
+detached worktree of the untouched baseline: `pending_tests.rs:113` expects the
+confirmed text to change color, and `typing.rs:285` expects a `Someone is typing`
+shape. The latter also panics while dropping unapplied texture deltas and aborts
+with Windows `0xc0000409`. These unrelated tests were not changed or disabled.
+
+Text release packaging succeeded before/after. Both voice release builds compiled;
+voice packaging fails on both revisions because exact license texts for
+`openh264-sys2 0.9.8` and `openh264 0.9.8` are missing (the existing realfft license
+evidence warning also remains). No license policy was bypassed. See `docs/performance.md` for
+package sizes and limited synthetic idle samples. Native screenshots and pointer
+verification are blocked: `orca` is not installed, and bundled Computer Use
+`sky.list_apps()` returns "Computer Use native pipe is unavailable: failed to
+connect native pipe: The system cannot find the file specified. (os error 2)".
+No native before/after images, interactive performance, or live Discord behavior
+are claimed. Keep the PR draft while these evidence/check blockers remain.
+
+Manual reproduction: launch `cargo run --locked -p serein -- --demo`, right-click
+a message's body or empty row space, compare its menu with the three-dot menu,
+and select Reply. Repeat with Shift held, another author, and `--demo-light`.
+
 ## September 11, 2026 — outgoing screen sharing
 
 Implemented on `feat/screen-sharing` from clean `609f8bf` (origin/main at task start). The connected-call screen button now opens source, 720p/1080p, 15/30/60 fps and cursor settings. Every quality option is exposed without a local Nitro gate. Explicit Share starts a separate DAVE-encrypted Discord stream using native macOS 14+ ScreenCaptureKit or Windows Graphics Capture and source-built OpenH264. The microphone remains on its existing transport and controls. Stop, permission/session loss, source closure and server replacement cancel sharing; cleanup waits for native retirement and Discord deletion before restart. Source lists, frames and queues are bounded and memory-only. Sharing status starts after the first keyframe is sent.
