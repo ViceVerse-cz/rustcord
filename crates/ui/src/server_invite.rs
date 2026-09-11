@@ -114,7 +114,12 @@ impl InviteDialog {
 		ui.add_enabled_ui(
 			!state.server_action_pending() && !state.server_invite_pending(),
 			|ui| {
-				ui.horizontal_wrapped(|ui| {
+				let layout = if ui.available_width() < 420.0 {
+					egui::Layout::top_down(egui::Align::Min)
+				} else {
+					egui::Layout::left_to_right(egui::Align::Center)
+				};
+				ui.with_layout(layout, |ui| {
 					ui.label(
 						egui::RichText::new("Recipients will land in")
 							.size(18.0)
@@ -131,7 +136,7 @@ impl InviteDialog {
 								.color(colors.muted)
 								.size(18.0),
 						)
-						.width(ui.available_width().clamp(80.0, 300.0))
+						.width(ui.available_width().min(300.0))
 						.wrap_mode(egui::TextWrapMode::Truncate)
 						.height(220.0)
 						.show_ui(ui, |ui| {

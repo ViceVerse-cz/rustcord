@@ -106,3 +106,18 @@ allow = ["MPL-2.0"]
 name = "symphonia-metadata"
 version = "=0.6.1"
 allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+name = "symphonia-common"
+version = "=0.6.1"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+name = "symphonia-codec-vorbis"
+version = "=0.6.1"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+name = "symphonia-format-ogg"
+version = "=0.6.1"
+allow = ["MPL-2.0"]

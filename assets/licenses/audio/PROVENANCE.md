@@ -1,7 +1,7 @@
 # Attachment audio dependency provenance
 
-Collected September 11, 2026 from the exact crates.io archives resolved in Cargo.lock.
-Both package variants include this directory at `licenses/audio`. The six unmodified
+Collected September 11–12, 2026 from the exact crates.io archives resolved in Cargo.lock.
+Both package variants include this directory at `licenses/audio`. The nine unmodified
 Symphonia 0.6.1 source archives in `source/` provide corresponding MPL-2.0 source to
 recipients; extract with `tar -xf <archive>.crate`. They retain their original licenses,
 copyrights and source notices. Serein does not modify or relicense those components.
@@ -17,6 +17,9 @@ SHA-256 checksums match Cargo.lock:
 | symphonia-core-0.6.1.crate | 01c412864d599d4750d0c3d684d7e093ec05e5309681ef5252cc1096a437f6e0 |
 | symphonia-format-riff-0.6.1.crate | 1ff70929083a8c1a5f6cd7c904b6071c7914ad04739b510c2f7239dfc9b7dabe |
 | symphonia-metadata-0.6.1.crate | 83713a97705d77bdef7cdbc0768fd6e5a54e4cd7e48d60a806ae85639e2c87c6 |
+| symphonia-common-0.6.1.crate | 2acc3fcc18ec9b8cdd48614e259c4cf0d27b71d41e5d9b120b42c5adab12d7c4 |
+| symphonia-codec-vorbis-0.6.1.crate | 73d90b4fcf796137cc683c538282804ff9629f8ad9dbfd881fcbba331ac4e986 |
+| symphonia-format-ogg-0.6.1.crate | 0b5495e7f7e3c7035328d82b6d6e377eef289bb0c4105bdeb557fc93a833f994 |
 
 Standalone texts are copied unchanged from registry source: Symphonia 0.6.1 `LICENSE`
 (MPL-2.0); CPAL 0.18.2 `LICENSE` (Apache-2.0); extended 0.1.0 `LICENSE.txt` (MIT);
