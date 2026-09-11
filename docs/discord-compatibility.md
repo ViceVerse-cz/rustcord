@@ -470,3 +470,25 @@ categories for these cases and missing dispatch names. Received names and payloa
 diagnostics. This changes observability, not the supported service contract. Offline local-socket
 checks cover continued message delivery and heartbeat cursor advancement; normal-user service
 behavior remains unverified. See storage-policy.md for exact per-run limits and stderr handling.
+
+### Outgoing detected game activity (September 11, 2026)
+
+An optional saved Game Activity setting publishes a detected game through the existing
+authenticated Gateway connection. It uses opcode 3 with `since: null`, `status: online`,
+`afk: false`, and either one `{name, type: 0}` activity or an empty array. Activity waits
+for READY/RESUMED, coalesces changes, and replays the latest choice after reconnect.
+Attempts, including clears, are spaced at least five seconds apart across reconnects.
+This is below the documented five updates per twenty seconds limit. Other Discord
+sessions may still publish their own activity; this setting only controls Serein.
+
+Primary protocol evidence checked: [Discord Update Presence](https://docs.discord.com/developers/events/gateway-events#update-presence)
+and [Activity Object](https://docs.discord.com/developers/events/gateway-events#activity-object).
+These document the app/bot Gateway shape, not authorization or guaranteed normal-user
+interoperability. The normal-user path remains unofficial and live-unverified. Offline
+WebSocket tests cover readiness, coalescing, clear, rate spacing and resumed-session clear.
+No Discord account, message, call, microphone, or live activity publication was used in validation.
+
+Windows and Linux have bounded exact-executable detectors; macOS reports unsupported.
+This slice sends the game name only, without a local Discord RPC server, game-supplied
+rich presence details, artwork, elapsed game time, or a remote game catalogue. Linux/macOS
+native execution has not been verified in this Windows run.

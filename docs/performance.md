@@ -2092,3 +2092,36 @@ repair has headless keyboard coverage; native focus and full-client UI performan
 unmeasured. Test-only rendering assertions now identify the actual activity texture and
 keyboard navigation reaches the unread button by accessible label. Neither changes shipped
 layout or adds runtime instrumentation.
+
+### Optional outgoing game activity (September 11, 2026)
+
+Baseline `11d0416` versus final `feat/own-activity` implementation.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| text exe bytes | 53,877,248 | 53,962,240 | +84,992 (+0.16%) |
+| text installed bytes | 54,997,004 | 55,085,883 | +88,879 (+0.16%) |
+| text zip bytes | 33,203,594 | 33,233,978 | +30,384 (+0.09%) |
+| voice exe bytes | 58,981,888 | 59,069,952 | +88,064 (+0.15%) |
+| voice installed bytes | 60,404,951 | 60,500,525 | +95,574 (+0.16%) |
+| voice zip bytes | 35,389,001 | 35,415,860 | +26,859 (+0.08%) |
+| Default-off idle private_bytes, peak bytes | 394,285,056 | 394,502,144 | +217,088 (+0.06%) |
+| Default-off idle working_set, peak bytes | 165,109,760 | 166,281,216 | +1,171,456 (+0.71%) |
+| Idle CPU seconds / 10 s | 0.015625 | 0.015625 | +0.000000 |
+
+Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical CPUs), 31.1 GiB visible RAM;
+RTX 5070 Ti and Radeon integrated adapters present. Rust 1.98.1, release, pinned wgpu renderer,
+text-only `--demo` with sharing off, identical 1120x760 requested viewport. Native capture is
+unavailable, so actual display scale/selected adapter/window visibility are unverified; both
+processes were launched with the same Hidden option, not an interactive workload.
+Each process warmed for 30 seconds, then ten samples at one-second intervals recorded Windows
+PrivateMemorySize64, WorkingSet64 and total process CPU seconds. Settled equals peak across
+these ten samples. There were no after-run child processes. Background release builds and
+allocator/driver noise limit the comparison; these small differences are not an improvement
+or a meaningful regression. Detection-on CPU, native frame/startup latency, real-account RSS,
+GPU allocations and screenshots remain unmeasured. No live session was started.
+
+Packages use `cargo xtask package` / `package-voice`; installed totals sum all packaged files,
+text excludes nested voice, ZIP uses sorted Python zipfile DEFLATE level 9. Text/voice each
+contain 65/128 files. Documentation totals are snapshots at packaging time, before this report
+append. No reducer or wire parser changed, so replay-bench would not exercise this feature.

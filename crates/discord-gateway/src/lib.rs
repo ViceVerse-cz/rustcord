@@ -1,4 +1,5 @@
 //! Bounded, zlib-stream JSON Gateway. Normal-user Identify remains live-unverified.
+mod activity;
 mod channel_events;
 mod compression;
 mod presence;
@@ -375,6 +376,7 @@ pub async fn run(
 		initial_url,
 		subscriptions,
 		mpsc::channel(1).1,
+		None,
 		emit,
 		#[cfg(test)]
 		None,
@@ -394,6 +396,29 @@ pub async fn run_with_voice(
 		initial_url,
 		subscriptions,
 		controls,
+		None,
+		emit,
+		#[cfg(test)]
+		None,
+	)
+	.await
+}
+/// Publishes the latest bounded game activity after READY/RESUMED.
+/// The documented wire shape does not establish normal-user compatibility.
+pub async fn run_with_activity(
+	secret: Arc<SessionSecret>,
+	initial_url: String,
+	subscriptions: watch::Receiver<Option<MemberSubscription>>,
+	controls: mpsc::Receiver<client_core::voice::Command>,
+	activity: watch::Receiver<Option<String>>,
+	emit: impl Fn(Event) -> Result<(), Failure>,
+) -> Result<(), Failure> {
+	run_inner(
+		secret,
+		initial_url,
+		subscriptions,
+		controls,
+		Some(activity),
 		emit,
 		#[cfg(test)]
 		None,
@@ -405,10 +430,16 @@ async fn run_inner(
 	initial_url: String,
 	mut subscriptions: watch::Receiver<Option<MemberSubscription>>,
 	mut voice_controls: mpsc::Receiver<client_core::voice::Command>,
+	activity: Option<watch::Receiver<Option<String>>>,
 	emit: impl Fn(Event) -> Result<(), Failure>,
 	#[cfg(test)] test_endpoint: Option<&str>,
 ) -> Result<(), Failure> {
 	let initial_url = validated_url(&initial_url)?;
+	let activity_enabled = activity.is_some();
+	let mut activity_open = activity_enabled;
+	let mut activity = activity.unwrap_or_else(|| watch::channel(None).1);
+	let mut outgoing_activity = activity::Pending::default();
+	outgoing_activity.update(&activity.borrow_and_update())?;
 	let mut member_diagnostics = Diagnostics::new(
 		"members",
 		std::env::var_os("SEREIN_MEMBER_DIAGNOSTICS").as_deref() == Some(std::ffi::OsStr::new("1")),
@@ -515,6 +546,7 @@ async fn run_inner(
 		let mut sent_members = false;
 		let mut members_deadline: Option<Instant> = None;
 		let mut subscriptions_open = true;
+		outgoing_activity.reconnect();
 		loop {
 			if ready_at.is_some() && !sent_members {
 				let subscription = subscriptions.borrow_and_update().clone();
@@ -549,7 +581,22 @@ async fn run_inner(
 			let presence_deadline = active_members
 				.as_ref()
 				.and_then(|active| active.presence_deadline);
+			let activity_deadline = if activity_enabled && ready_at.is_some() {
+				outgoing_activity.deadline()
+			} else {
+				None
+			};
 			tokio::select! {
+				changed = activity.changed(), if activity_open => {
+					activity_open = changed.is_ok();
+					outgoing_activity.update(&activity.borrow_and_update())?;
+				}
+				_ = tokio::time::sleep_until(activity_deadline.unwrap_or(ready_deadline)), if activity_deadline.is_some() => {
+					// Read the latest value even if a watch notification races the timer.
+					outgoing_activity.update(&activity.borrow_and_update())?;
+					if let Some(packet) = outgoing_activity.packet(Instant::now())
+						&& !matches!(timeout(Duration::from_secs(5), socket.send(packet)).await, Ok(Ok(()))) { break; }
+				}
 				_=tokio::time::sleep_until(direct_presence.deadline.unwrap_or(ready_deadline)), if direct_presence.deadline.is_some() && ready_at.is_some() => {
 					if let Some(event)=direct_presence.take() { emit(event)?; }
 				}
@@ -942,6 +989,83 @@ mod tests {
 	}
 
 	#[tokio::test]
+	async fn outgoing_activity_waits_for_ready_coalesces_clears_and_resumes() {
+		timeout(Duration::from_secs(25), async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("ws://{}/", listener.local_addr().unwrap());
+            let (activity, receiver) = watch::channel(Some("osu!".to_owned()));
+            let (finished, done) = tokio::sync::oneshot::channel();
+            let server = async {
+                let mut previous = None;
+                for connection in 0..2 {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let mut socket = accept_async(stream).await.unwrap();
+                    send(&mut socket, json!({"op":10,"d":{"heartbeat_interval":1000}})).await;
+                    let handshake = packet(&mut socket).await;
+                    assert_eq!(handshake["op"], if connection == 0 { 2 } else { 6 });
+                    if connection == 0 {
+                        assert_eq!(handshake["d"]["presence"]["activities"], json!([]));
+                    }
+                    // Before READY/RESUMED only heartbeats are allowed.
+                    let gate = Instant::now() + Duration::from_millis(100);
+                    while let Ok(value) = tokio::time::timeout_at(gate, packet(&mut socket)).await {
+                        assert_eq!(value["op"], 1);
+                        send(&mut socket, json!({"op":11,"d":null})).await;
+                    }
+                    send(&mut socket, if connection == 0 {
+                        ready(1, "synthetic-own-activity")
+                    } else { json!({"op":0,"t":"RESUMED","s":2,"d":{}}) }).await;
+                    let expected = if connection == 0 { vec![Some("osu!"), Some("Minecraft"), None] } else { vec![None] };
+                    for name in expected {
+                        let value = loop {
+                            let value = packet(&mut socket).await;
+                            if value["op"] == 1 {
+                                send(&mut socket, json!({"op":11,"d":null})).await;
+                            } else { break value; }
+                        };
+                        assert_eq!(value["op"], 3);
+                        assert_eq!(value["d"], json!({"since":null,"status":"online","afk":false,
+                            "activities": name.map_or_else(||json!([]), |name|json!([{"name":name,"type":0}]))}));
+                        let now = Instant::now();
+                        if let Some(previous) = previous {
+                            assert!(now.duration_since(previous) >= Duration::from_millis(4900));
+                        }
+                        previous = Some(now);
+                        match name {
+                            Some("osu!") => {
+                                activity.send(Some("Skipped intermediate".into())).unwrap();
+                                activity.send(Some("Minecraft".into())).unwrap();
+                            }
+                            Some(_) => activity.send(None).unwrap(),
+                            None => {}
+                        }
+                    }
+                    if connection == 0 {
+                        send(&mut socket, json!({"op":7,"d":null})).await;
+                    } else {
+                        socket.send(Frame::Close(Some(CloseFrame {
+                            code: CloseCode::from(4004), reason: "synthetic stop".into()
+                        }))).await.unwrap();
+                        done.await.unwrap();
+                        break;
+                    }
+                }
+            };
+            let client = async {
+                let result = run_inner(
+                    Arc::new(SessionSecret::from_owner_input("synthetic-owner-session".into()).unwrap()),
+                    "wss://gateway.discord.gg/".into(), watch::channel(None).1,
+                    mpsc::channel(1).1, Some(receiver), |_| Ok(()), Some(&endpoint),
+                ).await;
+                finished.send(()).unwrap();
+                result
+            };
+            let ((), result) = tokio::join!(server, client);
+            assert_eq!(result, Err(Failure::Expired));
+        }).await.expect("synthetic activity lifecycle timed out");
+	}
+
+	#[tokio::test]
 	async fn legacy_ready_game_reaches_known_dm_without_a_presence_update() {
 		timeout(Duration::from_secs(10), async {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -968,6 +1092,7 @@ mod tests {
                 "wss://gateway.discord.gg/".into(),
                 watch::channel(None).1,
                 mpsc::channel(1).1,
+                None,
                 |event| {
                     let presence = matches!(event, Event::DirectPresence(_));
                     let mut state = state.lock().unwrap();
@@ -1027,6 +1152,7 @@ mod tests {
                 Arc::new(SessionSecret::from_owner_input("SYNTHETIC_TYPING_SESSION".into()).unwrap()),
                 "wss://gateway.discord.gg/".into(), watch::channel(None).1,
                 mpsc::channel(1).1,
+                None,
                 |event| {
                     match event {
                         Event::Typing(signal) => observed.lock().unwrap().push((signal.channel, signal.user, signal.timestamp)),
@@ -1115,7 +1241,7 @@ mod tests {
             let emoji_changes=std::sync::atomic::AtomicUsize::new(0);
             let client=run_inner(
                 Arc::new(SessionSecret::from_owner_input("synthetic-owner-session".into()).unwrap()),
-                "wss://gateway.discord.gg/".into(),watch::channel(None).1,mpsc::channel(1).1,
+                "wss://gateway.discord.gg/".into(),watch::channel(None).1,mpsc::channel(1).1,None,
                 |event| {
                     if let Event::Ready { channels, permissions, .. } = &event {
                         assert!(channels.iter().any(|c| c.id == Id(5) && c.guild == Some(Id(2))));
@@ -1278,6 +1404,7 @@ mod tests {
 				"wss://gateway.discord.gg/".into(),
 				watch::channel(None).1,
 				mpsc::channel(1).1,
+				None,
 				|event| {
 					let label = match event {
 						Event::Ready { .. } => "ready",
@@ -1370,7 +1497,7 @@ mod tests {
                 }
                 socket.close(Some(CloseFrame{code:CloseCode::Library(4004),reason:"synthetic stop".into()})).await.unwrap();
             };
-            let client=run_inner(Arc::new(SessionSecret::from_owner_input("synthetic-owner-session".into()).unwrap()),"wss://gateway.discord.gg/".into(),watch::channel(None).1,receive,|event| {
+            let client=run_inner(Arc::new(SessionSecret::from_owner_input("synthetic-owner-session".into()).unwrap()),"wss://gateway.discord.gg/".into(),watch::channel(None).1,receive,None,|event| {
                 match event {
                     Event::Ready{..}=>controls.try_send(V::Join{channel:Id(2),request:7,ring:false}).unwrap(),
                     Event::Voice(E::State{request,session,..})=>{assert_eq!(request,Some(7));assert_eq!(session.unwrap().expose(),"synthetic-call-session");},
@@ -1863,7 +1990,7 @@ mod member_tests {
                 }
                 socket.close(Some(CloseFrame{code:CloseCode::Library(4004),reason:"synthetic stop".into()})).await.unwrap();
             };
-            let client=run_inner(Arc::new(SessionSecret::from_owner_input("synthetic-owner-session".into()).unwrap()),"wss://gateway.discord.gg/".into(),receive,mpsc::channel(1).1,|event| {
+            let client=run_inner(Arc::new(SessionSecret::from_owner_input("synthetic-owner-session".into()).unwrap()),"wss://gateway.discord.gg/".into(),receive,mpsc::channel(1).1,None,|event| {
                 if let Event::Members(list)=&event { assert_eq!(list.request,7);assert_eq!(list.channel,Id(2));assert_eq!(list.rows[0].as_ref().unwrap().user.id,Id(3)); }
                 if let Event::MemberPresence {guild,channel,request,updates}=event {
                     assert_eq!((guild,channel,request),(Id(1),Id(2),7));

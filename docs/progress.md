@@ -2189,3 +2189,49 @@ Separate outstanding spec conflict: incoming `5a6fb8a` advertises a Chrome finge
 avoid spam quarantine, contrary to SPEC section 3.2. This task preserves that separate main
 change without developing, tuning or live-testing it. Offline checks do not resolve the
 product-boundary conflict or validate its anti-spam claims; the full spec goal is incomplete.
+
+### Optional outgoing game activity (September 11, 2026)
+
+Implemented on `feat/own-activity`, isolated from the owner's `main` checkout and its
+untracked `target-relocation-remainder/`. Baseline is fetched `origin/main` commit
+`11d041676f47824332b812c6e53c4dd57a9893f0`; pinned compiler is Rust 1.98.1 on Windows x64.
+The original local main was `cbd057e`; its worktree was not switched or modified.
+
+Game Activity settings now offer a saved, default-off Share detected games toggle.
+The account panel shows Playing osu! (or another recognized game); an authenticated
+connection's bounded worker detects exact game executable names off the rendering thread.
+Only changed titles enter opcode 3 updates, after READY/RESUMED, at most once every five
+seconds. Disabling, game exit and detection failure clear Serein's outgoing activity.
+The latest activity survives reconnect; logout cancels detection along with the connection.
+
+A single constrained SQLite boolean survives logout. Late loads cannot override a local
+choice, and writes coalesce behind one pending save. Failed settings saves participate in
+the existing unsaved-close warning. Review fixed a disable/publication race by retaining
+the toggle's read guard while publishing, and display changes request a follow-up repaint
+after the frame's post-render synchronization. No new dependency package or lockfile change.
+
+Verification actually run:
+- `cargo test --locked -p discord-gateway -p local-store -p platform -p serein activity`: 10 passing filtered tests, including existing activity regressions; synthetic Gateway lifecycle test takes about 15 seconds.
+- `cargo test --locked --all-features -p serein game_activity`: 3 passed, rerun after final lifecycle/display integration.
+- `cargo test --locked -p ui --test own_activity`: 1 passed; renders panel/setting and verifies enable/disable at 760/1120 widths in dark/light. Three frames allow modal sizing to settle; deltas are disposed before assertions. This is headless rendering evidence, not native screenshot inspection.
+- Focused strict `cargo clippy --no-deps ... -- -D warnings` passed for Gateway/platform/store/desktop all-targets/all-features, UI library and the new UI integration test.
+- `cargo xtask policy` passed. Formatting and task diff review passed.
+- `cargo xtask check` is blocked by unchanged `crates/client-core/src/permissions.rs:439` (`clippy::question_mark`). Separately attempted `cargo test --workspace --all-features --locked` cannot compile unchanged UI avatar tests: `avatars.rs:37,38,682,732,835` retain old vector-cache assumptions. Neither file differs from baseline. These are not waived; the PR stays draft.
+
+Native evidence blocker: `orca` is absent, and bundled Windows Computer Use returns
+`Computer Use native pipe is unavailable ... (os error 2)` on initial query, retry and
+after kernel reset. No before/after native screenshots are fabricated or claimed.
+To inspect offline: `cargo run --locked -p serein -- --demo --demo-game-activity`, then
+open User settings > Game Activity and toggle sharing; `--demo-settings=activity` opens
+the page directly. Demo uses synthetic osu! and never scans processes, opens a credential
+store, publishes activity or saves the preference.
+
+No live Discord account/publication, microphone, Linux native execution or macOS native
+execution was tested. macOS detection reports unsupported. The exact allowlist is an
+intentional first slice, not a complete game catalogue or a local Discord RPC server.
+Compatibility, storage limits and package/process measurements are recorded in their docs.
+
+Final `cargo xtask package` and `cargo xtask package-voice` both passed (1m16s/1m22s).
+Text executable: 53,962,240 bytes (+84,992); voice: 59,069,952 bytes (+88,064).
+Matched default-off idle sampling observed 0.015625 CPU seconds over ten seconds on each
+revision; process memory changes are small/noisy. Full figures and limitations are in performance.md.

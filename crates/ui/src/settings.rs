@@ -17,21 +17,24 @@ enum Page {
 	#[default]
 	Appearance,
 	Notifications,
+	Activity,
 	Voice,
 	Storage,
 }
 impl Page {
-	const ALL: [Self; 5] = [
+	const ALL: [Self; 6] = [
 		Self::Account,
 		Self::Appearance,
 		Self::Notifications,
+		Self::Activity,
 		Self::Voice,
 		Self::Storage,
 	];
 	const USER: [Self; 1] = [Self::Account];
-	const APP: [Self; 4] = [
+	const APP: [Self; 5] = [
 		Self::Appearance,
 		Self::Notifications,
+		Self::Activity,
 		Self::Voice,
 		Self::Storage,
 	];
@@ -40,6 +43,7 @@ impl Page {
 			Self::Account => "My Account",
 			Self::Appearance => "Appearance",
 			Self::Notifications => "Notifications",
+			Self::Activity => "Game Activity",
 			Self::Voice => "Voice & Audio",
 			Self::Storage => "Data & Privacy",
 		}
@@ -49,6 +53,7 @@ impl Page {
 			Self::Account => "The Discord account signed in on this device.",
 			Self::Appearance => "Theme, colour preset, zoom and layout.",
 			Self::Notifications => "Desktop alerts for this session.",
+			Self::Activity => "Show others what you are playing.",
 			Self::Voice => "Microphone, speakers and voice processing.",
 			Self::Storage => "What Serein keeps on this device.",
 		}
@@ -60,6 +65,7 @@ impl Page {
 				"appearance theme dark light system zoom reading layout sidebar people reset colour color preset"
 			}
 			Self::Notifications => "notifications desktop system alerts",
+			Self::Activity => "game activity playing osu status presence sharing",
 			Self::Voice => {
 				"voice audio microphone speakers devices volume gain noise suppression push to talk"
 			}
@@ -188,6 +194,7 @@ impl MessagingUi {
 										self.reading_settings(ui, state.demo);
 									}
 									Page::Notifications => self.notification_settings(ui, state),
+									Page::Activity => self.activity_settings(ui, state),
 									Page::Voice => {
 										design::card(ui, |ui| {
 											self.voice_settings_menu(
@@ -550,6 +557,48 @@ impl MessagingUi {
 					"{} · saved with your appearance. Gradient presets always use dark text.",
 					current.label()
 				))
+				.size(12.0)
+				.color(colors.muted),
+			);
+		});
+	}
+
+	fn activity_settings(&mut self, ui: &mut egui::Ui, state: &State) {
+		let colors = design::palette(ui);
+		design::card(ui, |ui| {
+			design::switch(
+				ui,
+				"Share detected games",
+				Some("Display your current game as activity on Discord."),
+				&mut self.share_game_activity,
+			);
+			ui.separator();
+			let game = self.own_game.filter(|_| self.share_game_activity);
+			ui.label(
+				design::medium(
+					ui,
+					game.map_or_else(
+						|| {
+							if self.share_game_activity {
+								"No supported game detected".into()
+							} else {
+								"Activity sharing is off".into()
+							}
+						},
+						|name| format!("Playing {name}"),
+					),
+					16.0,
+				)
+				.color(colors.text_strong),
+			);
+			ui.label("Detects osu!, Counter-Strike 2, Dota 2, Terraria and Stardew Valley on Windows and Linux. Checks every 15 seconds while enabled. Only the game name is shared; window titles and process paths are never read.");
+			ui.label("Turning this off clears activity sent by Serein. Activity from other Discord sessions is managed there. macOS detection is not available yet.");
+			ui.label(
+				egui::RichText::new(if state.demo {
+					"Offline preview: synthetic activity, never shared or saved."
+				} else {
+					self.game_activity_status
+				})
 				.size(12.0)
 				.color(colors.muted),
 			);

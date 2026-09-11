@@ -528,3 +528,11 @@ The voice-only dependency nnnoiseless 0.5.2 embeds its default RNNoise model. De
 - transpose 0.2.3: MIT OR Apache-2.0.
 
 Available license texts/notices and provenance are under `assets/licenses/voice`; existing voice packaging stages that directory. Realfft omits its standalone MIT text from both the registry archive and the pinned Git tree; full redistribution notice assembly remains outstanding. Default text-only builds do not select this processor.
+
+### Game process enumeration (September 11, 2026)
+
+The existing pinned `windows` 0.61.3 dependency additionally enables
+`Win32_System_Diagnostics_ToolHelp`; no package or lockfile dependency is added.
+Platform keeps `unsafe_code = deny` with one narrowly allowed Windows detector function
+for the reviewed ToolHelp/CloseHandle FFI. Other workspace crates retain their existing
+forbid policy. The snapshot handle is owned once and closed on every return path.
