@@ -128,6 +128,8 @@ pub fn message(id: u64, channel: Id) -> Message {
 		attachments: if id == 500 {
 			vec![
                 Attachment {
+                    duration_ms: None,
+                    waveform: Vec::new(),
                     id: Id(700),
                     filename: "synthetic-landscape.png".into(),
                     description: Some("Original synthetic landscape · offline preview".into()),
@@ -145,6 +147,8 @@ pub fn message(id: u64, channel: Id) -> Message {
                     },
                 },
                 Attachment {
+                    duration_ms: None,
+                    waveform: Vec::new(),
                     id: Id(702),
                     filename: "synthetic-second-landscape.png".into(),
                     description: Some("Second original landscape · offline gallery preview".into()),
@@ -159,6 +163,8 @@ pub fn message(id: u64, channel: Id) -> Message {
                     },
                 },
                 Attachment {
+                    duration_ms: None,
+                    waveform: Vec::new(),
                     id: Id(701),
                     filename: "synthetic-notes.txt".into(),
                     description: None,
@@ -646,6 +652,7 @@ pub fn audio_demo_state() -> State {
 	let mut state = chat_demo_state();
 	state.timeline.clear();
 	for (id, filename, kind) in [
+		(499, "voice-message.ogg", "audio/ogg"),
 		(501, "synthetic-melody.wav", "audio/wav"),
 		(
 			502,
@@ -658,6 +665,14 @@ pub fn audio_demo_state() -> State {
 			"Synthetic audio attachment · click Play to preview a locally generated tone.".into();
 		message.embeds.clear();
 		message.attachments = vec![Attachment {
+			duration_ms: (id == 499).then_some(3000),
+			waveform: if id == 499 {
+				(0..64)
+					.map(|i| (40.0 + 180.0 * (i as f32 * 0.35).sin().abs()) as u8)
+					.collect()
+			} else {
+				Vec::new()
+			},
 			id: Id(id + 200),
 			filename: filename.into(),
 			description: None,

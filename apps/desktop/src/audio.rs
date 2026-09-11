@@ -1,4 +1,4 @@
-//! Explicit, memory-only MP3/WAV playback. One lazy worker, one replaceable request.
+//! Explicit, memory-only MP3/WAV/Ogg playback. One lazy worker, one replaceable request.
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use model::Attachment;
 use std::{
@@ -10,7 +10,7 @@ use std::{
 	time::Duration,
 };
 use symphonia::core::{
-	codecs::audio::AudioDecoderOptions,
+	codecs::audio::{AudioDecoderOptions, well_known::CODEC_ID_OPUS},
 	common::Limit,
 	formats::{FormatOptions, TrackType, probe::Hint},
 	io::MediaSourceStream,
@@ -72,6 +72,7 @@ struct Request {
 	generation: u64,
 	url: Option<url::Url>,
 	expected: usize,
+	voice_message: bool,
 }
 struct Worker {
 	requests: watch::Sender<Option<Request>>,
@@ -153,6 +154,7 @@ impl Audio {
 			generation,
 			url,
 			expected: attachment.size as usize,
+			voice_message: attachment.is_voice_message(),
 		}));
 		worker.wake.notify_one();
 		Ok(())
@@ -234,6 +236,8 @@ fn worker(
 					request.generation,
 					&wake,
 				))?
+			} else if request.voice_message {
+				include_bytes!("../tests/fixtures/voice-message.ogg").to_vec()
 			} else {
 				demo_wav()
 			};
@@ -368,6 +372,9 @@ fn decode(mut bytes: Vec<u8>, current: &impl Fn() -> bool) -> Result<Pcm, &'stat
 	if bytes.is_empty() || bytes.len() > MAX_ENCODED {
 		return Err(TOO_LARGE);
 	}
+	if bytes.starts_with(b"OggS") {
+		check_ogg_headers(&bytes, current)?;
+	}
 	prepare_media(&mut bytes)?;
 	let source = MediaSourceStream::new(Box::new(Cursor::new(bytes)), Default::default());
 	let metadata = MetadataOptions::default()
@@ -403,9 +410,47 @@ fn decode(mut bytes: Vec<u8>, current: &impl Fn() -> bool) -> Result<Pcm, &'stat
 		return Err(TOO_LARGE);
 	}
 	let track_id = track.id;
-	let mut decoder = symphonia::default::get_codecs()
-		.make_audio_decoder(parameters, &AudioDecoderOptions::default())
+	let mut opus = if parameters.codec == CODEC_ID_OPUS {
+		let header = parameters.extra_data.as_deref().ok_or(INVALID)?;
+		// Family 0 is the mono/stereo voice-message mapping. Reject multistream mappings.
+		if header.len() < 19
+			|| &header[..8] != b"OpusHead"
+			|| header[8] > 15
+			|| usize::from(header[9]) != channels
+			|| header[18] != 0
+			|| rate != 48000
+		{
+			return Err(INVALID);
+		}
+		let mut decoder = opus2::Decoder::new(
+			rate,
+			if channels == 1 {
+				opus2::Channels::Mono
+			} else {
+				opus2::Channels::Stereo
+			},
+		)
 		.map_err(|_| INVALID)?;
+		decoder
+			.set_gain(i32::from(i16::from_le_bytes([header[16], header[17]])))
+			.map_err(|_| INVALID)?;
+		Some((
+			decoder,
+			usize::from(u16::from_le_bytes([header[10], header[11]])),
+		))
+	} else {
+		None
+	};
+	let mut decoder = if opus.is_none() {
+		Some(
+			symphonia::default::get_codecs()
+				.make_audio_decoder(parameters, &AudioDecoderOptions::default())
+				.map_err(|_| INVALID)?,
+		)
+	} else {
+		None
+	};
+	let mut buffer = Vec::new();
 	let mut samples: Vec<f32> = Vec::new();
 	let mut packets = 0;
 	loop {
@@ -422,14 +467,43 @@ fn decode(mut bytes: Vec<u8>, current: &impl Fn() -> bool) -> Result<Pcm, &'stat
 		if packet.track_id != track_id {
 			return Err(INVALID);
 		}
-		let decoded = decoder.decode(&packet).map_err(|_| INVALID)?;
-		if decoded.spec().rate() != rate
-			|| decoded.spec().channels().count() != channels
-			|| decoded.frames() > 65536
-		{
-			return Err(INVALID);
-		}
-		let count = decoded.samples_interleaved();
+		let decoded = if let Some((decoder, pre_skip)) = &mut opus {
+			// Opus packets decode to at most 120 ms at 48 kHz.
+			buffer.resize(5760 * channels, 0.0);
+			if packet.data.is_empty() {
+				return Err(INVALID);
+			}
+			let frames = decoder
+				.decode_float(&packet.data, &mut buffer, false)
+				.map_err(|_| INVALID)?;
+			// Symphonia 0.6.1 exposes Opus pre-skip in OpusHead, but only applies end trim.
+			let skip = (*pre_skip).min(frames);
+			*pre_skip -= skip;
+			let start = usize::try_from(packet.trim_start.get())
+				.map_err(|_| INVALID)?
+				.max(skip);
+			let end = frames
+				.checked_sub(usize::try_from(packet.trim_end.get()).map_err(|_| INVALID)?)
+				.filter(|end| start <= *end)
+				.ok_or(INVALID)?;
+			&buffer[start * channels..end * channels]
+		} else {
+			let decoded = decoder
+				.as_mut()
+				.ok_or(INVALID)?
+				.decode(&packet)
+				.map_err(|_| INVALID)?;
+			if decoded.spec().rate() != rate
+				|| decoded.spec().channels().count() != channels
+				|| decoded.frames() > 65536
+			{
+				return Err(INVALID);
+			}
+			buffer.resize(decoded.samples_interleaved(), 0.0);
+			decoded.copy_to_slice_interleaved(&mut buffer);
+			&buffer[..]
+		};
+		let count = decoded.len();
 		if count > max_samples - samples.len() {
 			return Err(TOO_LARGE);
 		}
@@ -440,8 +514,7 @@ fn decode(mut bytes: Vec<u8>, current: &impl Fn() -> bool) -> Result<Pcm, &'stat
 				.try_reserve_exact(capacity - old_len)
 				.map_err(|_| TOO_LARGE)?;
 		}
-		samples.resize(old_len + count, 0.0);
-		decoded.copy_to_slice_interleaved(&mut samples[old_len..]);
+		samples.extend_from_slice(decoded);
 	}
 	if samples.is_empty() {
 		return Err(INVALID);
@@ -463,7 +536,10 @@ fn decode(mut bytes: Vec<u8>, current: &impl Fn() -> bool) -> Result<Pcm, &'stat
 // Skip metadata without decoding attacker-provided tag lengths/artwork. Compact in-place:
 // only bounded PCM fmt/data chunks reach the WAV demuxer; ID3 parsing is disabled entirely.
 fn prepare_media(bytes: &mut Vec<u8>) -> Result<(), &'static str> {
-	if bytes.starts_with(b"RIFF") {
+	if bytes.starts_with(b"OggS") {
+		// Preflight bounded the headers; Symphonia handles demuxing and CRC verification.
+		return Ok(());
+	} else if bytes.starts_with(b"RIFF") {
 		if bytes.get(8..12) != Some(b"WAVE") {
 			return Err(INVALID);
 		}
@@ -606,6 +682,109 @@ fn prepare_media(bytes: &mut Vec<u8>) -> Result<(), &'static str> {
 	Ok(())
 }
 
+// Symphonia's Ogg comments do not honor MetadataOptions. Bound header allocation before probing;
+// this only checks page framing/header sizes, leaving CRCs and stream decoding to Symphonia.
+fn check_ogg_headers(bytes: &[u8], current: &impl Fn() -> bool) -> Result<(), &'static str> {
+	let mut offset = 0;
+	let mut serial = None;
+	let mut packet = Vec::new();
+	let mut packet_len = 0usize;
+	let mut packets = 0;
+	let mut headers = 3;
+	let mut ended = false;
+	while offset < bytes.len() {
+		if !current() {
+			return Err("Cancelled");
+		}
+		let page = bytes.get(offset..offset + 27).ok_or(INVALID)?;
+		if &page[..4] != b"OggS" || page[4] != 0 || ended {
+			return Err(INVALID);
+		}
+		let page_serial = u32::from_le_bytes(page[14..18].try_into().map_err(|_| INVALID)?);
+		if serial.is_some_and(|serial| serial != page_serial)
+			|| (offset > 0 && page[5] & 2 != 0)
+			|| (offset == 0 && page[5] & 2 == 0)
+			|| (page[5] & 1 != 0) != (packet_len > 0)
+		{
+			return Err(INVALID);
+		}
+		serial = Some(page_serial);
+		ended = page[5] & 4 != 0;
+		let lacing = bytes
+			.get(offset + 27..offset + 27 + usize::from(page[26]))
+			.ok_or(INVALID)?;
+		offset += 27 + lacing.len();
+		for &lace in lacing {
+			let len = usize::from(lace);
+			let data = bytes.get(offset..offset + len).ok_or(INVALID)?;
+			offset += len;
+			packet_len += len;
+			if packet_len
+				> if packets < headers {
+					64 * 1024
+				} else {
+					1024 * 1024
+				} {
+				return Err(TOO_LARGE);
+			}
+			if packets < headers {
+				packet.extend_from_slice(data);
+			}
+			if lace < 255 {
+				if packets == 0 {
+					headers = if packet.starts_with(b"OpusHead") {
+						2
+					} else if packet.starts_with(b"\x01vorbis") {
+						3
+					} else {
+						return Err(INVALID);
+					};
+				} else if packets == 1 {
+					let comments = packet
+						.strip_prefix(b"OpusTags")
+						.or_else(|| packet.strip_prefix(b"\x03vorbis"))
+						.ok_or(INVALID)?;
+					let read_len = |offset: usize| -> Result<usize, &'static str> {
+						Ok(u32::from_le_bytes(
+							comments
+								.get(offset..offset + 4)
+								.ok_or(INVALID)?
+								.try_into()
+								.map_err(|_| INVALID)?,
+						) as usize)
+					};
+					let vendor_len = read_len(0)?;
+					if vendor_len > comments.len().saturating_sub(4) {
+						return Err(INVALID);
+					}
+					let count = read_len(4 + vendor_len)?;
+					if count > 128 {
+						return Err(TOO_LARGE);
+					}
+					let mut cursor = 8 + vendor_len;
+					for _ in 0..count {
+						let len = read_len(cursor)?;
+						cursor = cursor
+							.checked_add(4 + len)
+							.filter(|end| *end <= comments.len())
+							.ok_or(INVALID)?;
+					}
+				}
+				packets += 1;
+				if packets > 100_000 {
+					return Err(TOO_LARGE);
+				}
+				packet.clear();
+				packet_len = 0;
+			}
+		}
+	}
+	if !ended || packet_len != 0 || packets <= headers {
+		return Err(INVALID);
+	}
+	Ok(())
+}
+
 fn demo_wav() -> Vec<u8> {
 	let rate = 24000u32;
 	let frames = rate * 12;
@@ -629,6 +808,32 @@ fn demo_wav() -> Vec<u8> {
 		bytes.extend_from_slice(&sample.to_le_bytes());
 	}
 	bytes
+}
+
+#[cfg(debug_assertions)]
+pub fn debug_voice_message_check() {
+	let bytes = include_bytes!("../tests/fixtures/voice-message.ogg");
+	let pcm = decode(bytes.to_vec(), &|| true).expect("synthetic Ogg/Opus decodes");
+	assert_eq!(
+		(pcm.rate, pcm.channels, pcm.samples.len()),
+		(48000, 1, 144000)
+	);
+	assert!(pcm.samples.iter().any(|sample| sample.abs() > 0.01));
+	assert!(decode(bytes.to_vec(), &|| false).is_err());
+	assert!(decode(b"OggS\0".to_vec(), &|| true).is_err());
+	let mut oversized_comments = bytes.to_vec();
+	let tags = bytes
+		.windows(8)
+		.position(|window| window == b"OpusTags")
+		.unwrap();
+	let vendor = u32::from_le_bytes(bytes[tags + 8..tags + 12].try_into().unwrap()) as usize;
+	oversized_comments[tags + 12 + vendor..tags + 16 + vendor]
+		.copy_from_slice(&129u32.to_le_bytes());
+	assert_eq!(
+		check_ogg_headers(&oversized_comments, &|| true),
+		Err(TOO_LARGE)
+	);
+	assert!(check_ogg_headers(&[bytes.as_slice(), bytes.as_slice()].concat(), &|| true).is_err());
 }
 
 fn open_output(pcm: Pcm, gate: Arc<Gate>, generation: u64) -> Result<cpal::Stream, &'static str> {

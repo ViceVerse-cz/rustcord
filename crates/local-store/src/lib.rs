@@ -1719,6 +1719,8 @@ mod tests {
 		assert!(loaded[0].embeds_suppressed);
 		assert_eq!(store.load_drafts(Id(1)).unwrap()[&Id(2)], "synthetic draft");
 		loaded[0].attachments = vec![model::Attachment {
+			duration_ms: None,
+			waveform: Vec::new(),
 			id: Id(5),
 			filename: "SPOILER_synthetic.png".into(),
 			description: Some("Synthetic alt text".into()),

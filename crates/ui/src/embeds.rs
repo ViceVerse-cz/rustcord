@@ -809,6 +809,8 @@ mod tests {
 		let mut message = test_support::message(1, model::Id(1));
 		message.embeds = vec![Embed::default()];
 		message.attachments = vec![model::Attachment {
+			duration_ms: None,
+			waveform: Vec::new(),
 			id: model::Id(2),
 			filename: "photo.png".into(),
 			description: None,

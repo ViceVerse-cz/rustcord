@@ -1,4 +1,5 @@
 //! Attachment objects are bounded metadata; image decoding and URL authorization live elsewhere.
+use base64::Engine;
 use model::{Attachment, EmbedMedia, Id};
 use serde::Deserialize;
 
@@ -23,12 +24,27 @@ struct AttachmentDto {
 	height: Option<u32>,
 	#[serde(default)]
 	flags: u64,
+	#[serde(default)]
+	duration_secs: Option<f64>,
+	#[serde(default)]
+	waveform: Option<String>,
 }
 fn url(value: Option<String>) -> Option<String> {
 	value.filter(|value| value.len() <= 2048 && !value.chars().any(char::is_control))
 }
 impl AttachmentDto {
 	fn into_model(self) -> Attachment {
+		// Discord supplies at most 256 amplitude samples encoded as base64.
+		let mut samples = [0u8; 256];
+		let waveform = self
+			.waveform
+			.filter(|value| value.len() <= 344)
+			.and_then(|value| {
+				base64::engine::general_purpose::STANDARD
+					.decode_slice(value, &mut samples)
+					.ok()
+			})
+			.map_or_else(Vec::new, |len| samples[..len].to_vec());
 		let mut filename: String = self
 			.filename
 			.chars()
@@ -49,6 +65,11 @@ impl AttachmentDto {
 		let spoiler = self.flags & ((1 << 3) | (1 << 4) | (1 << 6) | (1 << 7)) != 0
 			|| self.filename.starts_with("SPOILER_");
 		let mut attachment = Attachment {
+			duration_ms: self
+				.duration_secs
+				.filter(|value| value.is_finite() && (0.0..=600.0).contains(value))
+				.map(|value| (value * 1000.0).round() as u32),
+			waveform,
 			id: self.id,
 			filename,
 			description: None,

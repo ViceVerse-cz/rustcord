@@ -4275,6 +4275,8 @@ mod tests {
 		message.embeds.clear();
 		message.content.clear();
 		message.attachments = vec![model::Attachment {
+			duration_ms: None,
+			waveform: Vec::new(),
 			id: Id(7),
 			filename: "SPOILER_hidden.png".into(),
 			description: None,

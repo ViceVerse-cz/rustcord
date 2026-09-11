@@ -359,7 +359,7 @@ mod tests {
 	use super::*;
 	use tokio::io::{AsyncReadExt, AsyncWriteExt};
 	fn attachment() -> Attachment {
-		Attachment { id: model::Id(2), filename: "synthetic image.png".into(), description: None,
+		Attachment { duration_ms: None, waveform: Vec::new(), id: model::Id(2), filename: "synthetic image.png".into(), description: None,
             content_type: Some("image/png".into()), size: 1024, spoiler: false,
             media: model::EmbedMedia { url: Some("https://cdn.discordapp.com/attachments/1/2/synthetic%20image.png?ex=123&is=123&hm=abc".into()), ..Default::default() } }
 	}

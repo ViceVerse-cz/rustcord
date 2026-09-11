@@ -386,8 +386,12 @@ impl Desktop {
 			.build()?;
 		let mut store = (!demo).then(|| credentials::Store::start(cc.egui_ctx.clone()));
 		let cache = (!demo).then(|| cache::Cache::start(cc.egui_ctx.clone()));
+		#[cfg(debug_assertions)]
+		if demo && std::env::args().any(|arg| arg == "--demo-voice-messages") {
+			audio::debug_voice_message_check();
+		}
 		let mut state = if demo {
-			if std::env::args().any(|arg| arg == "--demo-audio") {
+			if std::env::args().any(|arg| arg == "--demo-audio" || arg == "--demo-voice-messages") {
 				test_support::audio_demo_state()
 			} else if std::env::args().any(|arg| arg == "--demo-system-messages") {
 				test_support::system_demo_state()

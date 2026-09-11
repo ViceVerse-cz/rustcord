@@ -314,11 +314,18 @@ pub fn show(
 			for attachment in group {
 				ui.push_id(("attachment", attachment.id), |ui| {
 					if attachment.is_audio() {
-						audio.show(ui, message, attachment);
-						ui.horizontal_wrapped(|ui| {
-							download_button(ui, attachment, download, demo);
-							open_original(ui, attachment, opening);
-						});
+						let response = audio.show(ui, message, attachment);
+						if attachment.is_voice_message() {
+							response.context_menu(|ui| {
+								download_button(ui, attachment, download, demo);
+								open_original(ui, attachment, opening);
+							});
+						} else {
+							ui.horizontal_wrapped(|ui| {
+								download_button(ui, attachment, download, demo);
+								open_original(ui, attachment, opening);
+							});
+						}
 					} else {
 						file_card(ui, attachment, download, opening, demo);
 					}
@@ -716,7 +723,15 @@ pub fn estimated_height(attachments: &[Attachment], width: f32) -> f32 {
 			} else {
 				group
 					.iter()
-					.map(|attachment| if attachment.is_audio() { 138.0 } else { 62.0 })
+					.map(|attachment| {
+						if attachment.is_voice_message() {
+							88.0
+						} else if attachment.is_audio() {
+							138.0
+						} else {
+							62.0
+						}
+					})
 					.sum()
 			}
 		})
@@ -732,6 +747,8 @@ mod tests {
 		let mut message = test_support::message(1, Id(2));
 		message.attachments = (0..3)
 			.map(|id| Attachment {
+				duration_ms: None,
+				waveform: Vec::new(),
 				id: Id(id + 10),
 				filename: format!("synthetic-image-{id}.png"),
 				description: None,
@@ -868,6 +885,8 @@ mod tests {
 	fn viewer_closes_on_click_away_but_not_on_image_or_controls() {
 		let attachments: Vec<_> = (0..2)
 			.map(|id| Attachment {
+				duration_ms: None,
+				waveform: Vec::new(),
 				id: Id(id + 10),
 				filename: format!("synthetic-image-{id}.png"),
 				description: None,
@@ -973,6 +992,8 @@ mod tests {
 			output.drop_without_applying_deltas();
 		}
 		let attachment = Attachment {
+			duration_ms: None,
+			waveform: Vec::new(),
 			id: Id(3),
 			filename: "synthetic-report.pdf".into(),
 			description: None,

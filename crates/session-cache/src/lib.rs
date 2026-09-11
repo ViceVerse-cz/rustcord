@@ -576,6 +576,8 @@ mod tests {
 			..Default::default()
 		}];
 		loaded.attachments = vec![model::Attachment {
+			duration_ms: None,
+			waveform: Vec::new(),
 			id: Id(20),
 			filename: "SPOILER_synthetic.png".into(),
 			description: Some("Synthetic attachment".into()),
@@ -895,6 +897,8 @@ mod tests {
 	#[test]
 	fn attachment_only_mutations_clear_without_late_history_resurrection() {
 		let attachment = |id| model::Attachment {
+			duration_ms: None,
+			waveform: Vec::new(),
 			id: Id(id),
 			filename: "synthetic.png".into(),
 			description: None,

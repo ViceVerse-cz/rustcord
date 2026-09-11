@@ -46,17 +46,38 @@ impl AudioUi {
 		self.state = AudioState::Idle;
 		self.command = Some(AudioCommand::Stop);
 	}
-	pub fn show(&mut self, ui: &mut egui::Ui, message: &Message, attachment: &Attachment) {
+	pub fn show(
+		&mut self,
+		ui: &mut egui::Ui,
+		message: &Message,
+		attachment: &Attachment,
+	) -> egui::Response {
 		let colors = crate::design::palette(ui);
+		let voice = attachment.is_voice_message();
+		let button_color = if voice {
+			colors.text_strong
+		} else {
+			colors.accent
+		};
+		let icon_color = if voice {
+			colors.raised
+		} else {
+			colors.accent_text
+		};
 		let active = self.active.as_ref().is_some_and(|(channel, id, file)| {
 			*channel == message.channel && *id == message.id && file == attachment
 		});
 		let state = if active { self.state } else { AudioState::Idle };
-		let width = ui.available_width().min(380.0);
+		let duration = if active && self.duration > 0.0 {
+			self.duration
+		} else {
+			attachment.duration_ms.map_or(0.0, |ms| ms as f64 / 1000.0)
+		};
+		let width = ui.available_width().min(if voice { 320.0 } else { 380.0 });
 		let card = egui::Frame::new()
 			.fill(colors.raised)
 			.stroke(egui::Stroke::new(1.0, colors.border))
-			.corner_radius(8)
+			.corner_radius(if voice { 12 } else { 8 })
 			.inner_margin(12)
 			.show(ui, |ui| {
 				ui.set_width((width - 24.0).max(1.0));
@@ -78,17 +99,24 @@ impl AudioUi {
 				] {
 					widget.expansion = -6.0;
 				}
-				ui.horizontal(|ui| {
-					crate::icons::inline(ui, crate::icons::Icon::Soundboard, 16.0, colors.muted);
-					ui.add(
-						egui::Label::new(
-							crate::design::semibold(ui, &attachment.filename, 13.0)
-								.color(colors.text_strong),
+				if !voice {
+					ui.horizontal(|ui| {
+						crate::icons::inline(
+							ui,
+							crate::icons::Icon::Soundboard,
+							16.0,
+							colors.muted,
+						);
+						ui.add(
+							egui::Label::new(
+								crate::design::semibold(ui, &attachment.filename, 13.0)
+									.color(colors.text_strong),
+							)
+							.truncate(),
 						)
-						.truncate(),
-					)
-					.on_hover_text(&attachment.filename);
-				});
+						.on_hover_text(&attachment.filename);
+					});
+				}
 				ui.horizontal(|ui| {
 					let label = match state {
 						AudioState::Loading => "Cancel",
@@ -103,9 +131,9 @@ impl AudioUi {
 						play.rect.center(),
 						16.0,
 						if play.hovered() {
-							colors.accent.gamma_multiply(0.85)
+							button_color.gamma_multiply(0.85)
 						} else {
-							colors.accent
+							button_color
 						},
 					);
 					play.widget_info(|| {
@@ -121,7 +149,7 @@ impl AudioUi {
 										egui::vec2(3.0, 12.0),
 									),
 									1,
-									colors.accent_text,
+									icon_color,
 								);
 							}
 						}
@@ -134,7 +162,7 @@ impl AudioUi {
 									crate::icons::Icon::Reload
 								},
 								play.rect.shrink(7.0),
-								colors.accent_text,
+								icon_color,
 							);
 						}
 						_ => {
@@ -144,7 +172,7 @@ impl AudioUi {
 									center + egui::vec2(6.0, 0.0),
 									center + egui::vec2(-4.0, 6.0),
 								],
-								colors.accent_text,
+								icon_color,
 								egui::Stroke::NONE,
 							));
 						}
@@ -174,60 +202,91 @@ impl AudioUi {
 							}
 						});
 					}
-					let duration = if active { self.duration } else { 0.0 };
 					let mut position = if active { self.position } else { 0.0 };
 					ui.spacing_mut().slider_width = ui.available_width().max(24.0);
 					let can_seek =
 						duration > 0.0 && matches!(state, AudioState::Playing | AudioState::Paused);
-					let seek = ui.add_enabled(
-						can_seek,
-						egui::Slider::new(&mut position, 0.0..=duration.max(1.0))
-							.show_value(false)
-							.trailing_fill(true)
-							.handle_shape(egui::style::HandleShape::Circle),
-					);
-					seek.widget_info(|| egui::WidgetInfo::slider(can_seek, position, "Seek"));
-					let seek = seek.on_hover_text("Seek");
-					if seek.changed() {
-						self.command = Some(AudioCommand::Seek(position));
-					}
-				});
-				ui.horizontal(|ui| {
-					let position = if active { self.position } else { 0.0 };
-					let duration = if active && self.duration > 0.0 {
-						timestamp(self.duration)
+					if voice {
+						if waveform(
+							ui,
+							&attachment.waveform,
+							&mut position,
+							duration,
+							can_seek,
+							&colors,
+						) {
+							self.command = Some(AudioCommand::Seek(position));
+						}
 					} else {
-						"--:--".into()
-					};
-					ui.label(
-						egui::RichText::new(format!("{} / {duration}", timestamp(position)))
-							.size(11.0)
-							.color(colors.muted),
-					);
-					ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-						ui.spacing_mut().item_spacing.x = 6.0;
-						ui.spacing_mut().slider_width = 52.0;
-						let volume = ui.add(
-							egui::Slider::new(&mut self.volume, 0.0..=1.0)
+						let seek = ui.add_enabled(
+							can_seek,
+							egui::Slider::new(&mut position, 0.0..=duration.max(1.0))
 								.show_value(false)
 								.trailing_fill(true)
 								.handle_shape(egui::style::HandleShape::Circle),
 						);
-						volume.widget_info(|| {
-							egui::WidgetInfo::slider(ui.is_enabled(), self.volume as f64, "Volume")
-						});
-						if volume
-							.on_hover_text(format!("Volume: {:.0}%", self.volume * 100.0))
-							.changed()
-						{
-							self.command = Some(AudioCommand::Volume(self.volume));
+						seek.widget_info(|| egui::WidgetInfo::slider(can_seek, position, "Seek"));
+						let seek = seek.on_hover_text("Seek");
+						if seek.changed() {
+							self.command = Some(AudioCommand::Seek(position));
 						}
-						crate::icons::inline(ui, crate::icons::Icon::Speaker, 16.0, colors.muted);
-					});
+					}
+				});
+				ui.horizontal(|ui| {
+					let position = if active { self.position } else { 0.0 };
+					let duration_label = if duration > 0.0 {
+						timestamp(duration)
+					} else {
+						"--:--".into()
+					};
+					ui.label(
+						egui::RichText::new(if voice {
+							if duration > 0.0 {
+								timestamp((duration - position).max(0.0))
+							} else {
+								"--:--".into()
+							}
+						} else {
+							format!("{} / {duration_label}", timestamp(position))
+						})
+						.size(11.0)
+						.color(colors.muted),
+					);
+					if !voice {
+						ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+							ui.spacing_mut().item_spacing.x = 6.0;
+							ui.spacing_mut().slider_width = 52.0;
+							let volume = ui.add(
+								egui::Slider::new(&mut self.volume, 0.0..=1.0)
+									.show_value(false)
+									.trailing_fill(true)
+									.handle_shape(egui::style::HandleShape::Circle),
+							);
+							volume.widget_info(|| {
+								egui::WidgetInfo::slider(
+									ui.is_enabled(),
+									self.volume as f64,
+									"Volume",
+								)
+							});
+							if volume
+								.on_hover_text(format!("Volume: {:.0}%", self.volume * 100.0))
+								.changed()
+							{
+								self.command = Some(AudioCommand::Volume(self.volume));
+							}
+							crate::icons::inline(
+								ui,
+								crate::icons::Icon::Speaker,
+								16.0,
+								colors.muted,
+							);
+						});
+					}
 				});
 				match state {
 					AudioState::Loading => {
-						ui.small("Loading audio…");
+						ui.small("Loading audioâ€¦");
 					}
 					AudioState::Failed(error) => {
 						ui.colored_label(colors.danger, error);
@@ -241,8 +300,88 @@ impl AudioUi {
 			}) {
 			self.seen = true;
 		}
+		card.response
 	}
 }
+fn waveform(
+	ui: &mut egui::Ui,
+	samples: &[u8],
+	position: &mut f64,
+	duration: f64,
+	enabled: bool,
+	colors: &crate::design::Palette,
+) -> bool {
+	let enabled = enabled && ui.is_enabled();
+	let (rect, response) = ui.allocate_exact_size(
+		egui::vec2(ui.available_width().max(1.0), 32.0),
+		if enabled {
+			egui::Sense::click_and_drag()
+		} else {
+			egui::Sense::hover()
+		},
+	);
+	let before = *position;
+	if enabled {
+		if (response.clicked() || response.dragged())
+			&& let Some(pointer) = response.interact_pointer_pos()
+		{
+			*position =
+				f64::from(((pointer.x - rect.left()) / rect.width()).clamp(0.0, 1.0)) * duration;
+		}
+		if response.has_focus() {
+			ui.input_mut(|input| {
+				for (key, value) in [
+					(egui::Key::ArrowLeft, *position - 1.0),
+					(egui::Key::ArrowRight, *position + 1.0),
+					(egui::Key::Home, 0.0),
+					(egui::Key::End, duration),
+				] {
+					if input.consume_key(egui::Modifiers::NONE, key) {
+						*position = value.clamp(0.0, duration);
+					}
+				}
+			});
+		}
+	}
+	let bars = ((rect.width() / 4.0).floor() as usize).clamp(1, 80);
+	for index in 0..bars {
+		let start = index * samples.len() / bars;
+		let end = ((index + 1) * samples.len() / bars)
+			.max(start + 1)
+			.min(samples.len());
+		let amplitude = samples
+			.get(start..end)
+			.and_then(|part| part.iter().max())
+			.copied()
+			.unwrap_or(0);
+		let height = 3.0 + f32::from(amplitude) / 255.0 * 25.0;
+		let x = rect.left() + (index as f32 + 0.5) * rect.width() / bars as f32;
+		let played = duration > 0.0 && (index as f64 / bars as f64) < *position / duration;
+		ui.painter().rect_filled(
+			egui::Rect::from_center_size(egui::pos2(x, rect.center().y), egui::vec2(2.0, height)),
+			1,
+			if played {
+				colors.text_strong
+			} else {
+				colors.muted.gamma_multiply(0.65)
+			},
+		);
+	}
+	if response.has_focus() {
+		ui.painter().rect_stroke(
+			rect,
+			3,
+			egui::Stroke::new(1.0, colors.accent),
+			egui::StrokeKind::Inside,
+		);
+	}
+	response.widget_info(|| {
+		egui::WidgetInfo::slider(enabled && ui.is_enabled(), *position, "Seek voice message")
+	});
+	response.on_hover_text("Seek voice message");
+	*position != before
+}
+
 fn timestamp(seconds: f64) -> String {
 	let seconds = seconds.max(0.0) as u64;
 	format!("{}:{:02}", seconds / 60, seconds % 60)
