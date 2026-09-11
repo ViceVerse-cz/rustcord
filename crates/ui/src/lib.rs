@@ -3881,13 +3881,24 @@ mod composer_tests {
 					for shape in &output.shapes {
 						collect(&shape.shape, &mut painted);
 					}
+					// Match this activity's actual texture, not unrelated same-sized UI meshes.
+					let activity_texture = messaging.avatars.texture_id(
+						&model::ActivityImage::Asset {
+							application: Id(9001),
+							asset: Id(9002),
+						}
+						.key(),
+					);
 					artwork = ctx
 						.tessellate(output.shapes.clone(), output.pixels_per_point)
 						.iter()
 						.filter_map(|shape| match &shape.primitive {
 							egui::epaint::Primitive::Mesh(mesh)
-								if (mesh.calc_bounds().size() - egui::vec2(56.0, 56.0))
-									.length() < 2.0 =>
+								if Some(mesh.texture_id) == activity_texture
+									&& shape
+										.clip_rect
+										.intersect(mesh.calc_bounds())
+										.is_positive() =>
 							{
 								Some(mesh.calc_bounds())
 							}

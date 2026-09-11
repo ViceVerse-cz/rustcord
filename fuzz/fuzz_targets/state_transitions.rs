@@ -33,6 +33,7 @@ fn ready() -> Event {
 				position: 0,
 				recipients: vec![],
 				last_message: None,
+				message_count: None,
 				member_list_id: None,
 			})
 			.collect(),
