@@ -403,15 +403,214 @@ pub fn apply(ctx: &egui::Context) {
 		ctx.set_style_of(theme, style);
 	}
 }
+/// Space reserved at the left of window strips for macOS traffic lights.
+pub const TRAFFIC_LIGHT_INSET: f32 = if cfg!(target_os = "macos") { 72.0 } else { 0.0 };
+/// Width of the Windows caption buttons drawn by [`window_controls`]; zero elsewhere.
+pub const WINDOW_CONTROLS_WIDTH: f32 = if cfg!(target_os = "windows") {
+	3.0 * 46.0
+} else {
+	0.0
+};
+
+/// Make `rect` behave like a native title bar: drag moves the window and, where the app
+/// draws its own frame (Windows), a double click toggles maximize.
+pub fn window_drag(ui: &mut egui::Ui, rect: egui::Rect) {
+	let response = ui.interact(
+		rect,
+		ui.id().with("window-drag"),
+		egui::Sense::click_and_drag(),
+	);
+	if response.drag_started() {
+		ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+	}
+	if cfg!(target_os = "windows") && response.double_clicked() {
+		let maximized = ui.input(|i| i.viewport().maximized.unwrap_or(false));
+		ui.ctx()
+			.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+	}
+}
+
+/// Discord-style caption buttons (minimize, maximize/restore, close) for the undecorated
+/// Windows frame. Lay out in a right-to-left `ui`; a no-op on other platforms.
+pub fn window_controls(ui: &mut egui::Ui) {
+	if !cfg!(target_os = "windows") {
+		return;
+	}
+	let p = palette(ui);
+	let maximized = ui.input(|i| i.viewport().maximized.unwrap_or(false));
+	let height = ui.available_height().clamp(28.0, 36.0);
+	ui.spacing_mut().item_spacing.x = 0.0;
+	let mut caption =
+		|ui: &mut egui::Ui, label: &str, danger: bool| -> (egui::Response, egui::Rect, Color32) {
+			let (rect, response) =
+				ui.allocate_exact_size(egui::vec2(46.0, height), egui::Sense::click());
+			response
+				.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+			let hovered = response.hovered() || response.has_focus();
+			if hovered {
+				ui.painter()
+					.rect_filled(rect, 0, if danger { rgb(0xc42b1c) } else { p.hover });
+			}
+			let color = if hovered && danger {
+				Color32::WHITE
+			} else if hovered {
+				p.text_strong
+			} else {
+				p.text
+			};
+			(response, rect, color)
+		};
+	let (close, rect, color) = caption(ui, "Close", true);
+	let c = rect.center();
+	let stroke = Stroke::new(1.0, color);
+	ui.painter().line_segment(
+		[c + egui::vec2(-5.0, -5.0), c + egui::vec2(5.0, 5.0)],
+		stroke,
+	);
+	ui.painter().line_segment(
+		[c + egui::vec2(-5.0, 5.0), c + egui::vec2(5.0, -5.0)],
+		stroke,
+	);
+	if close.clicked() {
+		ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+	}
+	let (toggle, rect, color) = caption(ui, if maximized { "Restore" } else { "Maximize" }, false);
+	let c = rect.center();
+	let stroke = Stroke::new(1.0, color);
+	if maximized {
+		let back = egui::Rect::from_center_size(c + egui::vec2(1.5, -1.5), egui::Vec2::splat(9.0));
+		let front = egui::Rect::from_center_size(c + egui::vec2(-1.5, 1.5), egui::Vec2::splat(9.0));
+		ui.painter().line_segment(
+			[back.left_top() + egui::vec2(0.0, 0.0), back.right_top()],
+			stroke,
+		);
+		ui.painter()
+			.line_segment([back.right_top(), back.right_bottom()], stroke);
+		ui.painter().line_segment(
+			[back.left_top(), back.left_top() + egui::vec2(0.0, 3.0)],
+			stroke,
+		);
+		ui.painter().line_segment(
+			[
+				back.right_bottom(),
+				back.right_bottom() - egui::vec2(3.0, 0.0),
+			],
+			stroke,
+		);
+		ui.painter()
+			.rect_stroke(front, 1, stroke, egui::StrokeKind::Middle);
+	} else {
+		let square = egui::Rect::from_center_size(c, egui::Vec2::splat(10.0));
+		ui.painter()
+			.rect_stroke(square, 1, stroke, egui::StrokeKind::Middle);
+	}
+	if toggle.clicked() {
+		ui.ctx()
+			.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+	}
+	let (minimize, rect, color) = caption(ui, "Minimize", false);
+	let c = rect.center();
+	ui.painter().line_segment(
+		[c + egui::vec2(-5.0, 0.5), c + egui::vec2(5.0, 0.5)],
+		Stroke::new(1.0, color),
+	);
+	if minimize.clicked() {
+		ui.ctx()
+			.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+	}
+	ui.add_space(6.0);
+}
+
+/// Full-width accent call to action with centred text and an optional leading icon.
 pub fn primary_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
 	let p = palette(ui);
-	ui.add(
-		egui::Button::new(medium(ui, label, 15.0).color(p.accent_text))
-			.fill(p.accent)
-			.stroke(Stroke::NONE)
-			.corner_radius(8)
-			.min_size(egui::vec2(ui.available_width(), 44.0)),
+	wide_button(ui, label, None, p.accent, Stroke::NONE, p.accent_text)
+}
+pub fn primary_icon_button(
+	ui: &mut egui::Ui,
+	icon: crate::icons::Icon,
+	label: &str,
+) -> egui::Response {
+	let p = palette(ui);
+	wide_button(ui, label, Some(icon), p.accent, Stroke::NONE, p.accent_text)
+}
+/// Full-width neutral companion to [`primary_button`].
+pub fn secondary_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+	let p = palette(ui);
+	wide_button(
+		ui,
+		label,
+		None,
+		p.raised,
+		Stroke::new(1.0, p.border),
+		p.text_strong,
 	)
+}
+fn wide_button(
+	ui: &mut egui::Ui,
+	label: &str,
+	icon: Option<crate::icons::Icon>,
+	fill: Color32,
+	stroke: Stroke,
+	text: Color32,
+) -> egui::Response {
+	let p = palette(ui);
+	let (rect, response) =
+		ui.allocate_exact_size(egui::vec2(ui.available_width(), 44.0), egui::Sense::click());
+	response.widget_info(|| {
+		egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+	});
+	let enabled = ui.is_enabled();
+	let fill = if !enabled {
+		fill.gamma_multiply(0.5)
+	} else if response.is_pointer_button_down_on() {
+		fill.gamma_multiply(0.85)
+	} else if response.hovered() {
+		fill.linear_multiply(1.12)
+	} else {
+		fill
+	};
+	let text = if enabled {
+		text
+	} else {
+		text.gamma_multiply(0.6)
+	};
+	let painter = ui.painter();
+	painter.rect(rect, 8, fill, stroke, egui::StrokeKind::Inside);
+	if response.has_focus() {
+		painter.rect_stroke(
+			rect.expand(2.0),
+			10,
+			Stroke::new(2.0, p.accent),
+			egui::StrokeKind::Outside,
+		);
+	}
+	let galley = painter.layout_no_wrap(
+		label.to_owned(),
+		FontId::new(15.0, medium_family(ui.ctx())),
+		text,
+	);
+	let icon_size = if icon.is_some() { 20.0 } else { 0.0 };
+	let gap = if icon.is_some() { 10.0 } else { 0.0 };
+	let total = icon_size + gap + galley.size().x;
+	let mut x = rect.center().x - total * 0.5;
+	if let Some(icon) = icon {
+		let icon_rect = egui::Rect::from_center_size(
+			egui::pos2(x + icon_size * 0.5, rect.center().y),
+			egui::Vec2::splat(icon_size),
+		);
+		crate::icons::paint(painter, icon, icon_rect, text);
+		x += icon_size + gap;
+	}
+	painter.galley(
+		egui::pos2(x, rect.center().y - galley.size().y * 0.5),
+		galley,
+		text,
+	);
+	if enabled && response.hovered() {
+		ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+	}
+	response
 }
 /// Discord's deterministic fallback avatar colours, keyed by the display name.
 fn fallback_avatar_color(name: &str) -> Color32 {

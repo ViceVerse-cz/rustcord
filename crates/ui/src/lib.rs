@@ -343,10 +343,7 @@ impl MessagingUi {
 			.frame(egui::Frame::new().fill(colors.base))
 			.show(ui, |ui| {
 				let rect = ui.max_rect();
-				let drag = ui.interact(rect, ui.id().with("drag"), egui::Sense::click_and_drag());
-				if drag.drag_started() {
-					ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
-				}
+				design::window_drag(ui, rect);
 				let title_rect = egui::Rect::from_center_size(
 					rect.center(),
 					egui::vec2(rect.width() * 0.3, rect.height()),
@@ -371,6 +368,7 @@ impl MessagingUi {
 						))
 						.layout(egui::Layout::right_to_left(egui::Align::Center)),
 					|ui| {
+						design::window_controls(ui);
 						ui.spacing_mut().item_spacing.x = 10.0;
 						design::build_badge(ui, self.build);
 						if state.demo {
