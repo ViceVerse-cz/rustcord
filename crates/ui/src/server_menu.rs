@@ -34,68 +34,87 @@ impl ServerMenu {
 	) -> egui::Response {
 		ui.push_id(("server-menu", guild), |ui| {
 			let colors = design::palette(ui);
-			ui.spacing_mut().button_padding.x = 24.0;
 			let button = ui.add_sized(
 				[ui.available_width(), 40.0],
-				egui::Button::new(design::semibold(ui, title, 15.0).color(colors.text_strong))
-					.truncate()
-					.frame(false),
+				egui::Button::new(()).frame(false),
 			);
+			let title = egui::WidgetText::from(design::semibold(ui, title, 15.0)).into_galley(
+				ui,
+				Some(egui::TextWrapMode::Truncate),
+				(button.rect.width() - 24.0).max(0.0),
+				egui::TextStyle::Button,
+			);
+			let title_pos = egui::pos2(
+				button.rect.left(),
+				button.rect.center().y - title.size().y / 2.0,
+			);
+			let chevron_x = title_pos.x + title.size().x + 12.0;
+			ui.painter()
+				.galley(title_pos, title.clone(), colors.text_strong);
 			button.widget_info(|| {
 				egui::WidgetInfo::labeled(
 					egui::WidgetType::Button,
 					true,
-					format!("Server menu, {title}"),
+					format!("Server menu, {}", title.job.text),
 				)
 			});
 			icons::paint(
 				ui.painter(),
 				icons::Icon::ChevronDown,
 				egui::Rect::from_center_size(
-					egui::pos2(button.rect.right() - 10.0, button.rect.center().y),
+					egui::pos2(chevron_x, button.rect.center().y),
 					egui::Vec2::splat(14.0),
 				),
 				colors.muted,
 			);
-			egui::Popup::menu(&button).show(|ui| {
-				ui.set_min_width(210.0);
-				ui.spacing_mut().button_padding = egui::vec2(8.0, 6.0);
-				let available =
-					!state.server_action_pending() && (state.demo || state.gateway_connected);
-				if ui
-					.add_enabled(available, egui::Button::new("Create invite"))
-					.clicked()
-				{
-					state.clear_server_action_result(guild);
-					self.dialog = Some(Dialog::Invite {
-						guild,
-						channel: state.invite_channel(guild),
-					});
-					self.generation = state.generation;
-					self.copied = false;
-					ui.close();
-				}
-				ui.separator();
-				if ui
-					.add_enabled(
-						available,
-						egui::Button::new(egui::RichText::new("Leave server").color(colors.danger)),
-					)
-					.clicked()
-				{
-					state.clear_server_action_result(guild);
-					self.dialog = Some(Dialog::Leave(guild));
-					self.generation = state.generation;
-					ui.close();
-				}
-				if !available {
-					ui.small(if state.server_action_pending() {
-						"A server action is in progress."
-					} else {
-						"Reconnect to manage this server."
-					});
-				}
-			});
+			egui::Popup::menu(&button)
+				.frame(
+					egui::Frame::popup(ui.style())
+						.fill(colors.chat)
+						.inner_margin(8)
+						.corner_radius(8),
+				)
+				.show(|ui| {
+					ui.set_width(232.0);
+					let available =
+						!state.server_action_pending() && (state.demo || state.gateway_connected);
+					if ui
+						.add_enabled_ui(available, |ui| {
+							menu_row(ui, icons::Icon::AddPeople, "Create invite", colors.text)
+						})
+						.inner
+						.clicked()
+					{
+						state.clear_server_action_result(guild);
+						self.dialog = Some(Dialog::Invite {
+							guild,
+							channel: state.invite_channel(guild),
+						});
+						self.generation = state.generation;
+						self.copied = false;
+						ui.close();
+					}
+					ui.separator();
+					if ui
+						.add_enabled_ui(available, |ui| {
+							menu_row(ui, icons::Icon::ArrowRight, "Leave server", colors.danger)
+						})
+						.inner
+						.clicked()
+					{
+						state.clear_server_action_result(guild);
+						self.dialog = Some(Dialog::Leave(guild));
+						self.generation = state.generation;
+						ui.close();
+					}
+					if !available {
+						ui.small(if state.server_action_pending() {
+							"A server action is in progress."
+						} else {
+							"Reconnect to manage this server."
+						});
+					}
+				});
 			button
 		})
 		.inner
@@ -126,132 +145,241 @@ impl ServerMenu {
 			return;
 		};
 		let mut close = false;
-		let modal = egui::Modal::new(egui::Id::unique("server-action-dialog")).show(ctx, |ui| {
-			ui.set_width((ctx.content_rect().width() - 48.0).clamp(180.0, 400.0));
-			let colors = design::palette(ui);
-			let pending = state.server_action_pending();
-			if state.demo {
-				ui.small("Offline preview · no server changes");
-			}
-			match &mut dialog {
-				Dialog::Invite { channel, .. } => {
-					ui.heading("Create invite");
-					ui.label(&name);
-					ui.add_space(12.0);
-					if channel.is_none_or(|c| !state.can_create_server_invite(guild, c)) {
-						*channel = state.invite_channel(guild);
-					}
-					let before = *channel;
-					ui.label("Invite people to");
-					ui.add_enabled_ui(!pending, |ui| {
-						let label = state
-							.channels
-							.iter()
-							.find(|c| Some(c.id) == *channel)
-							.map_or("No eligible channel", |c| c.name.as_str());
-						egui::ComboBox::from_id_salt("invite-channel")
-							.selected_text(label)
-							.width(ui.available_width())
-							.height(220.0)
-							.show_ui(ui, |ui| {
-								for item in state
+		let colors = design::palette_for(ctx);
+		let modal = egui::Modal::new(egui::Id::unique("server-action-dialog"))
+			.frame(
+				egui::Frame::new()
+					.fill(colors.chat)
+					.stroke(egui::Stroke::new(1.0, colors.border))
+					.corner_radius(12)
+					.inner_margin(24),
+			)
+			.show(ctx, |ui| {
+				ui.set_width((ctx.content_rect().width() - 80.0).clamp(180.0, 536.0));
+				let pending = state.server_action_pending();
+				ui.horizontal(|ui| {
+					let heading = match dialog {
+						Dialog::Invite { .. } => format!("Invite friends to {name}"),
+						Dialog::Leave(_) => "Leave server?".to_owned(),
+					};
+					let heading_width = ui.available_width() - 36.0;
+					ui.allocate_ui_with_layout(
+						egui::vec2(heading_width, 28.0),
+						egui::Layout::top_down(egui::Align::Min),
+						|ui| {
+							ui.set_width(heading_width);
+							ui.add(
+								egui::Label::new(
+									design::semibold(ui, heading, 20.0).color(colors.text_strong),
+								)
+								.wrap(),
+							);
+						},
+					);
+					close = icons::button(ui, icons::Icon::Close, 28.0, "Close dialog").clicked();
+				});
+				ui.add_space(8.0);
+				match &mut dialog {
+					Dialog::Invite { channel, .. } => {
+						if channel.is_none_or(|c| !state.can_create_server_invite(guild, c)) {
+							*channel = state.invite_channel(guild);
+						}
+						let before = *channel;
+						ui.add_enabled_ui(!pending, |ui| {
+							ui.horizontal_wrapped(|ui| {
+								ui.colored_label(colors.muted, "Recipients will land in");
+								let label = state
 									.channels
 									.iter()
-									.filter(|c| state.can_create_server_invite(guild, c.id))
-								{
-									ui.selectable_value(channel, Some(item.id), &item.name);
-								}
+									.find(|c| Some(c.id) == *channel)
+									.map_or("No eligible channel", |c| c.name.as_str());
+								egui::ComboBox::from_id_salt("invite-channel")
+									.selected_text(
+										egui::RichText::new(format!("# {label}"))
+											.color(colors.muted),
+									)
+									.width(ui.available_width().clamp(80.0, 300.0))
+									.wrap_mode(egui::TextWrapMode::Truncate)
+									.height(220.0)
+									.show_ui(ui, |ui| {
+										for item in state
+											.channels
+											.iter()
+											.filter(|c| state.can_create_server_invite(guild, c.id))
+										{
+											ui.selectable_value(channel, Some(item.id), &item.name);
+										}
+									});
 							});
-					});
-					if before != *channel {
-						state.clear_server_action_result(guild);
-						self.copied = false;
+						});
+						if before != *channel {
+							state.clear_server_action_result(guild);
+							self.copied = false;
+						}
+						if channel.is_none() {
+							ui.colored_label(
+								colors.warning,
+								"You need Create Invite permission in a channel to create an invite.",
+							);
+						}
+						ui.add_space(24.0);
+						ui.separator();
+						ui.add_space(16.0);
+						ui.label(design::medium(
+							ui,
+							"Send a server invite link to a friend",
+							15.0,
+						));
+						ui.add_space(8.0);
+						egui::Frame::new()
+							.stroke(egui::Stroke::new(1.0, colors.border))
+							.corner_radius(8)
+							.inner_margin(4)
+							.show(ui, |ui| {
+								ui.horizontal(|ui| {
+									let link = state.created_invite(guild);
+									let mut displayed = link.unwrap_or("Create a link to share");
+									ui.add_sized(
+										[(ui.available_width() - 108.0).max(24.0), 36.0],
+										egui::TextEdit::singleline(&mut displayed)
+											.frame(
+												egui::Frame::new()
+													.inner_margin(egui::Margin::symmetric(8, 8)),
+											)
+											.text_color(if link.is_some() {
+												colors.text
+											} else {
+												colors.muted
+											}),
+									);
+									let label = if link.is_some() {
+										if self.copied { "Copied" } else { "Copy" }
+									} else if pending {
+										"Creating…"
+									} else {
+										"Create link"
+									};
+									let clicked = ui
+										.add_enabled_ui(!pending && channel.is_some(), |ui| {
+											ui.add_sized(
+												[100.0, 36.0],
+												egui::Button::new(
+													design::semibold(ui, label, 14.0)
+														.color(colors.accent_text),
+												)
+												.fill(colors.accent)
+												.corner_radius(4),
+											)
+										})
+										.inner
+										.clicked();
+									if clicked {
+										if let Some(link) = link {
+											ui.ctx().copy_text(link.to_owned());
+											self.copied = true;
+										} else if let Some(channel) = *channel
+											&& let Some(command) =
+												state.create_server_invite(guild, channel)
+										{
+											commands.push(command);
+										}
+									}
+								});
+							});
+						ui.add_space(12.0);
+						ui.label(
+							egui::RichText::new(
+								"Your invite link expires in 24 hours. No limit on uses.",
+							)
+							.small()
+							.color(colors.muted),
+						);
 					}
+					Dialog::Leave(_) => {
+						ui.label(format!(
+							"Leave {name}? You will need another invite to rejoin."
+						));
+						ui.add_space(12.0);
+						let reason = state.leave_server_reason(guild);
+						if let Some(reason) = reason {
+							ui.colored_label(colors.warning, reason);
+						}
+						if ui
+							.add_enabled(
+								!pending && reason.is_none(),
+								egui::Button::new(
+									egui::RichText::new(if pending {
+										"Leaving…"
+									} else {
+										"Leave server"
+									})
+									.color(colors.danger),
+								),
+							)
+							.clicked() && let Some(command) = state.leave_server(guild)
+						{
+							commands.push(command);
+						}
+					}
+				}
+				if let Some(status) = state.server_action_status(guild) {
+					ui.colored_label(colors.warning, status);
+				}
+				ui.add_space(8.0);
+				if matches!(dialog, Dialog::Leave(_))
+					&& ui
+						.button(if pending { "Close" } else { "Cancel" })
+						.clicked()
+				{
+					close = true;
+				}
+				if state.demo {
 					ui.label(
-						egui::RichText::new("Expires in 24 hours. No limit on uses.")
+						egui::RichText::new("Offline preview · no server changes")
 							.small()
 							.color(colors.muted),
 					);
-					if channel.is_none() {
-						ui.colored_label(
-							colors.warning,
-							"You need Create Invite permission in a channel to create an invite.",
-						);
-					}
-					ui.add_space(12.0);
-					if let Some(link) = state.created_invite(guild) {
-						ui.add(egui::Label::new(link).wrap().selectable(true));
-						if ui
-							.button(if self.copied {
-								"Copied"
-							} else {
-								"Copy invite link"
-							})
-							.clicked()
-						{
-							ui.ctx().copy_text(link.to_owned());
-							self.copied = true;
-						}
-					} else if ui
-						.add_enabled(
-							!pending && channel.is_some(),
-							egui::Button::new(if pending {
-								"Creating invite…"
-							} else {
-								"Create invite"
-							}),
-						)
-						.clicked() && let Some(channel) = *channel
-						&& let Some(command) = state.create_server_invite(guild, channel)
-					{
-						commands.push(command);
-					}
 				}
-				Dialog::Leave(_) => {
-					ui.heading("Leave server?");
-					ui.label(format!(
-						"Leave {name}? You will need another invite to rejoin."
-					));
-					ui.add_space(12.0);
-					let reason = state.leave_server_reason(guild);
-					if let Some(reason) = reason {
-						ui.colored_label(colors.warning, reason);
-					}
-					if ui
-						.add_enabled(
-							!pending && reason.is_none(),
-							egui::Button::new(
-								egui::RichText::new(if pending {
-									"Leaving…"
-								} else {
-									"Leave server"
-								})
-								.color(colors.danger),
-							),
-						)
-						.clicked() && let Some(command) = state.leave_server(guild)
-					{
-						commands.push(command);
-					}
-				}
-			}
-			if let Some(status) = state.server_action_status(guild) {
-				ui.colored_label(colors.warning, status);
-			}
-			ui.add_space(8.0);
-			if ui
-				.button(if pending { "Close" } else { "Cancel" })
-				.clicked()
-			{
-				close = true;
-			}
-		});
+			});
 		self.dialog = if close || modal.should_close() {
 			None
 		} else {
 			Some(dialog)
 		};
 	}
+}
+
+fn menu_row(
+	ui: &mut egui::Ui,
+	icon: icons::Icon,
+	label: &str,
+	color: egui::Color32,
+) -> egui::Response {
+	ui.scope(|ui| {
+		ui.spacing_mut().button_padding = egui::vec2(36.0, 8.0);
+		let response = ui.add_sized(
+			[ui.available_width(), 36.0],
+			egui::Button::new(())
+				.left_text(design::medium(ui, label, 14.0).color(color))
+				.frame_when_inactive(false)
+				.corner_radius(4),
+		);
+		icons::paint(
+			ui.painter(),
+			icon,
+			egui::Rect::from_center_size(
+				egui::pos2(response.rect.left() + 18.0, response.rect.center().y),
+				egui::Vec2::splat(20.0),
+			),
+			if ui.is_enabled() {
+				color
+			} else {
+				color.gamma_multiply(0.5)
+			},
+		);
+		response
+	})
+	.inner
 }
 
 #[cfg(test)]
@@ -282,15 +410,17 @@ mod tests {
 	}
 	fn frame(
 		ctx: &egui::Context,
+		width: f32,
 		menu: &mut ServerMenu,
 		state: &mut State,
 		events: Vec<Event>,
 		commands: &mut Vec<Command>,
 	) -> (egui::Response, Vec<(String, Rect)>) {
+		let copied_before = menu.copied;
 		let mut response = None;
 		let output = ctx.run_ui(
 			egui::RawInput {
-				screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(320.0, 550.0))),
+				screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(width, 550.0))),
 				events,
 				..Default::default()
 			},
@@ -308,14 +438,20 @@ mod tests {
 		for shape in &output.shapes {
 			labels(&shape.shape, &mut text);
 		}
+		if menu.copied && !copied_before {
+			assert!(output.platform_output.commands.iter().any(|command| {
+				matches!(command, egui::OutputCommand::CopyText(link) if link == "https://discord.gg/synthetic-invite")
+			}));
+		}
 		output.drop_without_applying_deltas();
 		(response.unwrap(), text)
 	}
 	#[test]
 	fn server_menu_requires_explicit_invite_and_leave_confirmation() {
-		for light in [false, true] {
+		for (light, width) in [(false, 320.0), (true, 320.0), (false, 960.0), (true, 960.0)] {
 			for action in ["Create invite", "Leave server"] {
 				let ctx = egui::Context::default();
+				design::apply(&ctx);
 				ctx.set_visuals(if light {
 					egui::Visuals::light()
 				} else {
@@ -324,11 +460,12 @@ mod tests {
 				let mut state = test_support::chat_demo_state();
 				let mut menu = ServerMenu::default();
 				let mut commands = vec![];
-				let (button, _) = frame(&ctx, &mut menu, &mut state, vec![], &mut commands);
+				let (button, _) = frame(&ctx, width, &mut menu, &mut state, vec![], &mut commands);
 				if light {
 					button.request_focus();
 					frame(
 						&ctx,
+						width,
 						&mut menu,
 						&mut state,
 						vec![Event::Key {
@@ -344,6 +481,7 @@ mod tests {
 					for pressed in [true, false] {
 						frame(
 							&ctx,
+							width,
 							&mut menu,
 							&mut state,
 							pointer(button.rect.center(), pressed),
@@ -351,7 +489,7 @@ mod tests {
 						);
 					}
 				}
-				let (_, text) = frame(&ctx, &mut menu, &mut state, vec![], &mut commands);
+				let (_, text) = frame(&ctx, width, &mut menu, &mut state, vec![], &mut commands);
 				assert!(commands.is_empty());
 				let position = text
 					.iter()
@@ -362,27 +500,51 @@ mod tests {
 				for pressed in [true, false] {
 					frame(
 						&ctx,
+						width,
 						&mut menu,
 						&mut state,
 						pointer(position, pressed),
 						&mut commands,
 					);
 				}
-				let (_, text) = frame(&ctx, &mut menu, &mut state, vec![], &mut commands);
+				let (_, text) = frame(&ctx, width, &mut menu, &mut state, vec![], &mut commands);
 				assert!(
 					commands.is_empty(),
 					"opening a dialog must not write to Discord"
 				);
+				if action == "Create invite" {
+					let heading = text
+						.iter()
+						.find(|(t, _)| t.starts_with("Invite friends to "))
+						.unwrap()
+						.1;
+					let footer = text
+						.iter()
+						.find(|(t, _)| t == "Send a server invite link to a friend")
+						.unwrap()
+						.1;
+					assert!(
+						(heading.left() - footer.left()).abs() < 1.0,
+						"heading and footer align left: {heading:?} {footer:?}"
+					);
+				}
 				let position = text
 					.iter()
 					.rev()
-					.find(|(t, _)| t == action)
+					.find(|(t, _)| {
+						t == if action == "Create invite" {
+							"Create link"
+						} else {
+							action
+						}
+					})
 					.unwrap()
 					.1
 					.center();
 				for pressed in [true, false] {
 					frame(
 						&ctx,
+						width,
 						&mut menu,
 						&mut state,
 						pointer(position, pressed),
@@ -395,10 +557,44 @@ mod tests {
 					"one explicit confirmation sends one command"
 				);
 				assert!(matches!(&commands[0], Command::ServerAction { .. }));
-				frame(&ctx, &mut menu, &mut state, vec![], &mut commands);
+				frame(&ctx, width, &mut menu, &mut state, vec![], &mut commands);
 				assert_eq!(commands.len(), 1);
+				if action == "Create invite" {
+					let Command::ServerAction { action, request } = commands[0] else {
+						unreachable!()
+					};
+					state.apply(client_core::Envelope {
+						generation: state.generation,
+						event: client_core::Event::ServerAction(
+							client_core::server_actions::Event::Written {
+								action,
+								request,
+								result: Ok(Some("synthetic-invite".into())),
+							},
+						),
+					});
+					let (_, text) =
+						frame(&ctx, width, &mut menu, &mut state, vec![], &mut commands);
+					let copy = text.iter().find(|(t, _)| t == "Copy").unwrap().1;
+					assert!(
+						copy.left() >= 0.0 && copy.right() <= width,
+						"copy stays inside the viewport"
+					);
+					for pressed in [true, false] {
+						frame(
+							&ctx,
+							width,
+							&mut menu,
+							&mut state,
+							pointer(copy.center(), pressed),
+							&mut commands,
+						);
+					}
+					assert!(menu.copied);
+					assert_eq!(commands.len(), 1, "copying does not create another invite");
+				}
 				state.generation += 1;
-				frame(&ctx, &mut menu, &mut state, vec![], &mut commands);
+				frame(&ctx, width, &mut menu, &mut state, vec![], &mut commands);
 				assert!(menu.dialog.is_none(), "old account dialogs close");
 			}
 		}
