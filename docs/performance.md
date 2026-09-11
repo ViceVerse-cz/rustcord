@@ -2423,3 +2423,41 @@ The scroll check detects an 8-point jump with original spacing and independently
 Native screenshots and process CPU/RSS/frame/startup measurements remain unavailable:
 `orca` is not installed; Windows Computer Use reports its native pipe unavailable with
 OS error 2 (file not found). No runtime performance or live Discord compatibility claim.
+
+
+## Game reply framing - September 11, 2026
+
+Baseline `037a44cf8af5c8ccbbb98afd6c9042c7d8d9ca89`; branch `fix/game-presence-frames`.
+Windows 11 Home 10.0.26200, Ryzen 7 7800X3D / 16 logical processors,
+33,410,678,784 bytes visible RAM; Rust 1.98.1, x86_64-pc-windows-msvc.
+Both baseline release variants were built before changing the reply writer and retained
+separately. One locked package per revision/variant; same release profile.
+
+| Metric (bytes) | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| text exe | 54,850,048 | 54,848,000 | -2,048 (-0.004%) |
+| text installed | 59,725,983 | 59,723,935 | -2,048 (-0.003%) |
+| text zip | 35,281,780 | 35,281,371 | -409 (-0.001%) |
+| voice exe | 59,945,984 | 59,944,448 | -1,536 (-0.003%) |
+| voice installed | 66,141,643 | 66,141,182 | -461 (-0.001%) |
+| voice zip | 37,897,377 | 37,896,986 | -391 (-0.001%) |
+
+Installed sums cover 670 text / 912 voice files; text excludes the nested voice directory.
+Archives use sorted paths and Python zipfile DEFLATE level 9. Voice includes the updated
+compatibility/storage documentation; later performance/progress appends are not packaged.
+Tiny size differences are not a performance improvement. No dependency changes.
+
+The existing 100,000-event reducer replay was built for each revision, warmed once, then
+run five times: median 43.9801 ms before / 44.9107 ms after
+(+0.9306 ms, +2.12%). Both retain 500 records,
+236,992..237,477 estimated timeline bytes. Warmups were 44.2414 /
+45.6009 ms. This unchanged workload does not exercise local game IPC;
+these noisy timings do not establish an IPC latency, CPU/RSS or frame-time change.
+
+The focused native test observed a pending game read completing with four bytes before
+the fix and the complete 240-byte reply afterward. An isolated probe of osu!'s installed
+DiscordRPC.dll 1.5.0.51 decoded 0/10 split replies and 10/10 combined replies; no live
+endpoint or account was used. The shared writer now assembles one temporary buffer,
+bounded at 16,392 bytes per writing client (131,136 bytes across the eight-client limit).
+Normal READY/ACK frames are smaller. Input limits and five-second write timeout remain.
+No native UI changed; screenshots and UI-process sampling are not applicable.

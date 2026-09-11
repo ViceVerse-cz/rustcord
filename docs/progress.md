@@ -2606,3 +2606,34 @@ The older permission/avatar blockers are resolved on this combined revision.
 CI will rerun on the updated head. Native capture remains owner-paused; live
 Discord publication remains unverified. Prior package measurements retain their
 original revision scope. No new activity or network session was launched.
+
+
+### osu! game reply framing - September 11, 2026
+
+Baseline clean main `037a44c`; isolated branch `fix/game-presence-frames`.
+The owner reported waiting with Discord running, then a read error after quitting Discord
+and restarting the game. Read-only process/pipe inspection showed competing endpoints;
+games connect to one client. Serein then independently reproduced an actual framing bug:
+writing opcode, length and payload separately lets osu!'s SDK reject the first four bytes
+and disconnect. The shared writer now sends an assembled, bounded frame for every reply.
+No settings text or other application behavior changed.
+
+- Installed osu! DiscordRPC.dll 1.5.0.51, SHA-256
+  `EB06C6BC394B8805C46B3C795F92D7D5F18A52F2D6300A1891349BCE353D49A3`:
+  isolated unique named pipes decoded 10/10 combined replies versus 0/10 immediately
+  split replies and 0/10 delayed split replies. Synthetic fields only; no game/account actions.
+- `cargo test --locked -p serein --features voice replies_reach_pending_game_reads_as_complete_frames`:
+  failed before (4 bytes received versus 240 expected), passed after.
+- `cargo test --locked -p serein --features voice game_activity::tests`: all 7 pass.
+- `cargo xtask check`: blocked by inherited `crates/ui/src/timeline.rs:1107` formatting;
+  no unrelated formatting changes or lint suppressions. Later stages of this check did not run.
+- `cargo xtask policy`, targeted rustfmt and `git diff --check`: pass.
+- `cargo xtask package` / `cargo xtask package-voice`: both pass before and after.
+  Existing realfft 3.5.0 upstream license-evidence warning remains. Executables decrease
+  2,048 bytes text / 1,536 bytes voice; full measurements are in docs/performance.md.
+
+Draft PR for the existing full-check blocker. No visible UI change, so screenshots are
+not applicable. Linux/macOS and live game-to-Gateway publication remain unverified.
+Owner reproduction: fully quit competing Discord clients, launch the corrected Serein
+build, enable sharing and restart osu!. This does not enable simultaneous publication
+to two local clients. The original main checkout and running owner session were preserved.

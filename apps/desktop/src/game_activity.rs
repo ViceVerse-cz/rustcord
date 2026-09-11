@@ -291,12 +291,14 @@ async fn write_frame(
 	if bytes.len() > rpc::MAX_FRAME_BYTES {
 		return Err(io::Error::from(io::ErrorKind::InvalidData));
 	}
+	// Some game SDKs parse each pipe read as a complete frame; a separate
+	// opcode/header write makes them reject READY and disconnect immediately.
+	let mut frame = Vec::with_capacity(8 + bytes.len());
+	frame.extend_from_slice(&opcode.to_le_bytes());
+	frame.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+	frame.extend_from_slice(bytes);
 	timeout(Duration::from_secs(5), async {
-		stream.write_all(&opcode.to_le_bytes()).await?;
-		stream
-			.write_all(&(bytes.len() as u32).to_le_bytes())
-			.await?;
-		stream.write_all(bytes).await?;
+		stream.write_all(&frame).await?;
 		stream.flush().await
 	})
 	.await
@@ -449,6 +451,42 @@ mod tests {
 		assert!(receive.recv().await.is_none());
 	}
 
+	#[tokio::test]
+	#[cfg(windows)]
+	async fn replies_reach_pending_game_reads_as_complete_frames() {
+		use tokio::net::windows::named_pipe::{ClientOptions, ServerOptions};
+		let name = format!(
+			r"\\.\pipe\serein-test-reply-{}-{}",
+			std::process::id(),
+			getrandom::u64().unwrap()
+		);
+		let mut server = ServerOptions::new()
+			.first_pipe_instance(true)
+			.create(&name)
+			.unwrap();
+		let mut game = ClientOptions::new().open(&name).unwrap();
+		server.connect().await.unwrap();
+		let reply = rpc::ready(user().id, &user().name);
+		let mut buffer = vec![0; rpc::MAX_FRAME_BYTES + 8];
+		let read = game.read(&mut buffer);
+		tokio::pin!(read);
+		// osu!'s SDK parses each completed pipe read as a whole frame. Start its
+		// read first so a separately written header cannot hide in buffered data.
+		tokio::select! {
+			biased;
+			result = &mut read => panic!("unexpected read before reply: {result:?}"),
+			_ = tokio::task::yield_now() => {}
+		}
+		write_frame(&mut server, 1, &reply).await.unwrap();
+		let length = timeout(Duration::from_secs(2), read)
+			.await
+			.unwrap()
+			.unwrap();
+		assert_eq!(length, reply.len() + 8);
+		assert_eq!(&buffer[..4], &1u32.to_le_bytes());
+		assert_eq!(&buffer[4..8], &(reply.len() as u32).to_le_bytes());
+		assert_eq!(&buffer[8..length], reply);
+	}
 	#[tokio::test]
 	async fn frames_bound_before_allocation_and_handle_partial_reads() {
 		let (mut client, mut server) = tokio::io::duplex(64);

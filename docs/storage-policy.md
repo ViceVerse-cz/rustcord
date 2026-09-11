@@ -343,7 +343,9 @@ explicitly disconnects clients, including blocked writers. No process enumeratio
 The handshake returns only the current user ID/name and empty legacy avatar/discriminator
 fields; no token, chat, account-read, authentication, call or microphone API is exposed.
 
-Each client frame is capped at 16 KiB before allocation; handshake timeout is 10 seconds,
+Each client frame is capped at 16 KiB before allocation. Replies assemble one temporary
+buffer capped at 16 KiB plus the eight-byte header per writing client, released after the
+write completes or is cancelled. The handshake timeout is 10 seconds,
 partial-frame and write deadlines are five seconds. Idle clients do not poll. At most one
 new client is admitted per five seconds; each client processes at most ten frames per second.
 A 16-item update queue carries activities bounded to 1,152 string bytes plus fixed fields;
