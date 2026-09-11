@@ -956,3 +956,14 @@ pub fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
 		})
 		.inner
 }
+
+/// Linear blend of two colours in premultiplied space; `t` = 0 keeps `a`, 1 gives `b`.
+pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
+	let lerp = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * t).round() as u8;
+	Color32::from_rgba_premultiplied(
+		lerp(a.r(), b.r()),
+		lerp(a.g(), b.g()),
+		lerp(a.b(), b.b()),
+		lerp(a.a(), b.a()),
+	)
+}

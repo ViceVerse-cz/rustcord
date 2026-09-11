@@ -143,6 +143,8 @@ struct Desktop {
 	tray_setting: toggle_setting::Settings,
 	tray: Option<platform::tray::Tray>,
 	tray_error: Option<&'static str>,
+	/// `--demo-reply`: keeps two synthetic typists active on the selected fixture channel.
+	demo_typing: bool,
 	variant_changed: bool,
 	pending_save: Option<Arc<SessionSecret>>,
 	credential_status: &'static str,
@@ -552,6 +554,12 @@ impl Desktop {
 			messaging.preview_profile(user);
 			state.status = "Offline fixture · synthetic profile card opened at startup";
 		}
+		let demo_typing = demo && std::env::args().any(|arg| arg == "--demo-reply");
+		if demo_typing {
+			// Reply bar plus an active typing row on the fixture conversation, for screenshots.
+			state.reply = state.timeline.iter().last().map(|message| message.id);
+			state.status = "Offline fixture · reply bar and typing row shown at startup";
+		}
 		if demo && std::env::args().any(|arg| arg == "--demo-pins") {
 			messaging.preview_pins();
 			state.status = "Offline fixture · pinned messages popout opened at startup";
@@ -706,6 +714,7 @@ impl Desktop {
 			tray_setting,
 			tray: None,
 			tray_error: None,
+			demo_typing,
 			variant_changed: false,
 			pending_save: None,
 			credential_status: if demo {
@@ -2465,6 +2474,24 @@ impl eframe::App for Desktop {
 		self.frame_metrics.begin(ctx);
 		self.messaging.sync_reading_zoom(ctx);
 		self.poll(ctx);
+		if self.demo_typing && let Some(channel) = self.state.selected {
+			let wall = std::time::SystemTime::now();
+			let timestamp = wall
+				.duration_since(std::time::UNIX_EPOCH)
+				.map(|age| age.as_secs())
+				.unwrap_or_default();
+			for user in [2, 3] {
+				self.state.observe_typing_at(
+					client_core::typing::Signal {
+						channel,
+						user: model::Id(user),
+						timestamp,
+					},
+					wall,
+					std::time::Instant::now(),
+				);
+			}
+		}
 		if let Some(tray) = &mut self.tray {
 			while let Some(event) = tray.take_event() {
 				match event {
