@@ -2610,3 +2610,42 @@ on both revisions because exact license texts for openh264-sys2 0.9.8 and openh2
 0.9.8 are missing. The realfft 3.5.0 incomplete upstream license-evidence warning also
 remains. Full voice installed/ZIP comparison is unavailable; partial staging is not
 reported as a complete package. Voice was never activated during measurement.
+
+## Message right-click menu — September 11, 2026
+
+Baseline `22e2283` versus `fix/message-context-menu`, Windows 11 Home,
+AMD Ryzen 7 7800X3D, 16 logical CPUs, 32,627,616 KiB visible RAM,
+Rust 1.98.1 x86_64-pc-windows-msvc. Release text build with no default features,
+configured wgpu renderer. GPU adapter and display scale remain unverified.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable bytes | 55,044,608 | 55,047,168 | +2,560 (+0.0047%) |
+| Text installed package bytes | 59,973,205 | 59,975,765 | +2,560 (+0.0043%) |
+| Text ZIP bytes | 35,545,309 | 35,545,797 | +488 (+0.0014%) |
+| Settled working set bytes | 172,957,696 | 167,301,120 | -5,656,576 (-3.27%) |
+| Peak working set bytes | 194,273,280 | 196,333,568 | +2,060,288 (+1.06%) |
+| Settled private bytes | 402,104,320 | 395,128,832 | -6,975,488 (-1.73%) |
+| CPU seconds across sample interval | 0.71875 | 0.1875 | -0.53125 |
+
+Package snapshots exclude nested voice staging and precede this documentation
+update; 671 files each. PowerShell `Compress-Archive -CompressionLevel Optimal`
+compressed each complete text package. Snapshots and raw idle samples are in
+ignored `target/message-context-baseline` and `target/message-context-after`.
+
+Idle method: one synthetic `--demo` process per revision, launched with
+`Start-Process -WindowStyle Hidden`, 10-second warmup, then 20 `Get-Process`
+samples spaced 500ms apart (about 10 seconds). Settled means the last sample;
+peak is the OS process peak working set. Builds overlapped these samples.
+No scripted UI interaction was possible because both native control providers
+were unavailable. Child processes were not separately accounted for. These noisy
+single-run idle samples establish neither an improvement nor a regression and
+do not measure foreground responsiveness, startup/frame p95, or GPU memory.
+The menu uses egui's existing popup state and adds no cache or dependency.
+
+Both voice release builds compiled: executable 61,058,560 -> 61,060,608 bytes
+(+2,048; +0.0034%). `cargo xtask package-voice` failed on both revisions because
+exact license texts for `openh264-sys2 0.9.8` and `openh264 0.9.8` are missing.
+The existing realfft 3.5.0 license-evidence warning also remains. Complete voice
+installed/ZIP sizes are unavailable; partial staging is not a complete package.
+No voice session or microphone was activated.

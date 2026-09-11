@@ -249,7 +249,7 @@ fn action_button(ui: &mut egui::Ui, icon: crate::icons::Icon, label: &str) -> eg
 	crate::icons::button(ui, icon, 28.0, label)
 }
 fn message_actions(
-	ui: &mut egui::Ui,
+	popup: egui::Popup<'_>,
 	message: &Message,
 	actions: (bool, bool, bool, bool),
 	selection: (Option<&mut Option<Id>>, &mut Option<Id>),
@@ -261,8 +261,7 @@ fn message_actions(
 	let (editing, edit_started) = editing;
 	let (own, can_reply, can_edit, can_delete) = actions;
 	let (can_pin, pinned, pin_request) = pin;
-	let menu = crate::icons::button(ui, crate::icons::Icon::More, 28.0, "More");
-	egui::Popup::menu(&menu).show(|ui| {
+	popup.show(|ui| {
 		ui.set_min_width(160.0);
 		if ui.button("Copy message").clicked() {
 			ui.ctx().copy_text(message.display_text().into_owned());
@@ -321,13 +320,6 @@ fn message_actions(
 			*deleting = Some((message.channel, message.id));
 			ui.close();
 		}
-	});
-	menu.widget_info(|| {
-		egui::WidgetInfo::labeled(
-			egui::WidgetType::Button,
-			ui.is_enabled(),
-			format!("Message actions for {}", message.author.name),
-		)
 	});
 }
 /// Flat strip painted over the timeline edge; `add` lays out its contents left to right.
@@ -1159,8 +1151,12 @@ impl TimelineView {
 						&& !other_toolbar_hover
 						&& !egui::Popup::is_any_open(ui.ctx())
 						&& retained_toolbar.is_none_or(|(active, _)| active == *id);
-					if hovered
-						|| focus.has_focus()
+					let context_menu = (ui.rect_contains_pointer(rect) || toolbar_hover)
+						&& !other_toolbar_hover
+						&& !egui::Popup::is_any_open(ui.ctx())
+						&& ui.input(|i| i.pointer.secondary_clicked());
+					if context_menu
+						|| hovered || focus.has_focus()
 						|| keyboard_focus.as_ref().is_some_and(|r| r.id == focus.id)
 						|| retained
 					{
@@ -1256,7 +1252,7 @@ impl TimelineView {
 							self.edit_started = true;
 						}
 						if can_delete
-							&& toolbar.input(|input| input.modifiers.shift)
+							&& !context_menu && toolbar.input(|input| input.modifiers.shift)
 							&& !egui::Popup::is_any_open(toolbar.ctx())
 						{
 							if toolbar
@@ -1273,8 +1269,28 @@ impl TimelineView {
 								self.quick_delete = Some((message.channel, *id));
 							}
 						} else {
+							let menu =
+								action_button(&mut toolbar, crate::icons::Icon::More, "More");
+							menu.widget_info(|| {
+								egui::WidgetInfo::labeled(
+									egui::WidgetType::Button,
+									toolbar.is_enabled(),
+									format!("Message actions for {}", message.author.name),
+								)
+							});
+							let mut popup = egui::Popup::menu(&menu);
+							if context_menu {
+								popup = popup.open_memory(Some(egui::SetOpenCommand::Bool(true)));
+							}
+							if context_menu
+								|| (!menu.clicked()
+									&& egui::Popup::position_of_id(toolbar.ctx(), popup.get_id())
+										.is_some())
+							{
+								popup = popup.at_pointer_fixed();
+							}
 							message_actions(
-								&mut toolbar,
+								popup,
 								message,
 								(own, can_reply, can_edit, can_delete),
 								(
@@ -1762,8 +1778,9 @@ mod tests {
 						..Default::default()
 					},
 					|ui| {
+						let menu = action_button(ui, crate::icons::Icon::More, "More");
 						message_actions(
-							ui,
+							egui::Popup::menu(&menu),
 							&message,
 							(own, true, true, can_delete),
 							(None, &mut reply),
@@ -2520,6 +2537,87 @@ mod tests {
 				);
 			}
 			assert_eq!(state.reply.take(), Some(Id(60_000 << 22)));
+			// Both entry points share the same menu, including on selectable text,
+			// row whitespace, and Shift+right-click (which must not quick-delete).
+			let menu_labels = [
+				"Copy message",
+				"Reply",
+				"Mark read through here",
+				"Pin message",
+				"Edit message",
+				"Delete message\u{2026}",
+			];
+			for (button, point, modifiers) in [
+				(
+					egui::PointerButton::Primary,
+					view.toolbar.unwrap().1.right_center() - egui::vec2(14.0, 0.0),
+					egui::Modifiers::NONE,
+				),
+				(
+					egui::PointerButton::Secondary,
+					row.center(),
+					egui::Modifiers::NONE,
+				),
+				(
+					egui::PointerButton::Secondary,
+					egui::pos2(width - 30.0, row.center().y),
+					egui::Modifiers::SHIFT,
+				),
+			] {
+				for pressed in [true, false] {
+					render(
+						&mut view,
+						&mut state,
+						vec![
+							egui::Event::PointerMoved(point),
+							egui::Event::PointerButton {
+								pos: point,
+								button,
+								pressed,
+								modifiers,
+							},
+							egui::Event::ModifiersChanged(modifiers),
+						],
+					);
+				}
+				render(&mut view, &mut state, vec![]);
+				let labels = render(&mut view, &mut state, vec![]);
+				assert_eq!(
+					labels
+						.iter()
+						.filter_map(|(label, _)| menu_labels
+							.contains(&label.as_str())
+							.then_some(label.as_str()))
+						.collect::<Vec<_>>(),
+					menu_labels,
+				);
+				let reply = labels
+					.iter()
+					.find(|(label, _)| label == "Reply")
+					.unwrap()
+					.1
+					.center();
+				for pressed in [true, false] {
+					render(
+						&mut view,
+						&mut state,
+						vec![
+							egui::Event::PointerMoved(reply),
+							egui::Event::ModifiersChanged(egui::Modifiers::NONE),
+							egui::Event::PointerButton {
+								pos: reply,
+								button: egui::PointerButton::Primary,
+								pressed,
+								modifiers: egui::Modifiers::NONE,
+							},
+						],
+					);
+				}
+				assert_eq!(state.reply.take(), Some(Id(60_000 << 22)));
+				assert!(!egui::Popup::is_any_open(&ctx));
+				assert!(view.quick_delete.is_none());
+				assert_eq!(view.heights, heights);
+			}
 			ctx.memory_mut(|m| {
 				if let Some(id) = m.focused() {
 					m.surrender_focus(id);
