@@ -119,7 +119,7 @@ impl InviteDialog {
 				} else {
 					egui::Layout::left_to_right(egui::Align::Center)
 				};
-				ui.with_layout(layout, |ui| {
+				ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 0.0), layout, |ui| {
 					ui.label(
 						egui::RichText::new("Recipients will land in")
 							.size(18.0)
@@ -189,7 +189,7 @@ impl InviteDialog {
 			})
 			.collect();
 		let list_height =
-			(ui.ctx().content_rect().height() - (ui.cursor().top() - ui.min_rect().top()) - 300.0)
+			(ui.ctx().content_rect().height() - (ui.cursor().top() - ui.min_rect().top()) - 380.0)
 				.clamp(40.0, 240.0);
 		let enabled = state.created_invite(guild).is_some()
 			&& !state.server_invite_pending()
