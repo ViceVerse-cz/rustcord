@@ -2688,6 +2688,54 @@ and narrow/wide render behavior is covered by the integration test. No live acco
 message, call or microphone action; Linux/macOS and remote publication remain unverified.
 Draft PR for inherited full-check failures. No changes to settings explanatory text.
 
+
+## Unread and history banners — September 11, 2026
+
+Baseline `690ce911ec7a4aaa147e85b1aa4b01527f05def2`, clean task branch
+`t3code/fix-unread-message-banner`; fetched `origin`, whose default is `main`
+(`283686a` after fetch). Rust 1.98.1, macOS 27.0, Apple M1 Pro, 16 GiB RAM.
+
+Empty latest pages and complete conversations that fit in the viewport no longer
+show phantom unread/navigation banners, including stale latest-message metadata.
+The provisional unread-gap guard is corrected after measuring the viewport; long
+unread conversations retain their original starting position and unread protection.
+An explicit reply/search jump, including one preceding a late read-state snapshot,
+is never undone by that correction. Service read/latest metadata is unchanged.
+Overlay buttons have persistent IDs so changing nearby widgets cannot lose a click.
+Ordinary scrolling now needs more than three viewport heights before showing the
+older-message bar; protected unread and explicit history navigation retain their
+return-to-present control. Forward pagination alone is labeled “More messages”.
+
+Verification:
+
+- `cargo test --locked -p ui timeline::tests::`: 24 passed.
+- `cargo test --locked -p ui unread_pages_and_return_to_present`: 1 passed;
+  includes light/dark navigation and draft preservation.
+- New regression checks failed on the original empty-banner/early-threshold behavior.
+  Removing only the persistent overlay ID reproduces the lost mouse click.
+  Coverage includes empty/single/stale-latest, tall complete unread content, original
+  initial anchor, late read-state arrival after a reply jump, two/four-screen distances.
+- Fixed the existing timeline wheel test's missing `TouchPhase` field so these checks
+  compile against the pinned egui revision. No dependency changes.
+- `cargo xtask policy` and `git diff --check`: passed.
+- `cargo xtask check`: blocked by existing `crates/ui/src/pending.rs` formatting.
+- Full UI tests abort in the existing presence-rendering command assertion in
+  `crates/ui/src/lib.rs`; timeline-wide tests also fail the existing confirmed/pending
+  color assertion in `pending_tests.rs`. Both failures were reproduced on baseline
+  runtime code, with only the wheel-test compile fix applied.
+- Strict UI Clippy is blocked by existing `message_actions.rs` dependency lints
+  (`question_mark` at line 92 and `collapsible_if` at line 192).
+- Final text release package succeeds. Voice release/package outcome and measurements
+  are recorded in the accompanying performance entry.
+
+Native evidence is blocked: the baseline offline demo rendered, but automated scroll,
+focus and keyboard actions did not move its viewport. An intermediate changed demo rendered too;
+subsequent Computer Use returned `-10005: noWindowsAvailable`. Captures also differed
+in reported dimensions, so no comparable before/after image pair is claimed or committed.
+All fixtures and actions were offline/synthetic; no live account, message, call or
+microphone use. Windows/Linux and live compatibility were not verified. Deliver as a
+draft PR because complete checks, voice packaging and native interaction evidence remain
+blocked; see `docs/performance.md` for measurements and their limits.
 ## Voice settings design — September 11, 2026
 
 Task branch `t3code/polish-voice-settings-calls`, clean baseline/origin main

@@ -355,6 +355,7 @@ fn overlay_bar(
 	ui.painter().rect_filled(rect, radius, fill);
 	let mut bar = ui.new_child(
 		egui::UiBuilder::new()
+			.id(ui.make_persistent_id(("timeline-overlay", radius.sw == 0)))
 			.max_rect(rect.shrink2(egui::vec2(12.0, 0.0)))
 			.layout(egui::Layout::left_to_right(egui::Align::Center)),
 	);
@@ -432,6 +433,7 @@ impl TimelineView {
 				..Self::default()
 			};
 		}
+		let mut initial_unread_gap = false;
 		if !self.initial_read_checked
 			&& state.freshness == model::Freshness::Fresh
 			&& !state.history_pending
@@ -444,6 +446,7 @@ impl TimelineView {
 				.flatten()
 				.is_some_and(|marker| state.timeline.row_ids().any(|id| id == marker));
 			if unread && !marker_loaded {
+				initial_unread_gap = !self.target_browsing;
 				// Opening a recent page is not consent to skip an unseen unread gap.
 				self.target_browsing = true;
 				self.following = false;
@@ -463,7 +466,6 @@ impl TimelineView {
 			&& state.history_before.is_none()
 			&& state.history_after.is_none()
 			&& ui.input(|input| input.focused);
-		let can_jump_unread = state.can_jump_unread() && !watching_latest;
 		let boundary = state
 			.selected
 			.and_then(|channel| state.read_marker(channel))
@@ -606,6 +608,7 @@ impl TimelineView {
 			&& !state.history_pending
 			&& let Some(target) = state.search_target.take()
 		{
+			initial_unread_gap = false;
 			// Target browsing is deliberate reading, even when the service omits the target.
 			// A short result page must not acknowledge unrelated newer messages automatically.
 			self.target_browsing = true;
@@ -1377,6 +1380,18 @@ impl TimelineView {
 				Some(channel.id) == state.selected && channel.last_message == Some(message.id)
 			})
 		});
+
+		let whole_conversation_visible =
+			state.older_exhausted && output.content_size.y <= output.inner_rect.height() + 3.0;
+		if initial_unread_gap
+			&& !state.history_targeted
+			&& state.history_before.is_none()
+			&& state.history_after.is_none()
+			&& (whole_conversation_visible || state.timeline.iter().next().is_none())
+		{
+			self.target_browsing = false;
+		}
+
 		if at_bottom
 			&& self.at_current_latest
 			&& ui.input(|input| {
@@ -1464,7 +1479,19 @@ impl TimelineView {
 		ui.painter()
 			.with_clip_rect(area)
 			.add(egui::Shape::mesh(fade));
-		if can_jump_unread || can_load_newer {
+		let browsing_history = state.history_targeted
+			|| state.history_before.is_some()
+			|| state.history_after.is_some();
+		let can_jump_unread = state.can_jump_unread()
+			&& state.timeline.iter().next().is_some()
+			&& !(self.following
+				&& self.at_current_latest
+				&& !browsing_history
+				&& ui.input(|input| input.focused));
+		// Latest-message metadata can outlive a deleted message. A complete, visible
+		// latest page has nowhere useful to jump; targeted pages still need navigation.
+		if (can_jump_unread || can_load_newer) && (!whole_conversation_visible || browsing_history)
+		{
 			let mut jump_unread = false;
 			let mut load_newer = false;
 			overlay_bar(
@@ -1482,8 +1509,16 @@ impl TimelineView {
 				},
 				|ui| {
 					ui.label(
-						crate::design::medium(ui, "Unread messages", 13.0)
-							.color(colors.accent_text),
+						crate::design::medium(
+							ui,
+							if can_jump_unread {
+								"Unread messages"
+							} else {
+								"More messages"
+							},
+							13.0,
+						)
+						.color(colors.accent_text),
 					);
 					ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 						if can_jump_unread
@@ -1520,10 +1555,7 @@ impl TimelineView {
 				self.browse_away();
 			}
 		}
-		let browsing_history = state.history_targeted
-			|| state.history_before.is_some()
-			|| state.history_after.is_some();
-		if (!self.following && distance_from_bottom > 120.0)
+		if (!self.following && distance_from_bottom > 3.0 * area.height())
 			|| self.target_browsing
 			|| browsing_history
 		{
@@ -1610,6 +1642,221 @@ mod pending_tests;
 #[cfg(test)]
 mod tests {
 	use super::*;
+	// Synthetic regressions: no transport or acknowledgement worker is running.
+	fn banner_frame(
+		ctx: &egui::Context,
+		view: &mut TimelineView,
+		state: &mut State,
+		events: Vec<egui::Event>,
+		shift_widget_order: bool,
+	) -> Vec<(String, egui::Rect)> {
+		fn collect(shape: &egui::Shape, labels: &mut Vec<(String, egui::Rect)>) {
+			match shape {
+				egui::Shape::Text(text) => labels.push((
+					text.galley.job.text.clone(),
+					text.galley.rect.translate(text.pos.to_vec2()),
+				)),
+				egui::Shape::Vec(shapes) => {
+					for shape in shapes {
+						collect(shape, labels);
+					}
+				}
+				_ => {}
+			}
+		}
+		let output = ctx.run_ui(
+			egui::RawInput {
+				focused: true,
+				events,
+				screen_rect: Some(egui::Rect::from_min_size(
+					egui::Pos2::ZERO,
+					egui::vec2(900.0, 600.0),
+				)),
+				..Default::default()
+			},
+			|ui| {
+				// A conditional sibling changes auto IDs without moving the bar.
+				if shift_widget_order {
+					ui.skip_ahead_auto_ids(1);
+				}
+				view.show(
+					ui,
+					state,
+					&mut None,
+					&mut None,
+					(&mut crate::avatars::Avatars::default(), &mut None),
+					None,
+				);
+			},
+		);
+		assert!(output.platform_output.commands.is_empty());
+		let mut labels = vec![];
+		for shape in &output.shapes {
+			collect(&shape.shape, &mut labels);
+		}
+		output.drop_without_applying_deltas();
+		labels
+	}
+
+	#[test]
+	fn complete_short_channels_never_flash_banners_but_tall_unread_content_is_preserved() {
+		for (count, tall, latest) in [
+			(0, false, 20),
+			(1, false, 20),
+			(1, false, 21),
+			(1, true, 20),
+		] {
+			let mut state = test_support::demo_state();
+			state.timeline.clear();
+			state.selected = Some(Id(20));
+			state.auth = client_core::auth::AuthState::Authenticated;
+			state.gateway_connected = true;
+			state.freshness = model::Freshness::Fresh;
+			state.history_pending = false;
+			state.history_targeted = false;
+			state.history_before = None;
+			state.history_after = None;
+			state.older_exhausted = true;
+			state.channels = vec![model::Channel {
+				id: Id(20),
+				guild: None,
+				parent_id: None,
+				position: 0,
+				name: "Synthetic complete channel".into(),
+				kind: 1,
+				recipients: vec![],
+				member_list_id: None,
+				message_count: None,
+				// Empty/short history can retain stale service latest metadata.
+				last_message: Some(Id(latest)),
+			}];
+			state
+				.apply_read_state(client_core::read_state::Event::Snapshot {
+					entries: Some(vec![(Id(20), None, 0)]),
+					version: None,
+					partial: false,
+				})
+				.unwrap();
+			if count == 1 {
+				let mut message = text_message(20);
+				if tall {
+					message.content = "Synthetic tall unread row\n\n".repeat(250);
+				}
+				state.timeline.insert(message, false, false).unwrap();
+			}
+			let ctx = egui::Context::default();
+			let mut view = TimelineView::default();
+			for _ in 0..5 {
+				let labels = banner_frame(&ctx, &mut view, &mut state, vec![], false);
+				if tall {
+					assert!(view.target_browsing && view.mark_read.is_none());
+					assert!(view.anchor.is_some_and(|(_, inset)| inset <= 3.0));
+					continue;
+				}
+				for forbidden in [
+					"Unread messages",
+					"More messages",
+					"Jump to unread",
+					"New messages below",
+					"Jump to present",
+				] {
+					assert!(
+						!labels.iter().any(|(text, _)| text == forbidden),
+						"{count} messages unexpectedly showed {forbidden}"
+					);
+				}
+				assert!(!view.target_browsing && view.following);
+			}
+			assert_eq!(
+				view.mark_read,
+				(count == 1 && !tall && latest == 20).then_some(Id(20))
+			);
+			if count == 1 && !tall && latest == 20 {
+				// A read snapshot arriving after a local reply jump must not resume reading.
+				state.read_state.reset();
+				let mut view = TimelineView::default();
+				state.search_target = Some(Id(20));
+				banner_frame(&ctx, &mut view, &mut state, vec![], false);
+				state
+					.apply_read_state(client_core::read_state::Event::Snapshot {
+						entries: Some(vec![(Id(20), None, 0)]),
+						version: None,
+						partial: false,
+					})
+					.unwrap();
+				banner_frame(&ctx, &mut view, &mut state, vec![], false);
+				assert!(view.target_browsing && view.mark_read.is_none());
+			}
+		}
+	}
+
+	#[test]
+	fn browsing_banner_waits_several_screens_and_click_survives_widget_order_changes() {
+		let ctx = egui::Context::default();
+		let mut state = test_support::demo_state();
+		state.read_state.reset();
+		state.timeline.clear();
+		state.selected = Some(Id(20));
+		state.history_targeted = false;
+		state.history_before = None;
+		state.history_after = None;
+		for id in 1..=200 {
+			state
+				.timeline
+				.insert(text_message(id), false, false)
+				.unwrap();
+		}
+		state.revision += 1;
+		let mut view = TimelineView::default();
+		for _ in 0..5 {
+			banner_frame(&ctx, &mut view, &mut state, vec![], false);
+		}
+		for (distance, expected) in [(1_200.0, false), (2_400.0, true)] {
+			let mut labels = vec![];
+			for _ in 0..5 {
+				let offset =
+					view.rows.iter().map(|(_, height)| height).sum::<f32>() - 600.0 - distance;
+				let (index, _, top) = visible_range(&view.rows, offset, offset);
+				view.following = false;
+				view.jump = false;
+				view.anchor = Some((view.rows[index].0, offset - top));
+				view.revision = u64::MAX;
+				labels = banner_frame(&ctx, &mut view, &mut state, vec![], false);
+			}
+			assert_eq!(
+				labels.iter().any(|(text, _)| text == "Jump to present"),
+				expected
+			);
+		}
+		let labels = banner_frame(&ctx, &mut view, &mut state, vec![], false);
+		let pos = labels
+			.iter()
+			.find(|(text, _)| text == "Jump to present")
+			.unwrap()
+			.1
+			.center();
+		for pressed in [true, false] {
+			banner_frame(
+				&ctx,
+				&mut view,
+				&mut state,
+				vec![
+					egui::Event::PointerMoved(pos),
+					egui::Event::PointerButton {
+						pos,
+						button: egui::PointerButton::Primary,
+						pressed,
+						modifiers: egui::Modifiers::NONE,
+					},
+				],
+				!pressed,
+			);
+		}
+		assert!(
+			view.following && view.jump,
+			"Jump to present lost its click when sibling widget IDs changed"
+		);
+	}
 	#[test]
 	fn pending_rows_share_scroll_and_only_measure_near_viewport() {
 		let ctx = egui::Context::default();
@@ -2817,6 +3064,7 @@ mod tests {
 					egui::Event::PointerMoved(egui::pos2(width / 2.0, 300.0)),
 					egui::Event::MouseWheel {
 						unit: egui::MouseWheelUnit::Point,
+						phase: egui::TouchPhase::Move,
 						delta: egui::vec2(0.0, -600.0),
 						modifiers: egui::Modifiers::NONE,
 						phase: egui::TouchPhase::Move,
