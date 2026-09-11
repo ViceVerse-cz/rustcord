@@ -18,11 +18,29 @@ use tokio::sync::{mpsc as async_mpsc, watch};
 
 const MAX_ENCODED: usize = 2 * 1024 * 1024;
 const MAX_ANIMATED_ENCODED: usize = 8 * 1024 * 1024;
+const MAX_LARGE_ENCODED: usize = 16 * 1024 * 1024;
 fn encoded_limit(key: &str) -> usize {
 	if key.starts_with("anim:") {
 		MAX_ANIMATED_ENCODED
+	} else if key.starts_with("large:") {
+		MAX_LARGE_ENCODED
 	} else {
 		MAX_ENCODED
+	}
+}
+/// Decode budget for one key: the longest edge kept in memory.
+fn decode_edge(key: &str) -> u32 {
+	if key.starts_with("large:") {
+		ui::LARGE_EDGE
+	} else if key.starts_with("anim:")
+		|| key.starts_with("embed:")
+		|| key.starts_with("gif:")
+		|| key.starts_with("banner-")
+		|| key.starts_with("member-banner-")
+	{
+		ui::EMBED_EDGE
+	} else {
+		128
 	}
 }
 const MAX_AVATAR_ENCODED: usize = 512 * 1024;
@@ -182,7 +200,7 @@ fn cdn_url(key: &str) -> Option<String> {
 		if model::valid_gif_url(source) && source.ends_with(".gif") {
 			return Some(source.to_owned());
 		}
-		let mut url = url::Url::parse(&embed_url(source)?).ok()?;
+		let mut url = url::Url::parse(&embed_url(source, ui::EMBED_EDGE)?).ok()?;
 		let query: Vec<_> = url
 			.query_pairs()
 			.filter(|(key, _)| key != "format")
@@ -195,7 +213,11 @@ fn cdn_url(key: &str) -> Option<String> {
 		return Some(url.into());
 	}
 	if let Some(source) = key.strip_prefix("embed:") {
-		return embed_url(source);
+		return embed_url(source, ui::EMBED_EDGE);
+	}
+	// The media viewer's rendition: same validation, larger proxy edge.
+	if let Some(source) = key.strip_prefix("large:") {
+		return embed_url(source, ui::LARGE_EDGE);
 	}
 	// Provider previews arrive only inside a service GIF result; the address is used verbatim.
 	if let Some(source) = key.strip_prefix("gif:") {
@@ -230,7 +252,7 @@ fn cdn_url(key: &str) -> Option<String> {
 }
 
 // Only service-provided image objects reach this path. Never fetch an arbitrary embed source.
-fn embed_url(source: &str) -> Option<String> {
+fn embed_url(source: &str, edge: u32) -> Option<String> {
 	if source.len() > 2048 || source.bytes().any(|b| b.is_ascii_control() || b == b'\\') {
 		return None;
 	}
@@ -291,13 +313,7 @@ fn embed_url(source: &str) -> Option<String> {
 	};
 	let dimensions = dimension("width")
 		.zip(dimension("height"))
-		.map(|(width, height)| {
-			let edge = u64::from(width.max(height)).max(512);
-			(
-				(u64::from(width) * 512 / edge).max(1),
-				(u64::from(height) * 512 / edge).max(1),
-			)
-		});
+		.map(|(width, height)| ui::fit_edge(width, height, edge));
 	// Static proxy conversion is unofficial. A rejected/unsupported format stays a placeholder;
 	// do not follow redirects, contact the original host, or add animation decoders as fallback.
 	let query: Vec<_> = url
@@ -320,7 +336,8 @@ fn embed_url(source: &str) -> Option<String> {
 			.append_pair("height", &height.to_string());
 	} else {
 		// Without dimensions, let the proxy derive height rather than request a square crop.
-		url.query_pairs_mut().append_pair("width", "512");
+		url.query_pairs_mut()
+			.append_pair("width", &edge.to_string());
 	}
 	Some(url.into())
 }
@@ -339,7 +356,11 @@ fn application_icon_url(key: &str, bytes: &[u8]) -> Option<String> {
 
 fn disk_key(key: &str) -> Option<String> {
 	let url = cdn_url(key)?;
-	if key.starts_with("anim:") || key.starts_with("embed:") || key.starts_with("gif:") {
+	if key.starts_with("anim:")
+		|| key.starts_with("embed:")
+		|| key.starts_with("large:")
+		|| key.starts_with("gif:")
+	{
 		Some(format!("embed-{:x}", Sha256::digest(url.as_bytes())))
 	} else {
 		Some(key.to_owned())
@@ -384,9 +405,8 @@ async fn run(
 					Ok(bytes) => bytes,
 					Err(_) => { error = Some(CACHE_ERROR); None }
 				});
-				let embed = key.starts_with("anim:") || key.starts_with("embed:") || key.starts_with("gif:")
-					|| key.starts_with("banner-") || key.starts_with("member-banner-");
-				let image = cached.as_deref().and_then(|bytes| decode(bytes, embed));
+				let edge = decode_edge(&key);
+				let image = cached.as_deref().and_then(|bytes| decode(bytes, edge));
 				if image.is_none() && Instant::now() >= cooldown && let Some(client) = &client {
 					let client = client.clone();
 					downloads.spawn(async move {
@@ -408,13 +428,9 @@ async fn run(
 		if *cancelled.borrow() {
 			break;
 		}
-		let embed = key.starts_with("anim:")
-			|| key.starts_with("embed:")
-			|| key.starts_with("gif:")
-			|| key.starts_with("banner-")
-			|| key.starts_with("member-banner-");
+		let edge = decode_edge(&key);
 		let mut image =
-			cached_image.or_else(|| bytes.as_deref().and_then(|bytes| decode(bytes, embed)));
+			cached_image.or_else(|| bytes.as_deref().and_then(|bytes| decode(bytes, edge)));
 		let frames = if key.starts_with("anim:") {
 			bytes
 				.as_deref()
@@ -488,13 +504,18 @@ async fn download(
 	Some(bytes)
 }
 
-fn decode(bytes: &[u8], embed: bool) -> Option<egui::ColorImage> {
-	if bytes.len()
-		> if embed {
-			MAX_ANIMATED_ENCODED
-		} else {
-			MAX_AVATAR_ENCODED
-		} {
+/// Decode one still image and keep its longest edge within `edge` pixels.
+fn decode(bytes: &[u8], edge: u32) -> Option<egui::ColorImage> {
+	let large = edge > ui::EMBED_EDGE;
+	let embed = edge >= ui::EMBED_EDGE;
+	let encoded_limit = if large {
+		MAX_LARGE_ENCODED
+	} else if embed {
+		MAX_ANIMATED_ENCODED
+	} else {
+		MAX_AVATAR_ENCODED
+	};
+	if bytes.len() > encoded_limit {
 		return None;
 	}
 	// Provider previews can be GIF/JPEG/WebP; decode only the first frame, within limits.
@@ -502,12 +523,29 @@ fn decode(bytes: &[u8], embed: bool) -> Option<egui::ColorImage> {
 		.with_guessed_format()
 		.ok()?;
 	let mut limits = image::Limits::default();
-	limits.max_image_width = Some(if embed { 1024 } else { 256 });
-	limits.max_image_height = Some(if embed { 1024 } else { 256 });
-	limits.max_alloc = Some(if embed { 8 * 1024 * 1024 } else { 1024 * 1024 });
+	let side = if large {
+		edge * 2
+	} else if embed {
+		1024
+	} else {
+		256
+	};
+	limits.max_image_width = Some(side);
+	limits.max_image_height = Some(side);
+	limits.max_alloc = Some(if large {
+		96 * 1024 * 1024
+	} else if embed {
+		8 * 1024 * 1024
+	} else {
+		1024 * 1024
+	});
 	reader.limits(limits);
-	let size = if embed { 512 } else { 128 };
-	let image = reader.decode().ok()?.thumbnail(size, size).into_rgba8();
+	let mut image = reader.decode().ok()?;
+	// Only shrink: a 1024-pixel original must not be blown up to the viewer's 2048 budget.
+	if image.width() > edge || image.height() > edge {
+		image = image.thumbnail(edge, edge);
+	}
+	let image = image.into_rgba8();
 	Some(egui::ColorImage::from_rgba_unmultiplied(
 		[image.width() as usize, image.height() as usize],
 		image.as_raw(),
@@ -937,7 +975,7 @@ mod tests {
 			"https://images-ext-1.discordapp.net/external/short/https/example.com/a.png",
 		] {
 			assert!(
-				embed_url(source).is_none(),
+				embed_url(source, ui::EMBED_EDGE).is_none(),
 				"Unsafe or unsupported test URL was accepted"
 			);
 		}
@@ -961,17 +999,24 @@ mod tests {
 		);
 		assert!(
 			embed_url(
-				"https://images-ext-1.discordapp.net/external/abcdefghijklmnop/https/example.com/image.jpg"
+				"https://images-ext-1.discordapp.net/external/abcdefghijklmnop/https/example.com/image.jpg",
+				ui::EMBED_EDGE,
 			)
 			.is_some()
 		);
-		assert!(decode(&png(1025, 1), true).is_none());
-		assert_eq!(decode(&png(1024, 512), true).unwrap().size, [512, 256]);
-		assert!(decode(&vec![0; MAX_ENCODED + 1], false).is_none());
-		assert!(decode(b"not an image", false).is_none());
-		assert!(decode(&png(257, 1), false).is_none());
+		let large_key = "large:https://cdn.discordapp.com/attachments/1/2/image.png?ex=abc&is=def&hm=synthetic&width=4096&height=1024";
+		let transformed = cdn_url(large_key).unwrap();
+		assert!(transformed.ends_with("format=png&width=2048&height=512"));
+		assert_ne!(disk_key(large_key).unwrap(), disk_key(embed_key).unwrap());
+		assert!(decode(&png(1025, 1), 512).is_none());
+		assert_eq!(decode(&png(1024, 512), 512).unwrap().size, [512, 256]);
+		assert_eq!(decode(&png(1024, 512), 2048).unwrap().size, [1024, 512]);
+		assert!(decode(&png(4097, 1), 2048).is_none());
+		assert!(decode(&vec![0; MAX_ENCODED + 1], 128).is_none());
+		assert!(decode(b"not an image", 128).is_none());
+		assert!(decode(&png(257, 1), 128).is_none());
 		let bytes = png(256, 256);
-		assert_eq!(decode(&bytes, false).unwrap().size, [128, 128]);
+		assert_eq!(decode(&bytes, 128).unwrap().size, [128, 128]);
 		let root = std::env::temp_dir().join(format!(
 			"serein-avatar-test-{}-{}",
 			std::process::id(),

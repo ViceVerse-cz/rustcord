@@ -180,8 +180,10 @@ fn layout_key(message: &Message) -> u64 {
 }
 // Discord snowflakes carry milliseconds since 2015-01-01. All u64 IDs fit time's range.
 fn timestamp(id: Id) -> time::OffsetDateTime {
-	time::OffsetDateTime::from_unix_timestamp(((id.0 >> 22) / 1000) as i64 + 1_420_070_400)
-		.expect("snowflake timestamp is in range")
+	crate::local_time::local(
+		time::OffsetDateTime::from_unix_timestamp(((id.0 >> 22) / 1000) as i64 + 1_420_070_400)
+			.expect("snowflake timestamp is in range"),
+	)
 }
 /// Discord's Nitro boost pink; not part of any theme palette.
 const BOOST: egui::Color32 = egui::Color32::from_rgb(0xff, 0x73, 0xfa);
@@ -780,7 +782,7 @@ impl TimelineView {
 						let date = timestamp(*id);
 						divider(
 							ui,
-							format!("{} {}, {} · UTC", date.month(), date.day(), date.year()),
+							format!("{} {}, {}", date.month(), date.day(), date.year()),
 							false,
 						);
 					}
@@ -1393,7 +1395,7 @@ impl TimelineView {
 			for (index, (pending, height)) in pending_rows.iter().enumerate() {
 				let compact = index > 0
 					|| state.timeline.iter().last().is_some_and(|previous| {
-						let now = time::OffsetDateTime::now_utc();
+						let now = crate::local_time::now();
 						state
 							.user
 							.as_ref()
@@ -3939,7 +3941,7 @@ mod tests {
 			assert!(state.timeline.is_empty());
 			assert_eq!(state.timeline.row_count(), 1);
 			assert!(view.rows.is_empty());
-			assert!(!labels.iter().any(|text| text.contains(" · UTC")));
+			assert!(!labels.iter().any(|text| text.contains("January 1, 2015")));
 			for text in [
 				"Deleted synthetic author",
 				"Deleted synthetic body",

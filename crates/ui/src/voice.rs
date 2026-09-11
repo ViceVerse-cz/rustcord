@@ -235,7 +235,7 @@ impl MessagingUi {
 		ui.painter().rect_filled(stage, 0, STAGE_FILL);
 		let (rect, _) = ui.allocate_exact_size(stage.size(), egui::Sense::hover());
 		let notices = self.stage_notices(state, channel, connected);
-		let bottom = 44.0 + 2.0 * STAGE_MARGIN;
+		let bottom = CONTROL_HEIGHT + 2.0 * STAGE_MARGIN;
 		let body = egui::Rect::from_min_max(
 			rect.left_top() + egui::vec2(STAGE_MARGIN, STAGE_MARGIN),
 			egui::pos2(rect.right() - STAGE_MARGIN, rect.bottom() - bottom),
@@ -914,19 +914,16 @@ impl MessagingUi {
 		let (mut muted, mut deafened) = (call.muted || !can_speak, call.deafened);
 		let controls = self.controls_enabled(state);
 		let compact = ui.available_width() < 480.0;
-		let width = if compact {
-			124.0 + 12.0 + 48.0 + 12.0 + 64.0
-		} else {
-			124.0 + 12.0 + 192.0 + 12.0 + 64.0
-		};
+		let tools = if compact { SHARE_PILL } else { TOOLS_PILL };
+		let width = MEDIA_PILL + BAR_GAP + tools + BAR_GAP + HANG_UP;
 		let mut camera_clicked = false;
 		let mut mute_clicked = false;
 		let mut deafen_changed = false;
 		let mut leave = false;
 		ui.horizontal(|ui| {
-			ui.spacing_mut().item_spacing.x = 12.0;
+			ui.spacing_mut().item_spacing.x = BAR_GAP;
 			ui.add_space(((ui.available_width() - width) * 0.5).max(0.0));
-			pill(ui, |ui| {
+			pill(ui, MEDIA_PILL, |ui| {
 				let mic = control(
 					ui,
 					if muted {
@@ -989,22 +986,17 @@ impl MessagingUi {
 				.clicked();
 			});
 			if !compact {
-				pill(ui, |ui| {
+				pill(ui, TOOLS_PILL, |ui| {
 					self.screen_share_control(ui, state);
-					for (icon, label) in [
-						(crate::icons::Icon::Activities, "Activities"),
-						(crate::icons::Icon::Soundboard, "Soundboard"),
-					] {
-						control(
-							ui,
-							icon,
-							48.0,
-							false,
-							STAGE_TEXT,
-							label,
-							"Not available in Serein.",
-						);
-					}
+					control(
+						ui,
+						crate::icons::Icon::Soundboard,
+						48.0,
+						false,
+						STAGE_TEXT,
+						"Soundboard",
+						"Not available in Serein.",
+					);
 					let more = control(
 						ui,
 						crate::icons::Icon::More,
@@ -1035,11 +1027,11 @@ impl MessagingUi {
 				});
 			}
 			if compact {
-				pill(ui, |ui| self.screen_share_control(ui, state));
+				pill(ui, SHARE_PILL, |ui| self.screen_share_control(ui, state));
 			}
 			let hang_up = {
-				let (rect, response) =
-					ui.allocate_exact_size(egui::vec2(64.0, 44.0), egui::Sense::click());
+				let (rect, response) = ui
+					.allocate_exact_size(egui::vec2(HANG_UP, CONTROL_HEIGHT), egui::Sense::click());
 				let enabled = !state.demo;
 				let fill = if !enabled {
 					colors.danger.gamma_multiply(0.45)
@@ -1250,7 +1242,7 @@ impl MessagingUi {
 						);
 					}
 					let bar = egui::Rect::from_min_max(
-						egui::pos2(rect.left(), rect.bottom() - 44.0 - STAGE_MARGIN),
+						egui::pos2(rect.left(), rect.bottom() - CONTROL_HEIGHT - STAGE_MARGIN),
 						egui::pos2(rect.right(), rect.bottom() - STAGE_MARGIN),
 					);
 					let mut bar_ui = ui.new_child(
@@ -1511,27 +1503,21 @@ const STAGE_TEXT: egui::Color32 = egui::Color32::from_rgb(0xdb, 0xde, 0xe1);
 const STAGE_MUTED: egui::Color32 = egui::Color32::from_rgb(0x9a, 0x9b, 0xa1);
 const STAGE_MARGIN: f32 = 16.0;
 const TILE_GAP: f32 = 8.0;
+/// Height shared by every control, pill and the hang-up button in the call bar.
+const CONTROL_HEIGHT: f32 = 48.0;
+const MEDIA_PILL: f32 = 124.0;
+const TOOLS_PILL: f32 = 144.0;
+const SHARE_PILL: f32 = 48.0;
+const HANG_UP: f32 = 64.0;
+const BAR_GAP: f32 = 12.0;
 
-/// Ring plus sound glyph keeps activity legible without relying on color alone.
+/// Green ring like Discord's speaking indicator; the accessible label still names the state.
 fn speaking_avatar(ui: &egui::Ui, avatar: &egui::Response, name: &str) {
 	let colors = design::palette(ui);
 	ui.painter().circle_stroke(
 		avatar.rect.center(),
 		avatar.rect.width() * 0.5 + 2.0,
 		egui::Stroke::new(2.0, colors.positive),
-	);
-	let size = (avatar.rect.width() * 0.3).clamp(10.0, 18.0);
-	let badge = egui::Rect::from_center_size(
-		avatar.rect.right_bottom() - egui::Vec2::splat(size * 0.4),
-		egui::Vec2::splat(size),
-	);
-	ui.painter()
-		.circle_filled(badge.center(), size * 0.65, colors.raised);
-	crate::icons::paint(
-		ui.painter(),
-		crate::icons::Icon::Speaker,
-		badge,
-		colors.positive,
 	);
 	let label = format!("{name} · Speaking");
 	avatar.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Image, true, &label));
@@ -1578,25 +1564,24 @@ fn stage_notices(ui: &mut egui::Ui, notices: &[(String, bool)]) {
 	ui.spacing_mut().item_spacing.y = 8.0;
 }
 
-/// Rounded dark group holding several call controls.
-fn pill<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-	let frame = egui::Frame::new()
-		.fill(PILL_FILL)
-		.corner_radius(12)
-		.show(ui, |ui| {
-			ui.horizontal(|ui| {
-				ui.spacing_mut().item_spacing.x = 0.0;
-				add(ui)
-			})
-			.inner
-		});
+/// Rounded dark group holding several call controls. Every pill is exactly `CONTROL_HEIGHT`
+/// tall and `width` wide so the groups and the hang-up button share one baseline.
+fn pill<R>(ui: &mut egui::Ui, width: f32, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+	let (rect, _) = ui.allocate_exact_size(egui::vec2(width, CONTROL_HEIGHT), egui::Sense::hover());
+	ui.painter().rect_filled(rect, 12, PILL_FILL);
 	ui.painter().rect_stroke(
-		frame.response.rect,
+		rect,
 		12,
 		egui::Stroke::new(1.0, egui::Color32::from_white_alpha(18)),
 		egui::StrokeKind::Inside,
 	);
-	frame.inner
+	let mut inner = ui.new_child(
+		egui::UiBuilder::new()
+			.max_rect(rect)
+			.layout(egui::Layout::left_to_right(egui::Align::Center)),
+	);
+	inner.spacing_mut().item_spacing.x = 0.0;
+	add(&mut inner)
 }
 
 /// One control inside a pill; disabled controls stay visible but inert, like Discord's.
@@ -1610,7 +1595,7 @@ fn control(
 	hint: &str,
 ) -> egui::Response {
 	let (rect, response) = ui.allocate_exact_size(
-		egui::vec2(width, 44.0),
+		egui::vec2(width, CONTROL_HEIGHT),
 		if enabled {
 			egui::Sense::click()
 		} else {
@@ -1619,7 +1604,7 @@ fn control(
 	);
 	if enabled && (response.hovered() || response.has_focus()) {
 		ui.painter()
-			.rect_filled(rect.shrink(3.0), 8, egui::Color32::from_white_alpha(28));
+			.rect_filled(rect.shrink(4.0), 8, egui::Color32::from_white_alpha(28));
 	}
 	let size = if width < 40.0 { 14.0 } else { 22.0 };
 	crate::icons::paint(

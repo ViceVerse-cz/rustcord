@@ -1611,6 +1611,7 @@ impl State {
 				}
 				self.voice.roster.clear();
 				self.voice.dm_calls.clear();
+				self.voice.dm_participants.clear();
 				self.members = None;
 				self.clear_profile();
 				self.profile_cache.clear();
@@ -1947,11 +1948,9 @@ impl State {
 				self.cancel_invite_join();
 				self.read_state.cancel();
 				self.clear_profile();
-				let roster = std::mem::take(&mut self.voice.roster);
-				let dm_calls = std::mem::take(&mut self.voice.dm_calls);
-				self.disconnect_voice("Discord gateway connection lost; rejoin after reconnecting");
-				self.voice.roster = roster; // RESUMED replays changes, not the entire unchanged roster.
-				self.voice.dm_calls = dm_calls;
+				// The voice socket is independent and a RESUME replays roster changes, so the call,
+				// roster and known DM calls all stay. Only a fresh READY invalidates the voice state.
+				self.voice.incoming = None;
 				self.invalidate_members();
 				self.gateway_connected = false;
 				self.cancel_history();

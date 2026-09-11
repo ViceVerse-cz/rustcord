@@ -348,7 +348,7 @@ fn creation_date(id: Id) -> Option<String> {
 	let seconds = ((id.0 >> 22) + 1_420_070_400_000) / 1000;
 	time::OffsetDateTime::from_unix_timestamp(seconds as i64)
 		.ok()
-		.map(|date| date.date().to_string())
+		.map(|date| crate::local_time::local(date).date().to_string())
 }
 
 /// Shows the popout beside `anchor`; returns an action when the card wants to change or close.

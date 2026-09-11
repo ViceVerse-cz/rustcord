@@ -161,6 +161,10 @@ impl Dave {
 	pub fn contains(&self, user: u64) -> bool {
 		self.participants.contains(&user)
 	}
+	/// Only this device remains announced in the call.
+	pub fn alone(&self) -> bool {
+		self.participants.len() == 1
+	}
 	pub fn connect(&mut self, users: &[u64]) -> Result<bool, &'static str> {
 		if users.len() > MAX_PARTICIPANTS
 			|| users.iter().any(|user| {
@@ -188,17 +192,17 @@ impl Dave {
 		}
 		Ok(changed)
 	}
+	/// A departing member, including a DM peer: the call continues and waits for them to rejoin.
 	pub fn disconnect(&mut self, user: u64) -> Result<bool, &'static str> {
 		if user == self.own {
-			return Err("You were disconnected from the call");
+			return Err("Discord removed this device from the call");
 		}
 		let before = self.participants.len();
 		self.participants.retain(|id| *id != user);
 		let changed = before != self.participants.len();
 		if changed {
 			self.ready = false;
-			// Stay joined with media paused when the last remote participant leaves.
-			self.waiting = self.participants.len() == 1;
+			self.waiting = false;
 		}
 		Ok(changed)
 	}
@@ -374,9 +378,7 @@ impl Dave {
 			|| !ids.contains(&self.own)
 			|| ids.iter().any(|id| !self.contains(*id))
 			|| ids.iter().enumerate().any(|(i, id)| ids[..i].contains(id))
-			|| self
-				.peer
-				.is_some_and(|peer| self.contains(peer) && (ids.len() != 2 || !ids.contains(&peer)))
+			|| (self.peer.is_some() && ids.len() > 2)
 		{
 			return Err("DAVE group does not match the authenticated call participants");
 		}
@@ -388,8 +390,7 @@ impl Dave {
 		}
 		self.validate_group()?;
 		self.pending = None;
-		self.ready = self.participants.len() > 1;
-		self.waiting = !self.ready;
+		self.ready = true;
 		Ok(())
 	}
 }
