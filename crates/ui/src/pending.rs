@@ -14,11 +14,17 @@ pub fn show(
 	pending: &Pending,
 	compact: bool,
 	state: &State,
-	avatars: &mut crate::avatars::Avatars,
+	media: (
+		&mut crate::avatars::Avatars,
+		&mut Option<String>,
+		&mut Option<model::User>,
+		&mut Option<model::Id>,
+	),
 	upload: Option<&Upload>,
 	(restore, cancel): (&mut Option<String>, &mut bool),
 ) {
 	let colors = crate::design::palette(ui);
+	let (avatars, opening, profile, channel) = media;
 	let upload = upload.filter(|upload| upload.nonce == pending.nonce);
 	egui::Frame::NONE
 		.inner_margin(egui::Margin { left: 16, right: 16, top: if compact { 1 } else { 14 }, bottom: 1 })
@@ -49,7 +55,17 @@ pub fn show(
 						}).size(12.0).color(if pending.delivery == Delivery::Rejected { colors.danger } else { colors.muted }));
 					}); }
 					if !pending.content.is_empty() {
-						ui.add(egui::Label::new(RichText::new(&pending.content).color(if pending.delivery == Delivery::Rejected { colors.danger } else { colors.muted })).wrap().selectable(true)).on_hover_text(match pending.delivery {
+						ui.scope(|ui| {
+							ui.set_opacity(0.55);
+							if pending.delivery == Delivery::Rejected {
+								ui.visuals_mut().override_text_color = Some(colors.danger);
+							}
+							let formatted = crate::markdown::Formatted::parse(&pending.content);
+							let id = ui.id().with("spoilers");
+							let mut revealed = ui.data_mut(|data| data.get_temp::<u32>(id).unwrap_or(0));
+							formatted.show_references(ui, opening, &crate::mentions::known_users(state, pending.channel), profile, (&state.channels, channel), (avatars, state.demo, &mut revealed));
+							if revealed != 0 { ui.data_mut(|data| data.insert_temp(id, revealed)); }
+						}).response.on_hover_text(match pending.delivery {
  Delivery::Sending => "Sending…", Delivery::Ambiguous => "Delivery unknown", Delivery::Rejected => "Not sent", Delivery::Confirmed => "Sent", });
 					}
 					if let Some(filename) = &pending.attachment {
@@ -145,7 +161,7 @@ mod tests {
 							&pending,
 							true,
 							&state,
-							&mut crate::avatars::Avatars::default(),
+							(&mut crate::avatars::Avatars::default(), &mut None, &mut None, &mut None),
 							Some(&upload),
 							(&mut None, &mut false),
 						);

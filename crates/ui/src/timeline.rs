@@ -1309,7 +1309,7 @@ impl TimelineView {
 						pending,
 						compact,
 						state,
-						avatars,
+						(avatars, &mut self.opening, profile, &mut self.channel_reference),
 						upload,
 						(&mut self.restore_pending, &mut self.cancel_upload),
 					);
