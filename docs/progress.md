@@ -2687,3 +2687,52 @@ The activity section increases card height and uses its existing scroll area. Da
 and narrow/wide render behavior is covered by the integration test. No live account,
 message, call or microphone action; Linux/macOS and remote publication remain unverified.
 Draft PR for inherited full-check failures. No changes to settings explanatory text.
+
+## Voice settings design — September 11, 2026
+
+Task branch `t3code/polish-voice-settings-calls`, clean baseline/origin main
+`283686ae4dc4f9ba1b20a5e4b14ebe9ca570e5d5`; pinned Rust 1.98.1. Voice & Audio
+now uses the settings page width, pairs device selectors/levels in two columns on
+wide pages, stacks them on narrow pages, and groups processing in existing settings
+cards/switches. In-call and header audio popovers share a compact, scrollable form,
+expandable processing/privacy sections, and an All voice settings link. Sliders have
+visible filled tracks and round handles; device names truncate with full-name hover
+text and distinct accessible labels. Device pickers and gain changes keep the parent
+popover open; outside clicks/Escape dismiss it. No new dependencies or media behavior.
+Offline/text-only controls stay disabled; preview now exposes their layout honestly.
+
+Verification and evidence (synthetic only):
+
+- `cargo test --locked -p ui voice::tests`: all 5 pass after the final UI edits;
+  includes device selection through a nested popup, outside dismissal, inert demo
+  refresh/reset, keyboard gain changes/clamping, and existing voice permission gates.
+- `cargo xtask check`: formatting passes; strict Clippy stops at pre-existing
+  `client-core/src/message_actions.rs:92,192` question-mark/collapsible-if findings.
+- `cargo clippy --locked -p ui --all-targets --no-deps -- -D warnings`: existing
+  `categories.rs:21` type complexity and `guild_folders.rs:220,468,573` collapsible-if
+  findings. No findings in the changed voice/settings code.
+- Broader `cargo test --locked -p ui`: link-confirmation test failure and abort in
+  `incoming_custom_status_updates_people_and_open_profile_without_refetch` at
+  `lib.rs:4059`, followed by an unapplied TexturesDelta destructor panic.
+- UI test compilation required adding the missing `TouchPhase::Move` in an existing
+  timeline wheel fixture; two existing tuple expressions were formatted by rustfmt.
+- Baseline voice release compiles; packaging fails on missing exact-version license
+  texts for objc2-core-media/core-video 0.3.2 and openh264/openh264-sys2 0.9.8.
+  Initial baseline voice attempt received SIGTERM (143); one retry reached this
+  reproducible packaging blocker. Existing upstream license-evidence warnings remain.
+
+Native before/after captures and final package/performance results are recorded in
+`docs/pr-evidence/voice-settings-polish` and `docs/performance.md`. The baseline preview
+hid all controls, so screenshots compare that state to newly visible disabled controls,
+not a simulated live call. Required full-check/voice-package blockers keep the PR draft.
+No Discord connection, messages, calls, microphone, camera or screen-share capture was used.
+
+Final evidence: both release variants compile; text packaging and `cargo xtask policy`
+pass. Text executable +40,768 bytes (0.079%); voice executable +24,240 bytes (0.042%).
+Full installed/archive values and noisy process samples are in the performance table.
+The composer assertion/destructor abort was reproduced in the isolated baseline after
+only applying the missing wheel-event test field needed to compile its UI test target.
+The final call popup was checked natively after removing an unreliable previous-frame
+response guard; the five focused voice tests still pass. Settings/call before/after
+images, light appearance, 150% scaling, scroll access and the full-page link were checked.
+All captures use synthetic data; no live account or media-device action was performed.
