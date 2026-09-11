@@ -1,3 +1,4 @@
+use crate::{design, icons};
 use client_core::State;
 use model::{Channel, Id};
 
@@ -15,9 +16,32 @@ pub(super) struct Switcher {
 	composing: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+	Text,
+	Voice,
+	Direct,
+	Group,
+}
+
 struct Candidate {
 	id: Id,
-	label: String,
+	kind: Kind,
+	name: String,
+	scope: String,
+	current: bool,
+}
+
+impl Candidate {
+	/// Full accessible label; also what tests and screen readers see.
+	fn label(&self) -> String {
+		let kind = match self.kind {
+			Kind::Text => "#",
+			Kind::Voice => "Voice · roster",
+			Kind::Direct | Kind::Group => "",
+		};
+		format!("{kind} {} · {}", self.name, self.scope)
+	}
 }
 
 fn bounded(value: &str) -> String {
@@ -88,18 +112,169 @@ fn candidates(state: &State, query: &str) -> Vec<Candidate> {
 					|g| g.name.as_str(),
 				);
 			let kind = if channel.kind == 2 {
-				"Voice · roster"
+				Kind::Voice
 			} else if channel.guild.is_some() {
-				"#"
+				Kind::Text
+			} else if channel.kind == 3 {
+				Kind::Group
 			} else {
-				""
+				Kind::Direct
 			};
 			Candidate {
 				id: channel.id,
-				label: format!("{kind} {} · {}", bounded(name), bounded(scope)),
+				kind,
+				name: bounded(name),
+				scope: bounded(scope),
+				current: Some(channel.id) == state.selected,
 			}
 		})
 		.collect()
+}
+
+/// Small rounded chip that names a key in the footer legend.
+fn key_hint(ui: &mut egui::Ui, keys: &str, colors: design::Palette) {
+	egui::Frame::new()
+		.fill(colors.raised)
+		.stroke(egui::Stroke::new(1.0, colors.border))
+		.corner_radius(4)
+		.inner_margin(egui::Margin::symmetric(5, 1))
+		.show(ui, |ui| {
+			ui.label(
+				egui::RichText::new(keys)
+					.size(11.0)
+					.color(colors.text)
+					.family(design::medium_family(ui.ctx())),
+			);
+		});
+}
+
+/// One result: kind glyph or initials avatar, name, scope line and a "Current" tag.
+fn result_row(
+	ui: &mut egui::Ui,
+	choice: &Candidate,
+	selected: bool,
+	enabled: bool,
+) -> egui::Response {
+	let colors = design::palette(ui);
+	let height = 46.0;
+	let width = ui.available_width();
+	let (rect, response) = ui.allocate_exact_size(
+		egui::vec2(width, height),
+		if enabled {
+			egui::Sense::click()
+		} else {
+			egui::Sense::hover()
+		},
+	);
+	response.widget_info(|| {
+		egui::WidgetInfo::selected(
+			egui::WidgetType::SelectableLabel,
+			enabled,
+			selected,
+			choice.label(),
+		)
+	});
+	if !ui.is_rect_visible(rect) {
+		return response;
+	}
+	let painter = ui.painter();
+	let hovered = enabled && (response.hovered() || response.has_focus());
+	if selected {
+		painter.rect_filled(rect, 8, colors.selected);
+	} else if hovered {
+		painter.rect_filled(rect, 8, colors.hover);
+	}
+	if response.has_focus() {
+		painter.rect_stroke(
+			rect.shrink(1.0),
+			8,
+			egui::Stroke::new(1.5, colors.accent),
+			egui::StrokeKind::Inside,
+		);
+	}
+	let text = if enabled {
+		colors.text_strong
+	} else {
+		colors.muted
+	};
+	let dim = if enabled {
+		colors.muted
+	} else {
+		colors.muted.gamma_multiply(0.7)
+	};
+	let icon_size = 32.0;
+	let icon_rect = egui::Rect::from_center_size(
+		egui::pos2(rect.left() + 10.0 + icon_size / 2.0, rect.center().y),
+		egui::Vec2::splat(icon_size),
+	);
+	match choice.kind {
+		Kind::Direct => design::paint_avatar(ui, &choice.name, icon_size, icon_rect),
+		Kind::Group => {
+			painter.circle_filled(icon_rect.center(), icon_size / 2.0, colors.accent);
+			icons::paint(
+				painter,
+				icons::Icon::People,
+				icon_rect.shrink(8.0),
+				colors.accent_text,
+			);
+		}
+		Kind::Text | Kind::Voice => {
+			painter.rect_filled(icon_rect, 8, colors.raised);
+			let icon = if choice.kind == Kind::Voice {
+				icons::Icon::Speaker
+			} else {
+				icons::Icon::Hash
+			};
+			icons::paint(
+				painter,
+				icon,
+				icon_rect.shrink(7.0),
+				if selected { text } else { dim },
+			);
+		}
+	}
+	let mut right = rect.right() - 10.0;
+	if choice.current {
+		let font = egui::FontId::new(10.0, design::semibold_family(ui.ctx()));
+		let galley = painter.layout_no_wrap("CURRENT".to_owned(), font, colors.accent_text);
+		let size = galley.size();
+		let tag = egui::Rect::from_center_size(
+			egui::pos2(right - size.x / 2.0 - 6.0, rect.center().y),
+			size + egui::vec2(12.0, 6.0),
+		);
+		painter.rect_filled(tag, 4, colors.accent);
+		painter.galley(tag.min + egui::vec2(6.0, 3.0), galley, colors.accent_text);
+		right = tag.left() - 8.0;
+	}
+	let text_left = icon_rect.right() + 10.0;
+	let text_width = (right - text_left).max(1.0);
+	let name = painter.layout(
+		choice.name.clone(),
+		egui::FontId::new(15.0, design::semibold_family(ui.ctx())),
+		text,
+		f32::INFINITY,
+	);
+	let scope_text = match choice.kind {
+		Kind::Voice => format!("{} · Voice", choice.scope),
+		_ => choice.scope.clone(),
+	};
+	let scope = painter.layout(
+		scope_text,
+		egui::FontId::proportional(12.0),
+		dim,
+		f32::INFINITY,
+	);
+	let name_height = name.size().y;
+	let total = name_height + scope.size().y + 1.0;
+	let top = rect.center().y - total / 2.0;
+	let clip = egui::Rect::from_min_size(
+		egui::pos2(text_left, rect.top()),
+		egui::vec2(text_width, height),
+	);
+	let clipped = painter.with_clip_rect(clip);
+	clipped.galley(egui::pos2(text_left, top), name, text);
+	clipped.galley(egui::pos2(text_left, top + name_height + 1.0), scope, dim);
+	response
 }
 
 impl Switcher {
@@ -185,31 +360,62 @@ impl Switcher {
 		}
 		let mut target = None;
 		let mut cancel = escape;
-		let modal = egui::Modal::new(egui::Id::unique("conversation-switcher"));
+		let colors = design::palette_for(ctx);
+		let narrow = ctx.content_rect().width() < 420.0;
+		let margin: i8 = if narrow { 12 } else { 16 };
+		let modal = egui::Modal::new(egui::Id::unique("conversation-switcher")).frame(
+			egui::Frame::new()
+				.fill(colors.chat)
+				.stroke(egui::Stroke::new(1.0, colors.border))
+				.corner_radius(14)
+				.inner_margin(margin),
+		);
 		let response = modal.show(ctx, |ui| {
-			ui.set_width((ctx.content_rect().width() - 48.0).clamp(180.0, 480.0));
-			ui.heading("Find conversation");
-			ui.weak("Loaded conversations · ↑↓ choose · Enter open · Esc close");
-			if blocked {
-				ui.weak("Finish composing text before opening or closing.");
-			}
-			let input = ui.add(
-				egui::TextEdit::singleline(&mut self.query)
-					.id(egui::Id::unique("conversation-switcher-query"))
-					.event_filter(egui::EventFilter {
-						horizontal_arrows: true,
-						vertical_arrows: true,
-						escape: true,
-						..Default::default()
-					})
-					.hint_text("Channel, server or person")
-					.char_limit(QUERY_CHARS)
-					.desired_width(f32::INFINITY),
+			ui.set_width(
+				(ctx.content_rect().width() - f32::from(margin) * 2.0 - 32.0).clamp(200.0, 560.0),
 			);
-			if self.focus {
-				input.request_focus();
-				self.focus = false;
-			}
+			ui.spacing_mut().item_spacing.y = 8.0;
+			// Search field: raised pill with a leading glyph, like the header search box.
+			let mut changed = false;
+			egui::Frame::new()
+				.fill(colors.raised)
+				.stroke(egui::Stroke::new(1.0, colors.border))
+				.corner_radius(8)
+				.inner_margin(egui::Margin::symmetric(10, 0))
+				.show(ui, |ui| {
+					ui.set_height(44.0);
+					ui.horizontal_centered(|ui| {
+						ui.spacing_mut().item_spacing.x = 8.0;
+						icons::inline(ui, icons::Icon::Search, 18.0, colors.muted);
+						let input = ui.add(
+							egui::TextEdit::singleline(&mut self.query)
+								.id(egui::Id::unique("conversation-switcher-query"))
+								.event_filter(egui::EventFilter {
+									horizontal_arrows: true,
+									vertical_arrows: true,
+									escape: true,
+									..Default::default()
+								})
+								.frame(egui::Frame::NONE)
+								.font(egui::FontId::proportional(16.0))
+								.hint_text("Where would you like to go?")
+								.char_limit(QUERY_CHARS)
+								.desired_width(ui.available_width().max(60.0)),
+						);
+						input.widget_info(|| {
+							egui::WidgetInfo::labeled(
+								egui::WidgetType::TextEdit,
+								true,
+								"Find conversation",
+							)
+						});
+						if self.focus {
+							input.request_focus();
+							self.focus = false;
+						}
+						changed = input.changed();
+					});
+				});
 			if self.query.chars().count() > QUERY_CHARS {
 				self.query = bounded(&self.query);
 			}
@@ -218,8 +424,15 @@ impl Switcher {
 					.into_boxed_str()
 					.into_string();
 			}
-			if input.changed() {
+			if changed {
 				self.selected = 0;
+			}
+			if blocked {
+				ui.label(
+					egui::RichText::new("Finish composing text before opening or closing.")
+						.size(12.0)
+						.color(colors.warning),
+				);
 			}
 			let choices = candidates(state, &self.query);
 			self.selected = self.selected.min(choices.len().saturating_sub(1));
@@ -233,23 +446,47 @@ impl Switcher {
 				if enter {
 					target = Some(choices[self.selected].id);
 				}
-			} else {
-				ui.label("No loaded conversations match");
+			}
+			ui.add_space(2.0);
+			ui.label(design::eyebrow(
+				ui,
+				if self.query.trim().is_empty() {
+					"Loaded conversations"
+				} else {
+					"Results"
+				},
+				colors.muted,
+			));
+			ui.spacing_mut().item_spacing.y = 2.0;
+			if choices.is_empty() {
+				egui::Frame::new()
+					.inner_margin(egui::Margin::symmetric(0, 18))
+					.show(ui, |ui| {
+						ui.vertical_centered(|ui| {
+							icons::inline(ui, icons::Icon::Search, 28.0, colors.muted);
+							ui.add_space(6.0);
+							ui.label(
+								design::semibold(ui, "No loaded conversations match", 14.0)
+									.color(colors.text),
+							);
+							ui.label(
+								egui::RichText::new("Try a channel, server or person name.")
+									.size(12.0)
+									.color(colors.muted),
+							);
+						});
+					});
 			}
 			egui::ScrollArea::vertical()
-				.max_height((ctx.content_rect().height() - 210.0).clamp(72.0, 360.0))
+				.max_height((ctx.content_rect().height() - 220.0).clamp(88.0, 400.0))
 				.show(ui, |ui| {
+					ui.set_width(ui.available_width());
 					for (index, choice) in choices.iter().enumerate() {
 						let selected = self.selected == index;
 						let row = ui
-							.push_id(choice.id, |ui| {
-								ui.add_enabled(
-									!blocked,
-									egui::Button::selectable(selected, &choice.label).truncate(),
-								)
-							})
+							.push_id(choice.id, |ui| result_row(ui, choice, selected, !blocked))
 							.inner;
-						if selected && (up || down || input.changed()) {
+						if selected && (up || down || changed) {
 							row.scroll_to_me(Some(egui::Align::Center));
 						}
 						if row.has_focus() {
@@ -263,12 +500,27 @@ impl Switcher {
 						}
 					}
 				});
-			if ui
-				.add_enabled(!blocked, egui::Button::new("Close"))
-				.clicked()
-			{
-				cancel = true;
-			}
+			ui.add_space(6.0);
+			ui.spacing_mut().item_spacing.y = 8.0;
+			// Footer: key hints on the left, close on the right.
+			ui.horizontal(|ui| {
+				ui.spacing_mut().item_spacing.x = 4.0;
+				if !narrow {
+					for (keys, action) in [("↑↓", "choose"), ("↵", "open"), ("Esc", "close")]
+					{
+						key_hint(ui, keys, colors);
+						ui.label(egui::RichText::new(action).size(12.0).color(colors.muted));
+						ui.add_space(6.0);
+					}
+				}
+				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+					ui.add_enabled_ui(!blocked, |ui| {
+						if design::secondary_button(ui, "Close").clicked() {
+							cancel = true;
+						}
+					});
+				});
+			});
 		});
 		if !blocked && response.backdrop_response.clicked() {
 			cancel = true;
@@ -332,10 +584,14 @@ mod tests {
 		let voice = candidates(&state, "SERVER ROOM 17");
 		assert_eq!(voice.len(), 1);
 		assert_eq!(voice[0].id, Id(17));
-		assert!(voice[0].label.contains("Voice · roster"));
+		assert!(voice[0].label().contains("Voice · roster"));
 		state.channels[0].name = "🦀".repeat(1000);
 		assert!(bounded(&state.channels[0].name).len() <= 512);
-		assert!(candidates(&state, "").iter().all(|c| c.label.len() <= 1100));
+		assert!(
+			candidates(&state, "")
+				.iter()
+				.all(|c| c.label().len() <= 1100)
+		);
 	}
 
 	fn key(key: egui::Key) -> egui::Event {
