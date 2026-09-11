@@ -26,6 +26,11 @@ use zeroize::Zeroizing;
 
 fn main() -> eframe::Result {
 	let demo = std::env::args().any(|arg| arg == "--demo");
+	#[cfg(all(debug_assertions, feature = "demo", target_os = "windows"))]
+	if demo && std::env::args().any(|arg| arg == "--demo-video-check") {
+		audio::debug_video_check();
+		return Ok(());
+	}
 	if !cfg!(feature = "demo")
 		&& std::env::args().any(|arg| arg == "--demo" || arg.starts_with("--demo-"))
 	{
@@ -426,6 +431,8 @@ impl Desktop {
 					.any(|arg| arg == "--demo-audio" || arg == "--demo-voice-messages")
 				{
 					test_support::audio_demo_state()
+				} else if std::env::args().any(|arg| arg == "--demo-video") {
+					test_support::video_demo_state()
 				} else if std::env::args().any(|arg| arg == "--demo-system-messages") {
 					test_support::system_demo_state()
 				} else if std::env::args().any(|arg| arg == "--demo-notifications") {
@@ -2717,7 +2724,16 @@ impl eframe::App for Desktop {
 			self.messaging.audio().stop();
 		}
 		let audio = self.audio.poll();
+		let video_frame = self.audio.take_video_frame();
 		let player = self.messaging.audio();
+		if let Some(image) = video_frame {
+			if let Some(texture) = &mut player.video_frame {
+				texture.set(image, egui::TextureOptions::LINEAR);
+			} else {
+				player.video_frame =
+					Some(ctx.load_texture("attachment-video", image, egui::TextureOptions::LINEAR));
+			}
+		}
 		player.position = audio.position.as_secs_f64();
 		player.duration = audio.duration.as_secs_f64();
 		player.state = match audio.state {

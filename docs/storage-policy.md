@@ -437,3 +437,10 @@ subtree is capped at 16 KiB and discarded after each request. No raw settings ar
 logged or saved. Server activity diagnostics borrow at most 64 KiB / 16 sessions /
 16 activities per list and retain only a fixed enum, never session identities or
 raw presence payloads. Connection teardown clears these reports and workers.
+
+
+## September 12: inline video attachments
+
+Windows video attachments now use native Media Foundation playback with existing inline
+controls. Other platforms retain a clear download/open fallback. See [video playback](video-playback.md)
+for supported scope, codec limitations, bounded RAM, worker ownership and verification.

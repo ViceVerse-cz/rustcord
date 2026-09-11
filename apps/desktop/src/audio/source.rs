@@ -610,6 +610,7 @@ pub(super) fn debug_check() {
 		generation: 0,
 		url: Some(url),
 		expected,
+		video: false,
 		voice_message: false,
 	};
 	let mut remote = self::source(

@@ -48,6 +48,23 @@ impl Attachment {
 			.any(|supported| kind.eq_ignore_ascii_case(supported))
 		})
 	}
+	pub fn is_video(&self) -> bool {
+		// Metadata selects the player; the decoder still validates the actual bytes.
+		self.filename
+			.rsplit_once('.')
+			.is_some_and(|(_, extension)| {
+				["mp4", "m4v", "mov", "webm", "mkv", "avi"]
+					.iter()
+					.any(|kind| extension.eq_ignore_ascii_case(kind))
+			}) || self.content_type.as_deref().is_some_and(|kind| {
+			kind.split(';')
+				.next()
+				.unwrap_or(kind)
+				.trim()
+				.get(..6)
+				.is_some_and(|prefix| prefix.eq_ignore_ascii_case("video/"))
+		})
+	}
 	pub fn bytes(&self) -> usize {
 		size_of::<Self>()
 			+ self.filename.capacity()
@@ -58,7 +75,7 @@ impl Attachment {
 			+ self.media.proxy_url.as_ref().map_or(0, String::capacity)
 	}
 	pub fn is_image(&self) -> bool {
-		if self.is_audio() {
+		if self.is_audio() || self.is_video() {
 			return false;
 		}
 		if let Some(kind) = &self.content_type {
@@ -148,6 +165,51 @@ mod audio_tests {
 			file.content_type = kind.map(str::to_owned);
 			assert!(!file.is_audio());
 			assert_eq!(file.is_image(), image);
+		}
+	}
+	#[test]
+	fn video_detection_uses_mime_and_filename_without_image_previews() {
+		let mut file = Attachment {
+			id: Id(1),
+			filename: String::new(),
+			description: None,
+			content_type: None,
+			size: 32,
+			media: EmbedMedia::default(),
+			spoiler: false,
+			duration_ms: None,
+			waveform: Vec::new(),
+		};
+		for filename in [
+			"clip.MP4",
+			"clip.M4v",
+			"clip.mov",
+			"clip.webm",
+			"clip.mkv",
+			"clip.avi",
+		] {
+			file.filename = filename.into();
+			for kind in [None, Some("application/octet-stream"), Some("image/jpeg")] {
+				file.content_type = kind.map(str::to_owned);
+				assert!(file.is_video(), "{filename}: {kind:?}");
+				assert!(!file.is_image());
+			}
+		}
+		file.filename = "attachment".into();
+		for kind in [
+			"video/mp4",
+			" Video/QuickTime; codecs=avc1",
+			"video/webm",
+			"video/x-matroska",
+		] {
+			file.content_type = Some(kind.into());
+			assert!(file.is_video());
+			assert!(!file.is_image());
+		}
+		for filename in ["clip.mp4.exe", "picture.jpg", "audio.wav"] {
+			file.filename = filename.into();
+			file.content_type = None;
+			assert!(!file.is_video());
 		}
 	}
 }

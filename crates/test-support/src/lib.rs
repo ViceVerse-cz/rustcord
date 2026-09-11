@@ -748,6 +748,33 @@ pub fn audio_demo_state() -> State {
 	state.revision += 1;
 	state
 }
+/// Synthetic attachment-player scenario. Demo playback uses bundled local bytes, never this URL.
+pub fn video_demo_state() -> State {
+	let mut state = chat_demo_state();
+	state.timeline.clear();
+	let mut message = message(503, Id(20));
+	message.content = "Synthetic video attachment · click Play to preview a local clip.".into();
+	message.embeds.clear();
+	message.attachments = vec![Attachment {
+		id: Id(703),
+		filename: "synthetic-motion.mp4".into(),
+		description: None,
+		content_type: Some("video/mp4".into()),
+		size: 58581,
+		spoiler: false,
+		duration_ms: Some(3000),
+		waveform: Vec::new(),
+		media: EmbedMedia {
+			url: Some("https://cdn.discordapp.com/attachments/20/703/synthetic-motion.mp4".into()),
+			width: 320,
+			height: 180,
+			..Default::default()
+		},
+	}];
+	state.timeline.insert(message, false, false).unwrap();
+	state.revision += 1;
+	state
+}
 /// Explicit synthetic permissions, separate from the production unknown-metadata path.
 pub fn permission_snapshot(state: &State) -> model::permissions::Snapshot {
 	use model::permissions as p;

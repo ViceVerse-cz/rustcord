@@ -1,8 +1,10 @@
-//! Explicit, memory-only MP3/WAV/Ogg playback. One lazy worker, one replaceable request.
+//! Explicit, memory-only attachment playback. One lazy worker, one replaceable request.
 #[path = "audio/source.rs"]
 mod source;
 #[path = "audio/streaming.rs"]
 mod streaming;
+#[path = "audio/video.rs"]
+mod video;
 use model::Attachment;
 #[cfg(any(test, all(debug_assertions, feature = "demo")))]
 use std::io::Cursor;
@@ -80,14 +82,17 @@ struct Request {
 	generation: u64,
 	url: Option<url::Url>,
 	expected: usize,
+	video: bool,
 	#[cfg(feature = "demo")]
 	voice_message: bool,
 	duration: Duration,
 }
+type VideoFrame = Arc<std::sync::Mutex<Option<(u64, eframe::egui::ColorImage)>>>;
 struct Worker {
 	requests: watch::Sender<Option<Request>>,
 	status: watch::Receiver<(u64, Status)>,
 	wake: Arc<Notify>,
+	frames: VideoFrame,
 }
 #[derive(Default)]
 pub struct Audio {
@@ -118,7 +123,16 @@ impl Audio {
 		demo: bool,
 	) -> Result<(), &'static str> {
 		if attachment.size == 0 || attachment.size > MAX_ENCODED as u64 {
-			return Err(TOO_LARGE);
+			return Err(if attachment.is_video() {
+				"Video preview limit: 20 MiB, 1080p, 10 minutes"
+			} else {
+				TOO_LARGE
+			});
+		}
+		if attachment.is_video() && !cfg!(target_os = "windows") {
+			return Err(
+				"Inline video is currently available on Windows; download to play externally",
+			);
 		}
 		let url = if demo {
 			None
@@ -131,6 +145,8 @@ impl Audio {
 		if self.worker.is_none() {
 			let (requests, receiver) = watch::channel(None);
 			let (status, updates) = watch::channel((0, Status::default()));
+			let frames: VideoFrame = Arc::default();
+			let frame_receiver = frames.clone();
 			let wake = Arc::new(Notify::new());
 			let gate = self.gate.clone();
 			let worker_wake = wake.clone();
@@ -139,13 +155,22 @@ impl Audio {
 			std::thread::Builder::new()
 				.name("serein-attachment-audio".into())
 				.spawn(move || {
-					worker(receiver, status, gate, worker_wake, runtime, context);
+					worker(
+						receiver,
+						status,
+						gate,
+						worker_wake,
+						runtime,
+						context,
+						frames,
+					);
 				})
 				.map_err(|_| "Could not start audio worker")?;
 			self.worker = Some(Worker {
 				requests,
 				status: updates,
 				wake,
+				frames: frame_receiver,
 			});
 		}
 		let generation = self.gate.generation.fetch_add(1, Ordering::AcqRel) + 1;
@@ -165,12 +190,17 @@ impl Audio {
 			generation,
 			url,
 			expected: attachment.size as usize,
+			video: attachment.is_video(),
 			#[cfg(feature = "demo")]
 			voice_message: attachment.is_voice_message(),
 			duration: Duration::from_millis(u64::from(attachment.duration_ms.unwrap_or(0))),
 		}));
 		worker.wake.notify_one();
 		Ok(())
+	}
+	pub fn take_video_frame(&mut self) -> Option<eframe::egui::ColorImage> {
+		let (generation, image) = self.worker.as_ref()?.frames.lock().ok()?.take()?;
+		self.gate.current(generation).then_some(image)
 	}
 	pub fn poll(&mut self) -> Status {
 		if let Some(worker) = &mut self.worker {
@@ -206,6 +236,11 @@ impl Audio {
 		}
 	}
 	pub fn seek(&mut self, position: Duration) {
+		if let Some(worker) = &self.worker
+			&& let Ok(mut frames) = worker.frames.lock()
+		{
+			frames.take();
+		}
 		self.gate.seek_millis.store(
 			position.min(Duration::from_secs(MAX_SECONDS)).as_millis() as u64,
 			Ordering::Release,
@@ -229,6 +264,9 @@ impl Audio {
 		if let Some(worker) = &self.worker {
 			worker.requests.send_replace(None);
 			worker.wake.notify_one();
+			if let Ok(mut frames) = worker.frames.lock() {
+				frames.take();
+			}
 		}
 		self.status = Status::default();
 	}
@@ -239,6 +277,77 @@ impl Drop for Audio {
 	}
 }
 
+/// Explicit offline check using a quiet synthetic clip and the real speaker output; no microphone.
+#[cfg(all(debug_assertions, feature = "demo", target_os = "windows"))]
+pub fn debug_video_check() {
+	let runtime = tokio::runtime::Builder::new_multi_thread()
+		.worker_threads(2)
+		.enable_all()
+		.build()
+		.unwrap();
+	let context = eframe::egui::Context::default();
+	let state = test_support::video_demo_state();
+	let attachment = state.timeline.iter().next().unwrap().attachments[0].clone();
+	let mut player = Audio::default();
+	player
+		.start(attachment.clone(), runtime.handle(), &context, true)
+		.unwrap();
+	let wait = |player: &mut Audio, ready: &dyn Fn(&Status, bool) -> bool| {
+		let deadline = std::time::Instant::now() + Duration::from_secs(10);
+		let mut image_seen = false;
+		loop {
+			let status = player.poll();
+			assert!(!matches!(status.state, State::Failed(_)), "{status:?}");
+			if let Some(image) = player.take_video_frame() {
+				assert_eq!(image.size, [320, 180]);
+				image_seen = true;
+			}
+			if ready(&status, image_seen) {
+				break;
+			}
+			assert!(
+				std::time::Instant::now() < deadline,
+				"video check timed out: {status:?}"
+			);
+			std::thread::sleep(Duration::from_millis(10));
+		}
+	};
+	wait(&mut player, &|status, frame| {
+		frame && status.position >= Duration::from_millis(300)
+	});
+	player.pause(true);
+	let paused = player.poll().position;
+	std::thread::sleep(Duration::from_millis(120));
+	assert!(player.poll().position.abs_diff(paused) < Duration::from_millis(30));
+	player.seek(Duration::from_secs(2));
+	wait(&mut player, &|status, frame| {
+		frame && status.state == State::Paused && status.position >= Duration::from_millis(1900)
+	});
+	player.pause(false);
+	wait(&mut player, &|status, _| status.state == State::Ended);
+	player
+		.start(attachment, runtime.handle(), &context, true)
+		.unwrap();
+	wait(&mut player, &|status, frame| {
+		frame && status.state == State::Playing
+	});
+	player.stop();
+	assert_eq!(player.poll().state, State::Idle);
+	assert!(player.take_video_frame().is_none());
+	video::debug_clip_end(
+		include_bytes!("../tests/fixtures/video-silent.mp4"),
+		runtime.handle(),
+	);
+	video::debug_clip_end(
+		include_bytes!("../tests/fixtures/video-short-audio.mp4"),
+		runtime.handle(),
+	);
+	println!(
+		"Offline video check passed: decoded frames, speaker playback, pause, paused seek, end, replay and cancellation."
+	);
+}
+
+#[allow(clippy::too_many_arguments)] // One owner for media, status and bounded frame handoff.
 fn worker(
 	mut requests: watch::Receiver<Option<Request>>,
 	status: watch::Sender<(u64, Status)>,
@@ -246,6 +355,7 @@ fn worker(
 	wake: Arc<Notify>,
 	runtime: tokio::runtime::Handle,
 	context: eframe::egui::Context,
+	frames: VideoFrame,
 ) {
 	while runtime.block_on(requests.changed()).is_ok() {
 		let request = requests.borrow_and_update().clone();
@@ -264,7 +374,19 @@ fn worker(
 				context.request_repaint();
 			}
 		};
-		let result = streaming::play(&request, &gate, &wake, &runtime, &publish);
+		let result = if request.video {
+			video::play(&request, &gate, &wake, &runtime, &publish, &|image| {
+				if gate.current(request.generation)
+					&& gate.seek_millis.load(Ordering::Acquire) == NO_SEEK
+					&& let Ok(mut frames) = frames.lock()
+				{
+					*frames = Some((request.generation, image));
+					context.request_repaint();
+				}
+			})
+		} else {
+			streaming::play(&request, &gate, &wake, &runtime, &publish)
+		};
 		if let Err(error) = result {
 			publish(Status {
 				state: State::Failed(error),
@@ -274,7 +396,6 @@ fn worker(
 	}
 }
 
-#[cfg(test)]
 async fn fetch(
 	url: url::Url,
 	expected: usize,
@@ -290,16 +411,16 @@ async fn fetch(
 		.redirect(reqwest::redirect::Policy::none())
 		.timeout(Duration::from_secs(60))
 		.build()
-		.map_err(|_| "Audio download unavailable")?;
+		.map_err(|_| "Media download unavailable")?;
 	let transfer = async {
 		let mut response = client
 			.get(url)
 			.header(reqwest::header::ACCEPT_ENCODING, "identity")
 			.send()
 			.await
-			.map_err(|_| "Audio download failed")?;
+			.map_err(|_| "Media download failed")?;
 		if response.status() != reqwest::StatusCode::OK {
-			return Err("Audio unavailable; reload the conversation");
+			return Err("Media unavailable; reload the conversation");
 		}
 		if response
 			.headers()
@@ -309,13 +430,13 @@ async fn fetch(
 				.content_length()
 				.is_some_and(|size| size != expected as u64)
 		{
-			return Err("Audio size or encoding changed; reload the conversation");
+			return Err("Media size or encoding changed; reload the conversation");
 		}
 		let mut bytes = Vec::with_capacity(expected);
 		while let Some(chunk) = response
 			.chunk()
 			.await
-			.map_err(|_| "Audio download interrupted")?
+			.map_err(|_| "Media download interrupted")?
 		{
 			if !gate.current(generation) {
 				return Err("Cancelled");
@@ -326,7 +447,7 @@ async fn fetch(
 			bytes.extend_from_slice(&chunk);
 		}
 		if bytes.len() != expected {
-			return Err("Audio download incomplete");
+			return Err("Media download incomplete");
 		}
 		Ok(bytes)
 	};
@@ -826,6 +947,7 @@ pub fn debug_voice_message_check() {
 			generation: 0,
 			url: None,
 			expected: 1,
+			video: false,
 			voice_message,
 			duration: Duration::ZERO,
 		};

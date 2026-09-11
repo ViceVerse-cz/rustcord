@@ -701,3 +701,10 @@ successful invite responses are treated as uncertain writes.
 These routes are documented developer API protocol evidence, not approval or proof
 of normal-user compatibility. Synthetic state/HTTP checks cover this adapter; live
 normal-user creation/leaving, service challenges and restricted guilds remain unverified.
+
+
+## September 12: inline video attachments
+
+Windows video attachments now use native Media Foundation playback with existing inline
+controls. Other platforms retain a clear download/open fallback. See [video playback](video-playback.md)
+for supported scope, codec limitations, bounded RAM, worker ownership and verification.

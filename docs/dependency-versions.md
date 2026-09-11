@@ -558,3 +558,10 @@ See `assets/licenses/dependencies/PROVENANCE.md` for hashes and known upstream o
 when selected; source archives and a labeled MIT reference do not close those omissions.
 New unreviewed missing texts fail packaging. Native system-library redistribution and a
 complete transitive notice review remain separate release gates.
+
+
+## September 12: inline video attachments
+
+Windows video attachments now use native Media Foundation playback with existing inline
+controls. Other platforms retain a clear download/open fallback. See [video playback](video-playback.md)
+for supported scope, codec limitations, bounded RAM, worker ownership and verification.

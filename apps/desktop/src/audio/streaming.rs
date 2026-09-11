@@ -110,6 +110,36 @@ fn open_output(
 	Ok(stream)
 }
 
+/// Video uses the same bounded PCM queue, output resampler and consumed-frame clock as audio.
+pub(super) fn video_output(
+	rate: u32,
+	position: Duration,
+	eof: Arc<AtomicBool>,
+	finished: Arc<AtomicBool>,
+	gate: Arc<Gate>,
+	generation: u64,
+) -> Result<(rtrb::Producer<[f32; 2]>, cpal::Stream), &'static str> {
+	let (sender, frames) = RingBuffer::new(rate as usize);
+	let position = position.as_secs_f64() * f64::from(rate);
+	gate.position_frames
+		.store(position as u64, Ordering::Release);
+	gate.sample_rate.store(rate, Ordering::Release);
+	let stream = open_output(
+		Playback {
+			frames,
+			current: None,
+			phase: 0.0,
+			position,
+			rate,
+			eof,
+			finished,
+		},
+		gate,
+		generation,
+	)?;
+	Ok((sender, stream))
+}
+
 fn output<T: cpal::SizedSample + cpal::FromSample<f32>>(
 	device: &cpal::Device,
 	config: &cpal::StreamConfig,

@@ -313,9 +313,9 @@ pub fn show(
 		} else {
 			for attachment in group {
 				ui.push_id(("attachment", attachment.id), |ui| {
-					if attachment.is_audio() {
+					if attachment.is_audio() || attachment.is_video() {
 						let response = audio.show(ui, message, attachment);
-						if attachment.is_voice_message() {
+						if attachment.is_voice_message() && !attachment.is_video() {
 							response.context_menu(|ui| {
 								download_button(ui, attachment, download, demo);
 								open_original(ui, attachment, opening);
@@ -724,7 +724,9 @@ pub fn estimated_height(attachments: &[Attachment], width: f32) -> f32 {
 				group
 					.iter()
 					.map(|attachment| {
-						if attachment.is_voice_message() {
+						if attachment.is_video() {
+							144.0 + crate::audio::video_stage_size(attachment, width - 24.0).y
+						} else if attachment.is_voice_message() {
 							88.0
 						} else if attachment.is_audio() {
 							138.0

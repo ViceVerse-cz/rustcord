@@ -43,3 +43,10 @@ The adapter uses existing user32/Shell APIs and dependencies, with no background
 polling or autostart. A synthetic native Windows test verifies registration,
 hide/restore, own-window taskbar recovery, Quit event and cleanup. Linux/macOS have
 an explicitly disabled control; their tray integration is not implemented.
+
+
+## September 12: inline video attachments
+
+Windows video attachments now use native Media Foundation playback with existing inline
+controls. Other platforms retain a clear download/open fallback. See [video playback](video-playback.md)
+for supported scope, codec limitations, bounded RAM, worker ownership and verification.

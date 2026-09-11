@@ -26,6 +26,7 @@ pub struct AudioUi {
 	pub command: Option<AudioCommand>,
 	pub seen: bool,
 	pub volume: f32,
+	pub video_frame: Option<egui::TextureHandle>,
 }
 impl Default for AudioUi {
 	fn default() -> Self {
@@ -37,12 +38,14 @@ impl Default for AudioUi {
 			command: None,
 			seen: false,
 			volume: 1.0,
+			video_frame: None,
 		}
 	}
 }
 impl AudioUi {
 	pub fn stop(&mut self) {
 		self.active = None;
+		self.video_frame = None;
 		self.state = AudioState::Idle;
 		self.command = Some(AudioCommand::Stop);
 	}
@@ -53,7 +56,8 @@ impl AudioUi {
 		attachment: &Attachment,
 	) -> egui::Response {
 		let colors = crate::design::palette(ui);
-		let voice = attachment.is_voice_message();
+		let video = attachment.is_video();
+		let voice = !video && attachment.is_voice_message();
 		let button_color = if voice {
 			colors.text_strong
 		} else {
@@ -73,7 +77,13 @@ impl AudioUi {
 		} else {
 			attachment.duration_ms.map_or(0.0, |ms| ms as f64 / 1000.0)
 		};
-		let width = ui.available_width().min(if voice { 320.0 } else { 380.0 });
+		let width = ui.available_width().min(if video {
+			420.0
+		} else if voice {
+			320.0
+		} else {
+			380.0
+		});
 		let card = egui::Frame::new()
 			.fill(colors.raised)
 			.stroke(egui::Stroke::new(1.0, colors.border))
@@ -103,7 +113,11 @@ impl AudioUi {
 					ui.horizontal(|ui| {
 						crate::icons::inline(
 							ui,
-							crate::icons::Icon::Soundboard,
+							if video {
+								crate::icons::Icon::FileVideo
+							} else {
+								crate::icons::Icon::Soundboard
+							},
 							16.0,
 							colors.muted,
 						);
@@ -116,6 +130,28 @@ impl AudioUi {
 						)
 						.on_hover_text(&attachment.filename);
 					});
+				}
+				if video {
+					let size = video_stage_size(attachment, ui.available_width());
+					let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+					ui.painter().rect_filled(rect, 4, egui::Color32::BLACK);
+					if let Some(frame) = self.video_frame.as_ref().filter(|_| active) {
+						let pixels = frame.size_vec2();
+						let fit = pixels * (size.x / pixels.x).min(size.y / pixels.y);
+						ui.painter().image(
+							frame.id(),
+							egui::Rect::from_center_size(rect.center(), fit),
+							egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+							egui::Color32::WHITE,
+						);
+					} else {
+						crate::icons::paint(
+							ui.painter(),
+							crate::icons::Icon::FileVideo,
+							egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(32.0)),
+							colors.muted,
+						);
+					}
 				}
 				ui.horizontal(|ui| {
 					let label = match state {
@@ -188,6 +224,7 @@ impl AudioUi {
 						self.command = Some(match state {
 							AudioState::Loading => {
 								self.active = None;
+								self.video_frame = None;
 								AudioCommand::Stop
 							}
 							AudioState::Playing => AudioCommand::Pause(true),
@@ -198,6 +235,7 @@ impl AudioUi {
 								self.state = AudioState::Loading;
 								self.position = 0.0;
 								self.duration = 0.0;
+								self.video_frame = None;
 								AudioCommand::Play(attachment.clone())
 							}
 						});
@@ -286,7 +324,11 @@ impl AudioUi {
 				});
 				match state {
 					AudioState::Loading => {
-						ui.small("Loading audio…");
+						ui.small(if video {
+							"Loading video…"
+						} else {
+							"Loading audio…"
+						});
 					}
 					AudioState::Failed(error) => {
 						ui.colored_label(colors.danger, error);
@@ -300,11 +342,24 @@ impl AudioUi {
 			}) {
 			self.seen = true;
 			if matches!(state, AudioState::Playing | AudioState::Loading) {
-				ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+				ui.ctx()
+					.request_repaint_after(std::time::Duration::from_millis(100));
 			}
 		}
 		card.response
 	}
+}
+pub(crate) fn video_stage_size(attachment: &Attachment, width: f32) -> egui::Vec2 {
+	let aspect = if attachment.media.width > 0 && attachment.media.height > 0 {
+		attachment.media.width as f32 / attachment.media.height as f32
+	} else {
+		16.0 / 9.0
+	};
+	let width = width.clamp(1.0, 396.0);
+	egui::vec2(
+		width,
+		(width / aspect).clamp(48.0, if aspect < 1.0 { 280.0 } else { 236.0 }),
+	)
 }
 fn waveform(
 	ui: &mut egui::Ui,
@@ -394,97 +449,135 @@ fn timestamp(seconds: f64) -> String {
 mod tests {
 	use super::*;
 	#[test]
-	fn audio_is_explicit_keyboard_operable_and_fits_narrow_cards() {
-		let state = test_support::audio_demo_state();
-		let mut message = state.timeline.iter().last().unwrap().clone();
-		message.attachments.truncate(1);
-		message.attachments[0].content_type = Some("text/plain".into());
-		let file = &message.attachments[0];
-		for (width, theme) in [
-			(220.0, egui::Theme::Dark),
-			(380.0, egui::Theme::Dark),
-			(220.0, egui::Theme::Light),
-			(380.0, egui::Theme::Light),
+	fn audio_and_video_are_explicit_keyboard_operable_and_fit_narrow_cards() {
+		for state in [
+			test_support::audio_demo_state(),
+			test_support::video_demo_state(),
 		] {
-			let ctx = egui::Context::default();
-			crate::design::apply(&ctx);
-			ctx.set_theme(theme);
-			let mut audio = AudioUi::default();
-			let mut images = crate::avatars::Avatars::default();
-			let mut viewing = None;
-			let mut opening = None;
-			let mut download = crate::attachments::DownloadUi::default();
-			let mut frame = |audio: &mut AudioUi, key: Option<egui::Key>| {
-				ctx.run_ui(
-					egui::RawInput {
-						screen_rect: Some(egui::Rect::from_min_size(
-							egui::Pos2::ZERO,
-							egui::vec2(width + 16.0, 300.0),
-						)),
-						events: key
-							.into_iter()
-							.map(|key| egui::Event::Key {
-								key,
-								physical_key: None,
-								pressed: true,
-								repeat: false,
-								modifiers: egui::Modifiers::NONE,
-							})
-							.collect(),
-						..Default::default()
-					},
-					|ui| {
-						ui.set_width(width);
-						ui.spacing_mut().item_spacing.x = 16.0;
-						crate::attachments::show(
-							ui,
-							&message,
-							&mut images,
-							&mut viewing,
-							&mut opening,
-							&mut download,
-							audio,
-							false,
-						);
-						assert!(ui.min_rect().width() <= width + 2.0);
-					},
-				)
-				.drop_without_applying_deltas();
-			};
-			frame(&mut audio, None);
-			assert!(audio.active.is_none() && audio.command.is_none());
-			for key in [egui::Key::Tab, egui::Key::Enter] {
-				frame(&mut audio, Some(key));
+			let mut message = state.timeline.iter().last().unwrap().clone();
+			message.attachments.truncate(1);
+			message.attachments[0].content_type = Some("text/plain".into());
+			let file = &message.attachments[0];
+			for (width, theme) in [
+				(220.0, egui::Theme::Dark),
+				(380.0, egui::Theme::Dark),
+				(220.0, egui::Theme::Light),
+				(380.0, egui::Theme::Light),
+			] {
+				let ctx = egui::Context::default();
+				crate::design::apply(&ctx);
+				ctx.set_theme(theme);
+				let mut audio = AudioUi::default();
+				let mut images = crate::avatars::Avatars::default();
+				let mut viewing = None;
+				let mut opening = None;
+				let mut download = crate::attachments::DownloadUi::default();
+				let mut frame = |audio: &mut AudioUi, key: Option<egui::Key>| {
+					ctx.run_ui(
+						egui::RawInput {
+							screen_rect: Some(egui::Rect::from_min_size(
+								egui::Pos2::ZERO,
+								egui::vec2(width + 16.0, 600.0),
+							)),
+							events: key
+								.into_iter()
+								.map(|key| egui::Event::Key {
+									key,
+									physical_key: None,
+									pressed: true,
+									repeat: false,
+									modifiers: egui::Modifiers::NONE,
+								})
+								.collect(),
+							..Default::default()
+						},
+						|ui| {
+							ui.set_width(width);
+							ui.spacing_mut().item_spacing.x = 16.0;
+							crate::attachments::show(
+								ui,
+								&message,
+								&mut images,
+								&mut viewing,
+								&mut opening,
+								&mut download,
+								audio,
+								false,
+							);
+							assert!(ui.min_rect().width() <= width + 2.0);
+						},
+					)
+					.drop_without_applying_deltas();
+				};
+				frame(&mut audio, None);
+				assert!(audio.active.is_none() && audio.command.is_none());
+				audio.video_frame = Some(ctx.load_texture(
+					"stale-video",
+					egui::ColorImage::filled([2, 2], egui::Color32::RED),
+					Default::default(),
+				));
+				for key in [egui::Key::Tab, egui::Key::Enter] {
+					frame(&mut audio, Some(key));
+				}
+				assert!(matches!(audio.command.take(), Some(AudioCommand::Play(a)) if a == *file));
+				assert!(audio.video_frame.is_none());
+				assert!(audio.seen);
+				audio.state = AudioState::Playing;
+				audio.video_frame = Some(ctx.load_texture(
+					"active-video",
+					egui::ColorImage::filled([2, 2], egui::Color32::RED),
+					Default::default(),
+				));
+				audio.duration = 12.0;
+				frame(&mut audio, Some(egui::Key::Enter));
+				assert!(matches!(
+					audio.command.take(),
+					Some(AudioCommand::Pause(true))
+				));
+				audio.state = AudioState::Paused;
+				frame(&mut audio, Some(egui::Key::Enter));
+				assert!(matches!(
+					audio.command.take(),
+					Some(AudioCommand::Pause(false))
+				));
+				for key in [egui::Key::Tab, egui::Key::ArrowRight] {
+					frame(&mut audio, Some(key));
+				}
+				assert!(
+					matches!(audio.command.take(), Some(AudioCommand::Seek(value)) if value > 0.0)
+				);
+				for key in [egui::Key::Tab, egui::Key::ArrowLeft] {
+					frame(&mut audio, Some(key));
+				}
+				assert!(
+					matches!(audio.command.take(), Some(AudioCommand::Volume(value)) if value < 1.0)
+				);
+				audio.stop();
+				assert!(audio.active.is_none());
+				assert!(audio.video_frame.is_none());
+				assert!(matches!(audio.command, Some(AudioCommand::Stop)));
 			}
-			assert!(matches!(audio.command.take(), Some(AudioCommand::Play(a)) if a == *file));
-			assert!(audio.seen);
-			audio.state = AudioState::Playing;
-			audio.duration = 12.0;
-			frame(&mut audio, Some(egui::Key::Enter));
-			assert!(matches!(
-				audio.command.take(),
-				Some(AudioCommand::Pause(true))
-			));
-			audio.state = AudioState::Paused;
-			frame(&mut audio, Some(egui::Key::Enter));
-			assert!(matches!(
-				audio.command.take(),
-				Some(AudioCommand::Pause(false))
-			));
-			for key in [egui::Key::Tab, egui::Key::ArrowRight] {
-				frame(&mut audio, Some(key));
-			}
-			assert!(matches!(audio.command.take(), Some(AudioCommand::Seek(value)) if value > 0.0));
-			for key in [egui::Key::Tab, egui::Key::ArrowLeft] {
-				frame(&mut audio, Some(key));
-			}
-			assert!(
-				matches!(audio.command.take(), Some(AudioCommand::Volume(value)) if value < 1.0)
-			);
-			audio.stop();
-			assert!(audio.active.is_none());
-			assert!(matches!(audio.command, Some(AudioCommand::Stop)));
 		}
 		assert_eq!(timestamp(125.4), "2:05");
+	}
+	#[test]
+	fn video_stage_is_bounded_with_unknown_or_extreme_dimensions() {
+		let state = test_support::video_demo_state();
+		let mut file = state.timeline.iter().last().unwrap().attachments[0].clone();
+		for (width, height) in [(640, 360), (360, 640), (0, 0), (1, u32::MAX), (u32::MAX, 1)] {
+			file.media.width = width;
+			file.media.height = height;
+			for available in [196.0, 396.0, 2000.0] {
+				let stage = video_stage_size(&file, available);
+				assert!(stage.x > 0.0 && stage.x <= available.min(396.0));
+				assert!(stage.y > 0.0 && stage.y <= 280.0);
+				assert!(
+					crate::attachments::estimated_height(
+						std::slice::from_ref(&file),
+						available + 24.0
+					) >= stage.y + 138.0
+				);
+			}
+		}
 	}
 }
