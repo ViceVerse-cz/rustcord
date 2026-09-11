@@ -179,6 +179,7 @@ fn display_activity(activity: &Activity) -> model::RichActivity {
 	}
 }
 
+#[cfg(feature = "demo")]
 pub fn demo_activity() -> model::RichActivity {
 	model::RichActivity {
 		kind: 0,

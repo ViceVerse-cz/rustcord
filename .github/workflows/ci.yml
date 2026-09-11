@@ -34,7 +34,8 @@ jobs:
       - name: Linux package regression
         if: runner.os == 'Linux'
         run: PYTHONDONTWRITEBYTECODE=1 python3 packaging/linux/test_package.py
-      - run: cargo xtask package
+      - name: Package app without demo or developer features
+        run: cargo xtask package
       - uses: actions/upload-artifact@v7.0.1
         with:
           name: serein-${{ runner.os }}-unsigned

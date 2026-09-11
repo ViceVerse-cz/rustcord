@@ -44,6 +44,9 @@ pub(super) fn source(
 			bytes_read: 0,
 		}
 	} else {
+		#[cfg(not(feature = "demo"))]
+		return Err(INVALID);
+		#[cfg(feature = "demo")]
 		Raw::memory(if request.voice_message {
 			include_bytes!("../../tests/fixtures/voice-message.ogg").to_vec()
 		} else {
@@ -64,6 +67,7 @@ pub(super) fn source(
 }
 
 enum Input {
+	#[cfg(any(test, feature = "demo"))]
 	Memory(Vec<u8>),
 	Http {
 		client: reqwest::Client,
@@ -87,6 +91,7 @@ fn invalid() -> io::Error {
 	io::Error::new(io::ErrorKind::InvalidData, INVALID)
 }
 impl Raw {
+	#[cfg(any(test, feature = "demo"))]
 	fn memory(bytes: Vec<u8>) -> Self {
 		Self {
 			len: bytes.len(),
@@ -111,6 +116,7 @@ impl Read for Raw {
 			return Ok(0);
 		}
 		match &mut self.input {
+			#[cfg(any(test, feature = "demo"))]
 			Input::Memory(bytes) => {
 				output[..count].copy_from_slice(&bytes[self.position..self.position + count])
 			}
@@ -504,7 +510,7 @@ impl Ogg {
 	}
 }
 
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "demo"))]
 pub(super) fn debug_check() {
 	use std::{io::Write, sync::atomic::AtomicUsize};
 	let bytes = super::demo_wav();

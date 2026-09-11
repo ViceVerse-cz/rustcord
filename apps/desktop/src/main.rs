@@ -25,6 +25,12 @@ use zeroize::Zeroizing;
 
 fn main() -> eframe::Result {
 	let demo = std::env::args().any(|arg| arg == "--demo");
+	if !cfg!(feature = "demo")
+		&& std::env::args().any(|arg| arg == "--demo" || arg.starts_with("--demo-"))
+	{
+		eprintln!("Demo support is not included; rebuild with --features demo and run with --demo");
+		std::process::exit(2);
+	}
 	let options = eframe::NativeOptions {
 		viewport: {
 			let builder = egui::ViewportBuilder::default()
@@ -144,6 +150,7 @@ struct Desktop {
 	tray: Option<platform::tray::Tray>,
 	tray_error: Option<&'static str>,
 	/// `--demo-reply`: keeps two synthetic typists active on the selected fixture channel.
+	#[cfg(feature = "demo")]
 	demo_typing: bool,
 	variant_changed: bool,
 	pending_save: Option<Arc<SessionSecret>>,
@@ -154,6 +161,7 @@ struct Desktop {
 	close_approved: bool,
 	fixture_only: bool,
 	authorized: bool,
+	#[cfg(feature = "demo")]
 	synthetic_id: u64,
 	#[cfg(feature = "developer-session")]
 	token_input: Zeroizing<String>,
@@ -298,6 +306,7 @@ fn changes_active_history(state: &State, event: &Event) -> bool {
 	state.selected == Some(*channel)
 }
 /// Synthetic People rows with presence; never a Discord member directory.
+#[cfg(feature = "demo")]
 fn demo_members(guild: Option<model::Id>, channel: model::Id, request: u64) -> model::MemberList {
 	let mut members = vec![
 		model::Member {
@@ -365,6 +374,7 @@ impl Desktop {
 		ui::fonts::install(&cc.egui_ctx);
 		ui::emoji::install_async(&cc.egui_ctx)?;
 		ui::icons::install(&cc.egui_ctx);
+		#[cfg(feature = "demo")]
 		if demo {
 			// Fixture-only preset preview, e.g. `--demo --demo-theme=onyx --demo-light`.
 			if let Some(variant) = std::env::args()
@@ -388,31 +398,36 @@ impl Desktop {
 			.build()?;
 		let mut store = (!demo).then(|| credentials::Store::start(cc.egui_ctx.clone()));
 		let cache = (!demo).then(|| cache::Cache::start(cc.egui_ctx.clone()));
-		#[cfg(debug_assertions)]
+		#[cfg(all(debug_assertions, feature = "demo"))]
 		if demo && std::env::args().any(|arg| arg == "--demo-voice-messages") {
 			audio::debug_voice_message_check();
 		}
-		let mut state = if demo {
-			if std::env::args().any(|arg| arg == "--demo-audio" || arg == "--demo-voice-messages") {
-				test_support::audio_demo_state()
-			} else if std::env::args().any(|arg| arg == "--demo-system-messages") {
-				test_support::system_demo_state()
-			} else if std::env::args().any(|arg| arg == "--demo-notifications") {
-				test_support::notification_demo_state()
-			} else if std::env::args().any(|arg| arg == "--demo-voice") {
-				test_support::voice_demo_state()
-			} else if std::env::args().any(|arg| arg == "--demo-existing-call") {
-				test_support::existing_call_demo_state()
-			} else if std::env::args().any(|arg| arg == "--demo-call") {
-				test_support::call_demo_state()
-			} else if std::env::args().any(|arg| arg == "--demo-chat") {
-				test_support::chat_demo_state()
-			} else {
-				test_support::demo_state()
-			}
-		} else {
-			State::default()
-		};
+		let mut state = State::default();
+		#[cfg(feature = "demo")]
+		if demo {
+			state = {
+				if std::env::args()
+					.any(|arg| arg == "--demo-audio" || arg == "--demo-voice-messages")
+				{
+					test_support::audio_demo_state()
+				} else if std::env::args().any(|arg| arg == "--demo-system-messages") {
+					test_support::system_demo_state()
+				} else if std::env::args().any(|arg| arg == "--demo-notifications") {
+					test_support::notification_demo_state()
+				} else if std::env::args().any(|arg| arg == "--demo-voice") {
+					test_support::voice_demo_state()
+				} else if std::env::args().any(|arg| arg == "--demo-existing-call") {
+					test_support::existing_call_demo_state()
+				} else if std::env::args().any(|arg| arg == "--demo-call") {
+					test_support::call_demo_state()
+				} else if std::env::args().any(|arg| arg == "--demo-chat") {
+					test_support::chat_demo_state()
+				} else {
+					test_support::demo_state()
+				}
+			};
+		}
+		#[cfg(feature = "demo")]
 		if demo {
 			let fixture = demo_members(None, model::Id(22), 0);
 			state.direct_presences = fixture
@@ -510,6 +525,7 @@ impl Desktop {
 				reading.restore(Err(local_store::StoreError::Unavailable));
 			}
 		}
+		#[cfg(feature = "demo")]
 		let synthetic_id = state
 			.timeline
 			.iter()
@@ -517,6 +533,7 @@ impl Desktop {
 			.map_or(10_000, |m| m.id.0.max(10_000));
 		let mut messaging = ui::MessagingUi::default();
 		messaging.tray_available = platform::tray::supported();
+		#[cfg(feature = "demo")]
 		if demo && std::env::args().any(|arg| arg == "--demo-game-activity") {
 			messaging.share_game_activity = true;
 			messaging.own_game = Some("Playing osu!".into());
@@ -536,6 +553,7 @@ impl Desktop {
 		if messaging.notification_test_available {
 			state.status = "Offline fixture · explicit system notification test";
 		}
+		#[cfg(feature = "demo")]
 		if demo
 			&& let Some(page) = std::env::args().find_map(|arg| {
 				arg.strip_prefix("--demo-settings")
@@ -544,6 +562,7 @@ impl Desktop {
 			// `--demo-settings` or `--demo-settings=account` etc.
 			messaging.preview_settings(&page);
 		}
+		#[cfg(feature = "demo")]
 		if demo && std::env::args().any(|arg| arg == "--demo-profile") {
 			// Presence for the fixture card comes from the same synthetic People rows.
 			let _ = state.request_members();
@@ -558,25 +577,31 @@ impl Desktop {
 			messaging.preview_profile(user);
 			state.status = "Offline fixture · synthetic profile card opened at startup";
 		}
+		#[cfg(feature = "demo")]
 		let demo_typing = demo && std::env::args().any(|arg| arg == "--demo-reply");
+		#[cfg(feature = "demo")]
 		if demo_typing {
 			// Reply bar plus an active typing row on the fixture conversation, for screenshots.
 			state.reply = state.timeline.iter().last().map(|message| message.id);
 			state.status = "Offline fixture · reply bar and typing row shown at startup";
 		}
+		#[cfg(feature = "demo")]
 		if demo && std::env::args().any(|arg| arg == "--demo-pins") {
 			messaging.preview_pins();
 			state.status = "Offline fixture · pinned messages popout opened at startup";
 		}
+		#[cfg(feature = "demo")]
 		if demo && std::env::args().any(|arg| arg == "--demo-emoji") {
 			messaging.preview_emoji_picker();
 			state.status = "Offline fixture · emoji popout opened at startup";
 		}
+		#[cfg(feature = "demo")]
 		if demo && std::env::args().any(|arg| arg == "--demo-viewer") {
 			// Opens the full-window media viewer on the fixture gallery message.
 			messaging.preview_image_viewer(model::Id(500), model::Id(700));
 			state.status = "Offline fixture · media viewer opened at startup";
 		}
+		#[cfg(feature = "demo")]
 		if demo && std::env::args().any(|arg| arg == "--demo-attachment=file") {
 			// Non-image variant: exercises the file-kind glyph and extension badge.
 			messaging.preview_attachment("quarterly-report.pdf", 1_482_311, None);
@@ -630,11 +655,13 @@ impl Desktop {
 				state.status = "Offline fixture · synthetic attachment staged in the composer";
 			}
 		}
+		#[cfg(feature = "demo")]
 		if demo && std::env::args().any(|arg| arg == "--demo-sending") {
 			messaging.preview_sending(&cc.egui_ctx, &mut state);
 			state.status = "Offline fixture · synthetic pending message; no upload or send";
 		}
 		// `--demo-gifs`, `--demo-gifs=favorites`, `--demo-gifs=trending` or `--demo-gifs=<query>`.
+		#[cfg(feature = "demo")]
 		if demo
 			&& let Some(section) = std::env::args().find_map(|arg| {
 				arg.strip_prefix("--demo-gifs")
@@ -650,6 +677,7 @@ impl Desktop {
 			messaging.preview_gif_picker(&section);
 			state.status = "Offline fixture · GIF popout opened at startup";
 		}
+		#[cfg(feature = "demo")]
 		if demo
 			&& let Some(query) = std::env::args()
 				.find_map(|arg| arg.strip_prefix("--demo-search=").map(str::to_owned))
@@ -657,6 +685,7 @@ impl Desktop {
 			messaging.preview_search(&query);
 			state.status = "Offline fixture · synthetic search opened at startup";
 		}
+		#[cfg(feature = "demo")]
 		if demo
 			&& std::env::args().any(|arg| arg == "--demo-browsing")
 			&& let Some(channel) = state.selected
@@ -672,6 +701,7 @@ impl Desktop {
 			state.history_targeted = true;
 			state.status = "Offline fixture · unread strip and older-messages bar shown";
 		}
+		#[cfg(feature = "demo")]
 		if demo && std::env::args().any(|arg| arg == "--demo-login") {
 			// Fixture-only: render the sign-in screen without a session.
 			state.user = None;
@@ -718,6 +748,7 @@ impl Desktop {
 			tray_setting,
 			tray: None,
 			tray_error: None,
+			#[cfg(feature = "demo")]
 			demo_typing,
 			variant_changed: false,
 			pending_save: None,
@@ -734,6 +765,7 @@ impl Desktop {
 			close_approved: false,
 			fixture_only: demo,
 			authorized: false,
+			#[cfg(feature = "demo")]
 			synthetic_id,
 			#[cfg(feature = "developer-session")]
 			token_input: Zeroizing::new(String::new()),
@@ -956,6 +988,7 @@ impl Desktop {
 			self.messaging.own_game.clone(),
 			self.messaging.game_activity_status,
 		);
+		#[cfg(feature = "demo")]
 		if self.state.demo {
 			let activity = self
 				.messaging
@@ -1289,6 +1322,7 @@ impl Desktop {
 				request: *request,
 			});
 		}
+		#[cfg(feature = "demo")]
 		if self.state.demo {
 			let event = match command {
 				Command::GuildFolders(settings) => {
@@ -1679,7 +1713,9 @@ impl Desktop {
 				event,
 			});
 			self.state.status = "Offline fixture · action affected synthetic RAM only";
-		} else if let Some(connection) = &self.connection {
+			return;
+		}
+		if let Some(connection) = &self.connection {
 			if let Err(error) = connection.commands.try_send(command) {
 				self.state.command_rejected(error.into_inner());
 			}
@@ -1852,6 +1888,8 @@ impl Desktop {
 						}
 					});
 				}
+				#[cfg(feature = "demo")]
+				if self.fixture_only {
 				ui.add_space(22.0);
 				ui.horizontal(|ui| {
 					let y = ui.cursor().top() + 8.0;
@@ -1878,8 +1916,9 @@ impl Desktop {
 				ui.vertical_centered(|ui| {
 					ui.label(egui::RichText::new("Sample conversations. No Discord connection.").size(12.0).color(p.muted));
 				});
+				}
 				ui.add_space(16.0);
-				ui.collapsing("About this preview", |ui| {
+				ui.collapsing("About Serein", |ui| {
 						ui.small("Messaging, reactions, search and read markers have offline tests. Real Discord interoperability is still unverified; attachment uploads and advanced search remain incomplete.");
 						ui.small("Messages and drafts are cached locally. Login tokens use the operating system credential store.");
 						ui.small("Unofficial clients may put your Discord account at risk.");
@@ -2478,7 +2517,10 @@ impl eframe::App for Desktop {
 		self.frame_metrics.begin(ctx);
 		self.messaging.sync_reading_zoom(ctx);
 		self.poll(ctx);
-		if self.demo_typing && let Some(channel) = self.state.selected {
+		#[cfg(feature = "demo")]
+		if self.demo_typing
+			&& let Some(channel) = self.state.selected
+		{
 			let wall = std::time::SystemTime::now();
 			let timestamp = wall
 				.duration_since(std::time::UNIX_EPOCH)

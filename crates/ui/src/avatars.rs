@@ -174,12 +174,13 @@ impl Avatars {
 	}
 	pub(crate) fn custom_image(
 		&mut self,
-		ctx: &egui::Context,
+		_ctx: &egui::Context,
 		id: model::Id,
 		size: f32,
 		demo: bool,
 	) -> Option<egui::Image<'static>> {
 		let key = format!("emoji-{id}");
+		#[cfg(any(test, feature = "demo"))]
 		if demo && matches!(id.0, 9001 | 9002) && !self.textures.contains_key(&key) {
 			let mut image = ColorImage::filled([32, 32], egui::Color32::TRANSPARENT);
 			for y in 3..29 {
@@ -194,7 +195,7 @@ impl Avatars {
 				}
 			}
 			self.attempts.insert(key.clone(), (Instant::now(), false));
-			self.accept(ctx, key.clone(), Some(image));
+			self.accept(_ctx, key.clone(), Some(image));
 		}
 		if let Some(entry) = self.textures.get_mut(&key) {
 			self.clock += 1;
@@ -222,6 +223,7 @@ impl Avatars {
 			format!("gif:{}", gif.preview)
 		};
 		self.advance_animation(ctx, &key);
+		#[cfg(any(test, feature = "demo"))]
 		if demo && gif.preview.contains("/synthetic/") && !self.textures.contains_key(&key) {
 			self.attempts.insert(key.clone(), (Instant::now(), false));
 			self.accept(ctx, key.clone(), Some(synthetic_gif(gif)));
@@ -256,6 +258,7 @@ impl Avatars {
 		if ui.is_rect_visible(rect)
 			&& let Some(key) = profile.banner_key()
 		{
+			#[cfg(any(test, feature = "demo"))]
 			if demo && !self.textures.contains_key(&key) {
 				let mut image = ColorImage::filled([128, 48], color);
 				let stripe = color.lerp_to_gamma(egui::Color32::WHITE, 0.16);
@@ -299,6 +302,7 @@ impl Avatars {
 		if ui.is_rect_visible(rect) {
 			let colors = crate::design::palette(ui);
 			if let Some(key) = key {
+				#[cfg(any(test, feature = "demo"))]
 				if demo && !self.textures.contains_key(&key) {
 					// Original synthetic emblem; never bundled third-party badge artwork.
 					let seed = key
@@ -358,6 +362,7 @@ impl Avatars {
 		let response = response.on_hover_text(&profile.user.name);
 		if ui.is_rect_visible(response.rect) {
 			let key = profile.avatar_key();
+			#[cfg(any(test, feature = "demo"))]
 			if demo && !self.textures.contains_key(&key) {
 				let image = ColorImage::filled([32, 32], crate::design::palette(ui).accent);
 				self.attempts.insert(key.clone(), (Instant::now(), false));
@@ -474,6 +479,7 @@ impl Avatars {
 		if ui.is_rect_visible(rect)
 			&& let Some(key) = guild.icon_key()
 		{
+			#[cfg(any(test, feature = "demo"))]
 			if demo && !self.textures.contains_key(&key) {
 				let mut image = ColorImage::filled([32, 32], egui::Color32::from_rgb(88, 101, 242));
 				for row in [8, 14, 20] {
@@ -652,6 +658,7 @@ impl Avatars {
 				}
 				format!("{}:{source}", if animated { "anim" } else { "embed" })
 			});
+			#[cfg(any(test, feature = "demo"))]
 			if demo
 				&& let Some(key) = &key
 				&& !self.textures.contains_key(key)
@@ -677,6 +684,7 @@ impl Avatars {
 			if !painted {
 				let colors = crate::design::palette(ui);
 				ui.painter().rect_filled(rect, 5, colors.canvas);
+				#[cfg(any(test, feature = "demo"))]
 				if demo {
 					// Original native landscape, never a service request or bundled third-party image.
 					let ridge = vec![
@@ -695,7 +703,8 @@ impl Avatars {
 						size.y * 0.08,
 						colors.accent,
 					);
-				} else if let Some(key) = key.as_ref() {
+				}
+				if !demo && let Some(key) = key.as_ref() {
 					self.request(key.clone());
 				}
 				if size.x >= 100.0 && size.y >= 32.0 {
@@ -771,6 +780,7 @@ impl Avatars {
 			let entry = self.avatar_keys.get_mut(&user.id).expect("avatar key");
 			entry.used = self.clock;
 			let key = entry.key.clone();
+			#[cfg(any(test, feature = "demo"))]
 			if demo && !self.textures.contains_key(key.as_ref()) {
 				// Original, synthetic silhouettes exercise the image path without network or assets.
 				let background = if user.id.0.is_multiple_of(2) {
@@ -824,6 +834,7 @@ impl Avatars {
 }
 
 /// Offline fixture artwork: a soft two-tone gradient with a highlight, sized like the GIF.
+#[cfg(any(test, feature = "demo"))]
 fn synthetic_gif(gif: &model::Gif) -> ColorImage {
 	let seed = gif.id.bytes().fold(7usize, |acc, b| {
 		acc.wrapping_mul(31).wrapping_add(b as usize)

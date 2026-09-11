@@ -451,6 +451,7 @@ fn show_system(
 }
 impl TimelineView {
 	/// Fixture-only: open the media viewer on one attachment.
+	#[cfg(any(test, feature = "demo"))]
 	pub(super) fn preview_image_viewer(&mut self, message: Id, attachment: Id) {
 		self.pending_viewer = Some((message, attachment));
 	}
