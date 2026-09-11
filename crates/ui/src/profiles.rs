@@ -4,7 +4,7 @@ use crate::{
 	avatars::Avatars,
 	design,
 	icons::{self, Icon},
-	markdown::{Formatted, external_url},
+	markdown::Formatted,
 };
 use client_core::{State, profile::ProfileView};
 use egui::{Color32, CornerRadius, Pos2, Rect, RichText, Stroke, UiBuilder, Vec2, pos2, vec2};
@@ -359,6 +359,7 @@ pub fn show(
 	state: &State,
 	avatars: &mut Avatars,
 	opening: &mut Option<String>,
+	confirm_links: bool,
 	anchor: Pos2,
 ) -> Option<Action> {
 	let colors = design::palette(ui);
@@ -918,34 +919,14 @@ pub fn show(
 				.interact_pos()
 				.is_some_and(|pos| !rect.contains(pos))
 	});
-	let escape = ui
-		.ctx()
-		.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+	let escape = opening.is_none()
+		&& ui
+			.ctx()
+			.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
 	if (pressed_outside || escape) && opening.is_none() {
 		action = Some(Action::Close);
 	}
-	if let Some(url) = opening.as_ref() {
-		let mut close = false;
-		let response =
-			egui::Modal::new(egui::Id::unique("profile-external-link")).show(ui.ctx(), |ui| {
-				ui.heading("Open external link?");
-				ui.add(egui::Label::new(url).wrap());
-				ui.horizontal(|ui| {
-					if ui.button("Open in browser").clicked() {
-						if let Some(target) = external_url(url) {
-							ui.ctx().open_url(egui::OpenUrl::new_tab(target));
-						}
-						close = true;
-					}
-					if ui.button("Cancel").clicked() {
-						close = true;
-					}
-				});
-			});
-		if close || response.should_close() {
-			*opening = None;
-		}
-	}
+	crate::markdown::confirm_external_link(ui.ctx(), opening, confirm_links);
 	action
 }
 
@@ -1091,6 +1072,7 @@ mod tests {
 						&state,
 						&mut images,
 						&mut opening,
+						true,
 						anchor
 					)
 					.is_none()
@@ -1125,6 +1107,7 @@ mod tests {
 				&state,
 				&mut images,
 				&mut opening,
+				true,
 				right_anchor,
 			);
 		});
@@ -1154,6 +1137,7 @@ mod tests {
 						&state,
 						&mut images,
 						&mut opening,
+						true,
 						anchor
 					),
 					Some(Action::Close)
@@ -1177,7 +1161,16 @@ mod tests {
 		let mut opening = None;
 		let anchor = pos2(100.0, 100.0);
 		let output = ctx.run_ui(input(vec2(800.0, 600.0), vec![]), |ui| {
-			show(ui, &user, None, &state, &mut images, &mut opening, anchor);
+			show(
+				ui,
+				&user,
+				None,
+				&state,
+				&mut images,
+				&mut opening,
+				true,
+				anchor,
+			);
 		});
 		output.drop_without_applying_deltas();
 		let rect = ctx
@@ -1198,7 +1191,16 @@ mod tests {
 					],
 				),
 				|ui| {
-					let action = show(ui, &user, None, &state, &mut images, &mut opening, anchor);
+					let action = show(
+						ui,
+						&user,
+						None,
+						&state,
+						&mut images,
+						&mut opening,
+						true,
+						anchor,
+					);
 					assert_eq!(matches!(action, Some(Action::Close)), closes);
 				},
 			);

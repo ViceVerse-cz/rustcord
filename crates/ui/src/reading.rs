@@ -94,6 +94,13 @@ impl MessagingUi {
 				Some("Hide standalone links when their image or GIF preview is shown."),
 				&mut value.hide_media_links,
 			);
+			ui.separator();
+			design::switch(
+				ui,
+				"Confirm before opening links",
+				Some("Ask before opening external links. Discord links always open directly."),
+				&mut value.confirm_external_links,
+			);
 		});
 		ui.horizontal_wrapped(|ui| {
 			if ui.button("Reset reading and layout").clicked() {
@@ -208,6 +215,7 @@ mod tests {
 			show_members: false,
 			animate_gifs: false,
 			hide_media_links: true,
+			confirm_external_links: true,
 		};
 		view.apply_reading_preferences(&ctx, custom);
 		for _ in 0..3 {

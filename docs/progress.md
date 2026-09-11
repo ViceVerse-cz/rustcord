@@ -2687,3 +2687,106 @@ The activity section increases card height and uses its existing scroll area. Da
 and narrow/wide render behavior is covered by the integration test. No live account,
 message, call or microphone action; Linux/macOS and remote publication remain unverified.
 Draft PR for inherited full-check failures. No changes to settings explanatory text.
+
+
+## Account activity privacy and minimize to tray - September 11, 2026
+
+Implemented on `fix/presence-and-tray` from clean main `381e178`; original checkout
+preserved. The local game-sharing toggle did not check Discord's account preference.
+The user clarified only Serein's toggle had been checked; their actual account value
+and peer visibility remain unverified. No evidence supported speculative activity
+fields or client identity changes. Serein now checks the account setting after local
+opt-in and offers an explicit Enable on Discord action if disabled. Version-guarded
+writes preserve unrelated status/custom fields. Local sharing off never alters other
+clients' global preference. Server observations distinguish listed, hidden, received,
+missing and unconfirmed game activity without claiming visibility to every peer.
+
+Appearance now offers Windows Minimize to tray, off by default and saved in a strict
+SQLite singleton. Native Show/Quit, recovery and cleanup use existing OS APIs with no
+new dependency/thread/timer. Close retains existing exit gates. Session UI resets
+preserve the application window preference; demo changes are not persisted.
+
+Verification actually run:
+
+- `cargo test --locked -p discord-protocol activity_`: 8 passed.
+- `cargo test --locked -p discord-api sharing_reads_fresh`: 1 passed, local HTTP only.
+- `cargo test --locked -p discord-gateway activity`: 4 passed, including local WebSocket
+  listed/hidden/missing observations, coalescing, clear and reconnect. Afterwards an
+  unreachable pre-send READY observation helper was removed; current tests compile.
+- `cargo test --locked -p local-store minimize_to_tray`: 1 passed, covering migration,
+  defaults, restart/logout, invalid stored values and write failure.
+- `cargo test --locked -p platform tray -- --include-ignored`: 2 passed, including an
+  actual owned synthetic Windows window/icon lifecycle (hide/keyboard restore,
+  taskbar recovery, Quit event without forced destruction and cleanup).
+- Final `cargo test --locked -p serein`: 43 passed; includes IPC, privacy opt-in and
+  session failure, cache routing and late-load setting behavior.
+- Final `cargo test --locked -p ui --test activity_sharing`: 2 passed, including
+  explicit action/busy gating in dark/light at 760/1120 widths and session reset.
+- `cargo fmt --all -- --check`, `git diff --check`, `cargo xtask policy`: pass.
+- `cargo xtask check`: fails pre-existing Clippy findings at
+  client-core/message_actions.rs:92,192 and discord-protocol/guild_folders.rs:102.
+  Final diagnostic desktop Clippy run has only the inherited guild-folder warning.
+- `cargo test --workspace --all-features --locked`: blocked by pre-existing missing
+  `camera` field in the screen.rs:544 voice test initializer. Baseline source verified.
+- Both final release executables compile. Text package passes; voice packaging remains
+  blocked by missing OpenH264 license texts at both baseline and after. Text executable
+  +90,624 bytes (+0.16%); voice +89,088 (+0.15%). Full measurements in performance.md.
+
+Native before/after PNGs capture only the synthetic demo HWND using PrintWindow and
+were inspected. They show Appearance before and the default-off tray setting after,
+with matched viewport/theme/scale. Light mode was additionally inspected at 950 logical
+pixels wide. Ordinary opt-out minimize/restore works in the release demo. The desktop
+would not grant foreground focus for its actual checkbox-click smoke test, so that
+interaction and enabled main-process memory/CPU remain unverified; the native adapter
+lifecycle and rendered action tests are separate evidence. No authenticated app,
+Discord message/call, microphone or camera was used. Linux/macOS tray unsupported.
+
+The owner subsequently requested fixing Clippy and pushing directly to main, with
+voice license-text packaging not a delivery gate. Existing license checks/files remain
+intact. Final integration checks and push evidence follow below.
+
+## Mention highlighting - September 11, 2026
+
+Mentions selected from autocomplete now use the existing mention foreground and
+background in both the composer/inline editor and formatted messages (including
+pending rows). Valid unresolved user IDs display as highlighted `@id` tokens.
+Profile actions, source text, copying, cursor snapping, undo, IME, and custom-emoji
+fallback styling retain their existing paths. Literal `@name` text is not converted
+into a ping; code, escaped tokens, and concealed spoilers retain parser protections.
+No new dependency, fetch, cache, or persistence behavior was added.
+
+Baseline: `0c1a43d32a3072de2621d5aa8286c7d7e7b6ab39` from fetched `origin/main`.
+Task branch: `fix/mention-highlights`, isolated worktree; original main checkout clean
+at `381e178` and left untouched. Rust 1.98.1, Windows x86_64 MSVC.
+
+Verification:
+
+- `cargo test --locked -p ui mention -- --skip inline_edit_uses_mentions_ime_and_preserves_draft_with_optimistic_updates`:
+  8 passed, including two new rendering checks across dark/light and 80/300-point
+  widths. Also passed with `--all-features`. The excluded test failed before edits.
+- `cargo clippy --locked -p ui --all-targets -- -D warnings`, `cargo xtask policy`,
+  `cargo fmt --all`, and `git diff --check` passed.
+- `cargo xtask check` failed in the UI test executable (Windows abort 0xc0000409).
+  Named failures: inline-edit IME/save fixture, link-confirmation fixture, and pending
+  gray-to-confirmed fixture. All three were reproduced separately on the untouched
+  baseline. Full workspace verification is therefore not green.
+- `cargo xtask package` passed before and after; text executable +1,024 bytes.
+- Independent read-only review found no blocking issues in the two changed UI files.
+
+Native before/after screenshots and pointer interaction are blocked: `orca` is not
+installed, and bundled Computer Use `sky.list_windows()` reports "Computer Use native
+pipe is unavailable: failed to connect native pipe: The system cannot find the file
+specified. (os error 2)" after retry and session reset. No screenshots were fabricated.
+Headless egui rendering checks are not native screenshot or accessibility evidence.
+A limited synthetic idle process comparison is recorded in performance.md; no live
+Discord messages, calls, microphone, authenticated session, or other OS validation.
+
+Manual reproduction: run `cargo run --locked -p serein -- --demo`, type `@`, select a
+synthetic person with Tab, inspect the mention, then inspect the existing `Hey <@2>`
+fixture message and open its profile. Repeat with `--demo-light` and a narrow window.
+Keep the PR draft until missing visual evidence and repository-wide gates are resolved.
+
+Final voice release compilation also passed (+1,536 executable bytes), but
+`cargo xtask package-voice` failed on both baseline and after: missing exact license
+texts for openh264-sys2 0.9.8 and openh264 0.9.8, plus the existing realfft evidence
+warning. No notices or policy checks were bypassed; complete voice packages unavailable.

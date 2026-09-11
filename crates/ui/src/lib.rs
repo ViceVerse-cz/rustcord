@@ -90,6 +90,14 @@ pub struct MessagingUi {
 	pub show_hidden_channels: bool,
 	pub reading_status: &'static str,
 	pub reading_save_requested: bool,
+	pub minimize_to_tray: bool,
+	pub tray_available: bool,
+	pub tray_status: &'static str,
+	pub discord_activity_sharing: Option<bool>,
+	pub discord_activity_sharing_busy: bool,
+	pub discord_activity_sharing_retry: bool,
+	/// false checks the account setting; true explicitly enables it.
+	pub discord_activity_sharing_request: Option<bool>,
 	pub share_game_activity: bool,
 	pub own_game: Option<String>,
 	pub game_activity_status: &'static str,
@@ -329,7 +337,13 @@ impl MessagingUi {
 		self.avatars.accept(ctx, key, image);
 	}
 	pub fn clear(&mut self) {
-		*self = Self::default();
+		// Window preferences belong to the application, not the account being cleared.
+		*self = Self {
+			minimize_to_tray: self.minimize_to_tray,
+			tray_available: self.tray_available,
+			tray_status: self.tray_status,
+			..Self::default()
+		};
 	}
 	pub fn has_edit(&self) -> bool {
 		self.editing.is_some()
@@ -1227,6 +1241,36 @@ impl MessagingUi {
 			return;
 		}
 		let colors = crate::design::palette(ui);
+		let keyboard_enabled = !self.switcher_frame
+			&& !self.switcher.is_open()
+			&& ctx.memory(|memory| memory.top_modal_layer().is_none());
+		if keyboard_enabled
+			&& self.editing.is_none()
+			&& !self.ime_active
+			&& !egui::Popup::is_any_open(ctx)
+			&& ctx.memory(|memory| memory.has_focus(ui.make_persistent_id("message-input")))
+			&& state.drafts.get(&channel).is_none_or(String::is_empty)
+			&& ctx.input_mut(|input| {
+				let up = !input
+					.events
+					.iter()
+					.any(|event| matches!(event, egui::Event::Ime(_)))
+					&& input.events.iter().any(|event| {
+						matches!(event, egui::Event::Key {
+							key: egui::Key::ArrowUp, pressed: true, repeat: false, modifiers, ..
+						} if *modifiers == egui::Modifiers::NONE)
+					});
+				up && input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)
+			}) && let Some(message) = state
+			.timeline
+			.iter()
+			.rev()
+			.find(|message| !message.unsupported && state.can_edit(channel, message.id))
+		{
+			self.editing = Some((channel, message.id, message.content.clone()));
+			self.edit_modified = None;
+			self.composer_edit = None;
+		}
 		let editing_key = self
 			.editing
 			.as_ref()
@@ -1268,9 +1312,6 @@ impl MessagingUi {
 				});
 			return;
 		}
-		let keyboard_enabled = !self.switcher_frame
-			&& !self.switcher.is_open()
-			&& ctx.memory(|memory| memory.top_modal_layer().is_none());
 		let focus_edit =
 			keyboard_enabled && editing_key.is_some() && self.composer_edit != editing_key;
 		let focus_composer = keyboard_enabled
@@ -1958,7 +1999,11 @@ impl MessagingUi {
 			ui.disable();
 		}
 		// Foreground confirmation handles Escape before background search/archive shortcuts.
-		markdown::confirm_external_link(&ctx, &mut self.timeline.opening);
+		markdown::confirm_external_link(
+			&ctx,
+			&mut self.timeline.opening,
+			self.reading_preferences.confirm_external_links,
+		);
 		let colors = crate::design::palette(ui);
 		if !settings_open
 			&& !self.switcher.is_open()
@@ -2222,6 +2267,11 @@ impl MessagingUi {
 							(&mut self.avatars, &mut self.profile),
 							self.pending_upload.as_ref(),
 						);
+						if let Some((channel, message)) = self.timeline.quick_delete.take()
+							&& let Some(command) = state.prepare_delete(channel, message)
+						{
+							commands.push(command);
+						}
 						if let Some(nonce) = self.timeline.restore_pending.take() {
 							self.restore_pending(state, channel, &nonce);
 						}
@@ -2386,6 +2436,7 @@ impl MessagingUi {
 				state,
 				&mut self.avatars,
 				&mut self.profile_link,
+				self.reading_preferences.confirm_external_links,
 				anchor,
 			) {
 				Some(profiles::Action::Profile(user)) => {
@@ -3981,6 +4032,7 @@ mod composer_tests {
 		}
 		let mut state = test_support::demo_state();
 		state.demo = false; // Exercise normal command admission using synthetic loaded data.
+		state.guild_folders = Some(Default::default()); // Folder fetch is outside this presence-only scenario.
 		let channel = state.selected.unwrap();
 		let guild = state
 			.channels
@@ -4038,16 +4090,17 @@ mod composer_tests {
 				},
 				|ui| commands = messaging.show(ui, state),
 			);
-			assert!(
-				commands.is_empty(),
-				"Presence rendering must not fetch a profile or emit other commands"
-			);
-			assert!(output.platform_output.commands.is_empty());
+			let platform_commands_empty = output.platform_output.commands.is_empty();
 			let mut labels = vec![];
 			for shape in &output.shapes {
 				collect(&shape.shape, &mut labels);
 			}
 			output.drop_without_applying_deltas();
+			assert!(
+				commands.is_empty(),
+				"Presence rendering must not fetch a profile or emit other commands"
+			);
+			assert!(platform_commands_empty);
 			labels
 		};
 		for _ in 0..3 {

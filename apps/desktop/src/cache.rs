@@ -17,6 +17,8 @@ pub enum Operation {
 	SaveReadingPreferences(model::ReadingPreferences),
 	LoadGameActivity,
 	SaveGameActivity(bool),
+	LoadMinimizeToTray,
+	SaveMinimizeToTray(bool),
 	LoadDrafts,
 	LoadGifFavorites,
 	SaveGifFavorites(Vec<model::Gif>),
@@ -51,6 +53,8 @@ pub enum Outcome {
 	ReadingPreferencesSaved(Result<(), StoreError>),
 	GameActivity(Result<bool, StoreError>),
 	GameActivitySaved(Result<(), StoreError>),
+	MinimizeToTray(Result<bool, StoreError>),
+	MinimizeToTraySaved(Result<(), StoreError>),
 	Drafts(BTreeMap<Id, String>),
 	GifFavorites(Vec<model::Gif>),
 	Channel {
@@ -202,6 +206,18 @@ fn execute(
 ) -> Outcome {
 	// Settings completions are account-independent and have their own pending/error state.
 	match &operation {
+		Operation::LoadMinimizeToTray => {
+			return Outcome::MinimizeToTray(match store {
+				Ok(store) => store.minimize_to_tray(),
+				Err(error) => Err(*error),
+			});
+		}
+		Operation::SaveMinimizeToTray(value) => {
+			return Outcome::MinimizeToTraySaved(match store {
+				Ok(store) => store.save_minimize_to_tray(*value),
+				Err(error) => Err(*error),
+			});
+		}
 		Operation::LoadGameActivity => {
 			return Outcome::GameActivity(match store {
 				Ok(store) => store.game_activity_enabled(),
@@ -272,14 +288,18 @@ fn execute(
 		Operation::LoadReadingPreferences
 		| Operation::SaveReadingPreferences(_)
 		| Operation::LoadGameActivity
-		| Operation::SaveGameActivity(_) => unreachable!(),
+		| Operation::SaveGameActivity(_)
+		| Operation::LoadMinimizeToTray
+		| Operation::SaveMinimizeToTray(_) => unreachable!(),
 	};
 	let result = match store {
 		Ok(store) => match operation {
 			Operation::LoadReadingPreferences
 			| Operation::SaveReadingPreferences(_)
 			| Operation::LoadGameActivity
-			| Operation::SaveGameActivity(_) => {
+			| Operation::SaveGameActivity(_)
+			| Operation::LoadMinimizeToTray
+			| Operation::SaveMinimizeToTray(_) => {
 				unreachable!()
 			}
 			Operation::LoadAppearance => store
@@ -345,6 +365,52 @@ mod tests {
 	use super::*;
 
 	#[test]
+	fn minimize_to_tray_results_are_independent_of_account_history() {
+		let safety = HistorySafety::default();
+		safety.fail();
+		let mut store = Ok(LocalStore::open(std::path::Path::new(":memory:")).unwrap());
+		assert!(matches!(
+			execute(&mut store, &safety, Id(0), 0, Operation::LoadMinimizeToTray),
+			Outcome::MinimizeToTray(Ok(false))
+		));
+		assert!(matches!(
+			execute(
+				&mut store,
+				&safety,
+				Id(0),
+				0,
+				Operation::SaveMinimizeToTray(true)
+			),
+			Outcome::MinimizeToTraySaved(Ok(()))
+		));
+		assert!(matches!(
+			execute(&mut store, &safety, Id(9), 0, Operation::LoadMinimizeToTray),
+			Outcome::MinimizeToTray(Ok(true))
+		));
+		let mut unavailable = Err(StoreError::Unavailable);
+		assert!(matches!(
+			execute(
+				&mut unavailable,
+				&safety,
+				Id(0),
+				0,
+				Operation::LoadMinimizeToTray
+			),
+			Outcome::MinimizeToTray(Err(StoreError::Unavailable))
+		));
+		assert!(matches!(
+			execute(
+				&mut unavailable,
+				&safety,
+				Id(0),
+				0,
+				Operation::SaveMinimizeToTray(false)
+			),
+			Outcome::MinimizeToTraySaved(Err(StoreError::Unavailable))
+		));
+	}
+
+	#[test]
 	fn game_activity_operations_keep_their_own_results_even_when_history_is_blocked() {
 		let safety = HistorySafety::default();
 		safety.block();
@@ -400,6 +466,7 @@ mod tests {
 			show_members: false,
 			animate_gifs: false,
 			hide_media_links: true,
+			confirm_external_links: true,
 		};
 		store
 			.as_mut()

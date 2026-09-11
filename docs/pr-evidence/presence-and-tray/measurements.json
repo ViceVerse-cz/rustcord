@@ -1,0 +1,196 @@
+{
+  "baseline": "381e178295d9b0f4b76d11a307d2586377364a06",
+  "baseline_build": "Rebuilt from baseline in this task; voice staging incomplete due missing upstream OpenH264 license texts",
+  "os": "Windows 11 Home 10.0.26200",
+  "cpu": "Ryzen 7 7800X3D, 16 logical processors",
+  "ram_bytes": 33410678784,
+  "rust": "1.98.1",
+  "renderer": "wgpu; adapter unmeasured",
+  "window_pixels": [
+    1400,
+    950
+  ],
+  "scale_percent": 125,
+  "before": {
+    "packages": {
+      "text": {
+        "exe": 54935552,
+        "installed": 59841905,
+        "zip": 35322352,
+        "files": 670,
+        "sha256": "e1c5e0eff420d130767616250a5e5d4e0af5b3b7ee6dfaf209055fb3fa2af5a0"
+      },
+      "voice": {
+        "exe": 60951040,
+        "installed": 61863480,
+        "zip": 35967242,
+        "files": 128,
+        "sha256": "3420eeca1ae985b316f6c380c5e6ad524e1b5d4907b4b4ce0cacec3c5b3a9d84"
+      }
+    },
+    "process_samples": [
+      {
+        "time": 1789144671021,
+        "rss": 167272448,
+        "private": 395055104,
+        "cpu": 0.484375
+      },
+      {
+        "time": 1789144672031,
+        "rss": 167272448,
+        "private": 395055104,
+        "cpu": 0.484375
+      },
+      {
+        "time": 1789144673044,
+        "rss": 167272448,
+        "private": 395055104,
+        "cpu": 0.484375
+      },
+      {
+        "time": 1789144674061,
+        "rss": 167272448,
+        "private": 395055104,
+        "cpu": 0.484375
+      },
+      {
+        "time": 1789144675077,
+        "rss": 167272448,
+        "private": 395055104,
+        "cpu": 0.484375
+      },
+      {
+        "time": 1789144676090,
+        "rss": 167272448,
+        "private": 395055104,
+        "cpu": 0.484375
+      },
+      {
+        "time": 1789144677095,
+        "rss": 167272448,
+        "private": 395055104,
+        "cpu": 0.5
+      },
+      {
+        "time": 1789144678105,
+        "rss": 167272448,
+        "private": 395055104,
+        "cpu": 0.5
+      },
+      {
+        "time": 1789144679108,
+        "rss": 167272448,
+        "private": 395055104,
+        "cpu": 0.5
+      },
+      {
+        "time": 1789144680123,
+        "rss": 167272448,
+        "private": 395055104,
+        "cpu": 0.5
+      }
+    ],
+    "working_set_median": 167272448.0,
+    "private_bytes_median": 395055104.0,
+    "one_core_cpu_percent": 0.17166556800703142,
+    "replay_ms": [
+      45.7247,
+      41.691,
+      46.0455,
+      41.634,
+      39.712,
+      39.9914
+    ]
+  },
+  "after": {
+    "packages": {
+      "text": {
+        "exe": 55026176,
+        "installed": 59936641,
+        "zip": 35351550,
+        "files": 670,
+        "sha256": "2f7defa0b586469f3456bd53363046d530f2bbe2b978912c30459a0b4ac1e5b3"
+      },
+      "voice": {
+        "exe": 61040128,
+        "installed": 61952568,
+        "zip": 35986991,
+        "files": 128,
+        "sha256": "063b73429e28d020ce0ff0a85b9302b9851c0147fffbcd078a3606796346f218"
+      }
+    },
+    "process_samples": [
+      {
+        "time": 1789146026166,
+        "rss": 168898560,
+        "private": 396910592,
+        "cpu": 0.59375
+      },
+      {
+        "time": 1789146027191,
+        "rss": 168824832,
+        "private": 396783616,
+        "cpu": 0.59375
+      },
+      {
+        "time": 1789146028208,
+        "rss": 168824832,
+        "private": 396783616,
+        "cpu": 0.59375
+      },
+      {
+        "time": 1789146029221,
+        "rss": 168824832,
+        "private": 396783616,
+        "cpu": 0.59375
+      },
+      {
+        "time": 1789146030238,
+        "rss": 168824832,
+        "private": 396783616,
+        "cpu": 0.59375
+      },
+      {
+        "time": 1789146031255,
+        "rss": 168824832,
+        "private": 396783616,
+        "cpu": 0.59375
+      },
+      {
+        "time": 1789146032267,
+        "rss": 168824832,
+        "private": 396783616,
+        "cpu": 0.59375
+      },
+      {
+        "time": 1789146033282,
+        "rss": 168824832,
+        "private": 396783616,
+        "cpu": 0.59375
+      },
+      {
+        "time": 1789146034295,
+        "rss": 168808448,
+        "private": 396754944,
+        "cpu": 0.59375
+      },
+      {
+        "time": 1789146035311,
+        "rss": 168808448,
+        "private": 396754944,
+        "cpu": 0.59375
+      }
+    ],
+    "working_set_median": 168824832.0,
+    "private_bytes_median": 396783616.0,
+    "one_core_cpu_percent": 0.0,
+    "replay_ms": [
+      43.807,
+      41.0937,
+      46.8773,
+      40.3332,
+      39.8216,
+      43.9473
+    ]
+  }
+}

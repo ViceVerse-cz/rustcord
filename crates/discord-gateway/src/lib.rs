@@ -9,6 +9,7 @@ use client_core::{
 	Event, MAX_NAV,
 	auth::{Failure, SessionSecret},
 };
+pub use discord_protocol::activity_sessions::Observation as ActivityObservation;
 use discord_protocol::*;
 use futures_util::{SinkExt, StreamExt};
 use model::{Freshness, Id, Member, MemberList};
@@ -411,6 +412,7 @@ pub async fn run_with_activity(
 	subscriptions: watch::Receiver<Option<MemberSubscription>>,
 	controls: mpsc::Receiver<client_core::voice::Command>,
 	activity: watch::Receiver<Option<discord_protocol::rpc::Activity>>,
+	observe: impl Fn(ActivityObservation) -> Result<(), Failure> + Sync,
 	emit: impl Fn(Event) -> Result<(), Failure>,
 ) -> Result<(), Failure> {
 	run_inner(
@@ -418,26 +420,41 @@ pub async fn run_with_activity(
 		initial_url,
 		subscriptions,
 		controls,
-		Some(activity),
+		Some(ActivityInput {
+			receiver: activity,
+			observe: &observe,
+		}),
 		emit,
 		#[cfg(test)]
 		None,
 	)
 	.await
 }
+struct ActivityInput<'a> {
+	receiver: watch::Receiver<Option<discord_protocol::rpc::Activity>>,
+	observe: &'a (dyn Fn(ActivityObservation) -> Result<(), Failure> + Sync),
+}
 async fn run_inner(
 	secret: Arc<SessionSecret>,
 	initial_url: String,
 	mut subscriptions: watch::Receiver<Option<MemberSubscription>>,
 	mut voice_controls: mpsc::Receiver<client_core::voice::Command>,
-	activity: Option<watch::Receiver<Option<discord_protocol::rpc::Activity>>>,
+	activity: Option<ActivityInput<'_>>,
 	emit: impl Fn(Event) -> Result<(), Failure>,
 	#[cfg(test)] test_endpoint: Option<&str>,
 ) -> Result<(), Failure> {
 	let initial_url = validated_url(&initial_url)?;
 	let activity_enabled = activity.is_some();
 	let mut activity_open = activity_enabled;
-	let mut activity = activity.unwrap_or_else(|| watch::channel(None).1);
+	let ignore_observation = |_| Ok(());
+	let ActivityInput {
+		receiver: mut activity,
+		observe,
+	} = activity.unwrap_or_else(|| ActivityInput {
+		receiver: watch::channel(None).1,
+		observe: &ignore_observation,
+	});
+	let mut last_observation = None;
 	let mut outgoing_activity = activity::Pending::default();
 	outgoing_activity.update(&activity.borrow_and_update())?;
 	let mut member_diagnostics = Diagnostics::new(
@@ -548,6 +565,10 @@ async fn run_inner(
 		let mut subscriptions_open = true;
 		outgoing_activity.reconnect();
 		loop {
+			if activity_enabled && last_observation != Some(outgoing_activity.observation) {
+				observe(outgoing_activity.observation)?;
+				last_observation = Some(outgoing_activity.observation);
+			}
 			if ready_at.is_some() && !sent_members {
 				let subscription = subscriptions.borrow_and_update().clone();
 				if let Some(subscription) = subscription {
@@ -786,6 +807,7 @@ async fn run_inner(
 										emit(notification_settings(vec![setting],false))?;
 									}
 									"SESSIONS_REPLACE" => {
+										if activity_enabled { outgoing_activity.observe(packet.d.get().as_bytes(), state.session.as_deref().map(String::as_str).unwrap_or_default()); }
 										let sessions=decode::<discord_protocol::notifications::Sessions>(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
 										emit(Event::NotificationPreferences(client_core::notifications::Event::Presence(sessions.dnd())))?;
 									}
@@ -1016,6 +1038,7 @@ mod tests {
             let endpoint = format!("ws://{}/", listener.local_addr().unwrap());
             let game = |name: &str| discord_protocol::rpc::ActivityFields::default().into_activity(Id(42), name.into()).unwrap();
             let (activity, receiver) = watch::channel(Some(game("osu!")));
+            let (observations, mut observed) = watch::channel(ActivityObservation::Unconfirmed);
             let (finished, done) = tokio::sync::oneshot::channel();
             let server = async {
                 let mut previous = None;
@@ -1027,6 +1050,8 @@ mod tests {
                     assert_eq!(handshake["op"], if connection == 0 { 2 } else { 6 });
                     if connection == 0 {
                         assert_eq!(handshake["d"]["presence"]["activities"], json!([]));
+                    } else {
+                        observed.wait_for(|value| *value == ActivityObservation::Unconfirmed).await.unwrap();
                     }
                     // Before READY/RESUMED only heartbeats are allowed.
                     let gate = Instant::now() + Duration::from_millis(100);
@@ -1037,7 +1062,7 @@ mod tests {
                     send(&mut socket, if connection == 0 {
                         ready(1, "synthetic-own-activity")
                     } else { json!({"op":0,"t":"RESUMED","s":2,"d":{}}) }).await;
-                    let expected = if connection == 0 { vec![Some("osu!"), Some("Minecraft"), None] } else { vec![None] };
+                    let expected = if connection == 0 { vec![Some("osu!"), Some("Minecraft")] } else { vec![Some("Minecraft"), None] };
                     for name in expected {
                         let value = loop {
                             let value = packet(&mut socket).await;
@@ -1055,10 +1080,30 @@ mod tests {
                         previous = Some(now);
                         match name {
                             Some("osu!") => {
+                                for (public, hidden, expected) in [
+                                    (true, false, ActivityObservation::ServerListed),
+                                    (false, true, ActivityObservation::ServerHidden),
+                                    (false, false, ActivityObservation::ServerMissing),
+                                ] {
+                                    let game = json!({"type":0,"application_id":"42"});
+                                    send(&mut socket, json!({"op":0,"t":"SESSIONS_REPLACE","s":2,"d":[{
+                                        "session_id":"all","status":"online",
+                                        "activities":if public {json!([game])} else {json!([])},
+                                        "hidden_activities":if hidden {json!([game])} else {json!([])}
+                                    }]})).await;
+                                    observed.wait_for(|value| *value == expected).await.unwrap();
+                                }
                                 activity.send(Some(game("Skipped intermediate"))).unwrap();
                                 activity.send(Some(game("Minecraft"))).unwrap();
+                                observed.wait_for(|value| *value == ActivityObservation::Unconfirmed).await.unwrap();
                             }
-                            Some(_) => activity.send(None).unwrap(),
+                            Some(_) if connection == 1 => activity.send(None).unwrap(),
+                            Some(_) => {
+                                send(&mut socket, json!({"op":0,"t":"SESSIONS_REPLACE","s":3,"d":[{
+                                    "session_id":"all","status":"online","activities":[{"type":0,"application_id":"42"}]
+                                }]})).await;
+                                observed.wait_for(|value| *value == ActivityObservation::ServerListed).await.unwrap();
+                            }
                             None => {}
                         }
                     }
@@ -1077,7 +1122,7 @@ mod tests {
                 let result = run_inner(
                     Arc::new(SessionSecret::from_owner_input("synthetic-owner-session".into()).unwrap()),
                     "wss://gateway.discord.gg/".into(), watch::channel(None).1,
-                    mpsc::channel(1).1, Some(receiver), |_| Ok(()), Some(&endpoint),
+                    mpsc::channel(1).1, Some(ActivityInput { receiver, observe: &|value| { observations.send_replace(value); Ok(()) } }), |_| Ok(()), Some(&endpoint),
                 ).await;
                 finished.send(()).unwrap();
                 result

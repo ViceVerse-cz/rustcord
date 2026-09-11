@@ -16,9 +16,10 @@ enum CachedRow {
 	Channel(usize, bool),
 	Participant(usize),
 }
+type CacheKey = (u64, u64, Option<Id>, Option<Id>, bool);
 #[derive(Default)]
 pub(super) struct Cache {
-	key: Option<(u64, u64, Option<Id>, Option<Id>, bool)>,
+	key: Option<CacheKey>,
 	rows: Vec<CachedRow>,
 }
 

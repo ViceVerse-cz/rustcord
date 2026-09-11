@@ -376,3 +376,26 @@ Disabling sharing cancels the listener, clients and metadata work and queues an 
 activity; publication including clears remains subject to the existing five-second interval.
 Connection teardown cancels IPC with the authenticated session. Demo mode never binds IPC or
 looks up metadata. The saved boolean and database schema are unchanged.
+
+
+### Tray and account activity privacy (September 11, 2026)
+
+Minimize to tray is off by default. One strict integer in the independent
+`minimize_to_tray` singleton table survives restart/logout; disabling deletes its
+row. Schema 12 receives the additive table without migrating messages. Demo toggles
+are memory-only. Failed loads stay off and failed saves remain visible.
+
+The Windows adapter owns one icon/menu and a window procedure hook on the existing
+UI thread. Three event bits coalesce Show/Quit/failure; there is no worker, polling
+timer, autostart or new dependency. It restores the window before removing a hidden
+tray or reporting Shell failure. Closing still follows existing application exit gates.
+
+While local game sharing is enabled, one cancellable account-settings operation reads
+Discord's actual sharing preference. A one-slot request channel permits an explicit
+refresh or enable action; a fixed-size watch result carries completion. Only the
+explicit Enable on Discord action can write the account preference. The existing
+1 MiB response limit and 4,096-field protobuf parser apply; the retained status
+subtree is capped at 16 KiB and discarded after each request. No raw settings are
+logged or saved. Server activity diagnostics borrow at most 64 KiB / 16 sessions /
+16 activities per list and retain only a fixed enum, never session identities or
+raw presence payloads. Connection teardown clears these reports and workers.

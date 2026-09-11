@@ -119,11 +119,39 @@ pub(super) fn discord_url(channel: &model::Channel, message: Option<Id>) -> Opti
 	Some(url)
 }
 
-pub(super) fn confirm_external_link(ctx: &egui::Context, opening: &mut Option<String>) {
+pub(super) fn confirm_external_link(
+	ctx: &egui::Context,
+	opening: &mut Option<String>,
+	confirm_links: bool,
+) {
 	let Some(target) = opening.as_deref().and_then(external_url) else {
 		*opening = None;
 		return;
 	};
+	let discord = url::Url::parse(&target).is_ok_and(|url| {
+		url.scheme() == "https"
+			&& url.port().is_none()
+			&& url.host_str().is_some_and(|host| {
+				[
+					"discord.com",
+					"discord.gg",
+					"discordapp.com",
+					"discordapp.net",
+				]
+				.iter()
+				.any(|domain| {
+					host == *domain
+						|| host
+							.strip_suffix(domain)
+							.is_some_and(|prefix| prefix.ends_with('.'))
+				})
+			})
+	});
+	if !confirm_links || discord {
+		ctx.open_url(egui::OpenUrl::new_tab(target));
+		*opening = None;
+		return;
+	}
 	let mut confirm = false;
 	let mut cancel = false;
 	let modal = egui::Modal::new(egui::Id::unique("confirm-external-link")).show(ctx, |ui| {
@@ -578,13 +606,19 @@ impl Formatted {
 						continue;
 					}
 					if let Some(id) = self.spans[start].1.mention {
+						let colors = crate::design::palette(ui);
 						let user = users.iter().find(|user| user.id == id);
 						let label = format!(
 							"@{}",
 							user.map_or_else(|| id.to_string(), |u| u.name.clone())
 						);
 						let response = ui
-							.add(egui::Link::new(egui::RichText::new(&label).strong()))
+							.add(egui::Link::new(
+								egui::RichText::new(&label)
+									.strong()
+									.color(colors.mention_text)
+									.background_color(colors.mention_bg),
+							))
 							.on_hover_text("Open user profile");
 						response.widget_info(|| {
 							egui::WidgetInfo::labeled(
@@ -856,6 +890,36 @@ mod tests {
 	}
 
 	#[test]
+	fn link_preferences_keep_validation_and_discord_host_boundaries() {
+		for (target, confirm_links, opens) in [
+			("https://discord.com/channels/@me/1", true, true),
+			("https://discord.gg/example", true, true),
+			("https://cdn.discordapp.com/attachments/example", true, true),
+			("https://discord.com.evil.example/", true, false),
+			("https://evildiscord.com/", true, false),
+			("https://discord.com@evil.example/", false, false),
+			("javascript:alert(1)", false, false),
+			("https://example.com/", true, false),
+			("https://example.com/", false, true),
+		] {
+			let ctx = egui::Context::default();
+			let mut opening = Some(target.to_owned());
+			let output = ctx.run_ui(Default::default(), |_| {
+				confirm_external_link(&ctx, &mut opening, confirm_links);
+			});
+			assert_eq!(
+				!output.platform_output.commands.is_empty(),
+				opens,
+				"{target}"
+			);
+			if opens {
+				assert!(opening.is_none());
+			}
+			output.drop_without_applying_deltas();
+		}
+	}
+
+	#[test]
 	fn external_confirmation_requires_explicit_action_and_displays_emitted_target() {
 		fn text_position(shape: &egui::Shape, label: &str) -> Option<egui::Pos2> {
 			match shape {
@@ -882,7 +946,7 @@ mod tests {
 						events,
 						..Default::default()
 					},
-					|_| confirm_external_link(&ctx, opening),
+					|_| confirm_external_link(&ctx, opening, true),
 				)
 			};
 			let mut position = None;
@@ -958,7 +1022,7 @@ mod tests {
 		let ctx = egui::Context::default();
 		let mut invalid = Some("javascript:alert(1)".into());
 		let output = ctx.run_ui(Default::default(), |_| {
-			confirm_external_link(&ctx, &mut invalid)
+			confirm_external_link(&ctx, &mut invalid, true)
 		});
 		assert!(invalid.is_none());
 		assert!(output.platform_output.commands.is_empty());
@@ -1574,6 +1638,53 @@ mod tests {
 		output.drop_without_applying_deltas();
 		assert_eq!(images, 2, "one image per complete grapheme, none in code");
 	}
+	#[test]
+	fn mention_highlights_include_unknown_users_in_both_themes() {
+		let ctx = egui::Context::default();
+		let users = vec![model::User {
+			id: Id(42),
+			name: "Synthetic Robin".into(),
+			avatar: None,
+			discriminator: 0,
+		}];
+		let parsed = Formatted::parse("<@42> <@!43> `<@44>` \\<@45>");
+		for dark in [true, false] {
+			ctx.set_visuals(if dark {
+				egui::Visuals::dark()
+			} else {
+				egui::Visuals::light()
+			});
+			for width in [80.0, 300.0] {
+				let mut output = ctx.run_ui(Default::default(), |ui| {
+					ui.set_width(width);
+					parsed.show_mentions(ui, &mut None, &users, &mut None);
+				});
+				output.textures_delta.clear();
+				let colors = crate::design::colors(dark, crate::design::variant());
+				let highlighted: Vec<_> = output
+					.shapes
+					.iter()
+					.filter_map(|shape| {
+						let egui::Shape::Text(text) = &shape.shape else {
+							return None;
+						};
+						text.galley
+							.job
+							.sections
+							.iter()
+							.any(|section| {
+								section.format.background == colors.mention_bg
+									&& section.format.color == colors.mention_text
+							})
+							.then_some(text.galley.job.text.as_str())
+					})
+					.collect();
+				assert_eq!(highlighted, ["@Synthetic Robin", "@43"]);
+				output.drop_without_applying_deltas();
+			}
+		}
+	}
+
 	#[test]
 	fn user_mentions_preserve_literals_and_open_native_profiles() {
 		let parsed = Formatted::parse(
