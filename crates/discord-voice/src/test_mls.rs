@@ -246,7 +246,9 @@ fn guild_three_party_join_remove_and_empty_room_fail_closed() {
 	assert!(!alice.contains(10));
 	let mut dm = Dave::new(1, Some(2), 3).unwrap();
 	assert!(dm.connect(&[4]).is_err());
-	assert!(dm.disconnect(2).is_err());
+	assert!(dm.disconnect(2).unwrap());
+	assert!(dm.waiting && !dm.ready);
+	assert!(dm.disconnect(1).is_err());
 }
 
 #[test]

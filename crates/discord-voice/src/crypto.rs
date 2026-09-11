@@ -189,23 +189,23 @@ impl Dave {
 		Ok(changed)
 	}
 	pub fn disconnect(&mut self, user: u64) -> Result<bool, &'static str> {
-		if user == self.own || self.peer == Some(user) {
-			return Err("A required participant left the call");
+		if user == self.own {
+			return Err("You were disconnected from the call");
 		}
 		let before = self.participants.len();
 		self.participants.retain(|id| *id != user);
 		let changed = before != self.participants.len();
 		if changed {
 			self.ready = false;
-			self.waiting = false;
+			// Stay joined with media paused when the last remote participant leaves.
+			self.waiting = self.participants.len() == 1;
 		}
 		Ok(changed)
 	}
 	/// Epoch zero has no media ratchets in Davey. Remain joined without opening audio devices.
 	pub fn wait_for_peer(&mut self) -> Result<(), &'static str> {
 		self.validate_group()?;
-		if self.peer.is_some()
-			|| self.participants.len() != 1
+		if self.participants.len() != 1
 			|| self.session.epoch().is_none_or(|epoch| epoch.as_u64() != 0)
 		{
 			return Err("Unexpected sole-member DAVE transition");
@@ -376,7 +376,7 @@ impl Dave {
 			|| ids.iter().enumerate().any(|(i, id)| ids[..i].contains(id))
 			|| self
 				.peer
-				.is_some_and(|peer| ids.len() != 2 || !ids.contains(&peer))
+				.is_some_and(|peer| self.contains(peer) && (ids.len() != 2 || !ids.contains(&peer)))
 		{
 			return Err("DAVE group does not match the authenticated call participants");
 		}
@@ -388,7 +388,8 @@ impl Dave {
 		}
 		self.validate_group()?;
 		self.pending = None;
-		self.ready = true;
+		self.ready = self.participants.len() > 1;
+		self.waiting = !self.ready;
 		Ok(())
 	}
 }
