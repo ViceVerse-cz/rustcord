@@ -1,0 +1,189 @@
+name: Release (manual)
+run-name: ${{ inputs.channel }} release by @${{ github.actor }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Release channel
+        type: choice
+        options: [nightly, production]
+        default: nightly
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_CHANNEL: ${{ inputs.channel }}
+
+concurrency:
+  group: serein-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      release: ${{ steps.version.outputs.release }}
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.19.0
+      - run: npm ci --prefix .github/release --ignore-scripts --no-audit --no-fund
+      - run: node .github/release/check.mjs
+      - name: Calculate semantic version and notes
+        id: version
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node .github/release/release.mjs plan
+      - name: Require Mac signing credentials before building
+        if: steps.version.outputs.release == 'true'
+        env:
+          MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          for name in MACOS_CERTIFICATE_BASE64 MACOS_CERTIFICATE_PASSWORD MACOS_SIGNING_IDENTITY APPLE_ID APPLE_TEAM_ID APPLE_APP_SPECIFIC_PASSWORD; do
+            test -n "${!name}" || { echo "Missing Actions secret: $name"; exit 1; }
+          done
+      - name: Apply planned version to manifests
+        if: steps.version.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: python3 .github/release/version.py "$VERSION"
+      - uses: actions/upload-artifact@v4
+        if: steps.version.outputs.release == 'true'
+        with:
+          name: release-manifests
+          path: |
+            Cargo.toml
+            Cargo.lock
+            fuzz/Cargo.lock
+            packaging/macos/Info.plist
+            target/release-plan.json
+          if-no-files-found: error
+          retention-days: 14
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.release == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+        variant: [text, voice]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      VARIANT: ${{ matrix.variant }}
+      PACKAGE_ROOT: ${{ matrix.variant == 'voice' && 'dist/voice' || 'dist' }}
+      ASSET: serein-${{ needs.prepare.outputs.tag }}-${{ runner.os }}-${{ runner.arch }}-${{ matrix.variant }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-manifests
+          path: .
+      - name: Linux native dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libxrandr-dev libxcursor-dev libvulkan-dev libasound2-dev cmake python3 dpkg-dev desktop-file-utils
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.variant }}
+      - name: Offline checks
+        run: cargo xtask check
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node tests/login-handoff.cjs
+      - name: Package selected variant
+        run: |
+          if [ "$VARIANT" = voice ]; then
+            cargo xtask package-voice
+          else
+            cargo xtask package
+          fi
+          mkdir release-assets
+      - name: Sign, notarize and verify Mac app
+        if: runner.os == 'macOS'
+        env:
+          MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: bash packaging/macos/sign-release.sh "$PACKAGE_ROOT/Serein.app"
+      - name: Archive Mac package
+        if: runner.os == 'macOS'
+        run: ditto -c -k --sequesterRsrc "$PACKAGE_ROOT" "release-assets/$ASSET.zip"
+      - name: Archive Windows package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path "$env:PACKAGE_ROOT/*" -DestinationPath "release-assets/$env:ASSET.zip"
+      - name: Collect Linux package
+        if: runner.os == 'Linux'
+        run: cp "$PACKAGE_ROOT"/*.deb "release-assets/$ASSET.deb"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ASSET }}
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.19.0
+      - run: npm ci --prefix .github/release --ignore-scripts --no-audit --no-fund
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-manifests
+          path: .
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: serein-*
+          path: release-assets
+          merge-multiple: true
+      - name: Checksums
+        working-directory: release-assets
+        run: sha256sum ./* > SHA256SUMS.txt
+      - name: Commit versions and publish semantic release with notes and assets
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node .github/release/release.mjs publish
