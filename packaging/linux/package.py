@@ -5,8 +5,10 @@ Debian packaging/desktop tools; run through cargo xtask package[-voice].
 """
 
 import filecmp
+import json
 from pathlib import Path
 import shutil
+import stat
 import struct
 import subprocess
 import sys
@@ -33,6 +35,56 @@ def copy(source, destination, manifest=None):
     else:
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, destination)
+
+
+def copy_dependency_notices(source, destination):
+    # Bound parsing/copying even if an old or modified staging tree is supplied.
+    def regular_file(path, limit):
+        if any(part.is_symlink() for part in [path, *path.parents]):
+            raise ValueError(f"Symlink in dependency notice path: {path}")
+        metadata = path.stat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > limit:
+            raise ValueError(f"Invalid or oversized dependency notice: {path}")
+        return metadata.st_size
+
+    manifest = source / "inventory.json"
+    regular_file(manifest, 1024 * 1024)
+    with manifest.open("rb") as stream:
+        content = stream.read(1024 * 1024 + 1)
+    if len(content) > 1024 * 1024:
+        raise ValueError("Dependency inventory exceeds 1 MiB")
+    inventory = json.loads(content)
+    if (not isinstance(inventory, dict) or type(inventory.get("schema_version")) is not int
+            or inventory["schema_version"] != 1
+            or not isinstance(inventory.get("files"), list)
+            or not 1 <= len(inventory["files"]) <= 8192):
+        raise ValueError("Invalid dependency inventory schema or file count")
+    names = set()
+    total = len(content)
+    for name in inventory["files"]:
+        if (not isinstance(name, str) or not name or len(name.encode("utf-8")) > 1024
+                or any(char in name for char in "\\:\x00")
+                or any(ord(char) < 32 or ord(char) == 127 for char in name)
+                or any(part in ("", ".", "..") for part in name.split("/"))
+                or name == "inventory.json" or name in names):
+            raise ValueError("Invalid dependency inventory path")
+        names.add(name)
+        total += regular_file(source / name, 8 * 1024 * 1024)
+        if total > 128 * 1024 * 1024:
+            raise ValueError("Dependency notices exceed 128 MiB")
+    total = len(content)
+    for name in sorted(names):
+        regular_file(source / name, 8 * 1024 * 1024)
+        with (source / name).open("rb") as stream:
+            data = stream.read(8 * 1024 * 1024 + 1)
+        total += len(data)
+        if len(data) > 8 * 1024 * 1024 or total > 128 * 1024 * 1024:
+            raise ValueError("Dependency notices changed beyond byte limits")
+        target = destination / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+    destination.mkdir(parents=True, exist_ok=True)
+    (destination / "inventory.json").write_bytes(content)
 
 
 def payload_files(root):
@@ -115,6 +167,7 @@ def package(root, application_version, variant):
             copy(root / "licenses" / name, doc / "licenses" / name)
         for name in ["files", "notifications", "login", "audio", *(["voice"] if variant == "voice" else [])]:
             copy(root / "licenses" / name, doc / "licenses" / name, Path("assets/licenses") / name)
+        copy_dependency_notices(root / "licenses/dependencies", doc / "licenses/dependencies")
         if variant == "voice":
             copy(root / "source/hpke-rs", doc / "source/hpke-rs", Path("vendor/hpke-rs"))
         debian = temporary / "debian"

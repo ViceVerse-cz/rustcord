@@ -2143,6 +2143,70 @@ keyboard navigation reaches the unread button by accessible label. Neither chang
 layout or adds runtime instrumentation.
 
 
+## Dependency notice assembly - September 11, 2026
+
+Windows x86_64 MSVC / pinned Rust 1.98.1. Clean baseline `11d0416` and task tree
+`chore/dependency-notice-assembly` built in the same private E: target directory, with
+CARGO_INCREMENTAL=0. Both release variants use the locked no-default-features package
+commands, adding `voice` only for voice. One package-size sample per variant/revision:
+sorted Python zipfile DEFLATE9, text excludes nested voice, no PR evidence is bundled.
+Installed/ZIP sizes include documentation at packaging time, before this evidence append.
+
+| Metric (bytes unless files) | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| text executable | 53,877,248 | 53,877,248 | +0 (+0.00%) |
+| text installed | 54,997,004 | 58,677,556 | +3,680,552 (+6.69%) |
+| text zip | 33,203,585 | 34,897,031 | +1,693,446 (+5.10%) |
+| text files | 65 | 668 | +603 (+927.69%) |
+| voice executable | 58,981,888 | 58,981,888 | +0 (+0.00%) |
+| voice installed | 60,404,951 | 65,105,373 | +4,700,422 (+7.78%) |
+| voice zip | 35,389,027 | 37,521,548 | +2,132,521 (+6.03%) |
+| voice files | 128 | 910 | +782 (+610.94%) |
+
+Executable sizes are unchanged. Growth is the per-build notice inventory, texts and
+corresponding component sources; build dependencies are conservatively included.
+Baseline Cargo release builds reported 1m37s text / 1m44s voice; after 1m42s / 1m45s.
+These are single warm-cache build observations, not a statistically controlled speed claim
+or isolated collector timing. No app/runtime dependencies changed. The mechanical permission
+lint repair preserves outcomes; avatar changes only repair tests for the existing map cache.
+Reducer, native UI, process memory and live audio were not remeasured for packaging tooling.
+Linux synthetic Debian assembly passed in WSL; actual Linux/macOS packages remain CI evidence.
+
+
+The notice-only after column above is revision `584163e`, before integrating later main.
+Final integration includes `ea68e0e` (GIF/media/autocomplete UI work). Both Windows packages
+passed again with the same toolchain/flags/size method; the following are absolute combined
+measurements before this evidence append, not a notice-only growth comparison.
+
+| Combined metric | Text | Voice |
+| --- | ---: | ---: |
+| Executable bytes | 53,986,304 | 59,091,968 |
+| Installed bytes | 58,793,234 | 65,218,622 |
+| DEFLATE9 ZIP bytes | 34,939,566 | 37,558,925 |
+| Files | 668 | 910 |
+
+Cargo reported 1m37s text / 1m42s voice. The final conflict resolution only repairs test
+assumptions relative to incoming animation code; it does not change that production renderer.
+No native visual or full-client performance claim is added for the separately authored main UI.
+
+
+The next combined measurement includes main `d8cb031` pending-message UI plus the integration
+Clippy and scroll-reflow repairs. Same Windows toolchain, flags and DEFLATE9 method as above;
+measured before this evidence append. These are absolute combined sizes, not notice-only deltas.
+
+| Combined pending-UI metric | Text | Voice |
+| --- | ---: | ---: |
+| Executable bytes | 54,037,504 | 59,143,168 |
+| Installed bytes | 58,848,537 | 65,273,925 |
+| DEFLATE9 ZIP bytes | 34,958,789 | 37,578,520 |
+| Files | 668 | 910 |
+
+Cargo release build observations: 1m40s text / 1m41s voice. The integration repair removes one
+immediate layout retry; all 106 synthetic UI tests pass, including wheel displacement and
+anchor preservation. Native screenshot/process/frame measurements remain owner-paused; no
+native UI performance improvement is claimed.
+
+
 ## Optimistic message rows ? September 11, 2026
 
 Baseline `ea68e0e9afaa822e64e6bea1e144d48816aab339`; task branch
@@ -2182,3 +2246,17 @@ The later owner-requested integration with main `d8cb031` preserves #68's shared
 pending/upload renderer and removes this branch's duplicate implementation. The table
 above remains historical evidence for the pre-integration revision; no size or native
 performance delta is attributed to the combined implementation.
+
+
+Notice-assembly integration with main `36b5c33` also preserves user context menus and DM
+actions. Both combined Windows release packages passed with the same size method above.
+These absolute measurements precede this evidence append and are not notice-only deltas.
+
+| Combined user-menu metric | Text | Voice |
+| --- | ---: | ---: |
+| Executable bytes | 54,099,456 | 59,205,632 |
+| Installed bytes | 58,929,204 | 65,355,104 |
+| DEFLATE9 ZIP bytes | 34,990,295 | 37,608,788 |
+| Files | 668 | 910 |
+
+Cargo reported 1m38s text / 1m47s voice. No native UI performance claim is added.

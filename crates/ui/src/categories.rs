@@ -822,6 +822,9 @@ mod tests {
 		assert!(state.selected.is_none());
 		// A category is a keyboard-operable button, never a history-selection command.
 		state.channels = vec![channel(4, 4, 0, None), channel(8, 0, 0, Some(Id(4)))];
+		// Direct fixture replacement must invalidate derived views, as State::apply does.
+		state.revision += 1;
+		state.invalidate_navigation();
 		let ctx = egui::Context::default();
 		for key in [egui::Key::Tab, egui::Key::Enter] {
 			let input = egui::RawInput {
@@ -843,6 +846,8 @@ mod tests {
 		assert!(state.selected.is_none());
 		// Forum containers never request history; their loaded posts remain keyboard-selectable.
 		state.channels = vec![channel(7, 15, 0, None), channel(8, 11, 0, Some(Id(7)))];
+		state.revision += 1;
+		state.invalidate_navigation();
 		state
 			.permissions
 			.replace(test_support::permission_snapshot(&state))

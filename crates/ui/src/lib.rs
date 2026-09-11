@@ -2168,8 +2168,7 @@ impl MessagingUi {
 							state,
 							&mut self.editing,
 							&mut self.deleting,
-							&mut self.avatars,
-							&mut self.profile,
+							(&mut self.avatars, &mut self.profile),
 							self.pending_upload.as_ref(),
 						);
 						if let Some(nonce) = self.timeline.restore_pending.take() {

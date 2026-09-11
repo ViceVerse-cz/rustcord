@@ -1,5 +1,19 @@
 # Third-party notices
 
+`cargo xtask package` and `package-voice` now assemble `licenses/dependencies/inventory.json`
+from Cargo compiler artifacts for that host and feature set. This conservatively includes
+build dependencies and procedural macros; it is not a linker-level inventory. Matching
+license/notice files and reviewed exact-version supplements accompany each entry. Missing
+unreviewed texts stop packaging. The collector runs offline after the locked build.
+
+`assets/licenses/dependencies/PROVENANCE.md` records supplement sources and hashes;
+`overrides.json` pins their package version and source identity. Corresponding MPL sources
+are retained with their original terms. Known upstream omissions remain explicit in each
+entry and set `complete: false`: supplied reference texts, declarations and original source
+archives do not invent missing copyright grants or establish redistribution clearance.
+This collection supplements the existing font, audio, login, notification and voice notices.
+
+
 REST gzip decoding adds **async-compression 0.4.42**, **compression-codecs 0.4.38**
 and **compression-core 0.4.32**. Gateway zlib-stream decoding directly uses the
 already-resolved **flate2 1.1.10**. Rusqlite statement caching adds **hashlink 0.12.2**.
