@@ -88,6 +88,7 @@ impl LocalStore {
             CREATE TABLE IF NOT EXISTS drafts(account TEXT NOT NULL,channel TEXT NOT NULL,content TEXT NOT NULL,PRIMARY KEY(account,channel));
             CREATE TABLE IF NOT EXISTS appearance(singleton INTEGER PRIMARY KEY CHECK(singleton=1),theme TEXT NOT NULL CHECK(theme IN ('light','dark')));
             CREATE TABLE IF NOT EXISTS theme_variant(singleton INTEGER PRIMARY KEY CHECK(singleton=1),variant TEXT NOT NULL CHECK(length(variant) BETWEEN 1 AND 32));
+            CREATE TABLE IF NOT EXISTS gif_favorites(account TEXT NOT NULL,position INTEGER NOT NULL CHECK(typeof(position)='integer' AND position BETWEEN 0 AND 99),id TEXT NOT NULL CHECK(length(id) BETWEEN 1 AND 64),title TEXT NOT NULL CHECK(length(title) <= 256),url TEXT NOT NULL CHECK(length(url) BETWEEN 1 AND 512),preview TEXT NOT NULL CHECK(length(preview) BETWEEN 1 AND 512),width INTEGER NOT NULL CHECK(typeof(width)='integer' AND width BETWEEN 1 AND 4096),height INTEGER NOT NULL CHECK(typeof(height)='integer' AND height BETWEEN 1 AND 4096),PRIMARY KEY(account,position));
             ")?;
 		let has_avatar: bool = connection.query_row(
 			"SELECT EXISTS(SELECT 1 FROM pragma_table_info('messages') WHERE name='avatar')",
@@ -542,9 +543,65 @@ impl LocalStore {
 		transaction.commit()?;
 		Ok(())
 	}
+	/// Saved GIF favorites for one account, newest first. Rejected rows are skipped.
+	pub fn gif_favorites(&self, account: Id) -> Result<Vec<model::Gif>> {
+		let mut statement = self.0.prepare(
+			"SELECT id,title,url,preview,width,height FROM gif_favorites WHERE account=?1 ORDER BY position LIMIT 100",
+		)?;
+		let rows = statement.query_map([account.to_string()], |row| {
+			Ok(model::Gif {
+				id: row.get(0)?,
+				title: row.get(1)?,
+				url: row.get(2)?,
+				preview: row.get(3)?,
+				width: row.get::<_, u32>(4)?,
+				height: row.get::<_, u32>(5)?,
+			})
+		})?;
+		let mut favorites = Vec::new();
+		for gif in rows {
+			let gif = gif?;
+			if gif.valid()
+				&& !favorites
+					.iter()
+					.any(|known: &model::Gif| known.id == gif.id)
+			{
+				favorites.push(gif);
+			}
+		}
+		Ok(favorites)
+	}
+	/// Replaces the account's favorites atomically; the list is bounded like the in-memory one.
+	pub fn save_gif_favorites(&mut self, account: Id, favorites: &[model::Gif]) -> Result<()> {
+		if favorites.len() > model::MAX_GIF_FAVORITES || !favorites.iter().all(model::Gif::valid) {
+			return Err(StoreError::Capacity);
+		}
+		let transaction = self.0.transaction()?;
+		transaction.execute(
+			"DELETE FROM gif_favorites WHERE account=?1",
+			[account.to_string()],
+		)?;
+		for (position, gif) in favorites.iter().enumerate() {
+			transaction.execute(
+				"INSERT INTO gif_favorites VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+				rusqlite::params![
+					account.to_string(),
+					position as i64,
+					gif.id,
+					gif.title,
+					gif.url,
+					gif.preview,
+					gif.width,
+					gif.height
+				],
+			)?;
+		}
+		transaction.commit()?;
+		Ok(())
+	}
 	pub fn forget_account(&mut self, account: Id) -> Result<()> {
 		let transaction = self.0.transaction()?;
-		for table in ["messages", "channels", "drafts"] {
+		for table in ["messages", "channels", "drafts", "gif_favorites"] {
 			transaction.execute(
 				&format!("DELETE FROM {table} WHERE account=?1"),
 				[account.to_string()],

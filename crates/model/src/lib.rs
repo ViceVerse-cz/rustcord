@@ -1,5 +1,6 @@
 //! UI-neutral session entities. No filesystem or network dependencies.
 pub mod archives;
+pub mod gifs;
 pub mod permissions;
 mod reading_preferences;
 pub use reading_preferences::ReadingPreferences;
@@ -17,6 +18,7 @@ pub use mentions::*;
 mod reactions;
 pub use reactions::*;
 mod search;
+pub use gifs::*;
 pub use search::*;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{fmt, str::FromStr};

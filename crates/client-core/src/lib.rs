@@ -1,7 +1,9 @@
 //! Single UI-thread state owner. Adapters deliver generation-tagged typed events.
 pub mod archives;
 pub mod auth;
+pub mod fingerprint;
 pub mod forum;
+pub mod gifs;
 pub mod permissions;
 #[cfg(test)]
 mod permissions_tests;
@@ -62,6 +64,11 @@ pub enum Command {
 		request: u64,
 	},
 	CancelSearch,
+	Gifs {
+		query: Option<String>,
+		request: u64,
+	},
+	CancelGifs,
 	MarkRead {
 		channel: Id,
 		message: Id,
@@ -128,6 +135,10 @@ pub enum Event {
 		channel: Id,
 		request: u64,
 		result: Result<search::Outcome, auth::Failure>,
+	},
+	Gifs {
+		request: u64,
+		result: Result<model::GifPage, auth::Failure>,
 	},
 	ReadState(read_state::Event),
 	NotificationPreferences(notifications::Event),
@@ -243,6 +254,7 @@ pub struct State {
 	pub archived_thread: Option<Id>,
 	pub search: Option<search::SearchView>,
 	pub search_request: u64,
+	pub gifs: gifs::Gifs,
 	/// A pin changed in this channel; the pins view should be reloaded once.
 	pub pins_changed: Option<Id>,
 	pub search_target: Option<Id>,
@@ -295,6 +307,7 @@ impl Default for State {
 			archived_thread: None,
 			search: None,
 			search_request: 0,
+			gifs: gifs::Gifs::default(),
 			pins_changed: None,
 			search_target: None,
 			history_targeted: false,
@@ -592,7 +605,7 @@ impl State {
 			.duration_since(std::time::UNIX_EPOCH)
 			.unwrap_or_default()
 			.as_millis();
-		let nonce = format!("{epoch}{:06}", self.send_sequence % 1_000_000);
+		let nonce = fingerprint::nonce(epoch, self.send_sequence);
 		self.pending.push(Pending {
 			channel,
 			content: content.clone(),
@@ -634,7 +647,11 @@ impl State {
 			self.apply_search(channel, request, Err(auth::Failure::Capacity));
 			return;
 		}
-		if matches!(command, Command::CancelSearch) {
+		if matches!(command, Command::CancelSearch | Command::CancelGifs) {
+			return;
+		}
+		if let Command::Gifs { request, .. } = command {
+			self.apply_gifs(request, Err(auth::Failure::Capacity));
 			return;
 		}
 		if let Command::Pin {
@@ -927,6 +944,10 @@ impl State {
 				result,
 			} => {
 				self.apply_search(channel, request, result);
+				Ok(())
+			}
+			Event::Gifs { request, result } => {
+				self.apply_gifs(request, result);
 				Ok(())
 			}
 			Event::ReadState(event) => self.apply_read_state(event),
@@ -1783,6 +1804,9 @@ impl Event {
 				Self::Search {
 					result: Ok(search::Outcome::Page(page) | search::Outcome::Pins(page)),
 					..
+				} => page.bytes(),
+				Self::Gifs {
+					result: Ok(page), ..
 				} => page.bytes(),
 				Self::ReadState(read_state::Event::Snapshot { entries, .. }) => entries
 					.as_ref()

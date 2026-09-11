@@ -224,7 +224,7 @@ impl DiscordApi {
 					.map_err(|_| Failure::ProtocolAt(CHANGED))?;
 				(Box::new(file), Some(original))
 			};
-		let body = serde_json::json!({"files":[{"id":"0","filename":source.filename(),"file_size":source.size()}]});
+		let body = serde_json::json!({"files":[{"id":"0","filename":source.filename(),"file_size":source.size(),"is_clip":false}]});
 		let response = self
 			.request_limited(
 				Method::POST,
@@ -268,6 +268,7 @@ impl DiscordApi {
 			.connect_timeout(Duration::from_secs(10))
 			.read_timeout(Duration::from_secs(30))
 			.timeout(Duration::from_secs(300))
+			.user_agent(client_core::fingerprint::user_agent())
 			.build()
 			.map_err(|_| Failure::Network)?;
 		let total = source.size();
@@ -290,7 +291,10 @@ impl DiscordApi {
 		});
 		let mut response = client
 			.put(url)
-			.header(reqwest::header::CONTENT_TYPE, "")
+			.header(
+				reqwest::header::CONTENT_TYPE,
+				content_type(source.filename()),
+			)
 			.header(reqwest::header::CONTENT_LENGTH, total)
 			.body(reqwest::Body::wrap_stream(stream))
 			.send()
@@ -358,6 +362,32 @@ impl DiscordApi {
 						&& url.port() == Some(address.port())
 				}));
 		if allowed { Ok(url) } else { Err(invalid) }
+	}
+}
+
+/// MIME type the official client declares on the storage PUT, from the filename extension.
+fn content_type(filename: &str) -> &'static str {
+	let extension = filename
+		.rsplit_once('.')
+		.map(|(_, e)| e.to_ascii_lowercase())
+		.unwrap_or_default();
+	match extension.as_str() {
+		"png" => "image/png",
+		"jpg" | "jpeg" => "image/jpeg",
+		"gif" => "image/gif",
+		"webp" => "image/webp",
+		"svg" => "image/svg+xml",
+		"mp4" => "video/mp4",
+		"webm" => "video/webm",
+		"mov" => "video/quicktime",
+		"mp3" => "audio/mpeg",
+		"ogg" => "audio/ogg",
+		"wav" => "audio/wav",
+		"pdf" => "application/pdf",
+		"zip" => "application/zip",
+		"json" => "application/json",
+		"txt" | "md" | "log" | "rs" | "toml" | "csv" => "text/plain",
+		_ => "application/octet-stream",
 	}
 }
 
@@ -493,7 +523,9 @@ mod tests {
                 let (head, bytes) = request(&mut socket).await;
                 assert!(head.starts_with("POST /channels/1/attachments HTTP/1.1"));
                 assert!(head.contains("SYNTHETIC_UPLOAD_TOKEN"));
-                assert_eq!(serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(), serde_json::json!({"files":[{"id":"0","filename":filename,"file_size":CHUNK_BYTES*2+9}]}));
+                assert!(head.to_ascii_lowercase().contains("x-super-properties: "));
+                assert!(head.contains(&format!("user-agent: {}", client_core::fingerprint::user_agent())));
+                assert_eq!(serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(), serde_json::json!({"files":[{"id":"0","filename":filename,"file_size":CHUNK_BYTES*2+9,"is_clip":false}]}));
                 respond(&mut socket, "200 OK", &serde_json::json!({"attachments":[{"id":0,"upload_url":upload_url,"upload_filename":"synthetic-upload/file.txt"}]}).to_string()).await;
                 let (mut socket, _) = storage.accept().await.unwrap();
                 let (head, bytes) = request(&mut socket).await;
@@ -501,6 +533,8 @@ mod tests {
                 assert!(!head.to_ascii_lowercase().contains("authorization"));
                 assert!(!head.to_ascii_lowercase().contains("cookie"));
                 assert!(!head.contains("SYNTHETIC_UPLOAD_TOKEN"));
+                assert!(!head.to_ascii_lowercase().contains("x-super-properties"));
+                assert!(head.to_ascii_lowercase().contains("content-type: text/plain"));
                 assert_eq!(bytes, vec![b'x'; CHUNK_BYTES*2+9]);
                 respond(&mut socket, "200 OK", "").await;
                 let (mut socket, _) = api_listener.accept().await.unwrap();

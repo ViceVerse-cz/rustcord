@@ -2179,3 +2179,13 @@ regression had already passed and its code was unaffected by the final UI-only i
 GitHub security, licenses and both sanitizer fuzz runs passed; native jobs were pending at
 recording. Final integrated package measurements are in performance.md. No native/account
 interoperability claim is made.
+
+Main advanced again through GIF support and `5a6fb8a`. Their mechanical integration
+passed `cargo xtask check` (380 tests, strict Clippy, text-only and policy checks), with
+no conflicts or additional fixes. Earlier package figures remain tied to `4b45c7e`; they
+do not describe this newer integration. Current package/CI status is recorded in PR #64.
+
+Separate outstanding spec conflict: incoming `5a6fb8a` advertises a Chrome fingerprint to
+avoid spam quarantine, contrary to SPEC section 3.2. This task preserves that separate main
+change without developing, tuning or live-testing it. Offline checks do not resolve the
+product-boundary conflict or validate its anti-spam claims; the full spec goal is incomplete.

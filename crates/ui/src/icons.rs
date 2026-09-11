@@ -87,10 +87,15 @@ pub enum Icon {
 	ArrowDown,
 	ArrowUp,
 	Check,
+	Gif,
+	Star,
+	StarFill,
+	Fire,
+	ArrowLeft,
 }
 
 impl Icon {
-	pub const ALL: [Icon; 72] = [
+	pub const ALL: [Icon; 77] = [
 		Icon::ChevronDown,
 		Icon::ChevronRight,
 		Icon::Gear,
@@ -163,6 +168,11 @@ impl Icon {
 		Icon::ArrowDown,
 		Icon::ArrowUp,
 		Icon::Check,
+		Icon::Gif,
+		Icon::Star,
+		Icon::StarFill,
+		Icon::Fire,
+		Icon::ArrowLeft,
 	];
 	/// Upstream Phosphor name recorded in `index.tsv`.
 	fn asset(self) -> &'static str {
@@ -239,6 +249,11 @@ impl Icon {
 			Icon::ArrowDown => "arrow-down",
 			Icon::ArrowUp => "arrow-up",
 			Icon::Check => "check",
+			Icon::Gif => "gif",
+			Icon::Star => "star",
+			Icon::StarFill => "star-fill",
+			Icon::Fire => "fire",
+			Icon::ArrowLeft => "arrow-left",
 		}
 	}
 	fn cell(self) -> usize {

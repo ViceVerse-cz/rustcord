@@ -35,6 +35,34 @@ pub struct DiscordApi {
 	#[cfg(test)]
 	upload_origin: Option<std::net::SocketAddr>,
 }
+/// Headers Discord's web client sends on every REST call; without them a normal-user
+/// session is classified as automated and quarantined (spam flag, attachment limits).
+fn fingerprint_headers() -> Result<reqwest::header::HeaderMap, Failure> {
+	let mut headers = reqwest::header::HeaderMap::new();
+	headers.insert(
+		"x-super-properties",
+		HeaderValue::from_str(&client_core::fingerprint::super_properties())
+			.map_err(|_| Failure::Network)?,
+	);
+	headers.insert(
+		"x-discord-locale",
+		HeaderValue::from_static(client_core::fingerprint::LOCALE),
+	);
+	headers.insert("x-discord-timezone", HeaderValue::from_static("UTC"));
+	headers.insert(
+		reqwest::header::ACCEPT_LANGUAGE,
+		HeaderValue::from_static("en-US,en;q=0.9"),
+	);
+	headers.insert(
+		reqwest::header::ORIGIN,
+		HeaderValue::from_static("https://discord.com"),
+	);
+	headers.insert(
+		reqwest::header::REFERER,
+		HeaderValue::from_static("https://discord.com/channels/@me"),
+	);
+	Ok(headers)
+}
 impl DiscordApi {
 	pub fn new(secret: Arc<SessionSecret>) -> Result<Self, Failure> {
 		let client = Client::builder()
@@ -44,7 +72,8 @@ impl DiscordApi {
 			.no_proxy()
 			.timeout(Duration::from_secs(20))
 			.connect_timeout(Duration::from_secs(10))
-			.user_agent("Serein/0.1 (unofficial native client)")
+			.user_agent(client_core::fingerprint::user_agent())
+			.default_headers(fingerprint_headers()?)
 			.build()
 			.map_err(|_| Failure::Network)?;
 		Ok(Self {
@@ -313,6 +342,11 @@ impl DiscordApi {
 				}
 			}
 			Command::CancelSearch => Event::Failure(Failure::Protocol),
+			Command::Gifs { query, request } => Event::Gifs {
+				request,
+				result: self.gifs(query.as_deref()).await,
+			},
+			Command::CancelGifs => Event::Failure(Failure::Protocol),
 			Command::MarkRead {
 				channel,
 				message,
@@ -625,6 +659,48 @@ impl DiscordApi {
 			.into_page(channel, before)
 			.map(client_core::search::Outcome::Page)
 			.map_err(|_| Failure::Protocol)
+	}
+	/// Unofficial normal-client relay of Tenor search/trending. Only the query text is encoded
+	/// into a fixed route; previews stay static and are loaded by the credential-free worker.
+	async fn gifs(&self, query: Option<&str>) -> Result<model::GifPage, Failure> {
+		const OPTIONS: &str = "media_format=tinygif&provider=tenor&locale=en-US";
+		match query {
+			Some(query) => {
+				if !model::valid_search_query(query) {
+					return Err(Failure::Protocol);
+				}
+				let encoded: String = query.bytes().map(|b| format!("%{b:02X}")).collect();
+				let bytes = self
+					.request_limited(
+						Method::GET,
+						&format!(
+							"/gifs/search?q={encoded}&limit={}&{OPTIONS}",
+							model::GIF_PAGE_SIZE
+						),
+						None,
+						gifs::MAX_WIRE,
+					)
+					.await?;
+				decode::<gifs::SearchReply>(&bytes)
+					.map_err(|_| Failure::Protocol)?
+					.into_page()
+					.map_err(|_| Failure::Protocol)
+			}
+			None => {
+				let bytes = self
+					.request_limited(
+						Method::GET,
+						&format!("/gifs/trending?limit={}&{OPTIONS}", model::GIF_PAGE_SIZE),
+						None,
+						gifs::MAX_WIRE,
+					)
+					.await?;
+				decode::<gifs::TrendingReply>(&bytes)
+					.map_err(|_| Failure::Protocol)?
+					.into_page()
+					.map_err(|_| Failure::Protocol)
+			}
+		}
 	}
 	async fn send_message(
 		&self,
