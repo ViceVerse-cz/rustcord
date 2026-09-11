@@ -480,6 +480,9 @@ pub fn chat_demo_state() -> State {
 		m.id = Id(((1_788_998_100_000u64 + i as u64 * 60_000 - 1_420_070_400_000) << 22) | 1);
 		m.author = message(if !(3..7).contains(&i) { 1 } else { 2 }, Id(20)).author;
 		m.content = (*text).into();
+		if i == 8 {
+			m.reply_to = state.timeline.iter().nth(6).map(|original| original.id);
+		}
 		if i < 7 {
 			state.timeline.insert(m, false, false).unwrap();
 		} else {

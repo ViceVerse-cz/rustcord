@@ -563,6 +563,127 @@ impl TimelineView {
 						})
 						.show(ui, |ui| {
 							ui.spacing_mut().item_spacing = egui::vec2(16.0, 4.0);
+							if let Some(reply) = message.reply_to {
+								ui.horizontal(|ui| {
+									ui.spacing_mut().interact_size.y = 18.0;
+									ui.spacing_mut().item_spacing.x = 6.0;
+									let (gutter, _) = ui.allocate_exact_size(
+										egui::vec2(50.0, 18.0),
+										egui::Sense::hover(),
+									);
+									let x = gutter.left() + 20.0;
+									let y = gutter.center().y;
+									let stroke =
+										egui::Stroke::new(2.0, colors.muted.gamma_multiply(0.5));
+									ui.painter().line_segment(
+										[
+											egui::pos2(x, gutter.bottom() + 2.0),
+											egui::pos2(x, y + 5.0),
+										],
+										stroke,
+									);
+									ui.painter().add(
+										egui::epaint::QuadraticBezierShape::from_points_stroke(
+											[
+												egui::pos2(x, y + 5.0),
+												egui::pos2(x, y),
+												egui::pos2(x + 5.0, y),
+											],
+											false,
+											egui::Color32::TRANSPARENT,
+											stroke,
+										),
+									);
+									ui.painter().line_segment(
+										[egui::pos2(x + 5.0, y), egui::pos2(gutter.right(), y)],
+										stroke,
+									);
+									// Reuse only loaded content; never fetch a thread while painting.
+									if message.reply_deleted || state.timeline.is_deleted(reply) {
+										ui.add(
+											egui::Label::new(
+												RichText::new("Message deleted")
+													.size(13.0)
+													.italics()
+													.color(colors.muted),
+											)
+											.truncate(),
+										);
+									} else {
+										ui.add_enabled_ui(
+											state.can_open_reply_target(reply),
+											|ui| {
+												let mut preview = egui::text::LayoutJob::default();
+												let text = if let Some(original) =
+													state.timeline.get(reply)
+												{
+													if avatars
+														.show(
+															ui,
+															&original.author,
+															16.0,
+															state.demo,
+														)
+														.clicked()
+													{
+														self.reply_target = Some(reply);
+													}
+													preview.append(
+														&format!("@{}  ", original.author.name),
+														0.0,
+														egui::TextFormat {
+															font_id: egui::FontId::new(
+																13.0,
+																crate::design::semibold_family(
+																	ui.ctx(),
+																),
+															),
+															color: colors.muted,
+															..Default::default()
+														},
+													);
+													if crate::embeds::has_spoilers(original) {
+														"Spoiler".into()
+													} else {
+														original
+															.display_text()
+															.chars()
+															.take(120)
+															.collect::<String>()
+															.replace(['\n', '\r'], " ")
+													}
+												} else {
+													"Earlier message · View original".into()
+												};
+												preview.append(
+													&text,
+													0.0,
+													egui::TextFormat {
+														font_id: egui::FontId::proportional(13.0),
+														color: colors.muted,
+														..Default::default()
+													},
+												);
+												if ui
+													.add(
+														egui::Label::new(preview)
+															.truncate()
+															.sense(egui::Sense::click()),
+													)
+													.on_hover_cursor(egui::CursorIcon::PointingHand)
+													.on_hover_text("View original message")
+													.on_disabled_hover_text(
+														"Wait for readable, current message history",
+													)
+													.clicked()
+												{
+													self.reply_target = Some(reply);
+												}
+											},
+										);
+									}
+								});
+							}
 							ui.horizontal_top(|ui| {
 								if compact {
 									time_rect = Some(
@@ -614,58 +735,6 @@ impl TimelineView {
 												.on_hover_text(format!("{} UTC", time));
 											},
 										);
-									}
-									if let Some(reply) = message.reply_to {
-										// Reuse only loaded content; never fetch a thread while painting.
-										if message.reply_deleted || state.timeline.is_deleted(reply)
-										{
-											ui.add(
-												egui::Label::new(
-													RichText::new("↳ Message deleted")
-														.small()
-														.color(colors.muted),
-												)
-												.truncate(),
-											);
-										} else {
-											let preview = state.timeline.get(reply).map_or_else(
-												|| "↳ Earlier message · View original".into(),
-												|m| {
-													if crate::embeds::has_spoilers(m) {
-														format!("↳ {} · Spoiler", m.author.name)
-													} else {
-														format!(
-															"↳ {}: {}",
-															m.author.name,
-															m.display_text()
-																.chars()
-																.take(120)
-																.collect::<String>()
-																.replace('\n', " ")
-														)
-													}
-												},
-											);
-											if ui
-												.add_enabled(
-													state.can_open_reply_target(reply),
-													egui::Button::new(
-														RichText::new(preview)
-															.size(13.0)
-															.color(colors.muted),
-													)
-													.frame(false)
-													.truncate(),
-												)
-												.on_hover_text("View original message")
-												.on_disabled_hover_text(
-													"Wait for readable, current message history",
-												)
-												.clicked()
-											{
-												self.reply_target = Some(reply);
-											}
-										}
 									}
 									if let Some(summary) = message.system_summary() {
 										ui.label(RichText::new(summary).color(colors.muted));
