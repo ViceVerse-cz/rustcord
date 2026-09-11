@@ -112,6 +112,8 @@ pub struct State {
 	pub incoming: Option<Id>,
 	/// Known service calls, independent of ringing and this device's media session.
 	pub(crate) dm_calls: Vec<Id>,
+	/// Last reported members of each known DM call, so answering or joining shows them at once.
+	pub(crate) dm_participants: Vec<(Id, Vec<Participant>)>,
 	pub roster: Vec<RosterEntry>,
 	sequence: u64,
 }
@@ -276,13 +278,21 @@ impl ClientState {
 		}
 		let guild = self.channel(channel)?.guild;
 		let ring = ring && guild.is_none() && !self.voice.has_dm_call(channel);
-		let participants: Vec<_> = self
-			.voice
-			.roster
-			.iter()
-			.filter(|r| r.channel == channel)
-			.map(|r| r.participant)
-			.collect();
+		let participants: Vec<_> = if guild.is_some() {
+			self.voice
+				.roster
+				.iter()
+				.filter(|r| r.channel == channel)
+				.map(|r| r.participant)
+				.collect()
+		} else {
+			self.voice
+				.dm_participants
+				.iter()
+				.find(|(id, _)| *id == channel)
+				.map(|(_, participants)| participants.clone())
+				.unwrap_or_default()
+		};
 		if participants.len() >= MAX_PARTICIPANTS {
 			self.status = "Voice channel exceeds the 64 participant limit";
 			return None;
@@ -414,7 +424,8 @@ impl ClientState {
 						|| (self.voice.dm_calls.len() + 1) * size_of::<Id>() > MAX_DM_CALL_BYTES
 					{
 						// ponytail: oldest call metadata is evicted; viewing that DM queries it again.
-						self.voice.dm_calls.remove(0);
+						let evicted = self.voice.dm_calls.remove(0);
+						self.voice.dm_participants.retain(|(id, _)| *id != evicted);
 					}
 					self.voice.dm_calls.push(channel);
 				}
@@ -433,11 +444,13 @@ impl ClientState {
 						self.voice.incoming = None;
 					}
 				}
-				if let Some(call) = &mut self.voice.active
-					&& call.channel == channel
-					&& let Some(participants) = participants
-				{
-					call.participants = participants;
+				if let Some(participants) = participants {
+					if let Some(call) = &mut self.voice.active
+						&& call.channel == channel
+					{
+						call.participants = participants.clone();
+					}
+					self.remember_dm_participants(channel, participants);
 				}
 			}
 			Event::Deleted { channel } => self.end_voice_channel(channel),
@@ -477,6 +490,26 @@ impl ClientState {
 							participant,
 							member: member.map(|member| *member).or(previous),
 						});
+					}
+				}
+				if guild.is_none() {
+					// DM voice states arrive whether or not this device has joined; keep the
+					// known call membership current so a later join shows everyone.
+					for (id, participants) in &mut self.voice.dm_participants {
+						participants.retain(|p| p.user != user);
+						if channel == Some(*id) && participants.len() < 2 {
+							participants.push(participant);
+						}
+					}
+					if let Some(channel) = channel
+						&& self.voice.has_dm_call(channel)
+						&& !self
+							.voice
+							.dm_participants
+							.iter()
+							.any(|(id, _)| *id == channel)
+					{
+						self.remember_dm_participants(channel, vec![participant]);
 					}
 				}
 				let Some(call) = &mut self.voice.active else {
@@ -602,8 +635,19 @@ impl ClientState {
 			}
 		}
 	}
+	fn remember_dm_participants(&mut self, channel: Id, participants: Vec<Participant>) {
+		if participants.len() > 2 || !self.voice.has_dm_call(channel) {
+			return;
+		}
+		self.voice.dm_participants.retain(|(id, _)| *id != channel);
+		while self.voice.dm_participants.len() >= MAX_DM_CALLS {
+			self.voice.dm_participants.remove(0);
+		}
+		self.voice.dm_participants.push((channel, participants));
+	}
 	pub(crate) fn end_voice_channel(&mut self, channel: Id) {
 		self.voice.dm_calls.retain(|id| *id != channel);
+		self.voice.dm_participants.retain(|(id, _)| *id != channel);
 		self.voice.roster.retain(|r| r.channel != channel);
 		if self.voice.incoming == Some(channel) {
 			self.voice.incoming = None;
@@ -619,6 +663,7 @@ impl ClientState {
 	}
 	pub fn disconnect_voice(&mut self, reason: &'static str) {
 		self.voice.dm_calls.clear();
+		self.voice.dm_participants.clear();
 		self.voice.roster.clear();
 		self.voice.incoming = None;
 		if let Some(call) = &mut self.voice.active {
@@ -751,7 +796,7 @@ mod tests {
 			event: CoreEvent::Disconnected,
 		});
 		assert_eq!(state.voice.roster.len(), 2);
-		assert_eq!(state.voice.active.as_ref().unwrap().phase, Phase::Failed);
+		assert_eq!(state.voice.active.as_ref().unwrap().phase, Phase::Connected);
 		state.apply(Envelope {
 			generation: state.generation,
 			event: CoreEvent::PermissionsChanged,
@@ -1013,6 +1058,93 @@ mod tests {
 	}
 
 	#[test]
+	fn answering_a_dm_call_seeds_the_caller_and_tracks_their_departure() {
+		let mut state = ClientState {
+			auth: AuthState::Authenticated,
+			gateway_connected: true,
+			user: Some(User {
+				id: Id(1),
+				name: "Owner".into(),
+				avatar: None,
+				discriminator: 0,
+			}),
+			channels: vec![Channel {
+				last_message: None,
+				id: Id(2),
+				name: "DM".into(),
+				guild: None,
+				parent_id: None,
+				position: 0,
+				kind: 1,
+				recipients: vec![User {
+					id: Id(3),
+					name: "Peer".into(),
+					avatar: None,
+					discriminator: 0,
+				}],
+				icon: None,
+				member_list_id: None,
+				message_count: None,
+			}],
+			..ClientState::default()
+		};
+		let peer = Participant {
+			user: Id(3),
+			muted: false,
+			deafened: false,
+			server_muted: false,
+			server_deafened: false,
+		};
+		// CALL_CREATE arrives before this device joins; the caller must not be forgotten.
+		state.apply_voice(Event::Call {
+			channel: Id(2),
+			ringing: Some(vec![Id(1)]),
+			participants: Some(vec![peer]),
+			unavailable: false,
+		});
+		assert!(state.voice.active.is_none());
+		assert!(state.start_call(Id(2), false).is_some());
+		let call = state.voice.active.as_ref().unwrap();
+		assert_eq!(call.participants, vec![peer]);
+		let request = call.request;
+		// The caller hanging up leaves this device alone in the call rather than ending it.
+		state.apply_voice(Event::State {
+			request: Some(request),
+			guild: None,
+			channel: None,
+			user: Id(3),
+			session: None,
+			member: None,
+			muted: false,
+			deafened: false,
+			server_muted: false,
+			server_deafened: false,
+		});
+		let call = state.voice.active.as_ref().unwrap();
+		assert!(call.participants.is_empty());
+		assert_ne!(call.phase, Phase::Failed);
+		// Their state while this device is not in the call still updates the known membership.
+		assert!(state.leave_call().is_some());
+		state.apply_voice(Event::State {
+			request: None,
+			guild: None,
+			channel: Some(Id(2)),
+			user: Id(3),
+			session: None,
+			member: None,
+			muted: true,
+			deafened: false,
+			server_muted: false,
+			server_deafened: false,
+		});
+		assert!(state.start_call(Id(2), false).is_some());
+		let seeded = &state.voice.active.as_ref().unwrap().participants;
+		assert_eq!(seeded.len(), 1);
+		assert!(seeded[0].user == Id(3) && seeded[0].muted);
+		state.apply_voice(Event::Deleted { channel: Id(2) });
+		assert!(state.voice.dm_participants.is_empty());
+	}
+	#[test]
 	fn dm_calls_require_gesture_and_reject_late_states() {
 		let mut state = ClientState {
 			auth: AuthState::Authenticated,
@@ -1117,14 +1249,15 @@ mod tests {
 			generation: state.generation,
 			event: CoreEvent::Disconnected,
 		});
-		assert_eq!(state.voice.active.as_ref().unwrap().phase, Phase::Failed);
-		assert!(!state.voice.active.as_ref().unwrap().camera);
+		// The voice socket is independent of the gateway: a dropped gateway keeps the call.
+		assert_eq!(state.voice.active.as_ref().unwrap().phase, Phase::Connected);
+		assert!(state.voice.active.as_ref().unwrap().camera);
 		state.apply_voice(Event::Progress {
 			channel: Id(2),
 			request,
 			phase: Phase::Connected,
 		});
-		assert_eq!(state.voice.active.as_ref().unwrap().phase, Phase::Failed);
+		assert_eq!(state.voice.active.as_ref().unwrap().phase, Phase::Connected);
 		assert!(state.leave_call().is_some());
 		state.gateway_connected = true;
 		state.channels[0].kind = 3;

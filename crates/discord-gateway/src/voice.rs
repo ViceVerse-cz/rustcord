@@ -40,7 +40,15 @@ pub(super) struct Calls {
 	pub(super) users: BTreeMap<Id, User>,
 }
 impl Calls {
+	/// The gateway socket dropped. A RESUME keeps Discord's voice state, so the joined call
+	/// and its mute flags survive; only an unacknowledged hangup is abandoned.
 	pub(super) fn disconnected(&mut self) {
+		self.departing = None;
+		self.departure_deadline = None;
+		self.users.clear();
+	}
+	/// A fresh READY: Discord dropped every voice state bound to the previous session.
+	pub(super) fn session_reset(&mut self) {
 		self.active = None;
 		self.active_guild = None;
 		self.muted = false;

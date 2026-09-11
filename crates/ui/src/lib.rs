@@ -5,7 +5,7 @@ pub use audio::{AudioCommand, AudioState, AudioUi};
 mod attachments;
 pub use attachments::DownloadUi;
 mod avatars;
-pub use avatars::GifFrames;
+pub use avatars::{EMBED_EDGE, GifFrames, LARGE_EDGE, fit_edge};
 mod categories;
 mod composer_text;
 pub mod design;
