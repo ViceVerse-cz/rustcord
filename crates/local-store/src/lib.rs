@@ -162,6 +162,10 @@ impl LocalStore {
             CREATE TABLE IF NOT EXISTS game_activity(
                 singleton INTEGER PRIMARY KEY CHECK(singleton=1),
                 enabled INTEGER NOT NULL CHECK(typeof(enabled)='integer' AND enabled IN (0,1))
+            );
+            CREATE TABLE IF NOT EXISTS minimize_to_tray(
+                singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                enabled INTEGER NOT NULL CHECK(typeof(enabled)='integer' AND enabled IN (0,1))
             ); PRAGMA user_version=12;")?;
 		let has_animate_gifs: bool = transaction.query_row(
 			"SELECT EXISTS(SELECT 1 FROM pragma_table_info('reading_preferences') WHERE name='animate_gifs')",
@@ -211,6 +215,40 @@ impl LocalStore {
 		} else {
 			self.0
 				.execute("DELETE FROM game_activity WHERE singleton=1", [])?;
+		}
+		Ok(())
+	}
+	/// Application-wide opt-in; an absent override keeps ordinary window minimization.
+	pub fn minimize_to_tray(&self) -> Result<bool> {
+		let stored = self
+			.0
+			.query_row(
+				"SELECT enabled FROM minimize_to_tray WHERE singleton=1",
+				[],
+				|row| {
+					Ok(match row.get_ref(0)? {
+						rusqlite::types::ValueRef::Integer(enabled @ 0..=1) => Some(enabled == 1),
+						_ => None,
+					})
+				},
+			)
+			.optional()?;
+		match stored {
+			None => Ok(false),
+			Some(Some(enabled)) => Ok(enabled),
+			Some(None) => Err(StoreError::Incompatible),
+		}
+	}
+	pub fn save_minimize_to_tray(&self, enabled: bool) -> Result<()> {
+		if enabled {
+			self.0.execute(
+				"INSERT INTO minimize_to_tray(singleton,enabled) VALUES(1,1)
+                ON CONFLICT(singleton) DO UPDATE SET enabled=1",
+				[],
+			)?;
+		} else {
+			self.0
+				.execute("DELETE FROM minimize_to_tray WHERE singleton=1", [])?;
 		}
 		Ok(())
 	}
@@ -954,6 +992,82 @@ mod tests {
 		let store = LocalStore::initialize(store.0).unwrap();
 		assert_eq!(store.load_channel(Id(1), Id(2)).unwrap()[0].kind, 255);
 	}
+	#[test]
+	fn minimize_to_tray_is_bounded_opt_in_surviving_restart_and_logout() {
+		let root = std::env::temp_dir().join(format!(
+			"serein-synthetic-minimize-to-tray-{}",
+			std::process::id()
+		));
+		std::fs::create_dir_all(&root).unwrap();
+		let path = root.join("test.sqlite3");
+		let store = LocalStore::open(&path).unwrap();
+		assert!(!store.minimize_to_tray().unwrap());
+		store
+			.0
+			.execute_batch("DROP TABLE minimize_to_tray;")
+			.unwrap();
+		drop(store);
+		let store = LocalStore::open(&path).unwrap();
+		assert!(!store.minimize_to_tray().unwrap());
+		store.save_minimize_to_tray(true).unwrap();
+		store.save_minimize_to_tray(true).unwrap();
+		assert!(
+			store
+				.0
+				.execute("INSERT INTO minimize_to_tray VALUES(2,1)", [])
+				.is_err()
+		);
+		assert!(
+			store
+				.0
+				.execute("UPDATE minimize_to_tray SET enabled=2", [])
+				.is_err()
+		);
+		drop(store);
+		let mut store = LocalStore::open(&path).unwrap();
+		assert!(store.minimize_to_tray().unwrap());
+		store.forget_account(Id(1)).unwrap();
+		assert!(store.minimize_to_tray().unwrap());
+		store.0.execute_batch("PRAGMA query_only=ON;").unwrap();
+		assert_eq!(
+			store.save_minimize_to_tray(false),
+			Err(StoreError::Unavailable)
+		);
+		assert!(store.minimize_to_tray().unwrap());
+		store
+			.0
+			.execute_batch("PRAGMA query_only=OFF; PRAGMA ignore_check_constraints=ON;")
+			.unwrap();
+		for invalid in ["2", "-1", "0.5", "'invalid'", "x'01'"] {
+			store
+				.0
+				.execute(
+					&format!("UPDATE minimize_to_tray SET enabled={invalid}"),
+					[],
+				)
+				.unwrap();
+			assert_eq!(store.minimize_to_tray(), Err(StoreError::Incompatible));
+		}
+		store.save_minimize_to_tray(false).unwrap();
+		let count: u32 = store
+			.0
+			.query_row("SELECT count(*) FROM minimize_to_tray", [], |row| {
+				row.get(0)
+			})
+			.unwrap();
+		assert_eq!(count, 0);
+		drop(store);
+		let store = LocalStore::open(&path).unwrap();
+		assert!(!store.minimize_to_tray().unwrap());
+		store
+			.0
+			.execute_batch("DROP TABLE minimize_to_tray;")
+			.unwrap();
+		assert_eq!(store.minimize_to_tray(), Err(StoreError::Unavailable));
+		drop(store);
+		std::fs::remove_dir_all(root).unwrap();
+	}
+
 	#[test]
 	fn game_activity_defaults_migrates_reopens_and_survives_logout() {
 		let root = std::env::temp_dir().join(format!(

@@ -2527,3 +2527,50 @@ the verified identical-tree replay executable from the prior build; after was re
 This workload does not exercise local game publication or UI; its noisy delta is not a
 performance improvement claim. The local view adds one activity capped at 4 KiB retained
 heap; selectors borrow it and equal activity reports do not invalidate the timeline.
+
+
+## Activity privacy and opt-in tray - September 11, 2026
+
+Baseline `381e178295d9b0f4b76d11a307d2586377364a06`; isolated branch
+`fix/presence-and-tray`. Both variants rebuilt at baseline and after with locked
+Rust 1.98.1 release settings. Text packaging passed. Voice executables compiled,
+but both voice packaging runs failed on pre-existing missing license texts for
+openh264/openh264-sys2 0.9.8; voice staging/zip figures below are incomplete, not
+redistributable packages. Existing realfft 3.5.0 license-evidence warning remains.
+
+Windows 11 Home 10.0.26200, Ryzen 7 7800X3D / 16 logical processors,
+33,410,678,784 bytes visible RAM. Text demo with Appearance open, 1400x950 pixels,
+125% scale, dark theme, wgpu (adapter unmeasured). Tray off in both process samples.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| text exe (bytes) | 54,935,552 | 55,026,176 | +90,624 (+0.16%) |
+| text installed (bytes) | 59,841,905 | 59,936,641 | +94,736 (+0.16%) |
+| text zip (bytes) | 35,322,352 | 35,351,550 | +29,198 (+0.08%) |
+| voice exe (bytes) | 60,951,040 | 61,040,128 | +89,088 (+0.15%) |
+| voice installed (incomplete staging) (bytes) | 61,863,480 | 61,952,568 | +89,088 (+0.14%) |
+| voice zip (incomplete staging) (bytes) | 35,967,242 | 35,986,991 | +19,749 (+0.05%) |
+| working_set_median (bytes) | 167,272,448 | 168,824,832 | +1,552,384 (+0.93%) |
+| private_bytes_median (bytes) | 395,055,104 | 396,783,616 | +1,728,512 (+0.44%) |
+| Idle CPU, one logical core (percent) | 0.1717 | 0 | -0.1717 (-100.00%) |
+| Reducer replay median (ms) | 41.6340 | 41.0937 | -0.5403 (-1.30%) |
+
+Native sampling: at least ten seconds settling, ten samples about one second apart.
+After sampling followed ordinary minimize/restore and failed attempts to focus the
+owned demo window for a checkbox click; baseline did not include those interactions.
+Concurrent builds and allocator noise limit comparison; no CPU/memory improvement
+is claimed. Hidden/resident tray process CPU, GPU allocation, startup/frame p95,
+child/helper memory, network privacy requests and live-account loads are unmeasured.
+
+Reducer: one warmup plus five measured 100,000-event runs per revision. Both retain
+500 records and 236,992..237,477 estimated timeline bytes. The workload does not
+exercise the new HTTP preference or tray paths; its small timing change is noise.
+Packages use sorted paths with Python zipfile DEFLATE level 9; text excludes nested
+voice staging. Package docs precede final progress/performance appends. Executable
+hashes, package file counts and raw samples are in
+`docs/pr-evidence/presence-and-tray/measurements.json`.
+
+Runtime bounds: one native icon/menu, three coalesced event bits, no tray timer/thread;
+one cancellable preference operation and one queued boolean action; 1 MiB HTTP
+response / 16 KiB retained status subtree; 64 KiB borrowed session projection and
+16 entries per session/activity list. These limits are not whole-process memory.

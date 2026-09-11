@@ -10,6 +10,7 @@ mod game_activity;
 mod reading_settings;
 #[cfg(feature = "voice")]
 mod screen;
+mod toggle_setting;
 mod uploads;
 #[cfg(feature = "voice")]
 mod voice;
@@ -139,7 +140,10 @@ struct Desktop {
 	appearance: egui::ThemePreference,
 	appearance_changed: bool,
 	reading: reading_settings::ReadingSettings,
-	game_activity: game_activity::Settings,
+	game_activity: toggle_setting::Settings,
+	tray_setting: toggle_setting::Settings,
+	tray: Option<platform::tray::Tray>,
+	tray_error: Option<&'static str>,
 	variant_changed: bool,
 	pending_save: Option<Arc<SessionSecret>>,
 	credential_status: &'static str,
@@ -453,7 +457,19 @@ impl Desktop {
 			)
 		}));
 		let mut reading = reading_settings::ReadingSettings::default();
-		let mut game_activity = game_activity::Settings::default();
+		let mut game_activity = toggle_setting::Settings::default();
+		let mut tray_setting = toggle_setting::Settings::default();
+		if cache.as_ref().is_some_and(|cache| {
+			cache.queue(
+				state.generation,
+				model::Id(0),
+				cache::Operation::LoadMinimizeToTray,
+			)
+		}) {
+			cache_pending += 1;
+		} else if !demo {
+			tray_setting.failed = true;
+		}
 		if cache.as_ref().is_some_and(|cache| {
 			cache.queue(
 				state.generation,
@@ -482,6 +498,7 @@ impl Desktop {
 			.last()
 			.map_or(10_000, |m| m.id.0.max(10_000));
 		let mut messaging = ui::MessagingUi::default();
+		messaging.tray_available = platform::tray::supported();
 		if demo && std::env::args().any(|arg| arg == "--demo-game-activity") {
 			messaging.share_game_activity = true;
 			messaging.own_game = Some("Playing osu!".into());
@@ -654,6 +671,9 @@ impl Desktop {
 			appearance_changed: false,
 			reading,
 			game_activity,
+			tray_setting,
+			tray: None,
+			tray_error: None,
 			variant_changed: false,
 			pending_save: None,
 			credential_status: if demo {
@@ -825,7 +845,50 @@ impl Desktop {
 		}
 		self.messaging.reading_status = self.reading.status();
 	}
+	fn sync_tray(&mut self, ctx: &egui::Context) {
+		let previous_status = self.messaging.tray_status;
+		self.tray_setting.observe(self.messaging.minimize_to_tray);
+		if self.tray_setting.dirty && !self.tray_setting.saving {
+			self.tray_error = None;
+			let accepted = !self.fixture_only
+				&& !self.state.demo
+				&& self.cache.as_ref().is_some_and(|cache| {
+					cache.queue(
+						self.state.generation,
+						model::Id(0),
+						cache::Operation::SaveMinimizeToTray(self.tray_setting.enabled),
+					)
+				});
+			self.tray_setting.dirty = false;
+			self.tray_setting.saving = accepted;
+			self.tray_setting.failed = !accepted && !self.fixture_only && !self.state.demo;
+			self.cache_pending += usize::from(accepted);
+		}
+		if !self.tray_setting.enabled {
+			self.tray = None;
+			self.tray_error = None;
+		} else if self.tray_error.is_some() {
+			self.tray = None;
+		} else if self.tray.is_none() {
+			let wake = ctx.clone();
+			match platform::tray::Tray::new(self.window.clone(), move || wake.request_repaint()) {
+				Ok(tray) => self.tray = Some(tray),
+				Err(error) => self.tray_error = Some(error),
+			}
+		}
+		self.messaging.tray_status = self
+			.tray_error
+			.unwrap_or_else(|| self.tray_setting.status());
+		if previous_status != self.messaging.tray_status {
+			ctx.request_repaint();
+		}
+	}
 	fn sync_game_activity(&mut self, ctx: &egui::Context) {
+		let previous_sharing = (
+			self.messaging.discord_activity_sharing,
+			self.messaging.discord_activity_sharing_busy,
+			self.messaging.discord_activity_sharing_retry,
+		);
 		let previous = (
 			self.messaging.own_game.clone(),
 			self.messaging.game_activity_status,
@@ -868,6 +931,10 @@ impl Desktop {
 			self.cache_pending += usize::from(accepted);
 		}
 		self.messaging.own_game = None;
+		self.messaging.discord_activity_sharing = None;
+		self.messaging.discord_activity_sharing_busy = false;
+		self.messaging.discord_activity_sharing_retry = false;
+		let sharing_request = self.messaging.discord_activity_sharing_request.take();
 		let mut own_activity = None;
 		self.messaging.game_activity_status = self.game_activity.status();
 		if let Some(connection) = &self.connection {
@@ -883,18 +950,84 @@ impl Desktop {
 					Ok(game) => {
 						self.messaging.own_game = game.as_ref().map(model::RichActivity::summary);
 						own_activity = game.clone();
+						if game.is_some() && !self.game_activity.needs_attention() {
+							use discord_gateway::ActivityObservation as Observation;
+							self.messaging.game_activity_status =
+								match *connection.activity_observation.borrow() {
+									Observation::Unconfirmed => {
+										"Game detected. Waiting for Discord to confirm."
+									}
+									Observation::ServerReceived => {
+										"Discord received your game. Public sharing is not confirmed."
+									}
+									Observation::ServerListed => {
+										"Discord lists your game. Server and friend privacy settings still apply."
+									}
+									Observation::ServerHidden => {
+										self.messaging.discord_activity_sharing_retry = true;
+										"Discord is hiding your game. Check Activity Privacy in Discord."
+									}
+									Observation::ServerMissing => {
+										"Discord is not listing your game. Sharing is not confirmed."
+									}
+								};
+						}
 					}
 					Err(error) => self.messaging.game_activity_status = error,
+				}
+			}
+			if self.game_activity.enabled && self.state.gateway_connected {
+				match *connection.activity_sharing.borrow() {
+					Ok(value) => {
+						self.messaging.discord_activity_sharing = value;
+						self.messaging.discord_activity_sharing_busy = value.is_none();
+						if !self.game_activity.needs_attention() {
+							match value {
+								Some(false) => {
+									self.messaging.game_activity_status =
+										"Discord's account-wide activity sharing is off."
+								}
+								None => {
+									self.messaging.game_activity_status =
+										"Checking Discord's activity sharing setting..."
+								}
+								Some(true) => {}
+							}
+						}
+					}
+					Err(_) => {
+						self.messaging.discord_activity_sharing_retry = true;
+						if !self.game_activity.needs_attention() {
+							self.messaging.game_activity_status =
+								"Could not check or change Discord's activity sharing setting.";
+						}
+					}
+				}
+				if let Some(enable) = sharing_request {
+					if connection.activity_sharing_request.try_send(enable).is_ok() {
+						self.messaging.discord_activity_sharing_busy = true;
+						self.messaging.game_activity_status =
+							"Updating Discord's activity sharing setting...";
+					} else {
+						self.messaging.discord_activity_sharing_retry = true;
+						self.messaging.game_activity_status =
+							"Could not request the setting change. Try again.";
+					}
 				}
 			}
 		}
 		let changed = self.state.set_local_game_activity(own_activity);
 		if changed
-			|| previous
+			|| previous_sharing
 				!= (
-					self.messaging.own_game.clone(),
-					self.messaging.game_activity_status,
-				) {
+					self.messaging.discord_activity_sharing,
+					self.messaging.discord_activity_sharing_busy,
+					self.messaging.discord_activity_sharing_retry,
+				) || previous
+			!= (
+				self.messaging.own_game.clone(),
+				self.messaging.game_activity_status,
+			) {
 			ctx.request_repaint();
 		}
 	}
@@ -1765,6 +1898,18 @@ impl Desktop {
 			self.cache_pending = self.cache_pending.saturating_sub(1);
 			// Settings are global; account removal/write failures still matter after logout.
 			match &outcome {
+				cache::Outcome::MinimizeToTray(result) => {
+					self.tray_setting.restore(*result);
+					if !self.fixture_only {
+						self.messaging.minimize_to_tray = self.tray_setting.enabled;
+					}
+					continue;
+				}
+				cache::Outcome::MinimizeToTraySaved(result) => {
+					self.tray_setting.saving = false;
+					self.tray_setting.failed = result.is_err();
+					continue;
+				}
 				cache::Outcome::GameActivity(result) => {
 					self.game_activity.restore(*result);
 					if !self.state.demo && !self.fixture_only {
@@ -1878,6 +2023,8 @@ impl Desktop {
 					}
 				}
 				cache::Outcome::Appearance(..)
+				| cache::Outcome::MinimizeToTray(_)
+				| cache::Outcome::MinimizeToTraySaved(_)
 				| cache::Outcome::GameActivity(_)
 				| cache::Outcome::GameActivitySaved(_)
 				| cache::Outcome::ReadingPreferences(_)
@@ -2198,6 +2345,19 @@ impl eframe::App for Desktop {
 		self.frame_metrics.begin(ctx);
 		self.messaging.sync_reading_zoom(ctx);
 		self.poll(ctx);
+		if let Some(tray) = &mut self.tray {
+			while let Some(event) = tray.take_event() {
+				match event {
+					platform::tray::Event::Quit => {
+						ctx.send_viewport_cmd(egui::ViewportCommand::Close)
+					}
+					platform::tray::Event::Show => {}
+					platform::tray::Event::Unavailable => {
+						self.tray_error = Some("Tray unavailable. The window will stay visible.")
+					}
+				}
+			}
+		}
 		let (focused, hidden_or_closing, ptt_down) = ctx.input(|input| {
 			(
 				input.focused,
@@ -2386,6 +2546,7 @@ impl eframe::App for Desktop {
 				|| self.cache_clears.pending()
 				|| (!self.fixture_only && self.reading.needs_attention())
 				|| (!self.fixture_only && self.game_activity.needs_attention())
+				|| (!self.fixture_only && self.tray_setting.needs_attention())
 				|| self.cache_error)
 		{
 			ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -2624,6 +2785,7 @@ impl eframe::App for Desktop {
 		let appearance = ctx.options(|options| options.theme_preference);
 		self.save_reading_preferences(&ctx);
 		self.sync_game_activity(&ctx);
+		self.sync_tray(&ctx);
 		if appearance != self.appearance {
 			self.appearance = appearance;
 			self.appearance_changed = true;
@@ -2650,6 +2812,7 @@ impl eframe::App for Desktop {
                 if self.cache_clears.pending(){ui.label("Cached history cleanup is pending; closing now may leave deleted messages on disk.");}
                 if !self.fixture_only && self.reading.needs_attention(){ui.label(self.reading.status());}
 				if !self.fixture_only && self.game_activity.needs_attention(){ui.label(self.game_activity.status());}
+                if !self.fixture_only && self.tray_setting.needs_attention(){ui.label(self.tray_setting.status());}
                 ui.horizontal(|ui|{
                     if ui.button("Keep working").clicked(){self.confirming_close=false;self.confirming_logout=false;self.download_close_pending=false;}
                     if ui.add_enabled(!self.forgetting,egui::Button::new("Discard and continue")).clicked(){

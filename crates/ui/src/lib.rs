@@ -89,6 +89,14 @@ pub struct MessagingUi {
 	pub show_hidden_channels: bool,
 	pub reading_status: &'static str,
 	pub reading_save_requested: bool,
+	pub minimize_to_tray: bool,
+	pub tray_available: bool,
+	pub tray_status: &'static str,
+	pub discord_activity_sharing: Option<bool>,
+	pub discord_activity_sharing_busy: bool,
+	pub discord_activity_sharing_retry: bool,
+	/// false checks the account setting; true explicitly enables it.
+	pub discord_activity_sharing_request: Option<bool>,
 	pub share_game_activity: bool,
 	pub own_game: Option<String>,
 	pub game_activity_status: &'static str,
@@ -281,7 +289,13 @@ impl MessagingUi {
 		self.avatars.accept(ctx, key, image);
 	}
 	pub fn clear(&mut self) {
-		*self = Self::default();
+		// Window preferences belong to the application, not the account being cleared.
+		*self = Self {
+			minimize_to_tray: self.minimize_to_tray,
+			tray_available: self.tray_available,
+			tray_status: self.tray_status,
+			..Self::default()
+		};
 	}
 	pub fn has_edit(&self) -> bool {
 		self.editing.is_some()

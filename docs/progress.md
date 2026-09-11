@@ -2687,3 +2687,60 @@ The activity section increases card height and uses its existing scroll area. Da
 and narrow/wide render behavior is covered by the integration test. No live account,
 message, call or microphone action; Linux/macOS and remote publication remain unverified.
 Draft PR for inherited full-check failures. No changes to settings explanatory text.
+
+
+## Account activity privacy and minimize to tray - September 11, 2026
+
+Implemented on `fix/presence-and-tray` from clean main `381e178`; original checkout
+preserved. The local game-sharing toggle did not check Discord's account preference.
+The user clarified only Serein's toggle had been checked; their actual account value
+and peer visibility remain unverified. No evidence supported speculative activity
+fields or client identity changes. Serein now checks the account setting after local
+opt-in and offers an explicit Enable on Discord action if disabled. Version-guarded
+writes preserve unrelated status/custom fields. Local sharing off never alters other
+clients' global preference. Server observations distinguish listed, hidden, received,
+missing and unconfirmed game activity without claiming visibility to every peer.
+
+Appearance now offers Windows Minimize to tray, off by default and saved in a strict
+SQLite singleton. Native Show/Quit, recovery and cleanup use existing OS APIs with no
+new dependency/thread/timer. Close retains existing exit gates. Session UI resets
+preserve the application window preference; demo changes are not persisted.
+
+Verification actually run:
+
+- `cargo test --locked -p discord-protocol activity_`: 8 passed.
+- `cargo test --locked -p discord-api sharing_reads_fresh`: 1 passed, local HTTP only.
+- `cargo test --locked -p discord-gateway activity`: 4 passed, including local WebSocket
+  listed/hidden/missing observations, coalescing, clear and reconnect. Afterwards an
+  unreachable pre-send READY observation helper was removed; current tests compile.
+- `cargo test --locked -p local-store minimize_to_tray`: 1 passed, covering migration,
+  defaults, restart/logout, invalid stored values and write failure.
+- `cargo test --locked -p platform tray -- --include-ignored`: 2 passed, including an
+  actual owned synthetic Windows window/icon lifecycle (hide/keyboard restore,
+  taskbar recovery, Quit event without forced destruction and cleanup).
+- Final `cargo test --locked -p serein`: 43 passed; includes IPC, privacy opt-in and
+  session failure, cache routing and late-load setting behavior.
+- Final `cargo test --locked -p ui --test activity_sharing`: 2 passed, including
+  explicit action/busy gating in dark/light at 760/1120 widths and session reset.
+- `cargo fmt --all -- --check`, `git diff --check`, `cargo xtask policy`: pass.
+- `cargo xtask check`: fails pre-existing Clippy findings at
+  client-core/message_actions.rs:92,192 and discord-protocol/guild_folders.rs:102.
+  Final diagnostic desktop Clippy run has only the inherited guild-folder warning.
+- `cargo test --workspace --all-features --locked`: blocked by pre-existing missing
+  `camera` field in the screen.rs:544 voice test initializer. Baseline source verified.
+- Both final release executables compile. Text package passes; voice packaging remains
+  blocked by missing OpenH264 license texts at both baseline and after. Text executable
+  +90,624 bytes (+0.16%); voice +89,088 (+0.15%). Full measurements in performance.md.
+
+Native before/after PNGs capture only the synthetic demo HWND using PrintWindow and
+were inspected. They show Appearance before and the default-off tray setting after,
+with matched viewport/theme/scale. Light mode was additionally inspected at 950 logical
+pixels wide. Ordinary opt-out minimize/restore works in the release demo. The desktop
+would not grant foreground focus for its actual checkbox-click smoke test, so that
+interaction and enabled main-process memory/CPU remain unverified; the native adapter
+lifecycle and rendered action tests are separate evidence. No authenticated app,
+Discord message/call, microphone or camera was used. Linux/macOS tray unsupported.
+
+The owner subsequently requested fixing Clippy and pushing directly to main, with
+voice license-text packaging not a delivery gate. Existing license checks/files remain
+intact. Final integration checks and push evidence follow below.
