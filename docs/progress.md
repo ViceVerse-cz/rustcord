@@ -1,5 +1,58 @@
 # Implementation progress — 2026-09-10
 
+## User context menu — September 11, 2026
+
+Integration: `main` advanced to `d8cb031` (pending message uploads) while PR #69
+was being opened. Its timeline state fields were combined with the menu action
+field without removing either feature. Both focused menu tests pass after the
+merge. The integrated UI suite also encounters the new upstream
+`pending_rows_share_scroll_and_only_measure_near_viewport` failure, reproduced
+directly on `d8cb031`; the full UI runner aborts with Windows `0xc0000409`
+while exercising the underestimated-leading-row test. That abort also reproduces
+on `d8cb031` without this feature; neither full UI run is reported green.
+
+Implemented Profile, Close DM, Block/Unblock and Mute/Unmute through a shared native
+context menu on DM rows/avatars, people rows, message authors, DM header avatars,
+unread DM avatars and resolved voice participants. Shift+F10 opens the focused
+user's menu. Mute changes the existing DM's notification setting until unmuted;
+Close DM is limited to one-to-one conversations and preserves messages/drafts.
+Self menus expose Profile only. No-open-DM mute is visibly disabled. Writes use
+the bounded authenticated worker, update only after confirmation, expose failures,
+and preserve later Gateway updates. READY does not recycle outstanding action IDs.
+Demo actions affect synthetic RAM only; no account, message, call or microphone test ran.
+
+Baseline: `ea68e0e9afaa822e64e6bea1e144d48816aab339` (`origin/main` after fetch).
+Original checkout's unrelated `target-relocation-remainder/` was preserved; implementation
+is isolated on `feat/user-context-menu` in `E:/codex-builds/rustcord-user-menu`.
+Windows 11 Home 10.0.26200, Rust 1.98.1, locked text-only and optional voice variants.
+
+Verification: `cargo test --locked -p ui user_menu -- --nocapture` passed both new
+headless input tests: all four actions, right-click/Shift+F10, both themes, 320-point
+menu bounds, and real DM row/avatar dispatch without navigation. Full workspace
+all-feature tests passed 92 core, 49 protocol, 17 API, 28 Gateway, 37 desktop and
+other non-UI suites; UI passed 103 with two pre-existing failures. Both failures
+were reproduced at the exact baseline in a separate worktree:
+`avatars::tests::avatar_artwork_matches_fallback_in_justified_layout` (avatars.rs:892)
+and `categories::tests::service_order_orphans_collapsed_selection_and_category_buttons`
+(categories.rs:273). `cargo xtask check` stops at the pre-existing
+`clippy::question_mark` warning in `crates/client-core/src/permissions.rs:439`.
+The additional Clippy diagnostic pass found one task warning (test-module order),
+which was fixed. Independent review found the READY request-ID race; the fix and
+regression passed the workspace run. Formatting and `cargo xtask policy` passed.
+No check was disabled. PR: https://github.com/ViceVerse-cz/rustcord/pull/69 (draft;
+CI pending at final inspection).
+
+Native evidence is blocked: Orca CLI is absent and Windows Computer Use repeatedly
+returned `Computer Use native pipe is unavailable: failed to connect native pipe:
+The system cannot find the file specified. (os error 2)`, including after session
+reset. No screenshot is fabricated or labeled verified. Native menu appearance,
+scrolling, screen-reader interaction and macOS/Linux remain unverified. Draft PR
+required for the missing images and baseline check failures. See performance.md
+for separately labeled release package, reducer and idle-process measurements.
+Both integrated release packages passed. Text executable: 54,098,432 bytes;
+voice: 59,205,120 bytes. These include the pending-upload merge from main. Reducer median: 39.3572 to 38.4854 ms,
+with overlapping samples and unchanged retained timeline bounds.
+
 ## Image clipping investigation — 2026-09-11
 
 The owner reports cropped inline images while the enlarged viewer is correct. The

@@ -1,5 +1,24 @@
 # Discord compatibility — checked 2026-09-10
 
+User context actions (checked September 11, 2026): Close DM uses the documented
+[Delete/Close Channel route](https://docs.discord.com/developers/resources/channel#deleteclose-channel)
+only for a known one-to-one DM. It closes navigation after successful HTTP completion;
+messages and drafts are not deleted. Pending messages and an active call prevent closing.
+Block/unblock use `PUT` (type 2)/`DELETE /users/@me/relationships/{user}`; mute/unmute use
+`PATCH /users/@me/guilds/@me/settings` with a single channel override. These account routes are
+unofficial and unstable, supported by the public [HTTP implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/http.py)
+and [channel settings implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/settings.py).
+Mute means DM notifications until explicitly unmuted, not voice audio. The response must confirm
+the requested channel and mute value. Block state hydrates from READY relationships and follows
+relationship add/update/remove events, based on the public [gateway implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/state.py).
+Unknown relationship/settings state is distinguished from false. One write is pending at a time;
+rejections, disconnects and ambiguous outcomes remain visible without automatic retries.
+Gateway updates take precedence over late HTTP confirmations. Notification suppression reuses
+the existing account settings and rejects alerts from known blocked authors. Existing timeline
+content is retained; this does not implement Discord's collapsed blocked-message presentation.
+Offline reducer, decoder and local HTTP tests cover these actions; normal-user acceptance,
+cross-device behavior and native interaction remain live-unverified. No accounts were accessed.
+
 Inline spoilers (September 10): Discord's [Spoiler Tags help](https://support.discord.com/hc/en-us/articles/360022320632-Spoiler-Tags)
 documents paired pipe delimiters and exempts code blocks. The native timeline recognizes
 bounded paired literal delimiters outside code, with up to 32 independently revealed text

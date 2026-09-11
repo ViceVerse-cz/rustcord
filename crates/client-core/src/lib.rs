@@ -20,6 +20,7 @@ pub mod resident;
 pub mod search;
 mod threads;
 pub mod typing;
+pub mod user_actions;
 pub mod voice;
 use model::*;
 use session_cache::Timeline;
@@ -34,6 +35,10 @@ pub const EVENT_SLOTS: usize = 8; // UI drain batch; reliable events share a 32 
 pub const COMMAND_SLOTS: usize = 16; // each admitted command <= 16 KiB
 
 pub enum Command {
+	UserAction {
+		action: user_actions::Action,
+		request: u64,
+	},
 	Invite {
 		code: String,
 	},
@@ -116,6 +121,7 @@ pub enum Command {
 	},
 }
 pub enum Event {
+	UserAction(user_actions::Event),
 	Invite {
 		code: String,
 		result: Result<Box<model::Embed>, auth::Failure>,
@@ -255,6 +261,7 @@ pub struct NavigationIndex {
 }
 
 pub struct State {
+	pub user_actions: user_actions::Actions,
 	pub typing: typing::Typing,
 	pub permissions: permissions::Permissions,
 	pub archives: Option<archives::View>,
@@ -312,6 +319,7 @@ pub struct State {
 impl Default for State {
 	fn default() -> Self {
 		Self {
+			user_actions: user_actions::Actions::default(),
 			typing: typing::Typing::default(),
 			permissions: permissions::Permissions::default(),
 			archives: None,
@@ -712,6 +720,16 @@ impl State {
 		})
 	}
 	pub fn command_rejected(&mut self, command: Command) {
+		if let Command::UserAction { action, request } = command {
+			let _ = self.apply_user_action(user_actions::Event::Written {
+				action,
+				request,
+				result: Err(auth::Failure::ProtocolAt(
+					"User action was not queued; try again",
+				)),
+			});
+			return;
+		}
 		if let Command::CreatePost {
 			parent, request, ..
 		} = command
@@ -948,6 +966,9 @@ impl State {
 			return;
 		}
 		self.invalidate_resident_event(&envelope.event);
+		if let Event::ChannelCreated(channel) = &envelope.event {
+			self.observe_dm_reopened(channel.id);
+		}
 		self.revision += 1;
 		if matches!(
 			&envelope.event,
@@ -1043,6 +1064,7 @@ impl State {
 			}
 			Event::ReadState(event) => self.apply_read_state(event),
 			Event::NotificationPreferences(event) => self.apply_notification_preferences(event),
+			Event::UserAction(event) => self.apply_user_action(event),
 			Event::ThreadsSync {
 				guild,
 				parents,
@@ -1363,6 +1385,8 @@ impl State {
 				self.profile_cache.clear();
 				self.read_state.reset();
 				self.notification_preferences = notifications::Preferences::default();
+				self.cancel_user_action();
+				self.user_actions.reset();
 				self.user = Some(user);
 				self.guilds = guilds;
 				self.channels = channels;
@@ -1690,6 +1714,7 @@ impl State {
 				Ok(())
 			}
 			Event::Disconnected => {
+				self.cancel_user_action();
 				self.read_state.cancel();
 				self.clear_profile();
 				let roster = std::mem::take(&mut self.voice.roster);
@@ -1711,6 +1736,7 @@ impl State {
 				Ok(())
 			}
 			Event::Resync | Event::PermissionsChanged => {
+				self.cancel_user_action();
 				self.direct_presences.clear();
 				self.direct_presence_bytes = None;
 				self.permissions = permissions::Permissions::default();
@@ -1846,6 +1872,7 @@ impl State {
 			_ => {}
 		}
 		if failure.ends_session() {
+			self.cancel_user_action();
 			self.direct_presences.clear();
 			self.direct_presence_bytes = None;
 			self.clear_cached_history();
@@ -1880,7 +1907,11 @@ impl Event {
 		matches!(
 			self,
 			Event::Ready { .. }
-				| Event::Permissions(_)
+				| Event::UserAction(user_actions::Event::Written {
+					action: user_actions::Action::CloseDm(_),
+					result: Ok(()),
+					..
+				}) | Event::Permissions(_)
 				| Event::Resync
 				| Event::PermissionsChanged
 				| Event::Unavailable(_)
@@ -1899,6 +1930,9 @@ impl Event {
 	pub fn bytes(&self) -> usize {
 		size_of::<Self>()
 			+ match self {
+				Self::UserAction(user_actions::Event::Relationships(entries)) => entries
+					.as_ref()
+					.map_or(0, |e| e.capacity() * size_of::<(Id, bool)>()),
 				Self::Archives { result, .. } => {
 					result.as_ref().map_or(0, model::archives::Page::bytes)
 				}
