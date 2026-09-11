@@ -1888,7 +1888,7 @@ impl State {
 				self.clear_profile();
 				let roster = std::mem::take(&mut self.voice.roster);
 				let dm_calls = std::mem::take(&mut self.voice.dm_calls);
-				self.disconnect_voice();
+				self.disconnect_voice("Discord gateway connection lost; rejoin after reconnecting");
 				self.voice.roster = roster; // RESUMED replays changes, not the entire unchanged roster.
 				self.voice.dm_calls = dm_calls;
 				self.invalidate_members();
@@ -1917,7 +1917,9 @@ impl State {
 				self.read_state.cancel();
 				self.clear_profile();
 				self.profile_cache.clear();
-				self.disconnect_voice();
+				self.disconnect_voice(
+					"Discord session or permissions changed; rejoin after refreshing",
+				);
 				self.invalidate_members();
 				self.timeline.clear();
 				self.freshness = Freshness::Stale;
@@ -2064,7 +2066,7 @@ impl State {
 			self.read_state.cancel();
 			self.clear_profile();
 			self.profile_cache.clear();
-			self.disconnect_voice();
+			self.disconnect_voice(failure.label());
 			self.gateway_connected = false;
 			self.invalidate_members();
 			self.cancel_history();

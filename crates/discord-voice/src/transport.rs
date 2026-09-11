@@ -194,6 +194,7 @@ async fn run_inner(
 	url: String,
 	local_test: bool,
 ) -> Result<(), &'static str> {
+	let mut metrics = crate::diagnostics::Metrics::new(crate::diagnostics::Scope::Transport);
 	emit(Status::Connecting).map_err(|_| "Call interface closed")?;
 	let config = WebSocketConfig::default()
 		.max_message_size(Some(MAX_SIGNAL))
@@ -323,6 +324,7 @@ async fn run_inner(
 				if active && !speaking {json_send(&mut ws,json!({"op":5,"d":{"speaking":1,"delay":0,"ssrc":ssrc}})).await?;speaking=true;}
 				if !active && speaking && silence==0 {silence=5;}
 				if enabled && (active || silence>0) {
+					let start = metrics.start();
 					let data=if active {
 						let frame=latest.unwrap();
 						for (sample,pair) in frame.iter().zip(stereo.as_chunks_mut::<2>().0.iter_mut()) {pair.fill(if sample.is_finite(){sample.clamp(-1.0,1.0)}else{0.0});}
@@ -331,17 +333,22 @@ async fn run_inner(
 					} else {silence-=1;davey::OPUS_SILENCE_PACKET.to_vec()};
 					let mut header=[0;12];header[0]=0x80;header[1]=120;header[2..4].copy_from_slice(&sequence.to_be_bytes());header[4..8].copy_from_slice(&timestamp.to_be_bytes());header[8..12].copy_from_slice(&ssrc.to_be_bytes());
 					let wire=encryption.as_mut().ok_or("Missing voice transport key")?.seal(&header,&data)?;
+					metrics.finish(crate::diagnostics::Stage::Encode, start);
 					if let Some(socket)=&udp {socket.send(&wire).await.map_err(|_|"Voice UDP send failed")?;}
 					sequence=sequence.wrapping_add(1);
 					if !active && silence==0 {json_send(&mut ws,json!({"op":5,"d":{"speaking":0,"delay":0,"ssrc":ssrc}})).await?;speaking=false;}
 					if active {silence=0;}
 				}
 				timestamp=timestamp.wrapping_add(960);
+				let mut drops = 0;
 				if enabled && !control.deafened {
+					let start = metrics.start();
 					let (frame,remote_audio)=mixer.pop();
-					if let Some(frame)=frame {let _=playback.try_send(frame);}
+					metrics.finish(crate::diagnostics::Stage::Mix, start);
+					if let Some(frame)=frame {drops = u64::from(playback.try_send(frame).is_err());}
 					if !heard && remote_audio {heard=true;emit(Status::RemoteAudio).map_err(|_|"Call interface closed")?;}
 				} else {mixer.clear();}
+				metrics.poll(false, drops, stalled, 0);
 				if now >= speakers_at {
 					let mut users=[0;64];
 					users[0]=if local_activity>0 {credentials.user.0} else {0};
@@ -362,11 +369,13 @@ async fn run_inner(
 					discovering=false;continue;
 				}
 				let Some(crypto)=&encryption else{continue;};
+				let start = metrics.start();
 				let Some((source,seq,frame))=crypto.open(&packet[..length]) else{continue;};
 				let Some(user)=mixer.user(source) else{continue;};
 				if !dave.ready || !dave.contains(user) || controls.borrow().deafened {continue;}
 				let Ok(opus)=dave.session.decrypt(user,davey::MediaType::AUDIO,&frame) else{continue;};
 				mixer.push(source,seq,opus);
+				metrics.finish(crate::diagnostics::Stage::Receive, start);
 			},
 			event=ws.next()=>{
 				let event=match event {

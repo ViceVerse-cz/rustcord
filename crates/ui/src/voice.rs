@@ -246,6 +246,16 @@ impl MessagingUi {
 				.layout(egui::Layout::top_down(egui::Align::Min)),
 		);
 		stage_notices(&mut body_ui, &notices);
+		call_failure(
+			&mut body_ui,
+			state
+				.voice
+				.active
+				.as_ref()
+				.filter(|c| c.channel == channel)
+				.and_then(|c| c.error),
+			STAGE_TEXT,
+		);
 		if !state.can_view(channel) {
 			body_ui.label(
 				RichText::new("Participant list unavailable with the current access.")
@@ -454,7 +464,7 @@ impl MessagingUi {
 	fn stage_notices(&self, state: &State, channel: Id, connected: bool) -> Vec<(String, bool)> {
 		let mut notices = Vec::new();
 		if let Some(call) = state.voice.active.as_ref().filter(|c| c.channel == channel) {
-			let mut status = if state.demo {
+			let mut status = if state.demo && call.phase != Phase::Failed {
 				"Voice preview".to_owned()
 			} else {
 				call.phase.label().to_owned()
@@ -471,9 +481,6 @@ impl MessagingUi {
 			}
 			if !self.voice_camera_status.is_empty() {
 				notices.push((self.voice_camera_status.into(), false));
-			}
-			if let Some(error) = call.error {
-				notices.push((error.to_owned(), false));
 			}
 			if call.server_deafened {
 				notices.push(("Deafened by the server".into(), false));
@@ -1147,6 +1154,11 @@ impl MessagingUi {
 							.layout(egui::Layout::top_down(egui::Align::Min)),
 					);
 					stage_notices(&mut notice_ui, &notices);
+					call_failure(
+						&mut notice_ui,
+						state.voice.active.as_ref().and_then(|c| c.error),
+						STAGE_TEXT,
+					);
 					let participants: Vec<(Option<model::User>, Participant)> = state
 						.voice
 						.active
@@ -1377,6 +1389,7 @@ impl MessagingUi {
 		let colors = design::palette(ui);
 		let phase = call.phase;
 		let connected = matches!(phase, Phase::Connected | Phase::Waiting);
+		let error = call.error;
 		let channel = state
 			.channels
 			.iter()
@@ -1391,7 +1404,7 @@ impl MessagingUi {
 			Some(guild) => format!("{channel} / {guild}"),
 			None => channel,
 		};
-		let title = if state.demo {
+		let title = if state.demo && phase != Phase::Failed {
 			"Voice preview"
 		} else if phase == Phase::Failed {
 			"Call failed"
@@ -1480,6 +1493,7 @@ impl MessagingUi {
 								},
 							);
 						});
+						call_failure(ui, error, colors.text_strong);
 					});
 			});
 		if connected && ui.is_rect_visible(ui.max_rect()) {
@@ -1522,6 +1536,27 @@ fn speaking_avatar(ui: &egui::Ui, avatar: &egui::Response, name: &str) {
 	let label = format!("{name} · Speaking");
 	avatar.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Image, true, &label));
 	avatar.clone().on_hover_text(label);
+}
+
+fn call_failure(ui: &mut egui::Ui, error: Option<&str>, color: egui::Color32) {
+	let Some(error) = error else { return };
+	ui.horizontal_top(|ui| {
+		ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+			if crate::icons::button(ui, crate::icons::Icon::Copy, 28.0, "Copy failure reason")
+				.clicked()
+			{
+				ui.ctx()
+					.copy_text(format!("Serein call failed\nReason: {error}"));
+			}
+			ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+				ui.add(
+					egui::Label::new(RichText::new(error).size(12.0).color(color))
+						.wrap()
+						.selectable(true),
+				);
+			});
+		});
+	});
 }
 
 fn stage_notices(ui: &mut egui::Ui, notices: &[(String, bool)]) {

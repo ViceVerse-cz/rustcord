@@ -4,6 +4,7 @@ pub mod audio;
 pub mod camera;
 mod capture;
 mod crypto;
+mod diagnostics;
 mod jitter;
 mod mixer;
 pub mod screen;

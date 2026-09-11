@@ -1,6 +1,7 @@
 //! Device I/O is created only after an explicit call reaches encrypted readiness.
 //! CPAL callbacks use preallocated lock-free rings; codecs and channels stay off them.
 use crate::Frame;
+use crate::diagnostics::{Metrics, Scope, Stage};
 mod echo;
 #[cfg(target_os = "macos")]
 mod permission_macos;
@@ -132,6 +133,7 @@ impl Audio {
 		let thread = std::thread::Builder::new()
 			.name("voice-audio".into())
 			.spawn(move || {
+				let mut metrics = Metrics::new(Scope::Audio);
 				let mut streams: Option<(u64, Streams)> = None;
 				'audio: while !worker_gate.stopped.load(Ordering::Acquire) {
 					let revision = worker_gate.revision.load(Ordering::Acquire);
@@ -149,6 +151,7 @@ impl Audio {
 								break;
 							}
 						}
+						metrics.poll(false, 0, false, 0);
 						std::thread::park_timeout(Duration::from_millis(10));
 						continue;
 					}
@@ -183,25 +186,30 @@ impl Audio {
 					let Some((_, active)) = &mut streams else {
 						continue;
 					};
-					if worker_gate.echo_reset.swap(false, Ordering::AcqRel) {
+					let reset = worker_gate.echo_reset.swap(false, Ordering::AcqRel);
+					let mut drops = 0;
+					let mut noise_frames = 0;
+					if reset {
 						active.echo = echo::Echo::new();
 						for _ in 0..8 {
 							let _ = active.input.pop();
 							let _ = active.reference.pop();
 						}
 					}
-					active.echo.set_noise_suppression(
-						worker_gate.noise_suppression.load(Ordering::Acquire),
-					);
+					let noise = worker_gate.noise_suppression.load(Ordering::Acquire);
+					active.echo.set_noise_suppression(noise);
 					for _ in 0..8 {
 						let Ok(frame) = active.reference.pop() else {
 							break;
 						};
-						if worker_gate.capture()
-							&& let Err(error) = active.echo.render(&frame)
-						{
-							emit(Err(error));
-							break 'audio;
+						if worker_gate.capture() {
+							let start = metrics.start();
+							let result = active.echo.render(&frame);
+							metrics.finish(Stage::EchoRender, start);
+							if let Err(error) = result {
+								emit(Err(error));
+								break 'audio;
+							}
 						}
 					}
 					for _ in 0..8 {
@@ -209,7 +217,11 @@ impl Audio {
 							break;
 						};
 						if worker_gate.capture() {
-							if let Err(error) = active.echo.capture(&mut frame) {
+							let start = metrics.start();
+							let result = active.echo.capture(&mut frame);
+							metrics.finish(Stage::EchoCapture, start);
+							noise_frames += u64::from(noise);
+							if let Err(error) = result {
 								emit(Err(error));
 								break 'audio;
 							}
@@ -221,7 +233,7 @@ impl Audio {
 							if worker_gate.capture()
 								&& !worker_gate.echo_reset.load(Ordering::Acquire)
 							{
-								let _ = capture.try_send(frame);
+								drops += u64::from(capture.try_send(frame).is_err());
 							}
 						}
 					}
@@ -230,9 +242,10 @@ impl Audio {
 							break;
 						};
 						if worker_gate.playback() {
-							let _ = active.output.push(frame);
+							drops += u64::from(active.output.push(frame).is_err());
 						}
 					}
+					metrics.poll(reset, drops, false, noise_frames);
 					std::thread::park_timeout(Duration::from_millis(5));
 				}
 				worker_gate.stopped.store(true, Ordering::Release);

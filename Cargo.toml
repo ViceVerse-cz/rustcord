@@ -50,6 +50,22 @@ codegen-units = 1
 strip = "debuginfo"
 debug = "line-tables-only"
 
+# Real-time echo processing must also keep up in otherwise unoptimized dev builds.
+[profile.dev.package.sonora]
+opt-level = 3
+
+[profile.dev.package.sonora-aec3]
+opt-level = 3
+
+[profile.dev.package.sonora-common-audio]
+opt-level = 3
+
+[profile.dev.package.sonora-fft]
+opt-level = 3
+
+[profile.dev.package.sonora-simd]
+opt-level = 3
+
 [patch.crates-io]
 # Replace an affected SHAKE dependency while retaining the compatible HPKE API.
 hpke-rs = { path = "vendor/hpke-rs" }

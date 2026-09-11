@@ -132,6 +132,58 @@ The outgoing DAVE key-package encoding was corrected to match reference implemen
 [the adapter's source comparison](../crates/discord-voice/README.md#key-package-interoperability-correction).
 Actual two-way audio still requires the owner-operated test above.
 
+## Investigating high CPU during a call
+
+Failed calls show their first safe failure reason, with a **Copy failure reason**
+button, in both the sidebar and call stage. The reason remains until the call is
+dismissed, including after departure acknowledgments or a later gateway disconnect.
+Audio/transport worker failures use a separate fixed slot so a full progress queue
+cannot discard the cause. Copying includes only the failure text, not participants,
+channel identifiers, credentials or media. The timing summaries below do not explain
+a terminal failure; copy the failed-call reason as well when troubleshooting.
+`cargo run --locked -p serein -- --demo --demo-voice-failed` previews a synthetic
+failure and checks that subsequent cleanup/progress events retain its original reason.
+
+Set `SEREIN_VOICE_DIAGNOSTICS=1` before launching Serein to get aggregate voice
+timings on stderr every five seconds and a best-effort final summary on teardown.
+For example, launch an already-built macOS app from a terminal:
+
+```sh
+SEREIN_VOICE_DIAGNOSTICS=1 SEREIN_FRAME_DIAGNOSTICS=1 /Applications/Serein.app/Contents/MacOS/serein 2> serein-voice.log
+```
+
+On Windows PowerShell, set `$env:SEREIN_VOICE_DIAGNOSTICS="1"` and
+`$env:SEREIN_FRAME_DIAGNOSTICS="1"`, then launch `serein.exe 2> serein-voice.log`.
+On Linux, use the same environment assignments as macOS with the installed executable.
+Quit an already-running instance first. Join/leave the call yourself; diagnostics never
+enable capture, join a call or send media. Quit normally to obtain the existing UI frame
+summary. Remove the environment variables to disable diagnostics on the next launch.
+
+Each voice stage reports `[calls, total_us, max_us]` over `window_ms`:
+`echo_render` processes speaker reference; `echo_capture` includes AEC and optional
+noise suppression; `encode` includes Opus and outgoing encryption; `mix` includes
+remote Opus decoding; `receive` measures accepted packet decryption/queueing.
+`noise_frames` identifies capture frames processed with suppression enabled.
+Audio `wakes` counts worker iterations; Transport `wakes` counts 20 ms timer ticks.
+`resets` counts AEC resets from mute transitions or callback overruns; `drops` counts
+full capture/playback worker queues; `stalls` counts transport gaps of at least 80 ms.
+Stage timings exclude device callbacks, socket waits, device opening and UI rendering.
+These are elapsed times, including scheduler preemption, **not process CPU percentages**.
+`debug=true` identifies a build with debug assertions. Development builds optimize the
+existing Sonora echo-processing crates while keeping application code unoptimized and
+debuggable; release builds remain the reference for overall performance. Rebuild and
+restart to apply this change. Compare speaking, muted and noise-suppression-on/off windows to narrow
+the cause; UI frame diagnostics help identify excessive rendering separately.
+
+Logging is off by default. Fixed numeric reports go through an eight-slot queue to a
+separate writer; media workers never wait for stderr. Output stops after 128 reports
+or 64 KiB per process, shared by all calls, so restart for another capture. A full queue
+drops summaries. No IDs, device names, endpoints, keys, audio or signaling payloads
+are logged; upstream cryptographic tracing remains disabled. No files are created by
+Serein. Shell redirection is owner-managed and may include unrelated framework logs.
+The device-free check is `cargo run --locked -p discord-voice --example voice_diagnostics`.
+Instrumentation alone does not establish the cause of a reported CPU spike or a speedup.
+
 ## Acoustic echo cancellation
 
 The voice build automatically runs Sonora 0.2.0 (a Rust port of WebRTC AEC3) on

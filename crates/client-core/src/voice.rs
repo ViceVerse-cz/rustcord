@@ -487,7 +487,9 @@ impl ClientState {
 						return;
 					}
 					if channel != Some(call.channel) || guild != call.guild {
-						self.voice.active = None;
+						if call.phase != Phase::Failed {
+							self.voice.active = None;
+						}
 						return;
 					}
 				}
@@ -501,7 +503,7 @@ impl ClientState {
 				call.participants.retain(|p| p.user != user);
 				if channel == Some(call.channel) {
 					if call.participants.len() >= MAX_PARTICIPANTS {
-						self.disconnect_voice();
+						self.disconnect_voice("Voice channel exceeds the 64 participant limit");
 						self.status = "Voice channel exceeds the 64 participant limit";
 						return;
 					}
@@ -540,7 +542,7 @@ impl ClientState {
 				{
 					call.phase = Phase::Failed;
 					call.camera = false;
-					call.error = Some(message);
+					call.error.get_or_insert(message);
 					call.participants.clear();
 				}
 			}
@@ -569,7 +571,7 @@ impl ClientState {
 				+ entry.bytes()
 				> MAX_ROSTER_BYTES
 		{
-			self.disconnect_voice();
+			self.disconnect_voice("Voice roster exceeds safe capacity; reconnect to refresh");
 			self.status = "Voice roster exceeds safe capacity; reconnect to refresh";
 			return false;
 		}
@@ -596,7 +598,7 @@ impl ClientState {
 				call.server_deafened = own.server_deafened;
 			}
 			if call.participants.len() > MAX_PARTICIPANTS {
-				self.disconnect_voice();
+				self.disconnect_voice("Voice channel exceeds the 64 participant limit");
 			}
 		}
 	}
@@ -610,19 +612,19 @@ impl ClientState {
 			.voice
 			.active
 			.as_ref()
-			.is_some_and(|c| c.channel == channel)
+			.is_some_and(|c| c.channel == channel && c.phase != Phase::Failed)
 		{
 			self.voice.active = None;
 		}
 	}
-	pub fn disconnect_voice(&mut self) {
+	pub fn disconnect_voice(&mut self, reason: &'static str) {
 		self.voice.dm_calls.clear();
 		self.voice.roster.clear();
 		self.voice.incoming = None;
 		if let Some(call) = &mut self.voice.active {
 			call.phase = Phase::Failed;
 			call.camera = false;
-			call.error = Some("Call disconnected; start a new call explicitly");
+			call.error.get_or_insert(reason);
 			call.participants.clear();
 		}
 	}

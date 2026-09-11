@@ -10,7 +10,7 @@ use discord_voice::{
 use eframe::egui;
 use model::Id;
 use std::{
-	sync::{Arc, mpsc},
+	sync::{Arc, OnceLock, mpsc},
 	time::{Duration, Instant},
 };
 use tokio::{runtime::Runtime, sync::watch, task::JoinHandle};
@@ -68,7 +68,6 @@ enum Notice {
 	MediaReady(String),
 	DeviceReady,
 	RemoteAudio,
-	Failed(&'static str),
 }
 struct Live {
 	generation: u64,
@@ -82,6 +81,8 @@ struct Live {
 	audio: Audio,
 	controls: watch::Sender<Controls>,
 	events: mpsc::Receiver<Notice>,
+	// Terminal errors must survive a full progress queue; retain the first safe reason.
+	failure: Arc<OnceLock<&'static str>>,
 	speakers: watch::Receiver<[u64; 64]>,
 	task: JoinHandle<()>,
 	devices: Devices,
@@ -463,12 +464,9 @@ impl Voice {
 					}
 					// Notices wake the UI; only the current device configuration can be ready.
 					Notice::DeviceReady | Notice::RemoteAudio => {}
-					Notice::Failed(error) => {
-						failure = Some(error);
-						break;
-					}
 				}
 			}
+			failure = live.failure.get().copied();
 			let devices_ready = live.audio.is_ready();
 			if failure.is_none() {
 				let pending = live
@@ -504,6 +502,8 @@ impl Voice {
 			if live.task.is_finished() && failure.is_none() {
 				failure = Some("Voice connection ended; start a new call explicitly");
 			}
+			// A worker can finish between draining notices and checking its lifecycle.
+			failure = live.failure.get().copied().or(failure);
 		}
 		if failure.is_none()
 			&& let Some(live) = &self.live
@@ -658,6 +658,8 @@ impl Voice {
 		let (camera_frames, camera_receive) = mpsc::sync_channel(1);
 		let (playback, playback_receive) = mpsc::sync_channel(8);
 		let (send, events) = mpsc::sync_channel(8);
+		let failure = Arc::new(OnceLock::new());
+		let audio_failure = failure.clone();
 		let (speaking, speakers) = watch::channel([0; 64]);
 		let audio_send = send.clone();
 		let wake = ctx.clone();
@@ -670,10 +672,14 @@ impl Voice {
 			capture_send,
 			playback_receive,
 			move |result| {
-				let _ = audio_send.try_send(match result {
-					Ok(()) => Notice::DeviceReady,
-					Err(error) => Notice::Failed(error),
-				});
+				match result {
+					Ok(()) => {
+						let _ = audio_send.try_send(Notice::DeviceReady);
+					}
+					Err(error) => {
+						let _ = audio_failure.set(error);
+					}
+				}
 				wake.request_repaint();
 			},
 		)?;
@@ -701,6 +707,7 @@ impl Voice {
 		};
 		let identity = discord_voice::Identity::generate();
 		let media_identity = identity.clone();
+		let transport_failure = failure.clone();
 		let wake = ctx.clone();
 		let task = runtime.spawn(async move {
 			let status = send.clone();
@@ -744,7 +751,7 @@ impl Voice {
 			)
 			.await;
 			if let Err(error) = result {
-				let _ = send.try_send(Notice::Failed(error));
+				let _ = transport_failure.set(error);
 			}
 			wake.request_repaint();
 		});
@@ -760,6 +767,7 @@ impl Voice {
 			audio,
 			controls,
 			events,
+			failure,
 			speakers,
 			task,
 			devices,
@@ -897,7 +905,7 @@ mod tests {
 		state.start_call(Id(25), false).unwrap();
 		let mut manager = Voice::default();
 		manager.begin(&state, false).unwrap();
-		state.disconnect_voice();
+		state.disconnect_voice("Discord gateway connection lost; rejoin after reconnecting");
 		let mut ui = ui::MessagingUi::default();
 		let context = egui::Context::default();
 		assert!(matches!(

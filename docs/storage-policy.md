@@ -226,6 +226,16 @@ Schema 7 adds one checked integer `message_kind` (0..255) per cached message, wi
 
 ### Opt-in synchronization and compatibility diagnostics
 
+Voice performance diagnostics (`SEREIN_VOICE_DIAGNOSTICS=1`) are also off by default.
+They retain at most eight fixed-size numeric reports in a worker queue (under 2 KiB),
+plus one report per producer and one being written. One background writer formats
+reports and caps attempted stderr output at 128 reports AND 64 KiB per process,
+across calls. Queue overflow drops diagnostics without delaying media. A blocked
+stderr can stall only that single diagnostic writer. No files, identifiers, device
+names, payloads, audio, keys or telemetry are produced. Explicit shell redirection
+is owner-managed; unrelated output and appended runs are outside these limits.
+See [voice CPU diagnostics](voice.md#investigating-high-cpu-during-a-call) for usage.
+
 `SEREIN_MEMBER_DIAGNOSTICS=1` enables fixed-label member synchronization diagnostics;
 `SEREIN_GATEWAY_DIAGNOSTICS=1` enables Gateway compatibility diagnostics. Both are off by default.
 Each enabled scope has a hard budget of 64 attempted records AND 8 KiB of formatted UTF-8

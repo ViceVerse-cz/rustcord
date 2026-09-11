@@ -419,7 +419,9 @@ impl Desktop {
 					test_support::system_demo_state()
 				} else if std::env::args().any(|arg| arg == "--demo-notifications") {
 					test_support::notification_demo_state()
-				} else if std::env::args().any(|arg| arg == "--demo-voice") {
+				} else if std::env::args()
+					.any(|arg| matches!(arg.as_str(), "--demo-voice" | "--demo-voice-failed"))
+				{
 					test_support::voice_demo_state()
 				} else if std::env::args().any(|arg| arg == "--demo-existing-call") {
 					test_support::existing_call_demo_state()
@@ -433,6 +435,35 @@ impl Desktop {
 			};
 		}
 		#[cfg(feature = "demo")]
+		if demo && std::env::args().any(|arg| arg == "--demo-voice-failed") {
+			let call = state
+				.voice
+				.active
+				.as_ref()
+				.expect("voice fixture has a call");
+			let (channel, request) = (call.channel, call.request);
+			let reason = "Audio device stopped or disconnected; choose a device and call again";
+			state.apply_voice(client_core::voice::Event::Failed {
+				channel,
+				request,
+				message: reason,
+			});
+			// Synthetic recovery events must not erase the reason before it can be copied.
+			state.disconnect_voice("Later gateway disconnect");
+			state.apply_voice(client_core::voice::Event::Deleted { channel });
+			state.apply_voice(client_core::voice::Event::Progress {
+				channel,
+				request,
+				phase: client_core::voice::Phase::Connected,
+			});
+			let call = state
+				.voice
+				.active
+				.as_ref()
+				.expect("failure survives departure");
+			assert_eq!(call.error, Some(reason));
+			assert_eq!(call.phase, client_core::voice::Phase::Failed);
+		}
 		if demo {
 			let fixture = demo_members(None, model::Id(22), 0);
 			state.direct_presences = fixture
@@ -786,7 +817,8 @@ impl Desktop {
 			"Connecting with the supplied session; saved login unchanged"
 		};
 		self.voice.stop();
-		self.state.disconnect_voice();
+		self.state
+			.disconnect_voice("Discord login session changed; start a new call");
 		self.uploads.cancel();
 		self.login = None;
 		self.connection = None;
