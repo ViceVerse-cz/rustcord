@@ -588,6 +588,27 @@ impl Avatars {
 							.iter()
 							.any(|ext| path.to_ascii_lowercase().ends_with(ext))
 					});
+				let mut source = source.to_owned();
+				if original_gif.is_none()
+					&& media.width > 0
+					&& media.height > 0
+					&& let Ok(mut url) = url::Url::parse(&source)
+				{
+					let query: Vec<_> = url
+						.query_pairs()
+						.filter(|(key, _)| key != "width" && key != "height")
+						.map(|(key, value)| (key.into_owned(), value.into_owned()))
+						.collect();
+					let edge = u64::from(media.width.max(media.height)).max(512);
+					let width = (u64::from(media.width) * 512 / edge).max(1);
+					let height = (u64::from(media.height) * 512 / edge).max(1);
+					url.set_query(None);
+					url.query_pairs_mut()
+						.extend_pairs(query)
+						.append_pair("width", &width.to_string())
+						.append_pair("height", &height.to_string());
+					source = url.into();
+				}
 				format!("{}:{source}", if animated { "anim" } else { "embed" })
 			});
 			if demo

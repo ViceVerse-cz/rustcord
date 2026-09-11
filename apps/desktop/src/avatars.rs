@@ -275,6 +275,22 @@ fn embed_url(source: &str) -> Option<String> {
 	if host == "cdn.discordapp.com" {
 		url.set_host(Some("media.discordapp.net")).ok()?;
 	}
+	// Keep the aspect ratio supplied by the media metadata, within the decode budget.
+	let dimension = |name| {
+		url.query_pairs()
+			.find(|(key, _)| key == name)
+			.and_then(|(_, value)| value.parse::<u32>().ok())
+			.filter(|value| *value > 0)
+	};
+	let dimensions = dimension("width")
+		.zip(dimension("height"))
+		.map(|(width, height)| {
+			let edge = u64::from(width.max(height)).max(512);
+			(
+				(u64::from(width) * 512 / edge).max(1),
+				(u64::from(height) * 512 / edge).max(1),
+			)
+		});
 	// Static proxy conversion is unofficial. A rejected/unsupported format stays a placeholder;
 	// do not follow redirects, contact the original host, or add animation decoders as fallback.
 	let query: Vec<_> = url
@@ -282,7 +298,7 @@ fn embed_url(source: &str) -> Option<String> {
 		.filter(|(key, _)| {
 			!matches!(
 				key.as_ref(),
-				"format" | "width" | "height" | "quality" | "animated"
+				"format" | "width" | "height" | "quality" | "animated" | "fit"
 			)
 		})
 		.map(|(key, value)| (key.into_owned(), value.into_owned()))
@@ -290,9 +306,15 @@ fn embed_url(source: &str) -> Option<String> {
 	url.set_query(None);
 	url.query_pairs_mut()
 		.extend_pairs(query)
-		.append_pair("format", "png")
-		.append_pair("width", "512")
-		.append_pair("height", "512");
+		.append_pair("format", "png");
+	if let Some((width, height)) = dimensions {
+		url.query_pairs_mut()
+			.append_pair("width", &width.to_string())
+			.append_pair("height", &height.to_string());
+	} else {
+		// Without dimensions, let the proxy derive height rather than request a square crop.
+		url.query_pairs_mut().append_pair("width", "512");
+	}
 	Some(url.into())
 }
 
@@ -309,9 +331,9 @@ fn application_icon_url(key: &str, bytes: &[u8]) -> Option<String> {
 }
 
 fn disk_key(key: &str) -> Option<String> {
-	cdn_url(key)?;
+	let url = cdn_url(key)?;
 	if key.starts_with("anim:") || key.starts_with("embed:") || key.starts_with("gif:") {
-		Some(format!("embed-{:x}", Sha256::digest(key.as_bytes())))
+		Some(format!("embed-{:x}", Sha256::digest(url.as_bytes())))
 	} else {
 		Some(key.to_owned())
 	}
@@ -894,12 +916,17 @@ mod tests {
 				"Unsafe or unsupported test URL was accepted"
 			);
 		}
-		let embed_key = "embed:https://cdn.discordapp.com/attachments/1/2/image.png?ex=abc&is=def&hm=synthetic&format=webp&width=4096";
+		let embed_key = "embed:https://cdn.discordapp.com/attachments/1/2/image.png?ex=abc&is=def&hm=synthetic&format=webp&width=4096&height=1024&fit=cover";
 		let transformed = cdn_url(embed_key).unwrap();
 		assert!(transformed.starts_with("https://media.discordapp.net/attachments/1/2/image.png?"));
-		assert!(transformed.ends_with("format=png&width=512&height=512"));
+		assert!(transformed.ends_with("format=png&width=512&height=128"));
 		assert!(transformed.contains("hm=synthetic"));
 		assert!(!transformed.contains("4096"));
+		assert!(!transformed.contains("fit=cover"));
+		assert_ne!(
+			disk_key(embed_key).unwrap(),
+			format!("embed-{:x}", Sha256::digest(embed_key.as_bytes()))
+		);
 		assert_eq!(disk_key(embed_key).unwrap().len(), 70);
 		assert!(
 			disk_key(embed_key)
