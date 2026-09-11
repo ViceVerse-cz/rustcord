@@ -1,5 +1,13 @@
 # Discord compatibility — checked 2026-09-10
 
+## Existing DM calls — September 11, 2026
+
+Viewing a supported one-to-one DM requests its call state using the existing unofficial
+Gateway opcode 13. CALL_CREATE/UPDATE keep an ongoing-call banner independently of ringing
+or local media; CALL_DELETE/unavailability removes it. Join never rings an already known
+call. [Primary implementation evidence and owner-controlled live checks](voice.md) distinguish
+the passing local WebSocket/reducer/UI tests from still-unverified Discord discovery and audio.
+
 ## Own profile editing — September 11, 2026
 
 The native editor updates global display name, bio, pronouns and accent color through

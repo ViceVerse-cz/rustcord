@@ -636,10 +636,8 @@ async fn run_inner(
 							continue;
 						}
 					};
-					if let Some(channel)=connect && calls.allowed.get(&channel) == Some(&None) {
-						let packet=Frame::Text(serde_json::json!({"op":13,"d":{"channel_id":channel}}).to_string().into());
-						if !matches!(timeout(Duration::from_secs(5),socket.send(packet)).await,Ok(Ok(()))) {break;}
-					}
+					if let Some(channel)=connect && let Some(packet)=calls.packet(client_core::voice::Command::Sync { channel })?
+						&& !matches!(timeout(Duration::from_secs(5),socket.send(packet)).await,Ok(Ok(()))) {break;}
 					if let Some(packet)=packet && !matches!(timeout(Duration::from_secs(5),socket.send(packet)).await,Ok(Ok(()))) {break;}
 				}
 
@@ -1541,6 +1539,71 @@ mod tests {
 		.expect("local lifecycle exceeded its bounded deadline");
 	}
 
+	#[tokio::test]
+	async fn unjoined_dm_call_discovery_and_lifecycle_over_local_gateway() {
+		use client_core::voice::{Command as V, Event as E};
+		timeout(Duration::from_secs(10), async {
+			let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+			let endpoint = format!("ws://{}/", listener.local_addr().unwrap());
+			let (controls, receive) = mpsc::channel(8);
+			let (deleted, mut deletion) = watch::channel(false);
+			let observed = std::sync::Mutex::new(Vec::new());
+			let server = async {
+				let (stream, _) = listener.accept().await.unwrap();
+				let mut socket = accept_async(stream).await.unwrap();
+				send(&mut socket, json!({"op":10,"d":{"heartbeat_interval":1000}})).await;
+				assert_eq!(packet(&mut socket).await["op"], 2);
+				let mut snapshot = ready(1, "synthetic-main-session");
+				snapshot["d"]["private_channels"] = json!([{"id":"2","type":1,"recipients":[{"id":"3","username":"Peer"}]}]);
+				send(&mut socket, snapshot).await;
+				loop {
+					let packet = packet(&mut socket).await;
+					if packet["op"] == 1 {
+						send(&mut socket, json!({"op":11,"d":null})).await;
+						continue;
+					}
+					assert_eq!(packet, json!({"op":13,"d":{"channel_id":"2"}}));
+					break;
+				}
+				send(&mut socket, json!({"op":0,"t":"CALL_CREATE","s":2,"d":{"channel_id":"2","ringing":[],"voice_states":[{"channel_id":"2","user_id":"3","session_id":"synthetic-passive-session"}]}})).await;
+				send(&mut socket, json!({"op":0,"t":"CALL_UPDATE","s":3,"d":{"channel_id":"2","ringing":[]}})).await;
+				send(&mut socket, json!({"op":0,"t":"VOICE_STATE_UPDATE","s":4,"d":{"channel_id":"2","user_id":"3","session_id":"synthetic-passive-session","self_mute":true}})).await;
+				send(&mut socket, json!({"op":0,"t":"CALL_DELETE","s":5,"d":{"channel_id":"2"}})).await;
+				loop {
+					tokio::select! {
+						result = deletion.changed() => { result.unwrap(); break; }
+						packet = packet(&mut socket) => {
+							assert_eq!(packet["op"], 1, "discovery must not join or send other controls");
+							send(&mut socket, json!({"op":11,"d":null})).await;
+						}
+					}
+				}
+				socket.close(Some(CloseFrame { code: CloseCode::Library(4004), reason: "synthetic stop".into() })).await.unwrap();
+			};
+			let client = run_inner(
+				Arc::new(SessionSecret::from_owner_input("synthetic-owner-session".into()).unwrap()),
+				"wss://gateway.discord.gg/".into(), watch::channel(None).1, receive, None,
+				|event| {
+					match event {
+						Event::Ready { .. } => controls.try_send(V::Sync { channel: Id(2) }).unwrap(),
+						Event::Voice(E::Call { channel, ringing, participants, unavailable }) => {
+							assert_eq!(channel, Id(2));
+							assert_eq!(ringing, Some(vec![]));
+							assert!(!unavailable);
+							observed.lock().unwrap().push(if let Some(rows) = participants { assert_eq!(rows[0].user, Id(3)); "create" } else { "update" });
+						}
+						Event::Voice(E::State { request, session, .. }) => { assert_eq!(request, None); assert!(session.is_none()); observed.lock().unwrap().push("state"); }
+						Event::Voice(E::Deleted { channel }) => { assert_eq!(channel, Id(2)); observed.lock().unwrap().push("delete"); deleted.send(true).unwrap(); }
+						_ => {}
+					}
+					Ok(())
+				}, Some(&endpoint),
+			);
+			let ((), result) = tokio::join!(server, client);
+			assert_eq!(result, Err(Failure::Expired));
+			assert_eq!(*observed.lock().unwrap(), ["create", "update", "state", "delete"]);
+		}).await.unwrap();
+	}
 	#[tokio::test]
 	async fn explicit_dm_join_negotiation_and_leave_over_local_gateway() {
 		use client_core::voice::{Command as V, Event as E};

@@ -939,6 +939,9 @@ impl State {
 
 		if let Command::Voice(control) = command {
 			match control {
+				voice::Command::Sync { .. } => {
+					self.status = "Call status could not refresh; reopen the DM to retry"
+				}
 				voice::Command::Join {
 					channel, request, ..
 				}
@@ -1529,6 +1532,7 @@ impl State {
 					self.freshness = Freshness::Stale;
 				}
 				self.voice.roster.clear();
+				self.voice.dm_calls.clear();
 				self.members = None;
 				self.clear_profile();
 				self.profile_cache.clear();
@@ -1860,8 +1864,10 @@ impl State {
 				self.read_state.cancel();
 				self.clear_profile();
 				let roster = std::mem::take(&mut self.voice.roster);
+				let dm_calls = std::mem::take(&mut self.voice.dm_calls);
 				self.disconnect_voice();
 				self.voice.roster = roster; // RESUMED replays changes, not the entire unchanged roster.
+				self.voice.dm_calls = dm_calls;
 				self.invalidate_members();
 				self.gateway_connected = false;
 				self.cancel_history();

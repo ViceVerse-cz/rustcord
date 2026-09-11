@@ -547,6 +547,8 @@ impl MessagingUi {
 			"Join Voice"
 		} else if incoming {
 			"Answer call"
+		} else if state.voice.has_dm_call(channel) {
+			"Join call"
 		} else {
 			"Start voice call"
 		};
@@ -1249,7 +1251,17 @@ impl MessagingUi {
 					self.call_controls(&mut bar_ui, state, channel, commands);
 				});
 		}
-		if let Some(channel) = state.voice.incoming {
+		let existing = selected.filter(|channel| {
+			state.voice.has_dm_call(*channel)
+				&& state.can_view(*channel)
+				&& state
+					.voice
+					.active
+					.as_ref()
+					.is_none_or(|call| call.channel != *channel)
+		});
+		if let Some(channel) = state.voice.incoming.or(existing) {
+			let incoming = state.voice.incoming == Some(channel);
 			let caller = state
 				.channels
 				.iter()
@@ -1283,25 +1295,39 @@ impl MessagingUi {
 						}
 						ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 							ui.spacing_mut().item_spacing.x = 8.0;
-							let decline = round_action(
-								ui,
-								crate::icons::Icon::HangUp,
-								colors.danger,
-								!state.demo,
-								"Decline",
-							);
-							if decline.clicked()
-								&& let Some(command) = state.decline_call()
-							{
-								commands.push(command);
+							if incoming {
+								let decline = round_action(
+									ui,
+									crate::icons::Icon::HangUp,
+									colors.danger,
+									!state.demo,
+									"Decline",
+								);
+								if decline.clicked()
+									&& let Some(command) = state.decline_call()
+								{
+									commands.push(command);
+								}
 							}
-							let answer = round_action(
-								ui,
-								crate::icons::Icon::Phone,
-								colors.positive,
-								unavailable.is_none(),
-								"Answer",
-							)
+							let answer = if incoming {
+								round_action(
+									ui,
+									crate::icons::Icon::Phone,
+									colors.positive,
+									unavailable.is_none(),
+									"Answer",
+								)
+							} else {
+								ui.add_enabled(
+									unavailable.is_none(),
+									egui::Button::new(
+										design::medium(ui, "Join call", 13.0)
+											.color(egui::Color32::WHITE),
+									)
+									.fill(colors.positive)
+									.min_size(egui::vec2(84.0, 36.0)),
+								)
+							}
 							.on_disabled_hover_text(unavailable.unwrap_or(""));
 							if answer.clicked()
 								&& let Some(command) = state.start_call(channel, false)
@@ -1321,9 +1347,15 @@ impl MessagingUi {
 											.truncate(),
 										);
 										ui.label(
-											RichText::new(unavailable.unwrap_or("Incoming call…"))
-												.size(13.0)
-												.color(colors.muted),
+											RichText::new(if incoming {
+												unavailable.unwrap_or("Incoming call…")
+											} else if !state.gateway_connected {
+												"Reconnect to refresh call"
+											} else {
+												"Call in progress"
+											})
+											.size(13.0)
+											.color(colors.muted),
 										);
 									});
 								},
@@ -1760,6 +1792,136 @@ fn device_combo(
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn existing_dm_call_banner_joins_without_ringing_and_disables_unavailable_actions() {
+		fn frame(
+			ctx: &egui::Context,
+			messaging: &mut MessagingUi,
+			state: &mut State,
+			width: f32,
+			events: Vec<egui::Event>,
+		) -> (Vec<(String, egui::Rect)>, Vec<Command>) {
+			fn labels(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+				match shape {
+					egui::Shape::Text(text) => out.push((
+						text.galley.job.text.clone(),
+						text.galley.rect.translate(text.pos.to_vec2()),
+					)),
+					egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| labels(shape, out)),
+					_ => {}
+				}
+			}
+			let mut commands = vec![];
+			let mut output = ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(width, 480.0),
+					)),
+					events,
+					..Default::default()
+				},
+				|ui| messaging.call_bar(ui, state, &mut commands),
+			);
+			output.textures_delta.clear();
+			let mut text = vec![];
+			for shape in output.shapes {
+				labels(&shape.shape, &mut text);
+			}
+			(text, commands)
+		}
+		for width in [320.0, 900.0] {
+			for dark in [false, true] {
+				for mode in 0..5 {
+					let mut state = test_support::existing_call_demo_state();
+					state.demo = mode == 1;
+					state.gateway_connected = mode != 2;
+					if mode == 4 {
+						assert!(state.start_call(Id(25), false).is_some());
+					}
+					state
+						.channels
+						.iter_mut()
+						.find(|c| c.id == Id(22))
+						.unwrap()
+						.name = "A long synthetic caller name ".repeat(8);
+					let mut messaging = MessagingUi {
+						voice_available: mode != 3,
+						..Default::default()
+					};
+					let ctx = egui::Context::default();
+					ctx.set_visuals(if dark {
+						egui::Visuals::dark()
+					} else {
+						egui::Visuals::light()
+					});
+					frame(&ctx, &mut messaging, &mut state, width, vec![]);
+					let (text, commands) = frame(&ctx, &mut messaging, &mut state, width, vec![]);
+					assert!(
+						commands.is_empty(),
+						"Showing an ongoing call must never join"
+					);
+					let join = text
+						.iter()
+						.find(|(label, _)| label == "Join call")
+						.expect("Visible Join call button")
+						.1;
+					assert!(
+						join.left() >= 0.0 && join.right() <= width,
+						"Join must fit narrow layouts"
+					);
+					assert!(text.iter().any(|(label, _)| label
+						== if mode == 2 {
+							"Reconnect to refresh call"
+						} else {
+							"Call in progress"
+						}));
+					let mut sent = vec![];
+					for pressed in [true, false] {
+						let (_, commands) = frame(
+							&ctx,
+							&mut messaging,
+							&mut state,
+							width,
+							vec![
+								egui::Event::PointerMoved(join.center()),
+								egui::Event::PointerButton {
+									pos: join.center(),
+									button: egui::PointerButton::Primary,
+									pressed,
+									modifiers: egui::Modifiers::NONE,
+								},
+							],
+						);
+						sent.extend(commands);
+					}
+					if mode == 0 {
+						assert!(matches!(
+							sent.as_slice(),
+							[Command::Voice(client_core::voice::Command::Join {
+								channel: Id(22),
+								ring: false,
+								..
+							})]
+						));
+					} else {
+						assert!(
+							sent.is_empty(),
+							"Demo, offline, text-only and busy states cannot join"
+						);
+					}
+					state.apply_voice(client_core::voice::Event::Deleted { channel: Id(22) });
+					let (text, _) = frame(&ctx, &mut messaging, &mut state, width, vec![]);
+					assert!(
+						!text
+							.iter()
+							.any(|(label, _)| label == "Join call" || label == "Call in progress")
+					);
+				}
+			}
+		}
+	}
 
 	#[test]
 	fn voice_popup_keeps_device_selection_open_and_demo_controls_inert() {

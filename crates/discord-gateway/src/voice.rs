@@ -204,6 +204,17 @@ impl Calls {
 	}
 	pub(super) fn packet(&mut self, command: Command) -> Result<Option<Frame>, Failure> {
 		let (channel, guild) = match command {
+			Command::Sync { channel } => {
+				if self.allowed.get(&channel) != Some(&None) {
+					return Ok(None);
+				}
+				// Unofficial opcode 13 requests existing call state; it never joins or rings.
+				return Ok(Some(Frame::Text(
+					json!({"op":13,"d":{"channel_id":channel}})
+						.to_string()
+						.into(),
+				)));
+			}
 			Command::Join {
 				channel, request, ..
 			} => {
@@ -618,6 +629,42 @@ fn participant(state: &VoiceStateDto) -> Participant {
 mod tests {
 	use super::*;
 	use std::sync::Mutex;
+	#[test]
+	fn sync_discovers_only_admitted_dm_calls_without_joining() {
+		let mut calls = Calls::default();
+		calls.allowed.insert(Id(2), None);
+		calls.allowed.insert(Id(20), Some(Id(10)));
+		for channel in [Id(9), Id(20)] {
+			assert!(calls.packet(Command::Sync { channel }).unwrap().is_none());
+		}
+		let Some(Frame::Text(packet)) = calls.packet(Command::Sync { channel: Id(2) }).unwrap()
+		else {
+			panic!("expected call discovery packet");
+		};
+		assert_eq!(
+			serde_json::from_str::<serde_json::Value>(&packet).unwrap(),
+			json!({"op":13,"d":{"channel_id":"2"}})
+		);
+		assert!(calls.active.is_none());
+		assert!(calls.departing.is_none());
+		calls
+			.packet(Command::Join {
+				channel: Id(20),
+				request: 7,
+				ring: false,
+			})
+			.unwrap();
+		calls.packet(Command::Sync { channel: Id(2) }).unwrap();
+		assert_eq!(calls.active, Some((Id(20), 7)));
+		assert_eq!(calls.active_guild, Some(Id(10)));
+		calls.invalidate(Id(2));
+		assert!(
+			calls
+				.packet(Command::Sync { channel: Id(2) })
+				.unwrap()
+				.is_none()
+		);
+	}
 	#[test]
 	fn camera_controls_preserve_mute_and_reject_stale_or_revoked_enable() {
 		let mut calls = Calls::default();

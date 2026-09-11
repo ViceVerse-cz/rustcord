@@ -535,6 +535,22 @@ pub fn call_demo_state() -> State {
 	state.status = "Offline call fixture · no microphone or network access";
 	state
 }
+/// Synthetic ongoing DM call on another client; this device has never joined.
+pub fn existing_call_demo_state() -> State {
+	let mut state = demo_state();
+	let _ = state.select(Id(22));
+	load_page(&mut state, None);
+	state.demo = false;
+	state.apply_voice(client_core::voice::Event::Call {
+		channel: Id(22),
+		ringing: Some(vec![]),
+		participants: None,
+		unavailable: false,
+	});
+	state.demo = true;
+	state.status = "Offline call fixture · no microphone or network access";
+	state
+}
 pub fn load_page(state: &mut State, before: Option<Id>) {
 	load_page_with_cursors(state, before, None);
 }
@@ -739,6 +755,102 @@ pub fn system_demo_state() -> State {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[test]
+	fn existing_dm_calls_survive_ringing_hangup_and_resume_but_not_deletion_or_logout() {
+		use client_core::voice::{Command as V, Event as E, MAX_DM_CALLS};
+		let mut state = existing_call_demo_state();
+		state.demo = false;
+		let call = |channel, ringing, unavailable| E::Call {
+			channel,
+			ringing,
+			participants: None,
+			unavailable,
+		};
+		assert!(state.voice.has_dm_call(Id(22)));
+		assert!(state.voice.active.is_none());
+		assert!(state.voice.incoming.is_none());
+		state.apply_voice(call(Id(22), Some(vec![Id(1)]), false));
+		assert!(state.decline_call().is_some());
+		state.apply_voice(call(Id(22), Some(vec![]), false));
+		assert!(state.voice.has_dm_call(Id(22)));
+		assert!(state.voice.incoming.is_none());
+		assert!(matches!(
+			state.start_call(Id(22), true),
+			Some(client_core::Command::Voice(V::Join { ring: false, .. }))
+		));
+		state.leave_call();
+		assert!(state.voice.has_dm_call(Id(22)));
+		state.apply(Envelope {
+			generation: state.generation,
+			event: Event::Disconnected,
+		});
+		assert!(state.voice.has_dm_call(Id(22)));
+		assert!(state.start_call(Id(22), false).is_none());
+		state.apply(Envelope {
+			generation: state.generation,
+			event: Event::Resumed,
+		});
+		assert!(state.voice.has_dm_call(Id(22)));
+		state.apply(Envelope {
+			generation: state.generation + 1,
+			event: Event::Voice(E::Deleted { channel: Id(22) }),
+		});
+		assert!(state.voice.has_dm_call(Id(22)));
+		state.apply_voice(E::Deleted { channel: Id(22) });
+		assert!(!state.voice.has_dm_call(Id(22)));
+		assert!(matches!(
+			state.start_call(Id(22), true),
+			Some(client_core::Command::Voice(V::Join { ring: true, .. }))
+		));
+		state.leave_call();
+		state.apply_voice(call(Id(22), None, false));
+		state.apply_voice(call(Id(22), None, true));
+		assert!(!state.voice.has_dm_call(Id(22)));
+		let template = state
+			.channels
+			.iter()
+			.find(|c| c.id == Id(22))
+			.unwrap()
+			.clone();
+		for id in 100..100 + MAX_DM_CALLS as u64 + 1 {
+			state.channels.push(model::Channel {
+				id: Id(id),
+				..template.clone()
+			});
+			state.apply_voice(call(Id(id), None, false));
+		}
+		assert!(!state.voice.has_dm_call(Id(100)));
+		assert_eq!(
+			state
+				.channels
+				.iter()
+				.filter(|c| state.voice.has_dm_call(c.id))
+				.count(),
+			MAX_DM_CALLS
+		);
+		// Duplicate partial updates consume no extra slot; invalid channels cannot establish calls.
+		state.apply_voice(call(Id(101), None, false));
+		state.apply_voice(call(Id(25), None, false));
+		state.apply_voice(call(Id(9999), None, false));
+		assert!(!state.voice.has_dm_call(Id(25)));
+		assert!(!state.voice.has_dm_call(Id(9999)));
+		state.apply(Envelope {
+			generation: state.generation,
+			event: Event::RecipientRemoved {
+				channel: Id(101),
+				user: Id(1),
+			},
+		});
+		assert!(!state.voice.has_dm_call(Id(101)));
+		state.logout();
+		assert!(
+			state
+				.channels
+				.iter()
+				.all(|c| !state.voice.has_dm_call(c.id))
+		);
+		assert!(!state.voice.has_dm_call(Id(102)));
+	}
 	#[test]
 	fn unread_demo_pages_start_after_marker_and_advance_without_latest_substitution() {
 		use client_core::Command;

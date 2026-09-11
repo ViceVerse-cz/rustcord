@@ -27,6 +27,23 @@ Reset levels, mute/deafen/PTT precedence and changing devices while custom level
 
 Start calls the selected existing DM; incoming calls require Answer or Decline. One active call is retained while navigating text conversations. Start rings once after Discord voice transport allocation is confirmed; Answer never rings. Required DAVE group readiness and native device readiness precede the connected-audio state. An allocation with no endpoint waits within the deadline; incompatible states fail visibly. Hangup closes local audio immediately and sends departure; another call waits for the service's departure acknowledgment. No uncertain ring write or failed main Gateway session automatically starts another call.
 
+Opening a one-to-one DM also requests its existing call state. An ongoing call shows a
+**Call in progress** banner and **Join call**, even after ringing stops or this device leaves.
+Join uses the existing connection flow without ringing again; browsing never joins or opens
+audio devices. Incoming ringing retains Answer/Decline. Join is disabled while offline, in a
+text-only build, or while another local call still exists. Ended/unavailable calls disappear.
+This uses the existing unofficial Gateway opcode 13 and CALL_CREATE/UPDATE/DELETE contract,
+checked against [discord.py-self's Gateway implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/gateway.py)
+and [call dispatch handling](https://github.com/dolfies/discord.py-self/blob/master/discord/state.py)
+on September 11, 2026. Local WebSocket and reducer/UI tests establish the implementation;
+discovery of a real existing Discord call remains unverified.
+
+`cargo run --locked --features voice -- --demo --demo-existing-call` shows a synthetic
+ongoing DM call with no local media session. The preview Join button is deliberately disabled.
+For the owner-controlled live gate, leave the peer connected in a private DM call, open that
+DM in Serein, wait for the banner, then explicitly Join. Verify no new ring, actual two-way
+audio, leaving/rejoining while the peer stays, and disappearance after the peer ends the call.
+
 Mute/deafen, session-local input/output selection and focused V push-to-talk are implemented. Push-to-talk releases when focus is lost and is disabled while text entry has focus. It is not a global hotkey. Devices are initialized only following an explicit call and encrypted readiness; no microphone test runs at startup. Acoustic echo cancellation is enabled automatically; see below for its limits. Device loss requires selecting a usable device and calling again; there is no automatic device fallback.
 
 DM calls accept only their expected peer. Server calls support up to 64 total participants, with independent bounded decoder/jitter state and mixed mono playback. Only DAVE version 1 is accepted; encryption downgrades and group identities outside the authenticated participant roster fail closed. Group DMs, Stage channels, recording and incoming video are unsupported. Outgoing screen sharing and macOS camera support is described below. Voice WebSocket resumption has a finite retry budget; failed resumption or main Gateway disconnect requires an explicit new call. Voice credentials, ephemeral DAVE identities and audio stay in bounded session memory. The displayed privacy code applies to the current group epoch; identities are not remembered across calls. Comparing codes does not establish long-term identity verification or text-message encryption.

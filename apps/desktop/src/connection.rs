@@ -215,6 +215,12 @@ impl Connection {
                                 })));
                                 continue;
                             }
+							if let Command::Voice(control @ client_core::voice::Command::Sync { channel }) = &command {
+								if *voice_availability.borrow() && dm_channels.lock().map_err(|_|Failure::Protocol)?.contains(channel) {
+									voice_send.try_send(*control).map_err(|_|Failure::Capacity)?;
+								}
+								continue;
+							}
 							if let Command::Voice(control @ (client_core::voice::Command::StartStream{..}|client_core::voice::Command::StopStream{..}))=&command {
 								use client_core::{screen,voice::Event as E};
 								let control=*control;
@@ -235,7 +241,7 @@ impl Connection {
 							}
 							if let Command::Voice(control)=command {
                                 use client_core::voice::{Command as V,Event as E};
-                                let (channel,request)=match control {V::Join{channel,request,..}|V::Ring{channel,request}|V::Leave{channel,request}|V::SetMute{channel,request,..}|V::SetCamera{channel,request,..}=>(channel,request),V::Decline{channel}=>(channel,0),V::StartStream{..}|V::StopStream{..}=>unreachable!("stream actions routed above")};
+                                let (channel,request)=match control {V::Join{channel,request,..}|V::Ring{channel,request}|V::Leave{channel,request}|V::SetMute{channel,request,..}|V::SetCamera{channel,request,..}=>(channel,request),V::Decline{channel}=>(channel,0),V::Sync{..}|V::StartStream{..}|V::StopStream{..}=>unreachable!("sync and stream actions routed above")};
                                 if !*voice_availability.borrow() {
                                     emit(Event::Voice(E::Failed{channel,request,message:"Voice is disconnected; no call was started"}))?;continue;
                                 }
@@ -508,7 +514,8 @@ fn ring_action(
 	if !dm {
 		return match control {
 			V::Ring { .. } | V::Decline { .. } | V::Join { ring: true, .. } => Err(()),
-			V::Join { .. }
+			V::Sync { .. }
+			| V::Join { .. }
 			| V::Leave { .. }
 			| V::SetMute { .. }
 			| V::SetCamera { .. }
@@ -544,9 +551,11 @@ fn ring_action(
 			}
 		}
 		V::Decline { .. } => Ok(Some((Some(owner), true))),
-		V::SetMute { .. } | V::SetCamera { .. } | V::StartStream { .. } | V::StopStream { .. } => {
-			Ok(None)
-		}
+		V::Sync { .. }
+		| V::SetMute { .. }
+		| V::SetCamera { .. }
+		| V::StartStream { .. }
+		| V::StopStream { .. } => Ok(None),
 	}
 }
 
@@ -787,6 +796,27 @@ mod tests {
 		assert!(!gate.accept(signal, 11, now));
 	}
 	use super::*;
+	#[test]
+	fn call_discovery_never_rings_or_changes_the_active_attempt() {
+		use client_core::voice::Command as V;
+		for dm in [false, true] {
+			for mut active in [None, Some((model::Id(20), 7, false))] {
+				let before = active;
+				assert_eq!(
+					ring_action(
+						V::Sync {
+							channel: model::Id(2)
+						},
+						model::Id(1),
+						&mut active,
+						dm
+					),
+					Ok(None)
+				);
+				assert_eq!(active, before);
+			}
+		}
+	}
 	#[test]
 	fn ringing_waits_for_transport_confirmation_and_rejects_old_requests() {
 		use client_core::voice::Command as V;
