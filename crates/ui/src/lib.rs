@@ -1386,6 +1386,7 @@ impl MessagingUi {
 			cursor.filter(|_| mention_enabled),
 			&mention_users,
 			&state.channels,
+			&state.guilds,
 		);
 		let mention_pick = if mention_enabled {
 			self.mention_menu.keys(ctx)
@@ -1441,6 +1442,11 @@ impl MessagingUi {
             .corner_radius(8)
             .inner_margin(egui::Margin::symmetric(10, 6))
             .show(ui, |ui| {
+                // Outer frame bounds for the autocomplete popout: undo the inner margin.
+                let composer_anchor = egui::Rect::from_min_max(
+                    egui::pos2(ui.max_rect().left() - 10.0, ui.max_rect().top() - 6.0),
+                    egui::pos2(ui.max_rect().right() + 10.0, ui.max_rect().top()),
+                );
                 if !editing_here && let Some((filename, bytes)) = self.attachment.clone() {
                     self.attachment_tray(ui, state, &filename, bytes);
                 }
@@ -1609,8 +1615,8 @@ impl MessagingUi {
                             .map(|r| r.primary.index.0)
                             .filter(|_| mention_enabled);
                         self.mention_menu
-                            .refresh(channel, draft, mention_cursor, &mention_users, &state.channels);
-                        if let Some(pick) = self.mention_menu.show(ui)
+                            .refresh(channel, draft, mention_cursor, &mention_users, &state.channels, &state.guilds);
+                        if let Some(pick) = self.mention_menu.show(ui, composer_anchor, &mut self.avatars, demo)
                             && let Some(cursor) = mentions::insert(draft, pick)
                         {
                             output
