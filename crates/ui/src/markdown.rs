@@ -785,6 +785,7 @@ impl Formatted {
 				text,
 				0.0,
 				TextFormat {
+					valign: ui.text_valign(),
 					font_id: if style.code {
 						FontId::monospace(body.size)
 					} else {
