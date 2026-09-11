@@ -100,6 +100,8 @@ pub struct MessagingUi {
 	pub draft_changes: Vec<Id>,
 	pub draft_restore_pending: bool,
 	pub attachment: Option<(String, u64)>,
+	pub attachment_files: Vec<(String, u64)>,
+	pub remove_attachment_index: Option<usize>,
 	/// Downscaled pixels of the selected image attachment, produced off the render thread.
 	pub attachment_preview: Option<std::sync::Arc<egui::ColorImage>>,
 	attachment_texture: Option<(usize, egui::TextureHandle)>,
@@ -1214,13 +1216,34 @@ impl MessagingUi {
 		}
 		let mut cancel_edit = false;
 		if ctx.input(|input| !input.raw.hovered_files.is_empty()) {
-			ui.label(if self.upload_busy || self.attachment.is_some() {
-				"Remove the current attachment or wait before dropping another file"
-			} else if state.can_attach(channel) {
-				"Drop one file up to 20 MB to attach it here; Send starts the upload"
-			} else {
-				"Attaching files is unavailable in this conversation"
-			});
+			let available = state.can_attach(channel) && !self.upload_busy && !editing_here;
+			egui::Frame::new()
+				.fill(colors.accent.gamma_multiply(0.12))
+				.stroke(egui::Stroke::new(1.5, colors.accent))
+				.corner_radius(12)
+				.inner_margin(20)
+				.show(ui, |ui| {
+					ui.set_min_width((ui.available_width() - 2.0).max(0.0));
+					ui.label(design::semibold(
+						ui,
+						if available {
+							"Drop files to attach"
+						} else {
+							"Attachments unavailable right now"
+						},
+						18.0,
+					));
+					ui.add_space(6.0);
+					ui.label(
+						egui::RichText::new(if available {
+							"Up to 10 files · 20 MB total · Review before sending"
+						} else {
+							"Return to an available conversation after the current operation finishes"
+						})
+						.color(colors.muted),
+					);
+				});
+			ui.add_space(8.0);
 		}
 		if editing_here {
 			let unavailable = editing_key.is_some_and(|(_, id)| state.timeline.get(id).is_none());
@@ -1499,7 +1522,7 @@ impl MessagingUi {
 		let can_attach = !editing_here
 			&& state.can_attach(channel)
 			&& !self.upload_busy
-			&& self.attachment.is_none();
+			&& self.attachment_files.len() < 10;
 		let can_send = if let Some((edit_channel, message)) = editing_key {
 			state.freshness == Freshness::Fresh
 				&& state.can_edit(edit_channel, message)
@@ -1528,10 +1551,10 @@ impl MessagingUi {
                     ui.spacing_mut().item_spacing.x = 8.0;
                     let attach = ui
                         .add_enabled_ui(can_attach, |ui| {
-                            icons::button(ui, icons::Icon::Attach, 28.0, "Attach a file")
+                            icons::button(ui, icons::Icon::Attach, 28.0, "Attach files")
                         })
                         .inner
-                        .on_hover_text("Choose, drop, or paste one file (Ctrl/Cmd/Option+V) up to 20 MB. Send starts the upload.");
+                        .on_hover_text("Choose, drop, or paste files (Ctrl/Cmd/Option+V). Up to 10 files and 20 MB total. Send starts the upload.");
                     if attach.clicked() {
                         self.attach_requested = true;
                     }
@@ -1796,16 +1819,31 @@ impl MessagingUi {
 			}
 		};
 		ui.add_space(4.0);
-		let remove = ui
-			.horizontal(|ui| {
-				ui.spacing_mut().item_spacing.x = 12.0;
-				ui.add_space(4.0);
-				attachments::pending_card(ui, filename, bytes, texture, !self.upload_busy)
-			})
-			.inner;
-		if remove {
-			self.remove_attachment_requested = true;
-		}
+		let files = if self.attachment_files.is_empty() {
+			vec![(filename.to_owned(), bytes)]
+		} else {
+			self.attachment_files.clone()
+		};
+		egui::ScrollArea::horizontal()
+			.id_salt("pending-attachments")
+			.show(ui, |ui| {
+				ui.horizontal(|ui| {
+					ui.spacing_mut().item_spacing.x = 12.0;
+					for (index, (filename, bytes)) in files.iter().enumerate() {
+						ui.push_id(index, |ui| {
+							if attachments::pending_card(
+								ui,
+								filename,
+								*bytes,
+								if index == 0 { texture } else { None },
+								!self.upload_busy,
+							) {
+								self.remove_attachment_index = Some(index);
+							}
+						});
+					}
+				});
+			});
 		ui.add_space(2.0);
 		ui.horizontal(|ui| {
 			ui.add_space(4.0);
@@ -1815,7 +1853,7 @@ impl MessagingUi {
 				} else if !state.can_attach(state.selected.unwrap_or(Id(0))) {
 					"Attaching files is unavailable here"
 				} else {
-					"Not uploaded yet · Send uploads this file with your message"
+					"Not uploaded yet · Send uploads these files with your message"
 				})
 				.size(12.0)
 				.color(colors.muted),

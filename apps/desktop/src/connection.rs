@@ -142,7 +142,7 @@ impl Connection {
                             let api=api.clone();let emit=emit.clone();let finished=finished.clone();let wake=wake.clone();
                             upload=Some(AbortTask(tokio::spawn(async move {
                                 let mut updates=request.progress.subscribe();
-                                let operation=api.upload_message(request.command,request.source,request.progress,request.cancel.subscribe());
+                                let operation=api.upload_messages(request.command,request.source,request.progress,request.cancel.subscribe());
                                 tokio::pin!(operation);
                                 let mut observing=true;
                                 let event=loop {
