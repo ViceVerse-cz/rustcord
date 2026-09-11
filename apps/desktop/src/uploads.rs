@@ -367,17 +367,13 @@ impl Uploads {
 	}
 	pub fn status(&self) -> Option<String> {
 		if let Some(choosing) = &self.choosing {
-			return Some(
-				if choosing.cancelled.load(Ordering::Acquire) {
-					"Attachment selection cancelled; close any open file chooser"
-				} else {
-					"Selecting attachment..."
-				}
-				.into(),
-			);
+			if choosing.cancelled.load(Ordering::Acquire) {
+				return None;
+			}
+			return Some("Selecting attachment...".into());
 		}
 		if self.uploading.as_ref().is_some_and(|job| job.cancelling) {
-			return Some("Cancelling upload; a message already sending may still arrive".into());
+			return None;
 		}
 		Some(match self.last.as_ref()? {
 			Status::Preparing => "Preparing attachment...".into(),
@@ -386,7 +382,7 @@ impl Uploads {
 			}
 			Status::Sending => "Sending attachment message...".into(),
 			Status::Finished => return None,
-			Status::Cancelled => "Attachment upload cancelled".into(),
+			Status::Cancelled => return None,
 			Status::Failed(error) => (*error).into(),
 		})
 	}

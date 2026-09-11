@@ -1487,14 +1487,10 @@ impl MessagingUi {
 		});
 		if !editing_here
 			&& !upload_in_timeline
-			&& (self.upload_busy || self.upload_status.is_some())
+			&& let Some(status) = self.upload_status.as_deref()
 		{
 			ui.horizontal_wrapped(|ui| {
-				ui.label(
-					self.upload_status
-						.as_deref()
-						.unwrap_or("Preparing attachment…"),
-				);
+				ui.label(status);
 				if self.upload_busy && ui.button("Cancel upload").clicked() {
 					self.cancel_upload_requested = true;
 				}
@@ -1735,7 +1731,7 @@ impl MessagingUi {
                     egui::pos2(ui.max_rect().right() + 10.0, ui.max_rect().top()),
                 );
                 if !editing_here && self.attachment.is_some() {
-                    self.attachment_tray(ui, state);
+                    self.attachment_tray(ui);
                 }
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
@@ -2008,7 +2004,7 @@ impl MessagingUi {
 		}
 	}
 	/// Selected-file cards above the composer input, in the style of Discord's upload tray.
-	fn attachment_tray(&mut self, ui: &mut egui::Ui, state: &State) {
+	fn attachment_tray(&mut self, ui: &mut egui::Ui) {
 		let colors = design::palette(ui);
 		let textures = self.attachment_textures(ui.ctx());
 		ui.add_space(4.0);
@@ -2033,21 +2029,6 @@ impl MessagingUi {
 					}
 				});
 			});
-		ui.add_space(2.0);
-		ui.horizontal(|ui| {
-			ui.add_space(4.0);
-			ui.label(
-				RichText::new(if state.demo {
-					"Uploads are disabled in offline preview"
-				} else if !state.can_attach(state.selected.unwrap_or(Id(0))) {
-					"Attaching files is unavailable here"
-				} else {
-					"Not uploaded yet · Send uploads these files with your message"
-				})
-				.size(12.0)
-				.color(colors.muted),
-			);
-		});
 		ui.add_space(8.0);
 		let line = ui.max_rect().x_range();
 		let y = ui.cursor().top();
