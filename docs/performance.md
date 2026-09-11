@@ -2,7 +2,11 @@
 
 ## User context menu - September 11, 2026
 
-Baseline `ea68e0e9afaa822e64e6bea1e144d48816aab339`, compared with this task.
+Baseline `ea68e0e9afaa822e64e6bea1e144d48816aab339`, compared with integrated code `de73c85`.
+The after column includes the pending-upload UI merged from `d8cb031`; it cannot
+isolate this menu's overhead. Before that merge, the menu-only text/voice executables
+grew by 56,832 / 57,856 bytes. Reducer samples predate the UI-only integration;
+client-core is unchanged by that merge.
 Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical cores), 31.1 GiB visible RAM,
 Rust 1.98.1, locked release, thin LTO/one codegen unit, wgpu. Both
 `cargo xtask package` and `cargo xtask package-voice` passed on both revisions.
@@ -11,17 +15,17 @@ builds replaced stale artifacts encountered in the shared build cache. No new de
 
 | Metric | Baseline | After | Delta |
 | --- | --- | --- | --- |
-| text executable, bytes | 53,986,304 | 54,043,136 | +56,832 (+0.105%) |
-| text installed package, bytes | 55,106,039 | 55,168,162 | +62,123 (+0.113%) |
-| text ZIP (DEFLATE 9), bytes | 33,243,781 | 33,266,872 | +23,091 (+0.069%) |
-| voice executable, bytes | 59,091,968 | 59,149,824 | +57,856 (+0.098%) |
-| voice installed package, bytes | 60,317,494 | 60,380,641 | +63,147 (+0.105%) |
-| voice ZIP (DEFLATE 9), bytes | 35,345,246 | 35,367,615 | +22,369 (+0.063%) |
+| text executable, bytes | 53,986,304 | 54,098,432 | +112,128 (+0.208%) |
+| text installed package, bytes | 55,106,039 | 55,227,192 | +121,153 (+0.220%) |
+| text ZIP (DEFLATE 9), bytes | 33,243,781 | 33,289,588 | +45,807 (+0.138%) |
+| voice executable, bytes | 59,091,968 | 59,205,120 | +113,152 (+0.191%) |
+| voice installed package, bytes | 60,317,494 | 60,439,743 | +122,249 (+0.203%) |
+| voice ZIP (DEFLATE 9), bytes | 35,345,246 | 35,390,825 | +45,579 (+0.129%) |
 | Reducer median, 100,000 events | 39.3572 ms | 38.4854 ms | -0.8718 ms (-2.22%); noisy |
-| Idle CPU, % of one logical core | 2.275 | 5.323 | +3.048 |
-| Median working set, MiB | 157.254 | 161.141 | +3.887 |
-| Peak sampled working set, MiB | 159.766 | 162.312 | +2.547 |
-| Median private bytes, MiB | 375.941 | 378.586 | +2.645 |
+| Idle CPU, % of one logical core | 2.275 | 0.000 | -2.275 |
+| Median working set, MiB | 157.254 | 157.199 | -0.055 |
+| Peak sampled working set, MiB | 159.766 | 157.199 | -2.566 |
+| Median private bytes, MiB | 375.941 | 375.672 | -0.270 |
 
 Package samples include all declared shipped files (65 text / 92 voice), measured
 before this performance addendum; the baseline's stale, untracked
@@ -34,13 +38,13 @@ bytes. This measures the synthetic reducer, not UI latency or RSS; overlapping
 ranges do not establish a speed improvement.
 
 Native process samples: one fresh text-only `--demo` process per revision, 10-second
-warmup, 20 samples at requested 500 ms intervals (10.303 / 10.273 actual seconds),
+warmup, 20 samples at requested 500 ms intervals (10.303 / 10.285 actual seconds),
 System.Diagnostics.Process working set/private bytes and TotalProcessorTime delta.
 No scripted input because native Computer Use was unavailable; default requested
 1120x760-point viewport, actual display scale/occlusion unverified. No auth/audio
 helpers were started. GPU memory, startup/frame p95 and menu-interaction memory
 remain unmeasured. Builds and other desktop activity were present, so these short
-single-process samples are noisy. The observed CPU/memory increase is recorded,
+single-process samples are noisy. The observed CPU/memory differences are recorded,
 not attributed to menu rendering or represented as a performance improvement.
 Working-set samples exceed the original 80 MiB settled-idle target on both revisions.
 

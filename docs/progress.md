@@ -38,7 +38,9 @@ and `categories::tests::service_order_orphans_collapsed_selection_and_category_b
 `clippy::question_mark` warning in `crates/client-core/src/permissions.rs:439`.
 The additional Clippy diagnostic pass found one task warning (test-module order),
 which was fixed. Independent review found the READY request-ID race; the fix and
-regression passed the workspace run. No check was disabled.
+regression passed the workspace run. Formatting and `cargo xtask policy` passed.
+No check was disabled. PR: https://github.com/ViceVerse-cz/rustcord/pull/69 (draft;
+CI pending at final inspection).
 
 Native evidence is blocked: Orca CLI is absent and Windows Computer Use repeatedly
 returned `Computer Use native pipe is unavailable: failed to connect native pipe:
@@ -47,8 +49,8 @@ reset. No screenshot is fabricated or labeled verified. Native menu appearance,
 scrolling, screen-reader interaction and macOS/Linux remain unverified. Draft PR
 required for the missing images and baseline check failures. See performance.md
 for separately labeled release package, reducer and idle-process measurements.
-Both final release packages passed. Text executable: 54,043,136 bytes (+56,832);
-voice: 59,149,824 bytes (+57,856). Reducer median: 39.3572 to 38.4854 ms,
+Both integrated release packages passed. Text executable: 54,098,432 bytes;
+voice: 59,205,120 bytes. These include the pending-upload merge from main. Reducer median: 39.3572 to 38.4854 ms,
 with overlapping samples and unchanged retained timeline bounds.
 
 ## Image clipping investigation — 2026-09-11
