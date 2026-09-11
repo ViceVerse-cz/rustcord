@@ -585,58 +585,207 @@ impl MessagingUi {
 	pub(super) fn voice_settings(&mut self, ui: &mut egui::Ui, demo: bool, active: bool) {
 		let trigger =
 			crate::icons::button(ui, crate::icons::Icon::Headphones, 32.0, "Voice settings");
-		egui::Popup::menu(&trigger).show(|ui| self.voice_settings_menu(ui, demo, active));
+		self.voice_settings_popup(&trigger, demo, active);
 	}
 
-	pub(super) fn voice_settings_menu(&mut self, ui: &mut egui::Ui, demo: bool, active: bool) {
-		ui.set_max_width(300.0);
-		ui.strong("Voice settings");
-		if demo || !self.voice_available {
-			ui.label(if demo {
-				"Microphone and speakers are unavailable in the offline preview."
-			} else {
-				"Install a voice-enabled build to join voice channels and make calls."
-			});
-			return;
+	fn voice_settings_popup(&mut self, trigger: &egui::Response, demo: bool, active: bool) {
+		let id = trigger.id.with("voice-settings-open");
+		let mut open = trigger
+			.ctx
+			.data_mut(|data| *data.get_temp_mut_or_default::<bool>(id));
+
+		if trigger.clicked() {
+			open = !open;
 		}
+		// Device dropdowns use egui's popup memory; keep the parent independently open.
+		let close_behavior = if egui::Popup::is_any_open(&trigger.ctx) {
+			egui::PopupCloseBehavior::IgnoreClicks
+		} else {
+			egui::PopupCloseBehavior::CloseOnClickOutside
+		};
+		egui::Popup::menu(trigger)
+			.open_bool(&mut open)
+			.style(|_: &mut egui::Style| {})
+			.width(340.0)
+			.close_behavior(close_behavior)
+			.frame(
+				egui::Frame::popup(&trigger.ctx.style_of(trigger.ctx.theme()))
+					.inner_margin(16)
+					.corner_radius(12),
+			)
+			.show(|ui| {
+				ui.set_width(308.0);
+				ui.spacing_mut().item_spacing.y = 12.0;
+				ui.label(design::semibold(ui, "Voice & Audio", 18.0));
+				egui::ScrollArea::vertical()
+					.max_height((ui.ctx().content_rect().height() - 180.0).clamp(180.0, 460.0))
+					.show(ui, |ui| self.voice_settings_content(ui, demo, active, true));
+				ui.separator();
+				if ui
+					.add_sized(
+						[ui.available_width(), 32.0],
+						egui::Button::new("All voice settings"),
+					)
+					.clicked()
+				{
+					self.open_voice_settings();
+					ui.close();
+				}
+			});
+		trigger.ctx.data_mut(|data| data.insert_temp(id, open));
+	}
+
+	pub(super) fn voice_settings_content(
+		&mut self,
+		ui: &mut egui::Ui,
+		demo: bool,
+		active: bool,
+		compact: bool,
+	) {
+		let colors = design::palette(ui);
+		ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+		ui.spacing_mut().item_spacing.y = if compact { 6.0 } else { 12.0 };
+		if demo || !self.voice_available {
+			ui.label(
+				RichText::new(if demo {
+					"Offline preview · microphone and speakers are off."
+				} else {
+					"Install a voice-enabled build to use these controls."
+				})
+				.size(13.0)
+				.color(colors.muted),
+			);
+		}
+		ui.add_enabled_ui(!demo && self.voice_available, |ui| {
+			if compact {
+				self.voice_audio_controls(ui);
+				egui::CollapsingHeader::new("Voice processing & input mode")
+					.show(ui, |ui| self.voice_processing_controls(ui));
+			} else {
+				ui.label(design::eyebrow(ui, "Devices & levels", colors.muted));
+				design::card(ui, |ui| self.voice_audio_controls(ui));
+				ui.add_space(8.0);
+				ui.label(design::eyebrow(ui, "Voice processing", colors.muted));
+				design::card(ui, |ui| self.voice_processing_controls(ui));
+			}
+		});
 		if active && let Some(code) = &self.voice_privacy_code {
-			ui.label("Voice privacy code");
-			ui.add(egui::Label::new(code).selectable(true).wrap());
+			egui::CollapsingHeader::new("Voice privacy code").show(ui, |ui| {
+				ui.add(
+					egui::Label::new(RichText::new(code).monospace())
+						.selectable(true)
+						.wrap(),
+				);
+				ui.label(
+					RichText::new(
+						"Compare with the other participants. This code changes with the encrypted call group.",
+					)
+					.size(12.0)
+					.color(colors.muted),
+				);
+			});
+		}
+		if !compact {
 			ui.label(
 				RichText::new(
-					"Compare with the other participants; this code changes with the encrypted call group.",
+					"Applies to this session. Your microphone starts only after you join a secured call.",
 				)
-				.small(),
+				.size(12.0)
+				.color(colors.muted),
 			);
-			ui.separator();
 		}
-		ui.label("Microphone");
-		device_combo(ui, "voice-input", &self.voice_inputs, &mut self.voice_input);
-		ui.label("Speakers");
-		device_combo(
-			ui,
-			"voice-output",
-			&self.voice_outputs,
-			&mut self.voice_output,
-		);
+	}
+
+	fn voice_audio_controls(&mut self, ui: &mut egui::Ui) {
+		let colors = design::palette(ui);
+		let mut device = |ui: &mut egui::Ui, input: bool| {
+			let label = ui
+				.horizontal(|ui| {
+					crate::icons::inline(
+						ui,
+						if input {
+							crate::icons::Icon::Microphone
+						} else {
+							crate::icons::Icon::Headphones
+						},
+						18.0,
+						colors.muted,
+					);
+					ui.label(design::medium(
+						ui,
+						if input { "Microphone" } else { "Speakers" },
+						15.0,
+					))
+				})
+				.inner;
+			if input {
+				device_combo(ui, "voice-input", &self.voice_inputs, &mut self.voice_input)
+					.labelled_by(label.id);
+			} else {
+				device_combo(
+					ui,
+					"voice-output",
+					&self.voice_outputs,
+					&mut self.voice_output,
+				)
+				.labelled_by(label.id);
+			}
+		};
+		if ui.available_width() >= 480.0 {
+			ui.columns(2, |columns| {
+				device(&mut columns[0], true);
+				device(&mut columns[1], false);
+			});
+		} else {
+			device(ui, true);
+			device(ui, false);
+		}
 		gain_controls(ui, &mut self.voice_gain);
-		if ui.button("Refresh audio devices").clicked() {
-			self.voice_refresh_devices = true;
-		}
+		ui.horizontal_wrapped(|ui| {
+			if ui.small_button("Refresh devices").clicked() {
+				self.voice_refresh_devices = true;
+			}
+			if ui.small_button("Reset levels").clicked() {
+				self.voice_gain = crate::VoiceGain::default();
+			}
+		});
 		if !self.voice_device_status.is_empty() {
-			ui.label(self.voice_device_status);
-		}
-		ui.separator();
-		ui.label("Echo cancellation · Always on");
-		ui.checkbox(&mut self.voice_noise_suppression, "Noise suppression")
-			.on_hover_text(
-				"Reduces background sounds locally while keeping your voice. Echo cancellation stays on.",
+			ui.label(
+				RichText::new(self.voice_device_status)
+					.size(12.0)
+					.color(colors.muted),
 			);
-		ui.label(RichText::new("Reduces keyboard noise, breathing and fans. Strong wind or distorted audio may still get through.").small());
+		}
+	}
+
+	fn voice_processing_controls(&mut self, ui: &mut egui::Ui) {
+		let colors = design::palette(ui);
+		design::switch(
+			ui,
+			"Noise suppression",
+			Some("Reduce keyboard noise, breathing and fans."),
+			&mut self.voice_noise_suppression,
+		)
+		.on_hover_text(
+			"Reduces background sounds locally. Strong wind or distorted audio may still get through.",
+		);
 		ui.separator();
-		ui.checkbox(&mut self.voice_push_to_talk, "Push to talk");
-		ui.label(RichText::new("Hold V while this window is focused and you are not typing. Mute and deafen always take priority.").small());
-		ui.label(RichText::new("Voice settings apply to this session. Microphone capture begins only after you join a secured call.").small());
+		design::switch(
+			ui,
+			"Push to talk",
+			Some("Hold V while this window is focused and you are not typing."),
+			&mut self.voice_push_to_talk,
+		)
+		.on_hover_text("Mute and deafen always take priority.");
+		ui.separator();
+		ui.horizontal_wrapped(|ui| {
+			ui.label(
+				RichText::new("Echo cancellation")
+					.size(13.0)
+					.color(colors.muted),
+			);
+			ui.label(design::medium(ui, "Always on", 13.0));
+		});
 	}
 
 	/// Whether the local mute/deafen controls may emit commands for the active call.
@@ -800,8 +949,7 @@ impl MessagingUi {
 					"Voice settings",
 					"Microphone and speaker settings",
 				);
-				egui::Popup::menu(&settings)
-					.show(|ui| self.voice_settings_menu(ui, state.demo, true));
+				self.voice_settings_popup(&settings, state.demo, true);
 				camera_clicked = control(
 					ui,
 					if camera {
@@ -1512,27 +1660,42 @@ fn participant_user(state: &State, channel: Id, user: Id) -> Option<&model::User
 }
 
 fn gain_controls(ui: &mut egui::Ui, gain: &mut crate::VoiceGain) -> [egui::Response; 2] {
-	let label = ui.label("Microphone gain");
-	let input = ui
-		.add(
-			egui::Slider::new(&mut gain.input_percent, 0..=200)
-				.suffix("%")
-				.step_by(1.0),
-		)
-		.labelled_by(label.id);
-	let label = ui.label("Speaker volume");
-	let output = ui
-		.add(
-			egui::Slider::new(&mut gain.output_percent, 0..=200)
-				.suffix("%")
-				.step_by(1.0),
-		)
-		.labelled_by(label.id);
-	ui.label(RichText::new("100% keeps the original level. Boosting above 100% can clip.").small());
-	if ui.small_button("Reset levels").clicked() {
-		*gain = crate::VoiceGain::default();
-	}
-	[input, output]
+	let slider = |ui: &mut egui::Ui, value: &mut u16, title: &str| {
+		ui.scope(|ui| {
+			let colors = design::palette(ui);
+			let label = ui.label(RichText::new(title).size(13.0).color(colors.muted));
+			ui.spacing_mut().slider_width = (ui.available_width() - 64.0).max(80.0);
+			ui.visuals_mut().widgets.inactive.bg_fill = colors.border;
+			ui.add(
+				egui::Slider::new(value, 0..=200)
+					.suffix("%")
+					.step_by(1.0)
+					.trailing_fill(true)
+					.handle_shape(egui::style::HandleShape::Circle),
+			)
+			.labelled_by(label.id)
+		})
+		.inner
+	};
+	let responses = if ui.available_width() >= 480.0 {
+		ui.columns(2, |columns| {
+			[
+				slider(&mut columns[0], &mut gain.input_percent, "Microphone gain"),
+				slider(&mut columns[1], &mut gain.output_percent, "Speaker volume"),
+			]
+		})
+	} else {
+		[
+			slider(ui, &mut gain.input_percent, "Microphone gain"),
+			slider(ui, &mut gain.output_percent, "Speaker volume"),
+		]
+	};
+	ui.label(
+		RichText::new("100% is the original level. Higher levels may distort.")
+			.size(12.0)
+			.color(design::palette(ui).muted),
+	);
+	responses
 }
 
 fn elapsed_label(call: &client_core::voice::Call) -> Option<String> {
@@ -1569,7 +1732,7 @@ fn device_combo(
 	id: &str,
 	devices: &[(String, String)],
 	selected: &mut Option<String>,
-) {
+) -> egui::Response {
 	let label = match selected.as_ref() {
 		None => "System default",
 		Some(id) => devices
@@ -1579,19 +1742,155 @@ fn device_combo(
 	};
 	egui::ComboBox::from_id_salt(id)
 		.selected_text(label)
-		.width(256.0)
+		.width(ui.available_width())
+		.truncate()
 		.height(220.0)
 		.show_ui(ui, |ui| {
+			ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
 			ui.selectable_value(selected, None, "System default");
 			for (id, label) in devices.iter().take(32) {
-				ui.selectable_value(selected, Some(id.clone()), label);
+				ui.selectable_value(selected, Some(id.clone()), label)
+					.on_hover_text(label);
 			}
-		});
+		})
+		.response
+		.on_hover_text(label)
 }
 
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn voice_popup_keeps_device_selection_open_and_demo_controls_inert() {
+		fn labels(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+			match shape {
+				egui::Shape::Text(text) => out.push((
+					text.galley.job.text.clone(),
+					text.galley.rect.translate(text.pos.to_vec2()),
+				)),
+				egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| labels(shape, out)),
+				_ => {}
+			}
+		}
+		fn frame(
+			ctx: &egui::Context,
+			messaging: &mut MessagingUi,
+			demo: bool,
+			events: Vec<egui::Event>,
+		) -> Vec<(String, egui::Rect)> {
+			let mut output = ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(800.0, 800.0),
+					)),
+					events,
+					..Default::default()
+				},
+				|ui| {
+					let trigger = ui.button("Open voice");
+					messaging.voice_settings_popup(&trigger, demo, false);
+				},
+			);
+			output.textures_delta.clear();
+			let mut text = vec![];
+			for shape in output.shapes {
+				labels(&shape.shape, &mut text);
+			}
+			text
+		}
+		fn click(ctx: &egui::Context, messaging: &mut MessagingUi, demo: bool, pos: egui::Pos2) {
+			for pressed in [true, false] {
+				frame(
+					ctx,
+					messaging,
+					demo,
+					vec![
+						egui::Event::PointerMoved(pos),
+						egui::Event::PointerButton {
+							pos,
+							button: egui::PointerButton::Primary,
+							pressed,
+							modifiers: egui::Modifiers::NONE,
+						},
+					],
+				);
+			}
+		}
+		let position = |text: &[(String, egui::Rect)], label: &str| {
+			text.iter()
+				.find(|(value, _)| value == label)
+				.unwrap_or_else(|| panic!("Missing visible control: {label}"))
+				.1
+				.center()
+		};
+		for demo in [false, true] {
+			let ctx = egui::Context::default();
+			let mut messaging = MessagingUi {
+				voice_available: true,
+				voice_inputs: vec![("synthetic-input".into(), "Synthetic headset".into())],
+				voice_gain: crate::VoiceGain {
+					input_percent: 140,
+					output_percent: 80,
+				},
+				..Default::default()
+			};
+			frame(&ctx, &mut messaging, demo, vec![]);
+			let text = frame(&ctx, &mut messaging, demo, vec![]);
+			click(&ctx, &mut messaging, demo, position(&text, "Open voice"));
+			let text = frame(&ctx, &mut messaging, demo, vec![]);
+			click(
+				&ctx,
+				&mut messaging,
+				demo,
+				position(&text, "System default"),
+			);
+			let text = frame(&ctx, &mut messaging, demo, vec![]);
+			if demo {
+				assert!(
+					!egui::Popup::is_any_open(&ctx),
+					"Disabled devices must not open a picker"
+				);
+				click(
+					&ctx,
+					&mut messaging,
+					demo,
+					position(&text, "Refresh devices"),
+				);
+				let text = frame(&ctx, &mut messaging, demo, vec![]);
+				click(&ctx, &mut messaging, demo, position(&text, "Reset levels"));
+				assert_eq!(messaging.voice_input, None);
+				assert!(!messaging.voice_refresh_devices);
+				assert_eq!(messaging.voice_gain.input_percent, 140);
+				assert_eq!(messaging.voice_gain.output_percent, 80);
+			} else {
+				assert!(
+					egui::Popup::is_any_open(&ctx),
+					"The device picker must survive its opening frame"
+				);
+				click(
+					&ctx,
+					&mut messaging,
+					demo,
+					position(&text, "Synthetic headset"),
+				);
+				assert_eq!(messaging.voice_input.as_deref(), Some("synthetic-input"));
+				assert!(!egui::Popup::is_any_open(&ctx));
+			}
+			let text = frame(&ctx, &mut messaging, demo, vec![]);
+			assert!(
+				text.iter().any(|(value, _)| value == "All voice settings"),
+				"Changing settings must keep the voice popup open"
+			);
+			click(&ctx, &mut messaging, demo, egui::pos2(760.0, 760.0));
+			let text = frame(&ctx, &mut messaging, demo, vec![]);
+			assert!(
+				!text.iter().any(|(value, _)| value == "All voice settings"),
+				"Clicking outside must close the popup"
+			);
+		}
+	}
 
 	#[test]
 	fn gain_sliders_accept_keyboard_input_and_reset_with_the_session() {

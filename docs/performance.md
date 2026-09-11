@@ -2528,6 +2528,55 @@ This workload does not exercise local game publication or UI; its noisy delta is
 performance improvement claim. The local view adds one activity capped at 4 KiB retained
 heap; selectors borrow it and equal activity reports do not invalidate the timeline.
 
+## Voice settings design — macOS, September 11, 2026
+
+Baseline `283686ae4dc4f9ba1b20a5e4b14ebe9ca570e5d5` versus the voice settings
+redesign on `t3code/polish-voice-settings-calls`. Apple M1 Pro, MacBookPro18,3,
+16 GiB RAM, macOS 27.0 (26A428), Rust 1.98.1, release profile, wgpu renderer.
+No dependency, transport, codec, cache, or audio callback changes.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable, packaged bytes | 51,621,632 | 51,662,400 | +40,768 (+0.079%) |
+| Text complete .app, sum of regular-file bytes | 58,811,147 | 58,854,652 | +43,505 (+0.074%) |
+| Text .app, `tar -czf` bytes | 35,864,221 | 35,888,336 | +24,115 (+0.067%) |
+| Voice release executable, bytes | 57,250,304 | 57,274,544 | +24,240 (+0.042%) |
+| Voice complete package / archive | Blocked | Blocked | Missing existing dependency license texts |
+| Early sample CPU, one core | 2.38% | 10.20% | +7.82 percentage points |
+| Peak sampled RSS, KiB | 172,032 | 140,416 | -31,616 (-18.38%) |
+| Last-five-sample median RSS, KiB | 122,736 | 140,416 | +17,680 (+14.41%) |
+
+Packages were built from the recorded sources into separate baseline/changed directories;
+text sums include bundled docs/licenses, before these final evidence appends. Voice
+compilation succeeds on both revisions, but `cargo xtask package-voice` stops on missing
+exact-version license texts for objc2-core-media/core-video 0.3.2 and
+openh264/openh264-sys2 0.9.8. Partial package directories are not counted as complete
+installed artifacts. No new dependency or redistribution-clearance claim is made.
+
+Process method: launch the text package with `--demo --demo-call --demo-settings=voice`,
+1120×760 window, default dark palette, 100% UI zoom (native captures are 1120×760).
+Inspect the settings accessibility tree, wait ten seconds, then take 21 `ps -p PID
+-o time=,rss=` readings one second apart. CPU is cumulative CPU-time delta / monotonic
+wall-time delta; sample durations were 20.60 s baseline and 20.39 s after. RSS includes
+this process only; `pgrep -P PID` found no child processes. Temporary copied .app bundle
+names/identifiers were changed solely to isolate native automation from other Serein
+instances; executable code was unchanged.
+
+These short early samples are noisy, not a performance improvement or a sustained idle
+regression claim. Concurrent local builds, delayed synthetic history/render initialization,
+and OS reclamation were not controlled. The first baseline attempt measured 0% CPU and
+115,456 KiB final median RSS; the repeated baseline above changed substantially. About two
+minutes after launch, the final changed process reported 0.0% CPU / 116,224 KiB RSS;
+a one-second `/usr/bin/sample` showed its main thread waiting in the native event loop
+(physical footprint 120.5 MiB, peak 147.8 MiB). That later spot check is not a paired
+benchmark. Longer controlled measurements would be needed to attribute the differences.
+Startup/frame p95, GPU allocations, live calls, Windows and Linux remain unmeasured.
+
+Native evidence is in `docs/pr-evidence/voice-settings-polish`: matching settings and
+call-popup pairs, plus light-theme settings. Baseline demo hid all audio controls; after
+shows disabled controls. Light/dark, 150% zoom (stacked form / bounded popup), scrolling,
+Escape and navigation to the full page were inspected. These are synthetic UI checks,
+not evidence of Discord voice interoperability.
 
 ## Activity privacy and opt-in tray - September 11, 2026
 

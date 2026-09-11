@@ -76,6 +76,12 @@ impl Page {
 }
 
 impl MessagingUi {
+	pub(super) fn open_voice_settings(&mut self) {
+		self.settings.open = true;
+		self.settings.page = Page::Voice;
+		self.settings.query.clear();
+	}
+
 	/// Fixture-only entry point for the native offline settings preview.
 	pub fn preview_settings(&mut self, page: &str) {
 		self.settings.open = true;
@@ -195,15 +201,12 @@ impl MessagingUi {
 									}
 									Page::Notifications => self.notification_settings(ui, state),
 									Page::Activity => self.activity_settings(ui, state),
-									Page::Voice => {
-										design::card(ui, |ui| {
-											self.voice_settings_menu(
-												ui,
-												state.demo,
-												state.voice.active.is_some(),
-											);
-										});
-									}
+									Page::Voice => self.voice_settings_content(
+										ui,
+										state.demo,
+										state.voice.active.is_some(),
+										false,
+									),
 									Page::Storage => self.storage_page(ui, state),
 								}
 								ui.add_space(24.0);
