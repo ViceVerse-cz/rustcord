@@ -458,3 +458,14 @@ one UI texture, one second of stereo float PCM (at most 768,000 bytes), and one 
 audio packet plus at most two seconds of timestamp-gap silence. Each native decoded
 sample is rejected above 16 MiB before copying. OS decoder/GPU allocations are additional
 and are released with the player. No file cache or media URL/byte diagnostics are written.
+
+
+### Friends overview
+
+The friends page reuses the bounded relationship store (4,000 friends / 2 MiB)
+and the existing presence cache (256 records / 512 KiB), now admitting known
+unblocked friends as well as DM recipients. Startup presence admission keeps its
+256-user bound. Presence outside retained/received data stays unavailable.
+The UI retains only a 128-character search and Online/All selection, renders visible
+64-point rows, and reuses the avatar cache and existing user actions. No new storage,
+network endpoint or friend-management writes are added.

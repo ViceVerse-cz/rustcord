@@ -430,6 +430,8 @@ impl Desktop {
 					test_support::audio_demo_state()
 				} else if std::env::args().any(|arg| arg == "--demo-video") {
 					test_support::video_demo_state()
+				} else if std::env::args().any(|arg| arg == "--demo-friends") {
+					test_support::friends_demo_state()
 				} else if std::env::args().any(|arg| arg == "--demo-system-messages") {
 					test_support::system_demo_state()
 				} else if std::env::args().any(|arg| arg == "--demo-notifications") {

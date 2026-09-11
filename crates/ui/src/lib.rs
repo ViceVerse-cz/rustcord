@@ -18,6 +18,7 @@ mod emoji_picker;
 pub mod fonts;
 mod formatting;
 mod forum;
+mod friends;
 mod group_menu;
 mod guild_folders;
 pub mod icons;
@@ -76,6 +77,7 @@ enum MemberRow {
 
 #[derive(Default)]
 pub struct MessagingUi {
+	friends: friends::Friends,
 	account_menu: account_menu::AccountMenu,
 	pub own_presence: model::OwnPresence,
 	pub own_presence_changed: bool,
@@ -870,6 +872,16 @@ impl MessagingUi {
 						self.switcher.open(&ctx);
 					}
 					ui.add_space(8.0);
+					if ui
+						.add_sized(
+							[ui.available_width(), 38.0],
+							egui::Button::new("Friends").selected(state.selected.is_none()),
+						)
+						.clicked()
+					{
+						state.selected = None;
+						self.search.open = false;
+					}
 				}
 				if self.guild.is_none() {
 					ui.horizontal(|ui| {
@@ -2326,6 +2338,12 @@ impl MessagingUi {
 		egui::CentralPanel::default()
 			.frame(egui::Frame::new().fill(colors.chat).inner_margin(0))
 			.show(ui, |ui| {
+				if state.selected.is_none() && self.guild.is_none() {
+					self.call_bar(ui, state, &mut commands);
+					self.timeline.download.show_status(ui);
+					self.friends_page(ui, state, &mut commands);
+					return;
+				}
 				self.channel_header(
 					ui,
 					state,

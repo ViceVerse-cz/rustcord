@@ -141,7 +141,10 @@ impl State {
 		true
 	}
 
-	fn known_direct_recipient(&self, user: Id) -> bool {
+	fn known_presence_user(&self, user: Id) -> bool {
+		if self.friend_username(user).is_some() && self.user_blocked(user) == Some(false) {
+			return true;
+		}
 		self.channels.iter().any(|c| {
 			c.guild.is_none()
 				&& matches!(c.kind, 1 | 3)
@@ -150,7 +153,7 @@ impl State {
 		})
 	}
 	pub fn presence_for(&self, user: Id) -> Option<&MemberPresence> {
-		if !self.gateway_connected || !self.known_direct_recipient(user) {
+		if !self.gateway_connected || !self.known_presence_user(user) {
 			return None;
 		}
 		self.direct_presences.iter().find(|p| p.user == user)
@@ -172,7 +175,7 @@ impl State {
 				|(_, bytes)| bytes,
 			);
 		for update in updates {
-			if !self.known_direct_recipient(update.user) {
+			if !self.known_presence_user(update.user) {
 				continue;
 			}
 			let index = self
@@ -243,7 +246,7 @@ impl State {
 		let old = std::mem::take(&mut self.direct_presences);
 		self.direct_presences = old
 			.into_iter()
-			.filter(|p| self.known_direct_recipient(p.user))
+			.filter(|p| self.known_presence_user(p.user))
 			.collect();
 	}
 	pub(crate) fn apply_member_presence(
@@ -716,6 +719,45 @@ mod tests {
 		state.members = None;
 		state
 	}
+	#[test]
+	fn friend_presence_without_a_dm_is_retained_but_strangers_are_not() {
+		let mut state = direct_state();
+		let mut friend = state.user.as_ref().unwrap().clone();
+		friend.id = Id(999);
+		state.apply(crate::Envelope {
+			generation: state.generation,
+			event: crate::Event::UserAction(crate::user_actions::Event::Friends(Some(vec![(
+				friend.clone(),
+				"friend".into(),
+			)]))),
+		});
+		state.apply(crate::Envelope {
+			generation: state.generation,
+			event: crate::Event::UserAction(crate::user_actions::Event::Relationship {
+				user: friend.id,
+				blocked: false,
+			}),
+		});
+		state.apply_direct_presence(&[
+			direct_update(999, Patch::Value("online".into()), Patch::Value(vec![])),
+			direct_update(998, Patch::Value("online".into()), Patch::Value(vec![])),
+		]);
+		assert_eq!(
+			state.presence_for(friend.id).unwrap().status.as_deref(),
+			Some("online")
+		);
+		assert!(state.presence_for(Id(998)).is_none());
+		state.apply(crate::Envelope {
+			generation: state.generation,
+			event: crate::Event::UserAction(crate::user_actions::Event::Friend {
+				user: friend.id,
+				friend: false,
+				profile: None,
+			}),
+		});
+		assert!(state.presence_for(friend.id).is_none());
+	}
+
 	fn direct_update(
 		user: u64,
 		status: Patch<String>,

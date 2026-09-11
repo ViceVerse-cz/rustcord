@@ -738,7 +738,7 @@ async fn run_inner(
 										let (guilds, channels) = ready.navigation().map_err(|_| Failure::ProtocolAt("Gateway login: invalid or oversized channel/thread navigation"))?;
 										let (read_entries,read_version,partial)=ready.read_state.take().map_or((None,None,false),|snapshot|(Some(snapshot.entries.into_iter().filter(|e|e.kind==0).map(|e|(e.id,e.last_message_id,e.mention_count)).collect()),snapshot.version,snapshot.partial));
 										if guilds.len() + channels.len() > MAX_NAV { return Err(Failure::Capacity); }
-										direct_presence.bootstrap_users=channels.iter().filter(|c|c.guild.is_none() && matches!(c.kind,1|3)).flat_map(|c|c.recipients.iter().map(|u|u.id)).take(client_core::presence::MAX_DIRECT_PRESENCES).collect();
+										direct_presence.bootstrap_users=friends.as_ref().into_iter().flatten().map(|(u,_)|u.id).chain(channels.iter().filter(|c|c.guild.is_none() && matches!(c.kind,1|3)).flat_map(|c|c.recipients.iter().map(|u|u.id))).take(client_core::presence::MAX_DIRECT_PRESENCES).collect();
 										calls.allowed=channels.iter().filter(|c|(c.guild.is_none() && c.kind==1 && c.recipients.len()==1) || (c.guild.is_some() && c.kind==2)).map(|c|(c.id,c.guild)).collect();
 										if was_ready { emit(Event::Resync)?; }
 										emit(Event::Ready { user: ready.user.into_model(), guilds, channels, permissions })?; was_ready = true;
@@ -1180,6 +1180,8 @@ mod tests {
                 let mut initial = ready(1, "synthetic-legacy-presence");
                 initial["d"]["private_channels"] = json!([{"id":"2","type":1,"recipients":[{"id":"3","username":"Synthetic player"}]}]);
                 initial["d"]["presences"] = json!([{"user":{"id":"3"},"status":"online","activities":[{"type":0,"name":"Genshin Impact"}]}]);
+                initial["d"]["relationships"] = json!([{"id":"4","type":1,"user":{"id":"4","username":"Synthetic friend"}}]);
+                initial["d"]["presences"].as_array_mut().unwrap().push(json!({"user":{"id":"4"},"status":"idle","activities":[]}));
                 send(&mut socket, initial).await;
                 // No PRESENCE_UPDATE is sent: an unchanged running game must appear at startup.
                 observed.await.unwrap();
@@ -1199,6 +1201,7 @@ mod tests {
                     if presence {
                         let activity = &state.presence_for(Id(3)).unwrap().activities[0];
                         assert_eq!(activity.summary(), "Playing Genshin Impact");
+                        assert_eq!(state.presence_for(Id(4)).unwrap().status.as_deref(), Some("idle"));
                         delivered.lock().unwrap().take().unwrap().send(()).unwrap();
                         return Err(Failure::Expired); // Stop the synthetic connection after delivery.
                     }
