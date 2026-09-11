@@ -19,6 +19,7 @@ mod group_menu;
 mod guild_folders;
 pub mod icons;
 mod invites;
+mod local_time;
 mod markdown;
 mod mentions;
 mod notifications;
