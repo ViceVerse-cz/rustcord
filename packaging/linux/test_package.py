@@ -22,7 +22,7 @@ class DebianPackageTest(unittest.TestCase):
                 (staged / "docs" / source.name).write_text("synthetic documentation\n")
             (staged / "licenses").mkdir()
             for name in ["NotoSansCJK-LICENSE.txt", "NotoSansArabic-OFL.txt", "Inter-OFL.txt",
-                         "Twemoji-CC-BY-4.0.txt", "Unicode-LICENSE.txt", "Phosphor-Icons-MIT.txt"]:
+                         "Twemoji-CC-BY-4.0.txt", "Unicode-LICENSE.txt", "Phosphor-Icons-MIT.txt", "Simple-Icons-CC0.txt"]:
                 (staged / "licenses" / name).write_text("synthetic license\n")
             for name in ["licenses/files", "licenses/notifications", "licenses/login",
                          "licenses/voice", "licenses/audio", "source/hpke-rs"]:

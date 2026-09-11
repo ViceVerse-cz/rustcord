@@ -110,7 +110,7 @@ def package(root, application_version, variant):
         for source in sorted(Path("docs").glob("*.md")):
             copy(root / "docs" / source.name, doc / "docs" / source.name)
         for name in ["NotoSansCJK-LICENSE.txt", "NotoSansArabic-OFL.txt", "Inter-OFL.txt",
-                     "Twemoji-CC-BY-4.0.txt", "Unicode-LICENSE.txt", "Phosphor-Icons-MIT.txt",
+                     "Twemoji-CC-BY-4.0.txt", "Unicode-LICENSE.txt", "Phosphor-Icons-MIT.txt", "Simple-Icons-CC0.txt",
                      ]:
             copy(root / "licenses" / name, doc / "licenses" / name)
         for name in ["files", "notifications", "login", "audio", *(["voice"] if variant == "voice" else [])]:

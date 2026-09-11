@@ -291,6 +291,11 @@ fn package(voice: bool) -> Result<(), String> {
 		resources.join("licenses/Phosphor-Icons-MIT.txt"),
 	)
 	.map_err(|e| e.to_string())?;
+	std::fs::copy(
+		"assets/icons/LICENSE-SIMPLE-ICONS",
+		resources.join("licenses/Simple-Icons-CC0.txt"),
+	)
+	.map_err(|e| e.to_string())?;
 	copy_directory(
 		std::path::Path::new("assets/licenses/files"),
 		&resources.join("licenses/files"),

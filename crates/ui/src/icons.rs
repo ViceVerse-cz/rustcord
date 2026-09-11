@@ -1,4 +1,5 @@
-//! Phosphor Icons (MIT) rasterized once into one bundled atlas and tinted at draw time.
+//! Phosphor Icons (MIT) plus Simple Icons brand marks (CC0) rasterized once into one bundled
+//! atlas and tinted at draw time.
 //!
 //! `assets/icons/atlas.png` holds white glyphs on transparency in fixed 64px cells;
 //! `index.tsv` maps upstream icon names to cells. See `assets/icons/README.md` for provenance.
@@ -92,10 +93,19 @@ pub enum Icon {
 	StarFill,
 	Fire,
 	ArrowLeft,
+	PlayStation,
+	BattleNet,
+	EpicGames,
+	LeagueOfLegends,
+	RiotGames,
+	Bungie,
+	Roblox,
+	Crunchyroll,
+	Ebay,
 }
 
 impl Icon {
-	pub const ALL: [Icon; 77] = [
+	pub const ALL: [Icon; 86] = [
 		Icon::ChevronDown,
 		Icon::ChevronRight,
 		Icon::Gear,
@@ -173,8 +183,17 @@ impl Icon {
 		Icon::StarFill,
 		Icon::Fire,
 		Icon::ArrowLeft,
+		Icon::PlayStation,
+		Icon::BattleNet,
+		Icon::EpicGames,
+		Icon::LeagueOfLegends,
+		Icon::RiotGames,
+		Icon::Bungie,
+		Icon::Roblox,
+		Icon::Crunchyroll,
+		Icon::Ebay,
 	];
-	/// Upstream Phosphor name recorded in `index.tsv`.
+	/// Upstream icon name recorded in `index.tsv`.
 	fn asset(self) -> &'static str {
 		match self {
 			Icon::ChevronDown => "caret-down",
@@ -226,7 +245,7 @@ impl Icon {
 			Icon::TikTok => "tiktok-logo",
 			Icon::PayPal => "paypal-logo",
 			Icon::Amazon => "amazon-logo",
-			Icon::Bluesky => "butterfly",
+			Icon::Bluesky => "bluesky",
 			Icon::Mastodon => "mastodon-logo",
 			Icon::Skype => "skype-logo",
 			Icon::GameController => "game-controller",
@@ -254,6 +273,15 @@ impl Icon {
 			Icon::StarFill => "star-fill",
 			Icon::Fire => "fire",
 			Icon::ArrowLeft => "arrow-left",
+			Icon::PlayStation => "playstation",
+			Icon::BattleNet => "battle-net",
+			Icon::EpicGames => "epic-games",
+			Icon::LeagueOfLegends => "league-of-legends",
+			Icon::RiotGames => "riot-games",
+			Icon::Bungie => "bungie",
+			Icon::Roblox => "roblox",
+			Icon::Crunchyroll => "crunchyroll",
+			Icon::Ebay => "ebay",
 		}
 	}
 	fn cell(self) -> usize {

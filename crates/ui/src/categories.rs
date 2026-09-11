@@ -375,8 +375,10 @@ impl MessagingUi {
 											&mut self.user_action,
 										);
 									}
-									if avatar.clicked() {
-										self.profile = Some(user.clone());
+									// The avatar is part of the row: clicking it opens the conversation,
+									// the profile stays behind the context menu and the header avatar.
+									if enabled && avatar.clicked() {
+										selected = Some(channel.id);
 									}
 								} else {
 									design::avatar(&mut inner, &channel.name, 32.0);
