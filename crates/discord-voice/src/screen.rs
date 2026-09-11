@@ -127,7 +127,7 @@ fn encode_loop(
 		let mut encoder = encoder(settings)?;
 		let (raw_send, raw) = mpsc::sync_channel(1);
 		let capture_stop = Arc::new(AtomicBool::new(false));
-		let native = capture::Capture::start(settings, raw_send, capture_stop.clone())?;
+		let _native = capture::Capture::start(settings, raw_send, capture_stop.clone())?;
 		let mut yuv = YUVBuffer::new(settings.width as usize, settings.height as usize);
 		let mut first_frame_deadline = Some(Instant::now() + Duration::from_secs(15));
 		let mut next_frame = Instant::now();
@@ -197,7 +197,6 @@ fn encode_loop(
 			}
 		}
 		capture_stop.store(true, Ordering::Release);
-		drop(native);
 		keyframe.store(true, Ordering::Release);
 	}
 	Ok(())

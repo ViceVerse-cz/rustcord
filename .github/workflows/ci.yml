@@ -3,39 +3,38 @@ on: [push, pull_request]
 permissions:
   contents: read
 jobs:
-  # Temporarily paused at owner request; uncomment this job to restore native CI.
-  #   native:
-  #     strategy:
-  #       fail-fast: false
-  #       matrix:
-  #         os: [macos-latest, windows-latest, ubuntu-latest]
-  #     runs-on: ${{ matrix.os }}
-  #     steps:
-  #       - uses: actions/checkout@v4
-  #       - name: Linux native dependencies
-  #         if: runner.os == 'Linux'
-  #         run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libxrandr-dev libxcursor-dev libvulkan-dev libasound2-dev cmake python3 dpkg-dev desktop-file-utils
-  #       - uses: dtolnay/rust-toolchain@1.98.1
-  #         with:
-  #           components: rustfmt, clippy
-  #       - uses: Swatinem/rust-cache@v2
-  #       - run: cargo xtask check
-  #       - uses: actions/setup-node@v4
-  #         with:
-  #           node-version: 22
-  #       - run: node tests/login-handoff.cjs
-  #       - run: node tests/xtask-workspace.cjs
-  #       - run: cargo replay
-  #       - run: cargo replay --soak 5
-  #       - name: Linux package regression
-  #         if: runner.os == 'Linux'
-  #         run: PYTHONDONTWRITEBYTECODE=1 python3 packaging/linux/test_package.py
-  #       - run: cargo xtask package
-  #       - run: cargo xtask package-voice
-  #       - uses: actions/upload-artifact@v4
-  #         with:
-  #           name: serein-${{ runner.os }}-unsigned
-  #           path: dist/
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux native dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libxrandr-dev libxcursor-dev libvulkan-dev libasound2-dev cmake python3 dpkg-dev desktop-file-utils
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo xtask check
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node tests/login-handoff.cjs
+      - run: node tests/xtask-workspace.cjs
+      - run: cargo replay
+      - run: cargo replay --soak 5
+      - name: Linux package regression
+        if: runner.os == 'Linux'
+        run: PYTHONDONTWRITEBYTECODE=1 python3 packaging/linux/test_package.py
+      - run: cargo xtask package
+      - run: cargo xtask package-voice
+      - uses: actions/upload-artifact@v4
+        with:
+          name: serein-${{ runner.os }}-unsigned
+          path: dist/
   security:
     runs-on: ubuntu-latest
     steps:

@@ -3162,7 +3162,6 @@ mod tests {
 					egui::Event::PointerMoved(egui::pos2(width / 2.0, 300.0)),
 					egui::Event::MouseWheel {
 						unit: egui::MouseWheelUnit::Point,
-						phase: egui::TouchPhase::Move,
 						delta: egui::vec2(0.0, -600.0),
 						modifiers: egui::Modifiers::NONE,
 						phase: egui::TouchPhase::Move,
