@@ -136,7 +136,7 @@ impl MessagingUi {
 			("voice-participant", entry.channel, entry.participant.user),
 			|ui| {
 				ui.horizontal(|ui| {
-					ui.set_min_height(36.0);
+					ui.set_min_height(34.0);
 					ui.spacing_mut().item_spacing.x = 6.0;
 					let avatar = if let Some(user) = user {
 						self.avatars.show(ui, user, 28.0, state.demo)

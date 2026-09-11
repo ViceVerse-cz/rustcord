@@ -511,11 +511,12 @@ impl MessagingUi {
 		} else {
 			None
 		};
+		let row_spacing = ui.spacing().item_spacing.y;
+		ui.spacing_mut().item_spacing.y = 0.0;
 		egui::ScrollArea::vertical()
 			.id_salt(("people", list.channel))
 			.auto_shrink([false, false])
 			.show_rows(ui, 42.0, self.member_cache.len(), |ui, range| {
-				ui.spacing_mut().item_spacing.y = 0.0;
 				for index in range {
 					match &self.member_cache[index] {
 						MemberRow::Header(text) => {
@@ -650,6 +651,7 @@ impl MessagingUi {
 					}
 				}
 			});
+		ui.spacing_mut().item_spacing.y = row_spacing;
 		if let Some(hint) = hint {
 			ui.label(RichText::new(hint).size(11.0).color(colors.muted));
 		}
@@ -1692,8 +1694,8 @@ impl MessagingUi {
                             .char_limit(MAX_CONTENT)
                             .desired_rows(1)
                             .desired_width(f32::INFINITY)
-                            // Match the 28px icon row so the hint sits on the same centre line.
-                            .min_size(egui::vec2(0.0, 28.0))
+                            // Horizontal layouts reserve the interaction height, including around icons.
+                            .min_size(egui::vec2(0.0, ui.spacing().interact_size.y))
                             .align(egui::Align2::LEFT_CENTER)
                             .frame(egui::Frame::NONE)
                             .hint_text(placeholder.as_str())
@@ -2406,6 +2408,77 @@ impl MessagingUi {
 #[cfg(test)]
 mod composer_tests {
 	use super::*;
+
+	#[test]
+	fn composer_placeholder_alignment() {
+		for scale in [1.0, 1.25, 1.5, 2.0] {
+			for theme in [egui::Theme::Dark, egui::Theme::Light] {
+				let ctx = egui::Context::default();
+				fonts::install(&ctx);
+				design::apply(&ctx);
+				ctx.set_theme(theme);
+				ctx.set_pixels_per_point(scale);
+				let mut state = edit_state();
+				state.channels[0].name = "Alex".into();
+				let mut view = MessagingUi::default();
+				for width in [320.0, 900.0] {
+					for draft in ["", "Message @Alex", "First line\nSecond line"] {
+						state.drafts.insert(Id(10), draft.into());
+						for _ in 0..2 {
+							let mut empty_height = 0.0;
+							let output = ctx.run_ui(
+								egui::RawInput {
+									screen_rect: Some(egui::Rect::from_min_size(
+										egui::Pos2::ZERO,
+										egui::vec2(width, 300.0),
+									)),
+									..Default::default()
+								},
+								|ui| {
+									view.composer(ui, &mut state, Id(10), &ctx, &mut vec![]);
+									empty_height = view
+										.composer_layout
+										.galley(ui, "", 300.0, &[], &mut view.avatars, true)
+										.rect
+										.height();
+								},
+							);
+							let frame = output
+								.shapes
+								.iter()
+								.find_map(|s| match &s.shape {
+									egui::Shape::Rect(r) => Some(r.rect),
+									_ => None,
+								})
+								.unwrap();
+							let text = output
+								.shapes
+								.iter()
+								.find_map(|s| match &s.shape {
+									egui::Shape::Text(t)
+										if t.galley.job.text == draft
+											|| t.galley.job.text == "Message @Alex" =>
+									{
+										Some(t.galley.rect.translate(t.pos.to_vec2()))
+									}
+									_ => None,
+								})
+								.unwrap();
+							output.drop_without_applying_deltas();
+							assert!(
+								(text.center().y - frame.center().y).abs() <= 0.5 / scale,
+								"{draft:?}, scale {scale}, width {width}: text {text:?}, frame {frame:?}"
+							);
+							assert!(
+								empty_height >= 15.0,
+								"empty editor must retain a full-height caret"
+							);
+						}
+					}
+				}
+			}
+		}
+	}
 
 	#[test]
 	fn download_cancel_remains_visible_without_a_text_composer() {
