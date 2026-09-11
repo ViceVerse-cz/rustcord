@@ -639,6 +639,28 @@ impl Formatted {
 			},
 		);
 	}
+	pub(super) fn show_plain_with_images(
+		ui: &mut egui::Ui,
+		text: &str,
+		images: &mut crate::avatars::Avatars,
+		demo: bool,
+	) -> egui::Response {
+		ui.allocate_ui_with_layout(
+			egui::vec2(ui.available_width(), 0.0),
+			egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true),
+			|ui| {
+				ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+				Self::show_emoji(
+					&[(text.to_owned(), Style::default())],
+					ui,
+					false,
+					images,
+					demo,
+				)
+			},
+		)
+		.inner
+	}
 	fn show_emoji(
 		spans: &[(String, Style)],
 		ui: &mut egui::Ui,

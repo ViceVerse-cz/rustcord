@@ -415,7 +415,13 @@ impl TimelineView {
 				state
 					.timeline
 					.iter()
-					.find(|m| read.is_none_or(|id| m.id > id))
+					.find(|m| {
+						read.is_none_or(|id| m.id > id)
+							&& state
+								.user
+								.as_ref()
+								.is_none_or(|user| user.id != m.author.id)
+					})
 					.map(|m| m.id)
 			});
 		if self.unread_boundary != boundary {
