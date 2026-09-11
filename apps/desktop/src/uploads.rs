@@ -17,9 +17,51 @@ pub struct UploadRequest {
 	pub cancel: watch::Sender<bool>,
 }
 
+type Selected = (Source, Option<egui::ColorImage>);
 struct Choosing {
-	result: mpsc::Receiver<Result<Option<Source>, &'static str>>,
+	result: mpsc::Receiver<Result<Option<Selected>, &'static str>>,
 	cancelled: Arc<AtomicBool>,
+}
+/// Longest edge of the composer thumbnail; the full decode stays bounded by `image::Limits`.
+const PREVIEW_EDGE: u32 = 320;
+const PREVIEW_ALLOC: u64 = 64 * 1024 * 1024;
+fn previewable(filename: &str) -> bool {
+	filename.rsplit_once('.').is_some_and(|(_, extension)| {
+		matches!(
+			extension.to_ascii_lowercase().as_str(),
+			"png" | "jpg" | "jpeg" | "gif" | "webp"
+		)
+	})
+}
+/// Downscaled pixels for the composer card, decoded on a blocking worker, never in a frame.
+async fn preview(source: &Source) -> Option<egui::ColorImage> {
+	if !previewable(source.filename()) {
+		return None;
+	}
+	let bytes = source.preview_bytes(discord_api::upload::MAX_BYTES).await?;
+	tokio::task::spawn_blocking(move || decode_preview(&bytes))
+		.await
+		.ok()
+		.flatten()
+}
+fn decode_preview(bytes: &[u8]) -> Option<egui::ColorImage> {
+	let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+		.with_guessed_format()
+		.ok()?;
+	let mut limits = image::Limits::default();
+	limits.max_image_width = Some(8192);
+	limits.max_image_height = Some(8192);
+	limits.max_alloc = Some(PREVIEW_ALLOC);
+	reader.limits(limits);
+	let image = reader
+		.decode()
+		.ok()?
+		.thumbnail(PREVIEW_EDGE, PREVIEW_EDGE)
+		.into_rgba8();
+	Some(egui::ColorImage::from_rgba_unmultiplied(
+		[image.width() as usize, image.height() as usize],
+		image.as_raw(),
+	))
 }
 struct Uploading {
 	progress: watch::Receiver<Status>,
@@ -30,6 +72,8 @@ struct Uploading {
 pub struct Uploads {
 	scope: Option<(u64, Id)>,
 	selected: Option<Source>,
+	preview: Option<Arc<egui::ColorImage>>,
+	previewing: Option<mpsc::Receiver<Option<egui::ColorImage>>>,
 	choosing: Option<Choosing>,
 	uploading: Option<Uploading>,
 	last: Option<Status>,
@@ -40,12 +84,23 @@ impl Uploads {
 		generation: u64,
 		channel: Id,
 		source: Source,
+		runtime: &tokio::runtime::Handle,
+		context: &egui::Context,
 	) -> Result<(), &'static str> {
 		if self.busy() || self.selected.is_some() {
 			return Err("Remove the current attachment or wait for its operation to finish");
 		}
 		self.scope = Some((generation, channel));
 		self.last = None;
+		self.preview = None;
+		let (send, receive) = mpsc::sync_channel(1);
+		let context = context.clone();
+		let copy = source.clone();
+		runtime.spawn(async move {
+			let _ = send.send(preview(&copy).await);
+			context.request_repaint();
+		});
+		self.previewing = Some(receive);
 		self.selected = Some(source);
 		Ok(())
 	}
@@ -113,7 +168,13 @@ impl Uploads {
 					return Ok(None);
 				}
 				match path {
-					Some(path) => Source::inspect(path).await.map(Some),
+					Some(path) => match Source::inspect(path).await {
+						Ok(source) => {
+							let thumbnail = preview(&source).await;
+							Ok(Some((source, thumbnail)))
+						}
+						Err(error) => Err(error),
+					},
 					None => Ok(None),
 				}
 			}
@@ -153,14 +214,25 @@ impl Uploads {
 					self.last = Some(Status::Cancelled);
 				} else {
 					match result {
-						Ok(Some(source)) => {
+						Ok(Some((source, thumbnail))) => {
 							self.selected = Some(source);
+							self.preview = thumbnail.map(Arc::new);
 							self.last = None;
 						}
 						Ok(None) => self.last = Some(Status::Cancelled),
 						Err(error) => self.last = Some(Status::Failed(error)),
 					}
 				}
+			}
+		}
+		if let Some(previewing) = &self.previewing {
+			match previewing.try_recv() {
+				Ok(thumbnail) => {
+					self.preview = thumbnail.filter(|_| self.selected.is_some()).map(Arc::new);
+					self.previewing = None;
+				}
+				Err(mpsc::TryRecvError::Disconnected) => self.previewing = None,
+				Err(mpsc::TryRecvError::Empty) => {}
 			}
 		}
 		if let Some(uploading) = &mut self.uploading {
@@ -196,6 +268,9 @@ impl Uploads {
 			.as_ref()
 			.map(|source| (source.filename(), source.size()))
 	}
+	pub fn preview(&self) -> Option<Arc<egui::ColorImage>> {
+		self.selected.as_ref().and(self.preview.clone())
+	}
 	pub fn busy(&self) -> bool {
 		self.choosing.is_some() || self.uploading.is_some()
 	}
@@ -229,6 +304,8 @@ impl Uploads {
 	}
 	pub fn remove(&mut self) {
 		self.selected = None;
+		self.preview = None;
+		self.previewing = None;
 		self.cancel();
 	}
 	pub fn cancel(&mut self) {
@@ -244,6 +321,8 @@ impl Uploads {
 		if self.scope != Some((generation, channel)) || self.busy() {
 			return None;
 		}
+		self.preview = None;
+		self.previewing = None;
 		self.selected.take()
 	}
 	pub fn begin_upload(
@@ -383,6 +462,8 @@ mod tests {
 				cancelled: cancelled.clone(),
 			}),
 			selected: None,
+			preview: None,
+			previewing: None,
 			uploading: None,
 			last: None,
 		};

@@ -75,10 +75,19 @@ pub enum Icon {
 	Verified,
 	Calendar,
 	Discord,
+	File,
+	FileImage,
+	FilePdf,
+	FileZip,
+	FileText,
+	FileCode,
+	FileAudio,
+	FileVideo,
+	Trash,
 }
 
 impl Icon {
-	pub const ALL: [Icon; 60] = [
+	pub const ALL: [Icon; 69] = [
 		Icon::ChevronDown,
 		Icon::ChevronRight,
 		Icon::Gear,
@@ -139,6 +148,15 @@ impl Icon {
 		Icon::Verified,
 		Icon::Calendar,
 		Icon::Discord,
+		Icon::File,
+		Icon::FileImage,
+		Icon::FilePdf,
+		Icon::FileZip,
+		Icon::FileText,
+		Icon::FileCode,
+		Icon::FileAudio,
+		Icon::FileVideo,
+		Icon::Trash,
 	];
 	/// Upstream Phosphor name recorded in `index.tsv`.
 	fn asset(self) -> &'static str {
@@ -203,6 +221,15 @@ impl Icon {
 			Icon::Verified => "seal-check",
 			Icon::Calendar => "calendar-blank",
 			Icon::Discord => "discord-logo",
+			Icon::File => "file",
+			Icon::FileImage => "file-image",
+			Icon::FilePdf => "file-pdf",
+			Icon::FileZip => "file-zip",
+			Icon::FileText => "file-text",
+			Icon::FileCode => "file-code",
+			Icon::FileAudio => "file-audio",
+			Icon::FileVideo => "file-video",
+			Icon::Trash => "trash",
 		}
 	}
 	fn cell(self) -> usize {

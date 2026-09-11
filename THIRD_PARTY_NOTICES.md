@@ -66,7 +66,7 @@ Single-file upload streaming enables existing reqwest's `stream` feature and Tok
 
 Twemoji 17.0.3 graphics © Twitter, Inc. and other contributors are licensed under **CC BY 4.0**, separately from Serein code. Source: https://github.com/jdecked/twemoji/tree/v17.0.3. The bundled images are resized and packed into an atlas; see [assets/twemoji/README.md](assets/twemoji/README.md) for provenance and modifications. The full license is `assets/twemoji/LICENSE-GRAPHICS`, staged in both packages as `licenses/Twemoji-CC-BY-4.0.txt`. No Twemoji JavaScript is bundled.
 
-Interface icons are **Phosphor Icons 2.1.1**, Copyright (c) 2023 Phosphor Icons, licensed under the **MIT License** (npm package `@phosphor-icons/core`, https://github.com/phosphor-icons/core). Thirty-six upstream SVGs plus one derived slashed-headphones glyph are rasterized into `assets/icons/atlas.png`; the unmodified license is `assets/icons/LICENSE`, staged in both packages as `licenses/Phosphor-Icons-MIT.txt`. Provenance and file hashes are in [assets/icons/README.md](assets/icons/README.md).
+Interface icons are **Phosphor Icons 2.1.1**, Copyright (c) 2023 Phosphor Icons, licensed under the **MIT License** (npm package `@phosphor-icons/core`, https://github.com/phosphor-icons/core). Sixty-eight upstream SVGs plus one derived slashed-headphones glyph are rasterized into `assets/icons/atlas.png`; the unmodified license is `assets/icons/LICENSE`, staged in both packages as `licenses/Phosphor-Icons-MIT.txt`. Provenance and file hashes are in [assets/icons/README.md](assets/icons/README.md).
 
 The emoji picker's English names and fully qualified sequences derive from Unicode 17.0
 `emoji-test.txt`, © 2025 Unicode, Inc., under Unicode License v3. Provenance and transformations

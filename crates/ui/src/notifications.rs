@@ -3,6 +3,9 @@ use client_core::{Command, State};
 use egui::{Align2, Color32, FontId};
 use model::Id;
 
+/// Fixed width of the server rail column.
+pub(super) const RAIL_WIDTH: f32 = 72.0;
+
 pub(super) fn badge(ui: &egui::Ui, center: egui::Pos2, count: u32, ring: Color32) {
 	let label = if count > 99 {
 		"99+".into()
@@ -80,7 +83,7 @@ impl MessagingUi {
 		}
 		egui::Panel::left("guilds")
             .resizable(false)
-            .exact_size(72.0)
+            .exact_size(RAIL_WIDTH)
             .show_separator_line(false)
             .frame(egui::Frame::new().fill(colors.base).inner_margin(egui::Margin {
                 left: 12,
