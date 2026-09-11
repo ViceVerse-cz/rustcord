@@ -1,4 +1,5 @@
 // Direct, origin-fixed REST adapter. No cookies, redirects, logging, persistence or bot SDK.
+mod activity_sharing;
 mod archives;
 mod guild_folders;
 pub mod rpc;
