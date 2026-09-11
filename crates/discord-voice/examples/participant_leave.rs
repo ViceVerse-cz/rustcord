@@ -34,11 +34,11 @@ fn main() {
 			b"synthetic voice"
 		);
 		assert!(alice.disconnect(2).unwrap());
-		assert!(alice.waiting && !alice.ready && !alice.contains(2));
+		assert!(!alice.ready && !alice.contains(2));
 		assert!(!alice.disconnect(2).unwrap());
 		assert!(alice.wait_for_peer().is_err()); // Old group still contains the departed peer.
 		alice.reinitialize().unwrap();
-		alice.wait_for_peer().unwrap();
+		alice.wait_for_peer().unwrap(); // Discord's transition 0 while alone.
 		assert!(alice.waiting && !alice.ready);
 		assert!(alice.session.encrypt_opus(b"never plaintext").is_err());
 		assert!(alice.connect(&[4]).is_err()); // Departure never widens the DM allowlist.

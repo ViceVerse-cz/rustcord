@@ -17,7 +17,10 @@ struct Animation {
 
 // A visible server emoji grid plus avatars/icons must fit without evicting each other.
 const TEXTURES: usize = 256;
-const TEXTURE_BYTES: usize = 16 * 1024 * 1024;
+const TEXTURE_BYTES: usize = 64 * 1024 * 1024;
+/// Longest edge requested for thumbnails and for the full-screen viewer.
+pub const EMBED_EDGE: u32 = 512;
+pub const LARGE_EDGE: u32 = 2048;
 const REQUESTS: usize = 128;
 const RETRY: Duration = Duration::from_secs(60);
 
@@ -41,6 +44,15 @@ pub(crate) struct Avatars {
 	attempts: HashMap<String, (Instant, bool)>,
 	requests: Vec<String>,
 }
+/// Scale `width`×`height` so the longer side is at most `edge`, never upscaling.
+pub fn fit_edge(width: u32, height: u32, edge: u32) -> (u32, u32) {
+	let longest = u64::from(width.max(height)).max(u64::from(edge));
+	(
+		(u64::from(width) * u64::from(edge) / longest).max(1) as u32,
+		(u64::from(height) * u64::from(edge) / longest).max(1) as u32,
+	)
+}
+
 impl Avatars {
 	#[cfg(test)]
 	pub(crate) fn texture_id(&self, key: &str) -> Option<egui::TextureId> {
@@ -124,13 +136,15 @@ impl Avatars {
 		if !self.attempts.contains_key(&key) {
 			return;
 		}
-		let limit = if key.starts_with("anim:")
+		let limit = if key.starts_with("large:") {
+			LARGE_EDGE as usize
+		} else if key.starts_with("anim:")
 			|| key.starts_with("embed:")
 			|| key.starts_with("gif:")
 			|| key.starts_with("banner-")
 			|| key.starts_with("member-banner-")
 		{
-			512
+			EMBED_EDGE as usize
 		} else {
 			128
 		};
@@ -670,36 +684,45 @@ impl Avatars {
 			let source = original_gif
 				.or(media.proxy_url.as_deref())
 				.or(media.url.as_deref());
-			let key = source.filter(|source| source.len() <= 2048).map(|source| {
-				let animated = self.animate_gifs
+			let animated = source.is_some_and(|source| {
+				self.animate_gifs
 					&& source.split('?').next().is_some_and(|path| {
 						[".gif", ".webp"]
 							.iter()
 							.any(|ext| path.to_ascii_lowercase().ends_with(ext))
-					});
-				let mut source = source.to_owned();
-				if original_gif.is_none()
-					&& media.width > 0
-					&& media.height > 0
-					&& let Ok(mut url) = url::Url::parse(&source)
-				{
-					let query: Vec<_> = url
-						.query_pairs()
-						.filter(|(key, _)| key != "width" && key != "height")
-						.map(|(key, value)| (key.into_owned(), value.into_owned()))
-						.collect();
-					let edge = u64::from(media.width.max(media.height)).max(512);
-					let width = (u64::from(media.width) * 512 / edge).max(1);
-					let height = (u64::from(media.height) * 512 / edge).max(1);
-					url.set_query(None);
-					url.query_pairs_mut()
-						.extend_pairs(query)
-						.append_pair("width", &width.to_string())
-						.append_pair("height", &height.to_string());
-					source = url.into();
-				}
-				format!("{}:{source}", if animated { "anim" } else { "embed" })
+					})
 			});
+			let source = source.filter(|source| source.len() <= 2048);
+			let sized = |edge: u32| {
+				source.map(|source| {
+					let mut source = source.to_owned();
+					if original_gif.is_none()
+						&& media.width > 0 && media.height > 0
+						&& let Ok(mut url) = url::Url::parse(&source)
+					{
+						let query: Vec<_> = url
+							.query_pairs()
+							.filter(|(key, _)| key != "width" && key != "height")
+							.map(|(key, value)| (key.into_owned(), value.into_owned()))
+							.collect();
+						let (width, height) = fit_edge(media.width, media.height, edge);
+						url.set_query(None);
+						url.query_pairs_mut()
+							.extend_pairs(query)
+							.append_pair("width", &width.to_string())
+							.append_pair("height", &height.to_string());
+						source = url.into();
+					}
+					source
+				})
+			};
+			let key = sized(EMBED_EDGE)
+				.map(|source| format!("{}:{source}", if animated { "anim" } else { "embed" }));
+			// The viewer wants real pixels: request a larger rendition and show the thumbnail
+			// already in memory until it arrives. Animated media keeps its animated key.
+			let large = (large && !animated)
+				.then(|| sized(LARGE_EDGE).map(|source| format!("large:{source}")))
+				.flatten();
 			#[cfg(any(test, feature = "demo"))]
 			if demo
 				&& let Some(key) = &key
@@ -720,9 +743,19 @@ impl Avatars {
 				self.attempts.insert(key.clone(), (Instant::now(), false));
 				self.accept(ui.ctx(), key.clone(), Some(image));
 			}
-			let painted = key.as_deref().is_some_and(|key| {
-				self.paint_fitted(ui, key, rect, if cover { 8 } else { 5 }, cover)
-			});
+			let radius = if cover { 8 } else { 5 };
+			let painted_large = large
+				.as_deref()
+				.is_some_and(|key| self.paint_fitted(ui, key, rect, radius, cover));
+			if !painted_large
+				&& !demo && let Some(key) = large.as_ref()
+			{
+				self.request(key.clone());
+			}
+			let painted = painted_large
+				|| key
+					.as_deref()
+					.is_some_and(|key| self.paint_fitted(ui, key, rect, radius, cover));
 			if !painted {
 				let colors = crate::design::palette(ui);
 				ui.painter().rect_filled(rect, 5, colors.canvas);
@@ -1146,7 +1179,7 @@ mod tests {
 			Some(ColorImage::filled([128, 128], egui::Color32::WHITE)),
 		);
 		assert_eq!(avatars.textures.len(), TEXTURES);
-		for index in 0..40 {
+		for index in 0..80 {
 			let key = format!("embed:synthetic-{index}");
 			avatars.request(key.clone());
 			avatars.accept(
@@ -1155,7 +1188,7 @@ mod tests {
 				Some(ColorImage::filled([512, 512], egui::Color32::WHITE)),
 			);
 		}
-		assert_eq!(avatars.textures.len(), 16);
+		assert_eq!(avatars.textures.len(), 64);
 		assert_eq!(
 			avatars
 				.textures

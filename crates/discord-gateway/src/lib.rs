@@ -707,6 +707,7 @@ async fn run_inner(
 										state.url = Some(validated_url(&ready.resume_gateway_url).map_err(|f|f.protocol_at("Gateway login: resume address rejected"))?);
 										state.session = Some(Zeroizing::new(std::mem::take(&mut ready.session_id)));
 										let friends = ready.relationships.as_ref().map(|s| s.friends(&ready.users)).transpose().map_err(|_| Failure::ProtocolAt("Invalid friend metadata"))?;
+										calls.session_reset();
 										calls.remember_users(std::mem::take(&mut ready.users))?;
 										known_guilds=channel_events::ready_calls(&ready,&mut calls)?;
 										let mut participants = Vec::new();
