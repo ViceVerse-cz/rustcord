@@ -208,6 +208,16 @@ fn demo_embeds(id: u64) -> Vec<Embed> {
         image: Some(EmbedMedia { url:Some("https://example.com/synthetic-image.png".into()),width:640,height:240,..Default::default() }),
         footer: Some(EmbedFooter { text:"Synthetic content · no service request".into(),..Default::default() }),
         ..Default::default()
+    }, Embed {
+        kind: "rich".into(),
+        url: Some("https://example.com/synthetic".into()),
+        image: Some(EmbedMedia { url: Some("https://example.com/synthetic-image-2.png".into()), width: 320, height: 320, ..Default::default() }),
+        ..Default::default()
+    }, Embed {
+        kind: "rich".into(),
+        url: Some("https://example.com/synthetic".into()),
+        image: Some(EmbedMedia { url: Some("https://example.com/synthetic-image-3.png".into()), width: 320, height: 320, ..Default::default() }),
+        ..Default::default()
     }]
 }
 pub fn demo_state() -> State {

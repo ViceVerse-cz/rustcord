@@ -96,6 +96,115 @@ fn inline_image(embed: &Embed) -> Option<&model::EmbedMedia> {
 		.flatten()
 }
 
+// Discord link previews carry additional images as same-URL embed entries.
+// Only consume continuations without independent content (or with repeated metadata).
+fn gallery_len(embeds: &[Embed]) -> usize {
+	let Some(first) = embeds.first() else {
+		return 0;
+	};
+	let eligible = |e: &Embed| {
+		e.image.is_some()
+			&& e.video.is_none()
+			&& matches!(e.kind.as_str(), "rich" | "article" | "link" | "image")
+	};
+	if !eligible(first) || first.url.as_deref().is_none_or(str::is_empty) {
+		return 1;
+	}
+	1 + embeds[1..]
+		.iter()
+		.take_while(|e| {
+			eligible(e)
+				&& e.url == first.url
+				&& (e.title.is_none() || e.title == first.title)
+				&& (e.description.is_none() || e.description == first.description)
+				&& (e.author.is_none() || e.author == first.author)
+				&& (e.provider.is_none() || e.provider == first.provider)
+				&& (e.footer.is_none() || e.footer == first.footer)
+				&& (e.timestamp.is_none() || e.timestamp == first.timestamp)
+				&& (e.thumbnail.is_none() || e.thumbnail == first.thumbnail)
+				&& (e.fields.is_empty() || e.fields == first.fields)
+		})
+		.count()
+}
+
+fn gallery_rect(count: usize, index: usize, width: f32) -> egui::Rect {
+	let gap = 4.0_f32.min(width / 4.0);
+	let half = (width - gap) / 2.0;
+	let (x, y, height) = if count == 3 {
+		if index == 0 {
+			(0.0, 0.0, width)
+		} else {
+			(half + gap, (index - 1) as f32 * (half + gap), half)
+		}
+	} else {
+		(
+			(index % 2) as f32 * (half + gap),
+			(index / 2) as f32 * (half + gap),
+			half,
+		)
+	};
+	egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(half, height))
+}
+
+fn gallery(
+	ui: &mut egui::Ui,
+	embeds: &[Embed],
+	images: &mut Avatars,
+	opening: &mut Option<String>,
+	demo: bool,
+) {
+	let width = ui.available_width().clamp(1.0, 480.0);
+	let height = gallery_rect(embeds.len(), embeds.len() - 1, width).bottom();
+	let (area, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+	for (index, embed) in embeds.iter().enumerate() {
+		let rect = gallery_rect(embeds.len(), index, width).translate(area.min.to_vec2());
+		ui.scope_builder(
+			egui::UiBuilder::new()
+				.id_salt(("gallery", index))
+				.max_rect(rect),
+			|ui| {
+				let media = embed.image.as_ref().expect("gallery has images");
+				let target = media
+					.url
+					.as_deref()
+					.or(media.proxy_url.as_deref())
+					.and_then(external_url);
+				let response = images.show_banner(ui, media, rect.size(), demo).interact(
+					if target.is_some() {
+						egui::Sense::click()
+					} else {
+						egui::Sense::hover()
+					},
+				);
+				response.widget_info(|| {
+					egui::WidgetInfo::labeled(
+						if target.is_some() {
+							egui::WidgetType::Button
+						} else {
+							egui::WidgetType::Image
+						},
+						ui.is_enabled(),
+						format!("Open embed image {} of {}", index + 1, embeds.len()),
+					)
+				});
+				if response.has_focus() {
+					ui.painter().rect_stroke(
+						rect,
+						5,
+						ui.visuals().selection.stroke,
+						egui::StrokeKind::Inside,
+					);
+				}
+				if let Some(target) = target
+					&& response.on_hover_text("Open image…").clicked()
+				{
+					*opening = Some(target);
+				}
+			},
+		);
+	}
+}
+
 fn gif_for_embed(embed: &Embed, gifs: &client_core::gifs::Gifs) -> Option<Gif> {
 	let media = [
 		embed.image.as_ref(),
@@ -161,8 +270,20 @@ pub fn show(
 	}
 	let demo = state.demo;
 	let mut favorite_action = None;
-	for (index, embed) in message.embeds.iter().enumerate() {
+	let mut index = 0;
+	while index < message.embeds.len() {
+		let count = gallery_len(&message.embeds[index..]);
+		let group = &message.embeds[index..index + count];
+		let embed = &group[0];
 		ui.push_id(("embed", index), |ui| {
+			if count > 1 && inline_image(embed).is_some() {
+				gallery(ui, group, images, opening, demo);
+				if group.iter().any(|e| e.limited) {
+					ui.small("Embed display limited");
+				}
+				ui.add_space(6.0);
+				return;
+			}
 			if let Some(image) = inline_image(embed) {
 				let gif = gif_for_embed(embed, &state.gifs);
 				let response = images
@@ -347,7 +468,9 @@ pub fn show(
 								});
 								field += count;
 							}
-							if let Some(image) = &embed.image {
+							if count > 1 {
+								gallery(ui, group, images, opening, demo);
+							} else if let Some(image) = &embed.image {
 								images.show_embed(
 									ui,
 									image,
@@ -395,7 +518,7 @@ pub fn show(
 							if let Some(timestamp) = &embed.timestamp {
 								ui.small(timestamp);
 							}
-							if embed.limited {
+							if group.iter().any(|e| e.limited) {
 								ui.small("Embed display limited");
 							}
 							if !matches!(
@@ -415,26 +538,205 @@ pub fn show(
 			);
 			ui.add_space(6.0);
 		});
+		index += count;
 	}
 	favorite_action
 }
 pub fn estimated_height(embeds: &[Embed]) -> f32 {
-	embeds
-		.iter()
-		.map(|e| {
-			if inline_image(e).is_some() {
-				206.0
-			} else {
-				100.0 + e.fields.len() as f32 * 44.0 + if e.image.is_some() { 200.0 } else { 0.0 }
-			}
-		})
-		.map(|h| h.min(664.0))
-		.sum()
+	let mut height = 0.0;
+	let mut index = 0;
+	while index < embeds.len() {
+		let count = gallery_len(&embeds[index..]);
+		let e = &embeds[index];
+		let image_height = if count > 1 {
+			gallery_rect(count, count - 1, 456.0).bottom()
+		} else if e.image.is_some() {
+			200.0
+		} else {
+			0.0
+		};
+		height += if inline_image(e).is_some() {
+			if count > 1 { image_height + 6.0 } else { 206.0 }
+		} else {
+			(100.0 + e.fields.len() as f32 * 44.0 + image_height).min(664.0)
+		};
+		index += count;
+	}
+	height
 }
 
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	fn gallery_embeds(count: usize) -> Vec<Embed> {
+		(0..count)
+			.map(|index| Embed {
+				kind: "rich".into(),
+				url: Some("https://example.com/gallery".into()),
+				image: Some(model::EmbedMedia {
+					url: Some(format!(
+						"https://cdn.discordapp.com/attachments/1/2/{index}.png"
+					)),
+					width: 640,
+					height: 360,
+					..Default::default()
+				}),
+				..Default::default()
+			})
+			.collect()
+	}
+
+	#[test]
+	fn gallery_groups_only_related_images_and_preserves_independent_content() {
+		let mut embeds = gallery_embeds(3);
+		embeds[0].title = Some("Gallery title".into());
+		assert_eq!(gallery_len(&embeds), 3);
+		assert!(estimated_height(&embeds) < 3.0 * 300.0);
+		embeds[1].title = embeds[0].title.clone();
+		assert_eq!(gallery_len(&embeds), 3);
+		for variant in 0..7 {
+			let mut separate = embeds.clone();
+			match variant {
+				0 => separate[1].url = Some("https://example.com/other".into()),
+				1 => separate.iter_mut().for_each(|e| e.url = None),
+				2 => separate
+					.iter_mut()
+					.for_each(|e| e.url = Some(String::new())),
+				3 => separate[1].title = Some("Independent title".into()),
+				4 => separate[1].image = None,
+				5 => separate[1].video = Some(Default::default()),
+				_ => separate[1].kind = "gifv".into(),
+			}
+			assert_eq!(gallery_len(&separate), 1, "variant {variant}");
+		}
+		assert_eq!(gallery_len(&[]), 0);
+		assert_eq!(
+			gallery_len(&gallery_embeds(model::MAX_EMBEDS)),
+			model::MAX_EMBEDS
+		);
+	}
+
+	#[test]
+	fn gallery_card_shows_one_title_all_images_and_keeps_suppression() {
+		let mut message = test_support::message(1, model::Id(20));
+		message.embeds = gallery_embeds(3);
+		message.embeds[0].title = Some("Shared card title".into());
+		message.embeds[1].limited = true;
+		for width in [240.0, 480.0] {
+			for suppressed in [false, true] {
+				message.embeds_suppressed = suppressed;
+				let ctx = egui::Context::default();
+				let mut images = Avatars::default();
+				let mut cache = FormatCache::default();
+				let mut output = ctx.run_ui(
+					egui::RawInput {
+						screen_rect: Some(egui::Rect::from_min_size(
+							egui::Pos2::ZERO,
+							egui::vec2(width, 900.0),
+						)),
+						..Default::default()
+					},
+					|ui| {
+						show(
+							ui,
+							&message,
+							&mut cache,
+							&mut images,
+							&mut None,
+							&mut None,
+							&client_core::State::default(),
+						);
+					},
+				);
+				let labels: Vec<_> = output
+					.shapes
+					.iter()
+					.filter_map(|shape| match &shape.shape {
+						egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+						_ => None,
+					})
+					.collect();
+				assert_eq!(
+					labels
+						.iter()
+						.filter(|label| **label == "Shared card title")
+						.count(),
+					usize::from(!suppressed)
+				);
+				assert_eq!(labels.contains(&"Embed display limited"), !suppressed);
+				assert_eq!(images.take_requests().len(), if suppressed { 0 } else { 3 });
+				output.textures_delta.clear();
+			}
+		}
+	}
+
+	#[test]
+	fn gallery_tiles_fit_without_overlap_and_open_each_original() {
+		for theme in [egui::Theme::Dark, egui::Theme::Light] {
+			for width in [96.0, 240.0, 456.0] {
+				for count in [2, 3, 4, 10] {
+					let rects: Vec<_> = (0..count).map(|i| gallery_rect(count, i, width)).collect();
+					for (i, rect) in rects.iter().enumerate() {
+						assert!(rect.width() > 0.0 && rect.right() <= width);
+						assert!(rects[..i].iter().all(|other| !rect.intersects(*other)));
+					}
+					if count == 3 {
+						assert_eq!(rects[0].height(), width);
+						assert_eq!(rects[0].bottom(), rects[2].bottom());
+						assert_eq!(rects[1].left(), rects[2].left());
+					}
+					let ctx = egui::Context::default();
+					ctx.set_theme(theme);
+					let embeds = gallery_embeds(count);
+					let mut images = Avatars::default();
+					let mut opening = None;
+					let mut origin = egui::Pos2::ZERO;
+					let mut frame = |events| {
+						ctx.run_ui(
+							egui::RawInput {
+								screen_rect: Some(egui::Rect::from_min_size(
+									egui::Pos2::ZERO,
+									egui::vec2(width + 16.0, 1400.0),
+								)),
+								events,
+								..Default::default()
+							},
+							|ui| {
+								ui.set_width(width);
+								origin = ui.cursor().min;
+								gallery(ui, &embeds, &mut images, &mut opening, false);
+							},
+						)
+						.drop_without_applying_deltas();
+						(origin, opening.take())
+					};
+					frame(vec![]);
+					let (origin, _) = frame(vec![]);
+					for (i, rect) in rects.iter().enumerate() {
+						let pos = rect.center() + origin.to_vec2();
+						frame(vec![
+							egui::Event::PointerMoved(pos),
+							egui::Event::PointerButton {
+								pos,
+								button: egui::PointerButton::Primary,
+								pressed: true,
+								modifiers: Default::default(),
+							},
+						]);
+						let (_, opened) = frame(vec![egui::Event::PointerButton {
+							pos,
+							button: egui::PointerButton::Primary,
+							pressed: false,
+							modifiers: Default::default(),
+						}]);
+						assert_eq!(opened, embeds[i].image.as_ref().unwrap().url);
+					}
+					assert_eq!(images.take_requests().len(), count);
+				}
+			}
+		}
+	}
 
 	#[test]
 	fn hide_media_links_requires_matching_visible_media_without_caption_or_spoiler() {

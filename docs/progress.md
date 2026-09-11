@@ -1,5 +1,35 @@
 # Implementation progress — 2026-09-10
 
+## Embed image galleries — September 11, 2026
+
+Related image embeds now render together inside one card. Two images sit side by
+side; three use a tall left tile and two stacked right tiles; larger retained sets
+use two-column rows. Tiles center-crop through the existing media renderer and open
+their own original image through the existing link confirmation. Grouping preserves
+independent card content, suppressed/spoiler handling, limited warnings, viewport
+fetching and cache bounds. Timeline height estimates use the same grouping. No new
+dependencies or storage/protocol changes.
+
+The existing offline message 500 now contains three synthetic same-URL embeds.
+Reproduce with `cargo run --locked -p serein -- --demo`, then inspect its preview
+in getting-started. This fixture extension is not captured Discord traffic.
+
+Validation: seven focused embed tests pass; the existing attachment gallery test
+also passes. Tests cover 2/3/4/10 images, 96/240/456-point widths, dark/light themes,
+every tile's mouse action, one shared title, all three visible image requests,
+suppression, distinct metadata and URL boundaries. Strict UI Clippy passes. The full
+xtask check pipeline passed all-feature Clippy, workspace tests, text-only check and
+policy (run from a copied xtask executable because concurrent Windows packaging held
+`target/debug/xtask.exe` open). Focused tests and UI Clippy were rerun after the final
+safe-link guard. Read-only independent review found no correctness blockers.
+
+Native before/after screenshots and scripted UI measurements are blocked: Orca CLI
+is absent, and `@oai/sky` window discovery fails with `Computer Use native pipe is
+unavailable ... (os error 2)` after reset/retry. Headless egui checks are not native
+screenshots. Live Discord, other operating systems, keyboard-only gallery navigation
+and actual GPU/frame timing remain unverified. Release measurements and packaging
+limitations are recorded in [performance.md](performance.md).
+
 ## Own profile editing — September 11, 2026
 
 Added Settings → Profile, My Account → Edit profile, and Edit profile on your own

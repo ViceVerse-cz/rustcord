@@ -1,5 +1,46 @@
 # Initial performance evidence
 
+## Embed image gallery — September 11, 2026
+
+Baseline `4bbec5a` versus final runtime sources on `fix/embed-image-gallery`, Rust
+1.98.1, locked release builds. Baseline and changed packages were copied to separate
+evidence directories immediately after building. Text packages pass. The initial
+gallery voice build and baseline compile, but packaging fails on missing
+exact-version license texts for
+`openh264-sys2 0.9.8` and `openh264 0.9.8`, also reproduced on the clean baseline.
+Complete voice installed/archive sizes are therefore unavailable. The final voice
+rebuild was interrupted when delivery switched to fast local
+mode; final-source voice release verification remains incomplete. No dependencies
+changed. Installed/ZIP totals include docs and licenses, exclude the sibling voice
+directory, and predate this final measurement addendum. ZIP uses Python `zipfile`,
+DEFLATE level 6, sorted relative file paths.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable, bytes | 55,205,376 | 55,207,424 | +2,048 (+0.004%) |
+| Text installed package, bytes | 60,176,513 | 60,181,544 | +5,031 (+0.008%) |
+| Text ZIP, bytes | 36,100,777 | 36,102,099 | +1,322 (+0.004%) |
+| Maximum sampled working set, bytes | 156,225,536 | 166,957,056 | +10,731,520 (+6.87%) |
+| Settled working set, bytes | 156,225,536 | 166,957,056 | +10,731,520 (+6.87%) |
+| Settled private memory, bytes | 386,510,848 | 394,907,648 | +8,396,800 (+2.17%) |
+| Sampled CPU, percent of one core | 0.305 | 0.000 | -0.305 percentage points |
+
+Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical CPUs), 33,410,678,784 bytes
+usable RAM; configured wgpu renderer and default 1120 x 760 logical viewport. Actual
+adapter/backend, display scale, GPU allocations, helper-process memory and frame
+timing were not measured. One fresh text-only `--demo` process per reported build,
+five-second warmup, ten one-second PowerShell samples of WorkingSet64 and
+PrivateMemorySize64; settled is the median of the last three samples. CPU uses
+TotalProcessorTime delta over measured wall time (10.261/10.181 seconds). Each
+process stayed alive throughout sampling and was then stopped. The original fixture
+has one embed image; the changed fixture has three. Background desktop/build activity
+was uncontrolled. These short idle samples are noisy, show increased sampled memory,
+and are not an improvement claim or a substitute for scrolling/gallery interaction
+measurements. Zero sampled CPU does not imply zero CPU cost.
+
+Native screenshot/scripted interaction evidence is blocked by the absent Computer Use
+native pipe (`os error 2`) after retry. No p95 latency or live Discord claim is made.
+
 ## Own profile editor - September 11, 2026
 
 Baseline `22e2283` and final runtime sources on `feat/profile-edit`, built from
