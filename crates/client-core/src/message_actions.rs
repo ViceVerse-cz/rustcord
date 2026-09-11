@@ -89,9 +89,10 @@ impl State {
 			self.status = "Wait for the previous message edit to finish";
 			return None;
 		}
-		let Some(current) = self.timeline.get(message).filter(|m| m.channel == channel) else {
-			return None;
-		};
+		let current = self
+			.timeline
+			.get(message)
+			.filter(|m| m.channel == channel)?;
 		// Eight snapshots, each limited to a 64 KiB source plus MAX_CONTENT UTF-8 text.
 		if current.content.len() > 64 * 1024 {
 			return None;
@@ -189,15 +190,14 @@ impl State {
 			return None;
 		}
 		let previous = self.is_pinned(channel, message);
-		if self.message_actions.pins.len() >= 128 {
-			if let Some(key) = self
+		if self.message_actions.pins.len() >= 128
+			&& let Some(key) = self
 				.message_actions
 				.pins
 				.iter()
 				.find_map(|(key, pin)| (!pin.pending).then_some(*key))
-			{
-				self.message_actions.pins.remove(&key);
-			}
+		{
+			self.message_actions.pins.remove(&key);
 		}
 		self.message_actions.sequence = self.message_actions.sequence.wrapping_add(1);
 		let request = self.message_actions.sequence;

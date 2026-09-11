@@ -26,6 +26,9 @@ pub struct Connection {
 	pub terminal: watch::Receiver<Option<Failure>>,
 	pub share_activity: watch::Sender<bool>,
 	pub game_activity: watch::Receiver<crate::game_activity::Detection>,
+	pub activity_observation: watch::Receiver<discord_gateway::ActivityObservation>,
+	pub activity_sharing: watch::Receiver<Result<Option<bool>, Failure>>,
+	pub activity_sharing_request: mpsc::Sender<bool>,
 	typing_channel: Arc<AtomicU64>,
 	task: JoinHandle<()>,
 }
@@ -59,6 +62,10 @@ impl Connection {
 		let (finished, terminal) = watch::channel(None);
 		let (share_activity, share_receive) = watch::channel(false);
 		let (game_report, game_activity) = watch::channel(Ok(None));
+		let (activity_observed, activity_observation) =
+			watch::channel(discord_gateway::ActivityObservation::Unconfirmed);
+		let (sharing_report, activity_sharing) = watch::channel(Ok(None));
+		let (activity_sharing_request, sharing_requests) = mpsc::channel(1);
 		let wake = ctx.clone();
 		let typing_channel = Arc::new(AtomicU64::new(0));
 		let active_typing = typing_channel.clone();
@@ -81,14 +88,19 @@ impl Connection {
                 let (member_send,member_receive)=watch::channel(None);
                 let (voice_send,voice_receive)=mpsc::channel(8);
 				let (activity_send,activity_receive)=watch::channel(None);
+				let _sharing_task=AbortTask(tokio::spawn(run_activity_sharing(api.clone(),share_receive.clone(),sharing_requests,sharing_report,finished.clone(),wake.clone())));
 				let _activity_task=AbortTask(tokio::spawn(crate::game_activity::run(share_receive,activity_send,game_report,wake.clone(),user.clone())));
                 let dm_channels=Arc::new(Mutex::new(BTreeSet::new()));
                 let gateway_channels=dm_channels.clone();
                 let (voice_online,mut voice_availability)=watch::channel(false);
                 let gateway_api=api.clone();let gateway_emit=emit.clone();let terminal_send=finished.clone();
                 let gateway_wake=wake.clone();
+                let activity_wake=wake.clone();
                 let mut gateway_task=AbortTask(tokio::spawn(async move {
-                    let error=discord_gateway::run_with_activity(secret,gateway,member_receive,voice_receive,activity_receive,|event|{
+                    let error=discord_gateway::run_with_activity(secret,gateway,member_receive,voice_receive,activity_receive,move |observation| {
+                        if activity_observed.send_if_modified(|current| { if *current == observation { false } else { *current = observation; true } }) { activity_wake.request_repaint(); }
+                        Ok(())
+                    },|event|{
                         if let Event::Ready{user:ready_user,channels,..}=&event {
                             if ready_user.id!=user.id {return Err(Failure::InvalidCredential);}
                             *gateway_channels.lock().map_err(|_|Failure::Protocol)?=channels.iter().filter(|c|c.guild.is_none()&&c.kind==1&&c.recipients.len()==1).map(|c|c.id).collect();
@@ -304,8 +316,77 @@ impl Connection {
 			terminal,
 			share_activity,
 			game_activity,
+			activity_observation,
+			activity_sharing,
+			activity_sharing_request,
 			typing_channel,
 			task,
+		}
+	}
+}
+
+async fn run_activity_sharing(
+	api: Arc<DiscordApi>,
+	mut enabled: watch::Receiver<bool>,
+	mut requests: mpsc::Receiver<bool>,
+	report: watch::Sender<Result<Option<bool>, Failure>>,
+	finished: watch::Sender<Option<Failure>>,
+	wake: egui::Context,
+) {
+	let mut refresh = true;
+	let mut request = None;
+	loop {
+		refresh |= enabled.has_changed().unwrap_or(true);
+		let current = *enabled.borrow_and_update();
+		if refresh {
+			refresh = false;
+			// An action queued before disabling sharing must not enable it on a later cycle.
+			let _ = requests.try_recv();
+			request = current.then_some(false);
+			let _ = report.send_replace(Ok(None));
+			wake.request_repaint();
+		}
+		if let Some(enable) = request.take() {
+			let _ = report.send_replace(Ok(None));
+			wake.request_repaint();
+			let operation = async {
+				if enable {
+					api.set_activity_sharing(true).await
+				} else {
+					api.activity_sharing().await
+				}
+			};
+			let result = tokio::select! {
+				biased;
+				changed = enabled.changed() => {
+					if changed.is_err() { return; }
+					refresh = true;
+					continue;
+				}
+				result = operation => result,
+			};
+			let _ = report.send_replace(result.map(Some));
+			wake.request_repaint();
+			if let Err(failure) = result
+				&& failure.ends_session()
+			{
+				api.stop();
+				let _ = finished.send(Some(failure));
+				wake.request_repaint();
+				return;
+			}
+		}
+		tokio::select! {
+			biased;
+			changed = enabled.changed() => {
+				if changed.is_err() { return; }
+				refresh = true;
+			},
+			next = requests.recv() => match next {
+				Some(next) if *enabled.borrow() => request = Some(next),
+				Some(_) => {},
+				None => return,
+			}
 		}
 	}
 }
@@ -485,6 +566,50 @@ fn scope_history_failure(event: Event, channel: model::Id, request: u64) -> Even
 
 #[cfg(test)]
 mod tests {
+	#[tokio::test]
+	async fn activity_privacy_waits_for_opt_in_and_propagates_expired_session() {
+		let api = Arc::new(
+			DiscordApi::new(Arc::new(
+				SessionSecret::from_owner_input("SYNTHETIC_ACTIVITY_PRIVACY_TOKEN".into()).unwrap(),
+			))
+			.unwrap(),
+		);
+		// Stop before the worker starts: this test can never send an HTTP request.
+		api.stop();
+		let (enabled, receive_enabled) = watch::channel(false);
+		let (requests, receive_requests) = mpsc::channel(1);
+		let (send_report, mut report) = watch::channel(Ok(None));
+		let (finished, mut terminal) = watch::channel(None);
+		let worker = tokio::spawn(run_activity_sharing(
+			api,
+			receive_enabled,
+			receive_requests,
+			send_report,
+			finished,
+			egui::Context::default(),
+		));
+		report.changed().await.unwrap();
+		assert_eq!(*report.borrow_and_update(), Ok(None));
+		for request in [false, true] {
+			requests.send(request).await.unwrap();
+			drop(requests.reserve().await.unwrap());
+		}
+		assert!(
+			tokio::time::timeout(Duration::from_millis(25), report.changed())
+				.await
+				.is_err()
+		);
+		assert_eq!(*terminal.borrow(), None);
+		enabled.send(true).unwrap();
+		tokio::time::timeout(Duration::from_secs(1), terminal.changed())
+			.await
+			.unwrap()
+			.unwrap();
+		assert_eq!(*terminal.borrow(), Some(Failure::Expired));
+		worker.await.unwrap();
+		assert_eq!(*report.borrow(), Err(Failure::Expired));
+	}
+
 	fn queued_channel(id: u64) -> client_core::Envelope {
 		client_core::Envelope {
 			generation: 1,

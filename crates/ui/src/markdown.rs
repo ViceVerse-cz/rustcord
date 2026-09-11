@@ -606,13 +606,19 @@ impl Formatted {
 						continue;
 					}
 					if let Some(id) = self.spans[start].1.mention {
+						let colors = crate::design::palette(ui);
 						let user = users.iter().find(|user| user.id == id);
 						let label = format!(
 							"@{}",
 							user.map_or_else(|| id.to_string(), |u| u.name.clone())
 						);
 						let response = ui
-							.add(egui::Link::new(egui::RichText::new(&label).strong()))
+							.add(egui::Link::new(
+								egui::RichText::new(&label)
+									.strong()
+									.color(colors.mention_text)
+									.background_color(colors.mention_bg),
+							))
 							.on_hover_text("Open user profile");
 						response.widget_info(|| {
 							egui::WidgetInfo::labeled(
@@ -1632,6 +1638,53 @@ mod tests {
 		output.drop_without_applying_deltas();
 		assert_eq!(images, 2, "one image per complete grapheme, none in code");
 	}
+	#[test]
+	fn mention_highlights_include_unknown_users_in_both_themes() {
+		let ctx = egui::Context::default();
+		let users = vec![model::User {
+			id: Id(42),
+			name: "Synthetic Robin".into(),
+			avatar: None,
+			discriminator: 0,
+		}];
+		let parsed = Formatted::parse("<@42> <@!43> `<@44>` \\<@45>");
+		for dark in [true, false] {
+			ctx.set_visuals(if dark {
+				egui::Visuals::dark()
+			} else {
+				egui::Visuals::light()
+			});
+			for width in [80.0, 300.0] {
+				let mut output = ctx.run_ui(Default::default(), |ui| {
+					ui.set_width(width);
+					parsed.show_mentions(ui, &mut None, &users, &mut None);
+				});
+				output.textures_delta.clear();
+				let colors = crate::design::colors(dark, crate::design::variant());
+				let highlighted: Vec<_> = output
+					.shapes
+					.iter()
+					.filter_map(|shape| {
+						let egui::Shape::Text(text) = &shape.shape else {
+							return None;
+						};
+						text.galley
+							.job
+							.sections
+							.iter()
+							.any(|section| {
+								section.format.background == colors.mention_bg
+									&& section.format.color == colors.mention_text
+							})
+							.then_some(text.galley.job.text.as_str())
+					})
+					.collect();
+				assert_eq!(highlighted, ["@Synthetic Robin", "@43"]);
+				output.drop_without_applying_deltas();
+			}
+		}
+	}
+
 	#[test]
 	fn user_mentions_preserve_literals_and_open_native_profiles() {
 		let parsed = Formatted::parse(

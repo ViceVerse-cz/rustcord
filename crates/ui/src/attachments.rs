@@ -328,7 +328,7 @@ pub fn show(
 		}
 	}
 }
-fn image_layout(count: usize, width: f32) -> (usize, egui::Vec2) {
+pub(crate) fn image_layout(count: usize, width: f32) -> (usize, egui::Vec2) {
 	let columns = if count > 1 && width >= 280.0 { 2 } else { 1 };
 	let width = ((width.min(420.0) - (columns - 1) as f32 * 6.0) / columns as f32).max(1.0);
 	(

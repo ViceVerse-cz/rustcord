@@ -590,3 +590,29 @@ updates supply actual access. New gateway guilds enter the server rail. Expired 
 invites and uncertain writes show errors. Challenges, membership screening, and application
 requirements remain unsupported in the native join flow. No challenge bypass or automatic retry.
 Live acceptance and restricted-server flows remain unverified; offline demo cannot join.
+
+
+### Account activity sharing and server observations (September 11, 2026)
+
+The local Share game activity switch does not itself enable Discord's account-wide
+`show_current_game` preference. Serein now reads that preference after local opt-in
+and offers Enable on Discord only when it is disabled. This explicit action uses
+normal-user `GET/PATCH /users/@me/settings-proto/1`, preserving other status/custom
+status bytes and guarding the fresh data version. Unconfirmed writes are not retried
+automatically. Turning local sharing off clears this client's game; it does not change
+other clients' account preference. External preference changes are rechecked on a
+new local opt-in cycle or an explicit retry after a hidden/error response.
+
+Post-send `SESSIONS_REPLACE` observations distinguish an aggregate public game,
+hidden game, current-session receipt, aggregate omission, and no confirmation.
+They match application ID/type, not every beatmap detail. Local profile/member
+previews remain local; neither a successful socket write nor a local preview proves
+peer visibility. Per-server, per-game and friend privacy may still limit visibility.
+No speculative activity fields or client identity changes were introduced.
+
+Sources checked: [Discord's Activity Sharing FAQ](https://support.discord.com/hc/en-us/articles/7931156448919-Activity-Sharing-on-Discord-FAQ),
+[settings protobuf schema](https://github.com/discord-userdoccers/discord-protos/blob/master/discord_protos/discord_users/v1/PreloadedUserSettings.proto),
+and [discord.py-self session handling](https://github.com/dolfies/discord.py-self/blob/master/discord/state.py).
+The normal-user protobuf/session behavior remains unofficial and live-unverified.
+Local mock HTTP/WebSocket tests verify bounds, preservation, write confirmation,
+listed/hidden/missing observations and reconnect resets. No live account was used.

@@ -99,10 +99,8 @@ fn decode_folder(bytes: &[u8]) -> Result<Folder, DecodeError> {
 				if packed.len() % 8 != 0 || folder.guild_ids.len() + packed.len() / 8 > MAX_GUILDS {
 					return Err(DecodeError);
 				}
-				for id in packed.chunks_exact(8) {
-					folder.guild_ids.push(Id(u64::from_le_bytes(
-						id.try_into().map_err(|_| DecodeError)?,
-					)));
+				for id in packed.as_chunks::<8>().0 {
+					folder.guild_ids.push(Id(u64::from_le_bytes(*id)));
 				}
 			}
 			2 => folder.id = Some(wrapper_integer(field.message()?)?),
@@ -197,21 +195,22 @@ pub fn encode_patch(current: &Decoded, settings: &Settings) -> Result<String, De
 	Ok(STANDARD.encode(patch))
 }
 
-struct Field<'a> {
-	number: u64,
+// Shared bounded settings-proto wire helpers, also used for activity sharing.
+pub(crate) struct Field<'a> {
+	pub(crate) number: u64,
 	wire_type: u8,
 	value: &'a [u8],
-	raw: &'a [u8],
+	pub(crate) raw: &'a [u8],
 }
 impl<'a> Field<'a> {
-	fn message(&self) -> Result<&'a [u8], DecodeError> {
+	pub(crate) fn message(&self) -> Result<&'a [u8], DecodeError> {
 		if self.wire_type == 2 {
 			Ok(self.value)
 		} else {
 			Err(DecodeError)
 		}
 	}
-	fn integer(&self) -> Result<u64, DecodeError> {
+	pub(crate) fn integer(&self) -> Result<u64, DecodeError> {
 		if self.wire_type != 0 {
 			return Err(DecodeError);
 		}
@@ -234,7 +233,7 @@ fn varint(input: &mut &[u8]) -> Result<u64, DecodeError> {
 	}
 	Err(DecodeError)
 }
-fn fields(mut bytes: &[u8]) -> Result<Vec<Field<'_>>, DecodeError> {
+pub(crate) fn fields(mut bytes: &[u8]) -> Result<Vec<Field<'_>>, DecodeError> {
 	let mut result = Vec::new();
 	while !bytes.is_empty() {
 		if result.len() >= 4096 {
@@ -281,12 +280,12 @@ fn write_varint(mut value: u64, output: &mut Vec<u8>) {
 	}
 	output.push(value as u8);
 }
-fn message(number: u64, value: &[u8], output: &mut Vec<u8>) {
+pub(crate) fn message(number: u64, value: &[u8], output: &mut Vec<u8>) {
 	write_varint(number << 3 | 2, output);
 	write_varint(value.len() as u64, output);
 	output.extend_from_slice(value);
 }
-fn integer_wrapper(number: u64, value: u64, output: &mut Vec<u8>) {
+pub(crate) fn integer_wrapper(number: u64, value: u64, output: &mut Vec<u8>) {
 	let mut wrapper = vec![8];
 	write_varint(value, &mut wrapper);
 	message(number, &wrapper, output);

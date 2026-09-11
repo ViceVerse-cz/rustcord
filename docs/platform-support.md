@@ -30,3 +30,16 @@ Native emoji use eframe system-font fallback and installed OS color fonts. macOS
 Apple Color Emoji was visually checked with a synthetic moon status on September
 10, 2026. Windows/Linux emoji coverage is unverified and depends on installed fonts
 (e.g. Segoe UI Emoji / Noto Color Emoji); no OS font is redistributed.
+
+
+## Opt-in minimize to tray (September 11, 2026)
+
+Windows Appearance settings now offer Minimize to tray, off by default. Minimizing
+hides the window only after successful Shell icon registration. The icon supports
+keyboard/mouse restore and a Show Serein / Quit menu. Quit uses the normal unsaved
+work/download exit checks; the window Close button retains normal exit behavior.
+Disabling restores a hidden window, and Shell recovery failure leaves it accessible.
+The adapter uses existing user32/Shell APIs and dependencies, with no background
+polling or autostart. A synthetic native Windows test verifies registration,
+hide/restore, own-window taskbar recovery, Quit event and cleanup. Linux/macOS have
+an explicitly disabled control; their tray integration is not implemented.

@@ -1,4 +1,5 @@
 use client_core::auth::Failure;
+use discord_protocol::activity_sessions::{self, Observation};
 use discord_protocol::rpc::Activity;
 use std::time::Duration;
 use tokio::time::Instant;
@@ -10,6 +11,7 @@ pub(super) struct Pending {
 	current: Option<Activity>,
 	sent: Option<Option<Activity>>,
 	next_send: Instant,
+	pub observation: Observation,
 }
 impl Default for Pending {
 	fn default() -> Self {
@@ -17,6 +19,7 @@ impl Default for Pending {
 			current: None,
 			sent: None,
 			next_send: Instant::now(),
+			observation: Observation::Unconfirmed,
 		}
 	}
 }
@@ -27,11 +30,26 @@ impl Pending {
 		}
 		if self.current != *activity {
 			self.current = activity.clone();
+			self.observation = Observation::Unconfirmed;
 		}
 		Ok(())
 	}
 	pub fn reconnect(&mut self) {
 		self.sent = None;
+		self.observation = Observation::Unconfirmed;
+	}
+	pub fn observe(&mut self, bytes: &[u8], session: &str) {
+		if self.sent.as_ref() != Some(&self.current) {
+			self.observation = Observation::Unconfirmed;
+			return;
+		}
+		self.observation = self
+			.current
+			.as_ref()
+			.map_or(Observation::Unconfirmed, |current| {
+				activity_sessions::observe(bytes, session, current)
+					.unwrap_or(Observation::Unconfirmed)
+			});
 	}
 	pub fn deadline(&self) -> Option<Instant> {
 		(self.sent.as_ref() != Some(&self.current)).then_some(self.next_send)
@@ -42,6 +60,7 @@ impl Pending {
 		}
 		let activities: Vec<_> = self.current.iter().collect();
 		self.sent = Some(self.current.clone());
+		self.observation = Observation::Unconfirmed;
 		// Charge attempts too: a failed write may have reached Discord.
 		self.next_send = now + Duration::from_secs(5);
 		Some(Message::Text(
@@ -76,6 +95,26 @@ mod tests {
 		}
 		.into_activity(Id(42), name.into())
 		.unwrap()
+	}
+
+	#[test]
+	fn server_observations_do_not_confirm_unsent_changed_or_cleared_games() {
+		let mut pending = Pending::default();
+		let listed = br#"[{"session_id":"all","activities":[{"application_id":"42","type":0}]}]"#;
+		pending.update(&Some(game("osu!"))).unwrap();
+		pending.observe(listed, "own");
+		assert_eq!(pending.observation, Observation::Unconfirmed);
+		pending.packet(Instant::now()).unwrap();
+		pending.observe(listed, "own");
+		assert_eq!(pending.observation, Observation::ServerListed);
+		let mut changed = game("osu!");
+		changed.details = Some("Next map".into());
+		pending.update(&Some(changed)).unwrap();
+		pending.observe(listed, "own");
+		assert_eq!(pending.observation, Observation::Unconfirmed);
+		pending.update(&None).unwrap();
+		pending.observe(listed, "own");
+		assert_eq!(pending.observation, Observation::Unconfirmed);
 	}
 
 	#[test]

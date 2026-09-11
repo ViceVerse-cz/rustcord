@@ -2568,3 +2568,134 @@ Final voice packaging fails on existing missing exact-version license texts for
 Native before/after interaction evidence is blocked by ineffective input and Computer
 Use `-10005: noWindowsAvailable`. The focused synthetic UI tests are separate evidence;
 no live Discord compatibility or native scroll-performance claim is made.
+## Voice settings design — macOS, September 11, 2026
+
+Baseline `283686ae4dc4f9ba1b20a5e4b14ebe9ca570e5d5` versus the voice settings
+redesign on `t3code/polish-voice-settings-calls`. Apple M1 Pro, MacBookPro18,3,
+16 GiB RAM, macOS 27.0 (26A428), Rust 1.98.1, release profile, wgpu renderer.
+No dependency, transport, codec, cache, or audio callback changes.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable, packaged bytes | 51,621,632 | 51,662,400 | +40,768 (+0.079%) |
+| Text complete .app, sum of regular-file bytes | 58,811,147 | 58,854,652 | +43,505 (+0.074%) |
+| Text .app, `tar -czf` bytes | 35,864,221 | 35,888,336 | +24,115 (+0.067%) |
+| Voice release executable, bytes | 57,250,304 | 57,274,544 | +24,240 (+0.042%) |
+| Voice complete package / archive | Blocked | Blocked | Missing existing dependency license texts |
+| Early sample CPU, one core | 2.38% | 10.20% | +7.82 percentage points |
+| Peak sampled RSS, KiB | 172,032 | 140,416 | -31,616 (-18.38%) |
+| Last-five-sample median RSS, KiB | 122,736 | 140,416 | +17,680 (+14.41%) |
+
+Packages were built from the recorded sources into separate baseline/changed directories;
+text sums include bundled docs/licenses, before these final evidence appends. Voice
+compilation succeeds on both revisions, but `cargo xtask package-voice` stops on missing
+exact-version license texts for objc2-core-media/core-video 0.3.2 and
+openh264/openh264-sys2 0.9.8. Partial package directories are not counted as complete
+installed artifacts. No new dependency or redistribution-clearance claim is made.
+
+Process method: launch the text package with `--demo --demo-call --demo-settings=voice`,
+1120×760 window, default dark palette, 100% UI zoom (native captures are 1120×760).
+Inspect the settings accessibility tree, wait ten seconds, then take 21 `ps -p PID
+-o time=,rss=` readings one second apart. CPU is cumulative CPU-time delta / monotonic
+wall-time delta; sample durations were 20.60 s baseline and 20.39 s after. RSS includes
+this process only; `pgrep -P PID` found no child processes. Temporary copied .app bundle
+names/identifiers were changed solely to isolate native automation from other Serein
+instances; executable code was unchanged.
+
+These short early samples are noisy, not a performance improvement or a sustained idle
+regression claim. Concurrent local builds, delayed synthetic history/render initialization,
+and OS reclamation were not controlled. The first baseline attempt measured 0% CPU and
+115,456 KiB final median RSS; the repeated baseline above changed substantially. About two
+minutes after launch, the final changed process reported 0.0% CPU / 116,224 KiB RSS;
+a one-second `/usr/bin/sample` showed its main thread waiting in the native event loop
+(physical footprint 120.5 MiB, peak 147.8 MiB). That later spot check is not a paired
+benchmark. Longer controlled measurements would be needed to attribute the differences.
+Startup/frame p95, GPU allocations, live calls, Windows and Linux remain unmeasured.
+
+Native evidence is in `docs/pr-evidence/voice-settings-polish`: matching settings and
+call-popup pairs, plus light-theme settings. Baseline demo hid all audio controls; after
+shows disabled controls. Light/dark, 150% zoom (stacked form / bounded popup), scrolling,
+Escape and navigation to the full page were inspected. These are synthetic UI checks,
+not evidence of Discord voice interoperability.
+
+## Activity privacy and opt-in tray - September 11, 2026
+
+Baseline `381e178295d9b0f4b76d11a307d2586377364a06`; isolated branch
+`fix/presence-and-tray`. Both variants rebuilt at baseline and after with locked
+Rust 1.98.1 release settings. Text packaging passed. Voice executables compiled,
+but both voice packaging runs failed on pre-existing missing license texts for
+openh264/openh264-sys2 0.9.8; voice staging/zip figures below are incomplete, not
+redistributable packages. Existing realfft 3.5.0 license-evidence warning remains.
+
+Windows 11 Home 10.0.26200, Ryzen 7 7800X3D / 16 logical processors,
+33,410,678,784 bytes visible RAM. Text demo with Appearance open, 1400x950 pixels,
+125% scale, dark theme, wgpu (adapter unmeasured). Tray off in both process samples.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| text exe (bytes) | 54,935,552 | 55,026,176 | +90,624 (+0.16%) |
+| text installed (bytes) | 59,841,905 | 59,936,641 | +94,736 (+0.16%) |
+| text zip (bytes) | 35,322,352 | 35,351,550 | +29,198 (+0.08%) |
+| voice exe (bytes) | 60,951,040 | 61,040,128 | +89,088 (+0.15%) |
+| voice installed (incomplete staging) (bytes) | 61,863,480 | 61,952,568 | +89,088 (+0.14%) |
+| voice zip (incomplete staging) (bytes) | 35,967,242 | 35,986,991 | +19,749 (+0.05%) |
+| working_set_median (bytes) | 167,272,448 | 168,824,832 | +1,552,384 (+0.93%) |
+| private_bytes_median (bytes) | 395,055,104 | 396,783,616 | +1,728,512 (+0.44%) |
+| Idle CPU, one logical core (percent) | 0.1717 | 0 | -0.1717 (-100.00%) |
+| Reducer replay median (ms) | 41.6340 | 41.0937 | -0.5403 (-1.30%) |
+
+Native sampling: at least ten seconds settling, ten samples about one second apart.
+After sampling followed ordinary minimize/restore and failed attempts to focus the
+owned demo window for a checkbox click; baseline did not include those interactions.
+Concurrent builds and allocator noise limit comparison; no CPU/memory improvement
+is claimed. Hidden/resident tray process CPU, GPU allocation, startup/frame p95,
+child/helper memory, network privacy requests and live-account loads are unmeasured.
+
+Reducer: one warmup plus five measured 100,000-event runs per revision. Both retain
+500 records and 236,992..237,477 estimated timeline bytes. The workload does not
+exercise the new HTTP preference or tray paths; its small timing change is noise.
+Packages use sorted paths with Python zipfile DEFLATE level 9; text excludes nested
+voice staging. Package docs precede final progress/performance appends. Executable
+hashes, package file counts and raw samples are in
+`docs/pr-evidence/presence-and-tray/measurements.json`.
+
+Runtime bounds: one native icon/menu, three coalesced event bits, no tray timer/thread;
+one cancellable preference operation and one queued boolean action; 1 MiB HTTP
+response / 16 KiB retained status subtree; 64 KiB borrowed session projection and
+16 entries per session/activity list. These limits are not whole-process memory.
+
+## Mention highlighting - September 11, 2026
+
+Compared clean baseline `0c1a43d` with `fix/mention-highlights` on Windows 11 Home,
+AMD Ryzen 7 7800X3D (16 logical CPUs), 32,627,616 KiB visible RAM, Rust 1.98.1
+x86_64-pc-windows-msvc. Default release text build, no default features, configured
+wgpu renderer; GPU adapter and display scale unverified because native capture failed.
+Package snapshots precede these documentation appends and exclude nested voice staging.
+ZIP uses PowerShell `Compress-Archive -CompressionLevel Optimal` on each package.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable bytes | 55,043,584 | 55,044,608 | +1,024 (+0.0019%) |
+| Text installed package bytes | 59,961,138 | 59,962,162 | +1,024 (+0.0017%) |
+| Text ZIP bytes | 35,539,850 | 35,540,776 | +926 (+0.0026%) |
+| Settled working set bytes | 167,333,888 | 167,071,744 | -262,144 (-0.16%) |
+| Peak working set bytes | 194,613,248 | 194,650,112 | +36,864 (+0.019%) |
+| Settled private bytes | 395,259,904 | 395,378,688 | +118,784 (+0.030%) |
+| CPU seconds over nominal 10-second sample | 0 | 0.0625 | +0.0625 |
+
+Idle sampling: one process/run, explicit `--demo`, `Start-Process -WindowStyle Hidden`,
+10-second warmup, 20 Get-Process samples spaced 500 ms apart. No scripted interaction:
+the native Computer Use pipe is unavailable. These are limited idle process samples,
+not proof of foreground rendering, typing latency, p95 frames, startup latency, or
+GPU memory. Both runs overlapped build/test work; tiny differences are noise, not an
+improvement or established regression. No helper process accounting was performed.
+Raw task samples remain in the isolated worktree's ignored `target/mention-baseline`
+and `target/mention-after` directories. Existing UI caches and input limits unchanged;
+one background color is stored per existing composer inline slot.
+
+Voice release compilation succeeded before and after: executable 61,057,024 ->
+61,058,560 bytes (+1,536; +0.0025%). `cargo xtask package-voice` fails after compilation
+on both revisions because exact license texts for openh264-sys2 0.9.8 and openh264
+0.9.8 are missing. The realfft 3.5.0 incomplete upstream license-evidence warning also
+remains. Full voice installed/ZIP comparison is unavailable; partial staging is not
+reported as a complete package. Voice was never activated during measurement.
