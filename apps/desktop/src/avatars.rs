@@ -707,7 +707,8 @@ mod tests {
 			for index in 0..100 {
 				encoder
 					.encode_frame(image::Frame::from_parts(
-						image::RgbaImage::from_pixel(320, 320, image::Rgba([index, 0, 255, 255])),
+						// Exercise temporal compaction without spending the decode deadline resizing 100 frames.
+						image::RgbaImage::from_pixel(16, 16, image::Rgba([index, 0, 255, 255])),
 						0,
 						0,
 						image::Delay::from_numer_denom_ms(100, 1),
@@ -744,7 +745,7 @@ mod tests {
 			for color in [[255, 0, 0, 255], [0, 255, 0, 255]] {
 				encoder
 					.encode_frame(image::Frame::from_parts(
-						image::RgbaImage::from_pixel(32, 16, image::Rgba(color)),
+						image::RgbaImage::from_pixel(320, 160, image::Rgba(color)),
 						0,
 						0,
 						image::Delay::from_numer_denom_ms(100, 1),
@@ -755,7 +756,7 @@ mod tests {
 		let frames = super::decode_animation(&bytes).unwrap();
 		assert_eq!(frames.len(), 2);
 		assert_eq!(frames[0].0, std::time::Duration::from_millis(100));
-		assert_eq!(frames[0].1.size, [32, 16]);
+		assert_eq!(frames[0].1.size, [160, 80]);
 		assert_ne!(frames[0].1.pixels[0], frames[1].1.pixels[0]);
 		assert!(super::decode_animation(b"not a GIF").is_none());
 		assert!(super::decode_animation(&vec![0; super::MAX_ENCODED + 1]).is_none());

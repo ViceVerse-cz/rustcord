@@ -2252,3 +2252,14 @@ text-only and policy checks. Both combined Windows release packages pass (1m37s 
 Their absolute sizes are recorded separately in performance.md; the original notice-only
 comparison is tied to `584163e` and is not attributed to the newer main UI work. Earlier-head
 native CI has reached packaging on all three OSes, but final integrated CI remains pending.
+
+
+Integrated Windows CI exposed the incoming long-GIF fixture's dependence on runner speed:
+100 frames at 320x320 exceeded the unchanged production three-second decode guard. Temporal
+compaction now uses 100 small frames while retaining total duration, frame and byte assertions;
+the existing two-frame case separately verifies 320x160-to-160x80 resizing, timing and colors.
+Both focused tests passed locally in 0.05 seconds. This is a test-only repair; production
+budgets and the measured integrated release binaries remain unchanged. Linux integrated CI
+already passed both packages; final-head CI is checked on the PR.
+
+The full `cargo xtask check` also passed after the GIF fixture repair (395 tests and policy checks).
