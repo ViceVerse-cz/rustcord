@@ -2,6 +2,7 @@
 use crate::{
 	State as ClientState,
 	auth::{AuthState, Failure},
+	screen,
 };
 use model::{Id, Member};
 use std::time::Instant;
@@ -23,7 +24,7 @@ impl Secret {
 	pub fn expose(&self) -> &str {
 		&self.0
 	}
-	fn bytes(&self) -> usize {
+	pub(crate) fn bytes(&self) -> usize {
 		self.0.capacity()
 	}
 }
@@ -130,6 +131,16 @@ pub enum Command {
 		mute: bool,
 		deaf: bool,
 	},
+	StartStream {
+		channel: Id,
+		request: u64,
+		stream_request: u64,
+	},
+	StopStream {
+		channel: Id,
+		request: u64,
+		stream_request: u64,
+	},
 	Decline {
 		channel: Id,
 	},
@@ -177,6 +188,12 @@ pub enum Event {
 		request: u64,
 		message: &'static str,
 	},
+	Stream {
+		channel: Id,
+		request: u64,
+		stream_request: u64,
+		event: screen::Event,
+	},
 }
 impl Event {
 	pub fn bytes(&self) -> usize {
@@ -209,6 +226,7 @@ impl Event {
 				token.as_ref().map_or(0, Secret::bytes)
 					+ endpoint.as_ref().map_or(0, String::capacity)
 			}
+			Self::Stream { event, .. } => event.bytes(),
 			_ => 0,
 		}
 	}
@@ -473,7 +491,7 @@ impl ClientState {
 					call.participants.clear();
 				}
 			}
-			Event::Server { .. } => {} // The desktop consumes negotiation material; core never retains it.
+			Event::Server { .. } | Event::Stream { .. } => {} // The desktop consumes negotiation material; core never retains it.
 		}
 	}
 	fn update_roster(&mut self, entry: RosterEntry) -> bool {

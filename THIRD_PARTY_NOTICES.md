@@ -118,3 +118,5 @@ generic_singleton 0.5.3, primal-check 0.3.4, realfft 3.5.0, rustfft 6.4.1,
 strength_reduce 0.2.4 and transpose 0.2.3. Their license declarations and retained
 texts/notices are recorded in docs/dependency-versions.md and
 assets/licenses/voice/PROVENANCE.md and staged by the existing voice packager.
+
+Optional screen sharing adds **screencapturekit 10.0.3** (MIT OR Apache-2.0) on macOS, **windows-capture 2.0.1** (MIT) on Windows and **openh264 / openh264-sys2 0.9.8** (BSD-2-Clause) for source-built Cisco OpenH264 encoding. It reuses **image 0.25.10** (MIT OR Apache-2.0) for bounded scaling. Native frameworks are supplied by the OS. These dependencies stay behind the existing voice feature. Unmodified available license texts and source provenance are retained in `assets/licenses/voice/PROVENANCE.md`; the noted missing binding license text and existing full per-artifact redistribution review remain outstanding.

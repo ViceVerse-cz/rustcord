@@ -529,6 +529,10 @@ The voice-only dependency nnnoiseless 0.5.2 embeds its default RNNoise model. De
 
 Available license texts/notices and provenance are under `assets/licenses/voice`; existing voice packaging stages that directory. Realfft omits its standalone MIT text from both the registry archive and the pinned Git tree; full redistribution notice assembly remains outstanding. Default text-only builds do not select this processor.
 
+## September 11 screen sharing
+
+Pinned direct additions: screencapturekit 10.0.3 (MIT OR Apache-2.0, macOS, default features disabled with `macos_14_0` for aspect-preserving output), windows-capture 2.0.1 (MIT, Windows), openh264 and openh264-sys2 0.9.8 (BSD-2-Clause, source build). Image 0.25.10 is already resolved. New support crates: apple-cf 0.10.0, apple-metal 0.9.0, crossbeam-queue 0.3.14, doom-fish-utils 0.4.0 and nasm-rs 0.3.2 (MIT OR Apache-2.0), wide 1.7.0 and safe_arch 1.2.0 (Zlib OR Apache-2.0 OR MIT). No existing locked package version changes. These remain optional voice dependencies, with platform capture dependencies target-specific.
+
 
 ### Game process enumeration (September 11, 2026)
 

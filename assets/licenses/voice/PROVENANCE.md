@@ -73,3 +73,37 @@ Unmodified license and notice files from the pinned registry packages. The anyma
 | strength_reduce-LICENSE-MIT.txt | [registry source](https://docs.rs/crate/strength_reduce/0.2.4/source/LICENSE-MIT) | `8f5442dfa8e9169045697e386bc91d19f393c939635741fa2a665ec36ca6f0ad` |
 | transpose-LICENSE-APACHE.txt | [registry source](https://docs.rs/crate/transpose/0.2.3/source/LICENSE-APACHE) | `8797ef61538ec5ee9222ebef7ca4e0f3ec5761b145ca9943d358c450efb644dd` |
 | transpose-LICENSE-MIT.txt | [registry source](https://docs.rs/crate/transpose/0.2.3/source/LICENSE-MIT) | `5080149357fd0be590bdc10cf92165412bb4d61ce496284d56f2d12874ae3121` |
+
+## Screen sharing — September 11, 2026
+
+Unmodified texts from newly locked registry archives, included by voice packaging.
+
+| File | Exact source | SHA-256 |
+|---|---|---|
+| apple-cf-LICENSE-APACHE | [registry source](https://docs.rs/crate/apple-cf/0.10.0/source/LICENSE-APACHE) | `cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30` |
+| apple-cf-LICENSE-MIT | [registry source](https://docs.rs/crate/apple-cf/0.10.0/source/LICENSE-MIT) | `a31e68c0715fe30f0fd0a2372b39ed1ccc3cf07d396940d7d1258001d60ea4e4` |
+| apple-metal-LICENSE-APACHE | [registry source](https://docs.rs/crate/apple-metal/0.9.0/source/LICENSE-APACHE) | `cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30` |
+| apple-metal-LICENSE-MIT | [registry source](https://docs.rs/crate/apple-metal/0.9.0/source/LICENSE-MIT) | `a31e68c0715fe30f0fd0a2372b39ed1ccc3cf07d396940d7d1258001d60ea4e4` |
+| crossbeam-queue-LICENSE-APACHE | [registry source](https://docs.rs/crate/crossbeam-queue/0.3.14/source/LICENSE-APACHE) | `a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2` |
+| crossbeam-queue-LICENSE-MIT | [registry source](https://docs.rs/crate/crossbeam-queue/0.3.14/source/LICENSE-MIT) | `5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab` |
+| doom-fish-utils-LICENSE-APACHE | [registry source](https://docs.rs/crate/doom-fish-utils/0.4.0/source/LICENSE-APACHE) | `cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30` |
+| doom-fish-utils-LICENSE-MIT | [registry source](https://docs.rs/crate/doom-fish-utils/0.4.0/source/LICENSE-MIT) | `a31e68c0715fe30f0fd0a2372b39ed1ccc3cf07d396940d7d1258001d60ea4e4` |
+| nasm-rs-LICENSE-APACHE | [registry source](https://docs.rs/crate/nasm-rs/0.3.2/source/LICENSE-APACHE) | `a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2` |
+| nasm-rs-LICENSE-MIT | [registry source](https://docs.rs/crate/nasm-rs/0.3.2/source/LICENSE-MIT) | `c9a75f18b9ab2927829a208fc6aa2cf4e63b8420887ba29cdb265d6619ae82d5` |
+| openh264-sys2-upstream-LICENSE | [registry source](https://docs.rs/crate/openh264-sys2/0.9.8/source/upstream/LICENSE) | `dd5c1c9668512530fa5a96e4c29ac4033d70a7eeb0eed7a42fddb6dd794ebdbb` |
+| screencapturekit-LICENSE-APACHE | [registry source](https://docs.rs/crate/screencapturekit/10.0.3/source/LICENSE-APACHE) | `cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30` |
+| screencapturekit-LICENSE-MIT | [registry source](https://docs.rs/crate/screencapturekit/10.0.3/source/LICENSE-MIT) | `5464a5ed6a2143a9d31e5516c7336a312c3c067cdc6ad15323f18fdf8d9755ae` |
+| wide-LICENSE-APACHE.txt | [registry source](https://docs.rs/crate/wide/1.7.0/source/LICENSE-APACHE.txt) | `d64ac6ba60c7352115244dcfcb46c24f934603dd92e64835beafe7631c485abc` |
+| wide-LICENSE-MIT.txt | [registry source](https://docs.rs/crate/wide/1.7.0/source/LICENSE-MIT.txt) | `69c62cda6938d510467c134dc0b5c83fb9c8ca847b9cd9d9d2fe9ab427c82100` |
+| wide-LICENSE-ZLIB.txt | [registry source](https://docs.rs/crate/wide/1.7.0/source/LICENSE-ZLIB.txt) | `3c6921f3dfec0bed0cfa2d632616edd7380a875c8ad76c7b23dc59892259f62c` |
+| windows-capture-LICENCE | [pinned upstream](https://raw.githubusercontent.com/NiiightmareXD/windows-capture/c7d106448eb9d9b251345c39047711e1cd408ae2/LICENCE) | `ee09cf4f5e858c3b5105968951825c562120959f6cb53707e326d8f3d9e5a481` |
+
+OpenH264 Rust binding crates declare BSD-2-Clause but their registry archives and pinned upstream tree omit a binding license file. The bundled Cisco OpenH264 codec license is retained separately above; this does not complete the existing distribution license/patent review. The encoder is built from source; no Cisco binary download or binary-license coverage is assumed.
+
+Safe_arch 1.2.0 archive verified against Cargo.lock SHA-256 before reading its unmodified license texts:
+
+| File | Exact source | SHA-256 |
+|---|---|---|
+| safe_arch-LICENSE-APACHE.md | [registry source](https://docs.rs/crate/safe_arch/1.2.0/source/LICENSE-APACHE.md) | `e3ba223bb1423f0aad8c3dfce0fe3148db48926d41e6fbc3afbbf5ff9e1c89cb` |
+| safe_arch-LICENSE-MIT.md | [registry source](https://docs.rs/crate/safe_arch/1.2.0/source/LICENSE-MIT.md) | `e57011537d230b14e790f6666dc00816f7b371ebbd7da8a12491e51086fec278` |
+| safe_arch-LICENSE-ZLIB.md | [registry source](https://docs.rs/crate/safe_arch/1.2.0/source/LICENSE-ZLIB.md) | `c43b9a9b1387ed53d2c49263838261129a010e280e3a174a792242c3e2c98db9` |

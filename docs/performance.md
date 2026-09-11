@@ -1,5 +1,26 @@
 # Initial performance evidence
 
+## September 11 — outgoing screen sharing
+
+Same host: macOS 27.0 (26A428), Apple M1 Pro, 16 GiB RAM, wgpu Metal, built-in 3024×1964 Retina display, default reading scale. Baseline is the verified `609f8bf` release package; changed packages come from `cargo xtask package` and `cargo xtask package-voice` at feature commit `fb3736d`, before merging unrelated main UI changes from `afac0ee`. Full package means the app bundle and the four license/readme/notice files staged by xtask; stale pre-existing ZIPs and the sibling voice directory are excluded. Gzip level 6 archives use the same Python tarfile procedure on both outputs.
+
+| Metric / method | Baseline `609f8bf` | Screen-sharing branch | Delta |
+|---|---:|---:|---:|
+| Text executable, bytes | 48,494,496 | 48,532,208 | +37,712 (+0.08%) |
+| Text installed package, bytes | 49,645,543 | 49,696,554 | +51,011 (+0.10%) |
+| Text gzip distribution, bytes | 31,319,339 | 31,345,030 | +25,691 (+0.08%) |
+| Voice executable, bytes | 52,318,592 | 53,702,000 | +1,383,408 (+2.64%) |
+| Voice installed package, bytes | 53,784,318 | 55,292,726 | +1,508,408 (+2.80%) |
+| Voice gzip distribution, bytes | 33,159,474 | 33,672,043 | +512,569 (+1.55%) |
+| Reducer median, ms | 37.742 | 37.772 | +0.030 (+0.08%) |
+| Voice preview mean CPU, % | 0.18 | 0.24 | +0.06 |
+| Voice preview settled RSS, KiB | 143456 | 141152 | -2304 |
+| Voice preview maximum sampled RSS, KiB | 159584 | 141152 | -18432 |
+
+Idle measurements use separate `--demo --demo-voice` processes at the same 1120×760 viewport, 30-second launch warmup, then ten one-second `ps` CPU/RSS samples without a competing compiler. Settled RSS is the median of the final three samples; maximum RSS is only the maximum of those ten samples, not a process lifetime peak. The preview performs no capture, encoding or network activity. No screen-capture helper is started in this workload. Other desktop activity is uncontrolled, and the small CPU/RSS/reducer changes are noise, not an improvement claim.
+
+Reducer comparison: release `cargo replay`, then one warmup and five direct `target/release/replay-bench` runs per revision; 100,000 synthetic events, 500 retained records and 236,992–237,477 estimated retained bytes on both. Package counts include the documentation snapshot staged during measurement; later evidence-only prose edits may change a subsequent package by a few KiB. Raw samples and byte counts are in [metrics.json](pr-evidence/screen-sharing/metrics.json). UI frame-time percentiles, encoder throughput, actual sharing CPU/RAM, Windows runtime costs and live network quality remain unmeasured. Output presets cap at 1080p60 and target 4–16 Mbps; they are not achieved-throughput claims.
+
 
 ## Game IPC Rich Presence - September 11, 2026
 

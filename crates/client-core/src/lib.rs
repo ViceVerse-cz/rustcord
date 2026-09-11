@@ -19,6 +19,7 @@ pub mod read_state;
 mod replies;
 pub use replies::ReplyDeletions;
 pub mod resident;
+pub mod screen;
 pub mod search;
 mod threads;
 pub mod typing;

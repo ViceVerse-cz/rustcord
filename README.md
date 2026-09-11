@@ -93,7 +93,8 @@ cargo xtask package-voice
 | **Persistence & Drafts** | Implemented | Bounded SQLite cache for history and drafts; OS credential store for auth token |
 | **Voice Engine** | Optional (`voice`) | DM calls & server channels, Opus codec, DAVE v1, push-to-talk (`V`), device selector |
 | **File Uploads** | In Progress | Synthetic pipeline validated; direct client uploads in active development |
-| **Video & Screen Sharing** | Unimplemented | Planned for future milestones |
+| **Screen Sharing** | Experimental sender | macOS 14+ / Windows; source and quality picker up to 1080p60; live Discord viewing unverified |
+| **Camera Video / Stream Viewing** | Unimplemented | Planned for future milestones |
 | **Internationalization** | Partial | CJK and Arabic font fallbacks included; full IME and bidirectional editing unverified |
 
 > [!NOTE]

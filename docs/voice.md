@@ -29,7 +29,7 @@ Start calls the selected existing DM; incoming calls require Answer or Decline. 
 
 Mute/deafen, session-local input/output selection and focused V push-to-talk are implemented. Push-to-talk releases when focus is lost and is disabled while text entry has focus. It is not a global hotkey. Devices are initialized only following an explicit call and encrypted readiness; no microphone test runs at startup. Acoustic echo cancellation is enabled automatically; see below for its limits. Device loss requires selecting a usable device and calling again; there is no automatic device fallback.
 
-DM calls accept only their expected peer. Server calls support up to 64 total participants, with independent bounded decoder/jitter state and mixed mono playback. Only DAVE version 1 is accepted; encryption downgrades and group identities outside the authenticated participant roster fail closed. Group DMs, Stage channels, recording, video and screen sharing are unsupported. Voice WebSocket resumption has a finite retry budget; failed resumption or main Gateway disconnect requires an explicit new call. Voice credentials, ephemeral DAVE identities and audio stay in bounded session memory. The displayed privacy code applies to the current group epoch; identities are not remembered across calls. Comparing codes does not establish long-term identity verification or text-message encryption.
+DM calls accept only their expected peer. Server calls support up to 64 total participants, with independent bounded decoder/jitter state and mixed mono playback. Only DAVE version 1 is accepted; encryption downgrades and group identities outside the authenticated participant roster fail closed. Group DMs, Stage channels, recording and camera video are unsupported. The optional outgoing screen-share sender is described below. Voice WebSocket resumption has a finite retry budget; failed resumption or main Gateway disconnect requires an explicit new call. Voice credentials, ephemeral DAVE identities and audio stay in bounded session memory. The displayed privacy code applies to the current group epoch; identities are not remembered across calls. Comparing codes does not establish long-term identity verification or text-message encryption.
 
 ## Protocol classification
 
@@ -186,3 +186,11 @@ voice may remain audible. There is no extra hard speech gate to cut quiet syllab
 The offline echo example checks synthetic hiss/click reduction, retention of a
 synthetic voiced vowel, finite output and exact AEC-only behavior after disabling
 suppression. These signals do not establish Krisp-equivalent real-world quality.
+
+## Screen sharing
+
+In a connected call, select **Share your screen**, choose a display/window, 720p or 1080p, 15/30/60 fps and cursor visibility, then select **Share screen**. The screen button changes to **Stop sharing** while starting/sharing; it also remains available in the compact call controls. System audio is not included; call microphone controls remain independent. All presets are selectable without Nitro, but Discord acceptance and sustained frame rate are not guaranteed.
+
+Capture uses macOS 14+ ScreenCaptureKit (screen-recording permission in System Settings) or Windows Graphics Capture. Source discovery alone does not start streaming. Closing or minimizing a selected source may pause frames or end capture, according to the native API. The initial Windows adapter accepts source dimensions up to 3840×2160. Changes to screen-server metadata, lost video permission, leaving the call and logout stop sharing. The sender never starts itself after reconnection.
+
+The native demo (`cargo run --locked -p serein --features voice -- --demo --demo-voice`) exposes a synthetic picker without OS source discovery or capture. Live screen sharing requires the same owner-controlled developer-session gate as voice testing. See [compatibility and limits](discord-compatibility.md#outgoing-screen-sharing--september-11-2026).

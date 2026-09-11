@@ -2,10 +2,11 @@
 use client_core::{
 	Event,
 	auth::Failure,
+	screen,
 	voice::{self, Command, Participant, RosterEntry, Secret},
 };
 use discord_protocol::{
-	CallDto, GuildDto, UserDto, VoiceMemberDto, VoiceServerDto, VoiceStateDto, decode,
+	CallDto, GuildDto, UserDto, VoiceMemberDto, VoiceServerDto, VoiceStateDto, decode, stream,
 };
 use model::{Id, Member, User};
 use serde_json::json;
@@ -13,6 +14,15 @@ use std::{collections::BTreeMap, time::Duration};
 use tokio::time::Instant;
 use tokio_tungstenite::tungstenite::Message as Frame;
 use zeroize::Zeroizing;
+
+struct StreamAttempt {
+	channel: Id,
+	request: u64,
+	stream_request: u64,
+	key: String,
+	created: Option<(Id, Id)>,
+	departing: bool,
+}
 
 #[derive(Default)]
 pub(super) struct Calls {
@@ -22,6 +32,7 @@ pub(super) struct Calls {
 	departing: Option<(Id, u64)>,
 	departing_guild: Option<Id>,
 	pub(super) departure_deadline: Option<Instant>,
+	stream: Option<StreamAttempt>,
 	// Only retained between READY and READY_SUPPLEMENTAL, with the roster's item/byte budget.
 	pub(super) users: BTreeMap<Id, User>,
 }
@@ -31,7 +42,16 @@ impl Calls {
 		self.active_guild = None;
 		self.departing = None;
 		self.departure_deadline = None;
+		self.stream = None;
 		self.users.clear();
+	}
+	pub(super) fn invalidate(&mut self, channel: Id) {
+		self.allowed.remove(&channel);
+		if self.active.is_some_and(|(active, _)| active == channel) {
+			self.active = None;
+			self.active_guild = None;
+			self.stream = None;
+		}
 	}
 	pub(super) fn departure_expired(&mut self) -> Option<Event> {
 		self.departure_deadline = None;
@@ -195,6 +215,7 @@ impl Calls {
 				self.departing = self.active.take();
 				self.departing_guild = self.active_guild;
 				self.departure_deadline = Some(Instant::now() + Duration::from_secs(10));
+				self.stream = None;
 				(None, self.active_guild, true, true)
 			}
 			Command::SetMute {
@@ -211,9 +232,193 @@ impl Calls {
 				}
 				(Some(channel), self.active_guild, mute || deaf, deaf)
 			}
-			Command::Decline { .. } | Command::Ring { .. } => return Ok(None),
+			Command::StartStream { .. }
+			| Command::StopStream { .. }
+			| Command::Decline { .. }
+			| Command::Ring { .. } => return Ok(None),
 		};
 		Ok(Some(Frame::Text(json!({"op":4,"d":{"guild_id":guild,"channel_id":channel,"self_mute":mute,"self_deaf":deaf,"self_video":false}}).to_string().into())))
+	}
+	pub(super) fn stream_packet(
+		&mut self,
+		command: Command,
+		owner: Option<Id>,
+	) -> Result<Option<Frame>, Failure> {
+		match command {
+			Command::StartStream {
+				channel,
+				request,
+				stream_request,
+			} => {
+				let owner = owner.filter(|id| id.0 != 0).ok_or(Failure::Protocol)?;
+				if self.stream.is_some()
+					|| self.active != Some((channel, request))
+					|| self.allowed.get(&channel) != Some(&self.active_guild)
+				{
+					return Err(Failure::Forbidden);
+				}
+				let (kind, key) = self.active_guild.map_or_else(
+					|| ("call", format!("call:{channel}:{owner}")),
+					|guild| ("guild", format!("guild:{guild}:{channel}:{owner}")),
+				);
+				self.stream = Some(StreamAttempt {
+					channel,
+					request,
+					stream_request,
+					key,
+					created: None,
+					departing: false,
+				});
+				Ok(Some(Frame::Text(
+					json!({"op":18,"d":{"type":kind,"guild_id":self.active_guild,"channel_id":channel,"preferred_region":null}})
+						.to_string()
+						.into(),
+				)))
+			}
+			Command::StopStream {
+				channel,
+				request,
+				stream_request,
+			} => {
+				let Some(stream) = &mut self.stream else {
+					return Ok(None);
+				};
+				if (stream.channel, stream.request, stream.stream_request)
+					!= (channel, request, stream_request)
+					|| stream.departing
+				{
+					return Ok(None);
+				}
+				stream.departing = true;
+				Ok(Some(Frame::Text(
+					json!({"op":19,"d":{"stream_key":stream.key}})
+						.to_string()
+						.into(),
+				)))
+			}
+			_ => Ok(None),
+		}
+	}
+	fn emit_stream(
+		&self,
+		event: screen::Event,
+		emit: &impl Fn(Event) -> Result<(), Failure>,
+	) -> Result<(), Failure> {
+		if let Some(stream) = &self.stream {
+			emit(Event::Voice(voice::Event::Stream {
+				channel: stream.channel,
+				request: stream.request,
+				stream_request: stream.stream_request,
+				event,
+			}))?;
+		}
+		Ok(())
+	}
+	fn stream_dispatch(
+		&mut self,
+		kind: &str,
+		data: &[u8],
+		emit: &impl Fn(Event) -> Result<(), Failure>,
+	) -> Result<(), Failure> {
+		let Ok(key) = decode::<stream::Key>(data) else {
+			return Ok(());
+		};
+		if let Some(stream) = &self.stream
+			&& (self.active != Some((stream.channel, stream.request))
+				|| self.allowed.get(&stream.channel) != Some(&self.active_guild))
+		{
+			self.stream = None;
+			return Ok(());
+		}
+		if key.stream_key.len() > 128
+			|| self
+				.stream
+				.as_ref()
+				.is_none_or(|stream| stream.key != key.stream_key)
+		{
+			return Ok(());
+		}
+		if kind != "STREAM_DELETE" && self.stream.as_ref().is_some_and(|stream| stream.departing) {
+			return Ok(());
+		}
+		match kind {
+			"STREAM_CREATE" => {
+				let Ok(created) = decode::<stream::Created>(data) else {
+					return self.emit_stream(
+						screen::Event::Failed("Discord sent invalid screen-share setup"),
+						emit,
+					);
+				};
+				let ids = (created.rtc_server_id, created.rtc_channel_id);
+				match self.stream.as_ref().and_then(|stream| stream.created) {
+					Some(previous) if previous != ids => self.emit_stream(
+						screen::Event::Failed("Discord changed screen-share connection identity"),
+						emit,
+					)?,
+					Some(_) => {}
+					None => {
+						self.stream.as_mut().unwrap().created = Some(ids);
+						self.emit_stream(
+							screen::Event::Created {
+								rtc_server: ids.0,
+								rtc_channel: ids.1,
+							},
+							emit,
+						)?;
+					}
+				}
+			}
+			"STREAM_SERVER_UPDATE" => {
+				let Ok(mut server) = decode::<stream::ServerUpdate>(data) else {
+					return self.emit_stream(
+						screen::Event::Failed("Discord sent invalid screen-share server data"),
+						emit,
+					);
+				};
+				if server.token.len() > 2048
+					|| server
+						.endpoint
+						.as_ref()
+						.is_some_and(|endpoint| endpoint.len() > 512)
+				{
+					return self.emit_stream(
+						screen::Event::Failed("Discord sent oversized screen-share server data"),
+						emit,
+					);
+				}
+				let token = Zeroizing::new(std::mem::take(&mut server.token));
+				let Ok(token) = Secret::new(token.to_string()) else {
+					return self.emit_stream(
+						screen::Event::Failed("Discord sent invalid screen-share server data"),
+						emit,
+					);
+				};
+				self.emit_stream(
+					screen::Event::Server {
+						token: Some(token),
+						endpoint: server.endpoint,
+					},
+					emit,
+				)?;
+			}
+			"STREAM_DELETE" => {
+				if decode::<stream::Deleted>(data).is_err() {
+					return self.emit_stream(
+						screen::Event::Failed("Discord sent invalid screen-share deletion"),
+						emit,
+					);
+				}
+				let stream = self.stream.take().unwrap();
+				emit(Event::Voice(voice::Event::Stream {
+					channel: stream.channel,
+					request: stream.request,
+					stream_request: stream.stream_request,
+					event: screen::Event::Deleted,
+				}))?;
+			}
+			_ => {}
+		}
+		Ok(())
 	}
 	fn state(
 		&mut self,
@@ -272,6 +477,8 @@ impl Calls {
 		}))?;
 		if own && self.active.is_some() && !matches_active {
 			self.active = None;
+			self.active_guild = None;
+			self.stream = None;
 		}
 		Ok(())
 	}
@@ -283,6 +490,9 @@ impl Calls {
 		emit: &impl Fn(Event) -> Result<(), Failure>,
 	) -> Result<(), Failure> {
 		match kind {
+			"STREAM_CREATE" | "STREAM_SERVER_UPDATE" | "STREAM_DELETE" => {
+				self.stream_dispatch(kind, data, emit)?;
+			}
 			"CALL_CREATE" | "CALL_UPDATE" | "CALL_DELETE" => {
 				let call: CallDto = decode(data).map_err(|_| Failure::Protocol)?;
 				if self.allowed.get(&call.channel_id) != Some(&None) {
@@ -301,6 +511,8 @@ impl Calls {
 						.is_some_and(|(channel, _)| channel == call.channel_id)
 					{
 						self.active = None;
+						self.active_guild = None;
+						self.stream = None;
 					}
 					emit(Event::Voice(voice::Event::Deleted {
 						channel: call.channel_id,
@@ -708,5 +920,151 @@ mod tests {
 			.unwrap();
 		calls.dispatch("VOICE_STATE_UPDATE",br#"{"guild_id":"9","channel_id":"10","user_id":"1","session_id":"synthetic-session"}"#,Some(Id(1)),&emit).unwrap();
 		assert!(calls.active.is_none());
+	}
+
+	#[test]
+	fn screen_stream_matches_one_call_attempt_until_delete() {
+		let mut calls = Calls::default();
+		calls.allowed.insert(Id(20), Some(Id(10)));
+		calls
+			.packet(Command::Join {
+				channel: Id(20),
+				request: 7,
+				ring: false,
+			})
+			.unwrap();
+		let Frame::Text(create) = calls
+			.stream_packet(
+				Command::StartStream {
+					channel: Id(20),
+					request: 7,
+					stream_request: 8,
+				},
+				Some(Id(1)),
+			)
+			.unwrap()
+			.unwrap()
+		else {
+			panic!("expected stream create");
+		};
+		let packet: serde_json::Value = serde_json::from_str(&create).unwrap();
+		assert_eq!(packet["op"], 18);
+		assert_eq!(packet["d"]["type"], "guild");
+		assert_eq!(packet["d"]["guild_id"], "10");
+		assert!(packet["d"]["preferred_region"].is_null());
+
+		let events = Mutex::new(Vec::new());
+		let emit = |event| {
+			events.lock().unwrap().push(event);
+			Ok(())
+		};
+		calls
+			.dispatch(
+				"STREAM_CREATE",
+				br#"{"stream_key":"guild:10:20:2","rtc_server_id":"30","rtc_channel_id":"31"}"#,
+				Some(Id(1)),
+				&emit,
+			)
+			.unwrap();
+		calls
+			.dispatch(
+				"STREAM_CREATE",
+				br#"{"stream_key":"guild:10:20:1","rtc_server_id":"30","rtc_channel_id":"31"}"#,
+				Some(Id(1)),
+				&emit,
+			)
+			.unwrap();
+		calls.dispatch(
+			"STREAM_SERVER_UPDATE",
+			br#"{"stream_key":"guild:10:20:1","token":"synthetic-stream-token","endpoint":null}"#,
+			Some(Id(1)),
+			&emit,
+		).unwrap();
+		calls
+			.dispatch(
+				"STREAM_CREATE",
+				br#"{"stream_key":"guild:10:20:1","rtc_server_id":"32","rtc_channel_id":"33"}"#,
+				Some(Id(1)),
+				&emit,
+			)
+			.unwrap();
+		assert!(matches!(
+			&events.lock().unwrap()[0],
+			Event::Voice(voice::Event::Stream {
+				channel: Id(20),
+				request: 7,
+				stream_request: 8,
+				event: screen::Event::Created {
+					rtc_server: Id(30),
+					rtc_channel: Id(31)
+				}
+			})
+		));
+		assert!(matches!(
+			&events.lock().unwrap()[1],
+			Event::Voice(voice::Event::Stream {
+				event: screen::Event::Server { token: Some(token), endpoint: None }, ..
+			}) if token.expose() == "synthetic-stream-token"
+		));
+		assert!(matches!(
+			&events.lock().unwrap()[2],
+			Event::Voice(voice::Event::Stream {
+				event: screen::Event::Failed("Discord changed screen-share connection identity"),
+				..
+			})
+		));
+
+		let Frame::Text(delete) = calls
+			.stream_packet(
+				Command::StopStream {
+					channel: Id(20),
+					request: 7,
+					stream_request: 8,
+				},
+				Some(Id(1)),
+			)
+			.unwrap()
+			.unwrap()
+		else {
+			panic!("expected stream delete");
+		};
+		assert_eq!(
+			serde_json::from_str::<serde_json::Value>(&delete).unwrap()["op"],
+			19
+		);
+		assert!(
+			calls
+				.stream_packet(
+					Command::StartStream {
+						channel: Id(20),
+						request: 7,
+						stream_request: 9
+					},
+					Some(Id(1)),
+				)
+				.is_err()
+		);
+		calls
+			.dispatch(
+				"STREAM_DELETE",
+				br#"{"stream_key":"guild:10:20:1"}"#,
+				Some(Id(1)),
+				&emit,
+			)
+			.unwrap();
+		assert!(matches!(
+			&events.lock().unwrap()[3],
+			Event::Voice(voice::Event::Stream {
+				event: screen::Event::Deleted,
+				..
+			})
+		));
+		calls.dispatch(
+			"STREAM_SERVER_UPDATE",
+			br#"{"stream_key":"guild:10:20:1","token":"stale-token","endpoint":"stale.invalid"}"#,
+			Some(Id(1)),
+			&emit,
+		).unwrap();
+		assert_eq!(events.lock().unwrap().len(), 4);
 	}
 }

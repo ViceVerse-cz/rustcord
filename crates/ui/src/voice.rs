@@ -444,6 +444,12 @@ impl MessagingUi {
 				status = format!("{status} · {elapsed}");
 			}
 			notices.push((status, true));
+			if !state.demo
+				&& !self.screen.status.is_empty()
+				&& self.screen.context == Some((state.generation, channel, call.request))
+			{
+				notices.push((self.screen.status.to_owned(), false));
+			}
 			if let Some(error) = call.error {
 				notices.push((error.to_owned(), false));
 			}
@@ -728,7 +734,7 @@ impl MessagingUi {
 		let controls = self.controls_enabled(state);
 		let compact = ui.available_width() < 480.0;
 		let width = if compact {
-			76.0 + 12.0 + 64.0
+			76.0 + 12.0 + 48.0 + 12.0 + 64.0
 		} else {
 			152.0 + 12.0 + 192.0 + 12.0 + 64.0
 		};
@@ -793,8 +799,8 @@ impl MessagingUi {
 			});
 			if !compact {
 				pill(ui, |ui| {
+					self.screen_share_control(ui, state);
 					for (icon, label) in [
-						(crate::icons::Icon::ScreenShare, "Share your screen"),
 						(crate::icons::Icon::Activities, "Activities"),
 						(crate::icons::Icon::Soundboard, "Soundboard"),
 					] {
@@ -836,6 +842,9 @@ impl MessagingUi {
 						}
 					});
 				});
+			}
+			if compact {
+				pill(ui, |ui| self.screen_share_control(ui, state));
 			}
 			let hang_up = {
 				let (rect, response) =
@@ -881,6 +890,42 @@ impl MessagingUi {
 		}
 		if leave && let Some(command) = state.leave_call() {
 			commands.push(command);
+		}
+	}
+
+	fn screen_share_control(&mut self, ui: &mut egui::Ui, state: &State) {
+		let enabled = self.screen.busy
+			|| state.demo
+			|| (self.screen.supported
+				&& state.voice.active.as_ref().is_some_and(|call| {
+					call.phase == Phase::Connected && state.can_stream(call.channel)
+				}));
+		let label = if self.screen.busy {
+			"Stop sharing"
+		} else {
+			"Share your screen"
+		};
+		let color = if self.screen.busy {
+			design::palette(ui).accent
+		} else {
+			STAGE_TEXT
+		};
+		if control(
+			ui,
+			crate::icons::Icon::ScreenShare,
+			48.0,
+			enabled,
+			color,
+			label,
+			if enabled {
+				label
+			} else {
+				"Screen sharing requires a connected call and video permission on macOS or Windows."
+			},
+		)
+		.clicked()
+		{
+			self.screen.launch(state);
 		}
 	}
 

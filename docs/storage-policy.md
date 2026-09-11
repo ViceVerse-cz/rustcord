@@ -327,6 +327,11 @@ the conversation changes, the window is minimized/occluded, or the session ends.
 An atomic generation gate mutes obsolete output; the single worker releases its
 stream/buffers on cancellation. Pausing retains the current bounded decoded clip.
 
+## Screen sharing
+
+Screen/window labels, selected source identifiers, settings, raw pixels and encoded video exist only in session memory. They are not written to SQLite, diagnostics, previews or video files. Sources and video queues use the limits in [screen-sharing compatibility](discord-compatibility.md#outgoing-screen-sharing--september-11-2026). Stream credentials and DAVE identities are ephemeral and redacted; the signing key is shared with the active voice call and zeroized when its final owner drops. Native OS/driver capture surfaces are distinct from application-owned frame buffers. Synthetic PR screenshots are development evidence, excluded from runtime assets.
+
+
 ### Own game activity (September 11, 2026)
 
 Sharing is off by default. The application-wide `game_activity` SQLite singleton stores

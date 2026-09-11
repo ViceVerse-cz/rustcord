@@ -17,6 +17,7 @@ pub mod ready;
 pub mod relationships;
 pub mod rpc;
 pub mod search;
+pub mod stream;
 pub mod threads;
 pub mod typing;
 use attachments::AttachmentList;

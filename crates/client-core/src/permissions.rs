@@ -508,6 +508,10 @@ impl State {
 	pub fn can_speak(&self, channel: Id) -> bool {
 		self.permission(channel, p::VIEW_CHANNEL | p::CONNECT | p::SPEAK) == Some(true)
 	}
+	pub fn can_stream(&self, channel: Id) -> bool {
+		self.can_call(channel)
+			&& self.permission(channel, p::VIEW_CHANNEL | p::CONNECT | p::STREAM) == Some(true)
+	}
 	pub fn can_react(&self, message: Id, emoji: Option<&ReactionEmoji>, add: bool) -> bool {
 		let Some(channel) = self.selected else {
 			return false;
