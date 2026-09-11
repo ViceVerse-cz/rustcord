@@ -13,14 +13,26 @@ pub struct Attachment {
 	pub size: u64,
 	pub media: EmbedMedia,
 	pub spoiler: bool,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub duration_ms: Option<u32>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub waveform: Vec<u8>,
 }
 impl Attachment {
+	pub fn is_voice_message(&self) -> bool {
+		self.filename
+			.trim_start_matches("SPOILER_")
+			.eq_ignore_ascii_case("voice-message.ogg")
+			|| (!self.waveform.is_empty() && self.is_audio())
+	}
 	pub fn is_audio(&self) -> bool {
 		// Metadata only selects the preview; playback validates the actual bytes.
 		self.filename
 			.rsplit_once('.')
 			.is_some_and(|(_, extension)| {
-				extension.eq_ignore_ascii_case("mp3") || extension.eq_ignore_ascii_case("wav")
+				["mp3", "wav", "ogg", "opus"]
+					.iter()
+					.any(|kind| extension.eq_ignore_ascii_case(kind))
 			}) || self.content_type.as_deref().is_some_and(|kind| {
 			let kind = kind.split(';').next().unwrap_or(kind).trim();
 			[
@@ -29,6 +41,8 @@ impl Attachment {
 				"audio/wav",
 				"audio/x-wav",
 				"audio/wave",
+				"audio/ogg",
+				"audio/opus",
 			]
 			.iter()
 			.any(|supported| kind.eq_ignore_ascii_case(supported))
@@ -39,6 +53,7 @@ impl Attachment {
 			+ self.filename.capacity()
 			+ self.description.as_ref().map_or(0, String::capacity)
 			+ self.content_type.as_ref().map_or(0, String::capacity)
+			+ self.waveform.capacity()
 			+ self.media.url.as_ref().map_or(0, String::capacity)
 			+ self.media.proxy_url.as_ref().map_or(0, String::capacity)
 	}
@@ -70,7 +85,9 @@ pub fn valid_attachments(attachments: &[Attachment]) -> bool {
 	attachments.len() <= MAX_ATTACHMENTS
 		&& attachment_bytes(attachments) <= MAX_ATTACHMENT_BYTES
 		&& attachments.iter().all(|a| {
-			a.filename.len() <= 1024
+			a.waveform.len() <= 256
+				&& a.duration_ms.is_none_or(|duration| duration <= 600_000)
+				&& a.filename.len() <= 1024
 				&& a.description.as_ref().is_none_or(|s| s.len() <= 4096)
 				&& a.content_type.as_ref().is_none_or(|s| s.len() <= 128)
 				&& [&a.media.url, &a.media.proxy_url]
@@ -85,6 +102,8 @@ mod audio_tests {
 	#[test]
 	fn audio_detection_uses_mime_and_safe_filename_fallback() {
 		let mut file = Attachment {
+			duration_ms: None,
+			waveform: Vec::new(),
 			id: Id(1),
 			filename: "TRACK.MP3".into(),
 			description: None,
@@ -93,7 +112,7 @@ mod audio_tests {
 			media: EmbedMedia::default(),
 			spoiler: false,
 		};
-		for filename in ["TRACK.MP3", "track.WaV"] {
+		for filename in ["TRACK.MP3", "track.WaV", "voice-message.ogg", "track.opus"] {
 			file.filename = filename.into();
 			for kind in [
 				None,
@@ -122,7 +141,6 @@ mod audio_tests {
 		}
 		for (filename, kind, image) in [
 			("track.mp3.exe", None, false),
-			("track.ogg", Some("audio/ogg"), false),
 			("picture.jpg", Some("image/jpeg"), true),
 			("picture.png", None, true),
 		] {

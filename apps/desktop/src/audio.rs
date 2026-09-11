@@ -1,8 +1,12 @@
-//! Explicit, memory-only MP3/WAV playback. One lazy worker, one replaceable request.
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+//! Explicit, memory-only MP3/WAV/Ogg playback. One lazy worker, one replaceable request.
+#[path = "audio/source.rs"]
+mod source;
+#[path = "audio/streaming.rs"]
+mod streaming;
 use model::Attachment;
+#[cfg(any(test, debug_assertions))]
+use std::io::Cursor;
 use std::{
-	io::Cursor,
 	sync::{
 		Arc,
 		atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
@@ -10,10 +14,10 @@ use std::{
 	time::Duration,
 };
 use symphonia::core::{
-	codecs::audio::AudioDecoderOptions,
+	codecs::audio::{AudioDecoderOptions, well_known::CODEC_ID_OPUS},
 	common::Limit,
 	formats::{FormatOptions, TrackType, probe::Hint},
-	io::MediaSourceStream,
+	io::{MediaSource, MediaSourceStream},
 	meta::MetadataOptions,
 };
 use tokio::sync::{Notify, watch};
@@ -49,6 +53,8 @@ struct Gate {
 	seek_millis: AtomicU64,
 	position_frames: AtomicU64,
 	failed: AtomicBool,
+	buffering: AtomicBool,
+	sample_rate: AtomicU32,
 }
 impl Default for Gate {
 	fn default() -> Self {
@@ -59,6 +65,8 @@ impl Default for Gate {
 			seek_millis: AtomicU64::new(NO_SEEK),
 			position_frames: AtomicU64::new(0),
 			failed: AtomicBool::new(false),
+			buffering: AtomicBool::new(true),
+			sample_rate: AtomicU32::new(0),
 		}
 	}
 }
@@ -72,6 +80,8 @@ struct Request {
 	generation: u64,
 	url: Option<url::Url>,
 	expected: usize,
+	voice_message: bool,
+	duration: Duration,
 }
 struct Worker {
 	requests: watch::Sender<Option<Request>>,
@@ -140,6 +150,7 @@ impl Audio {
 		let generation = self.gate.generation.fetch_add(1, Ordering::AcqRel) + 1;
 		self.gate.paused.store(false, Ordering::Release);
 		self.gate.seek_millis.store(NO_SEEK, Ordering::Release);
+		self.gate.sample_rate.store(0, Ordering::Release);
 		self.status = Status {
 			state: State::Loading,
 			..Default::default()
@@ -153,6 +164,8 @@ impl Audio {
 			generation,
 			url,
 			expected: attachment.size as usize,
+			voice_message: attachment.is_voice_message(),
+			duration: Duration::from_millis(u64::from(attachment.duration_ms.unwrap_or(0))),
 		}));
 		worker.wake.notify_one();
 		Ok(())
@@ -164,16 +177,40 @@ impl Audio {
 				self.status = status;
 			}
 		}
-		self.status.clone()
+		let mut status = self.status.clone();
+		let rate = self.gate.sample_rate.load(Ordering::Acquire);
+		if rate > 0
+			&& matches!(
+				status.state,
+				State::Playing | State::Paused | State::Loading
+			) {
+			status.position = Duration::from_secs_f64(
+				self.gate.position_frames.load(Ordering::Acquire) as f64 / f64::from(rate),
+			);
+			status.state = if self.gate.paused.load(Ordering::Acquire) {
+				State::Paused
+			} else if self.gate.buffering.load(Ordering::Acquire) {
+				State::Loading
+			} else {
+				State::Playing
+			};
+		}
+		status
 	}
 	pub fn pause(&mut self, paused: bool) {
 		self.gate.paused.store(paused, Ordering::Release);
+		if let Some(worker) = &self.worker {
+			worker.wake.notify_one();
+		}
 	}
 	pub fn seek(&mut self, position: Duration) {
 		self.gate.seek_millis.store(
 			position.min(Duration::from_secs(MAX_SECONDS)).as_millis() as u64,
 			Ordering::Release,
 		);
+		if let Some(worker) = &self.worker {
+			worker.wake.notify_one();
+		}
 	}
 	pub fn volume(&mut self, volume: f32) {
 		if volume.is_finite() {
@@ -225,61 +262,7 @@ fn worker(
 				context.request_repaint();
 			}
 		};
-		let result = (|| {
-			let bytes = if let Some(url) = request.url {
-				runtime.block_on(fetch(
-					url,
-					request.expected,
-					&gate,
-					request.generation,
-					&wake,
-				))?
-			} else {
-				demo_wav()
-			};
-			let pcm = decode(bytes, &|| gate.current(request.generation))?;
-			if !gate.current(request.generation) {
-				return Ok(());
-			}
-			let frames = pcm.samples.len() / pcm.channels;
-			let rate = pcm.rate;
-			let duration = Duration::from_secs_f64(frames as f64 / rate as f64);
-			gate.position_frames.store(0, Ordering::Release);
-			gate.failed.store(false, Ordering::Release);
-			let stream = open_output(pcm, gate.clone(), request.generation)?;
-			while gate.current(request.generation) {
-				if gate.failed.load(Ordering::Acquire) {
-					return Err("Audio output disconnected; retry playback");
-				}
-				let position_frames = gate
-					.position_frames
-					.load(Ordering::Acquire)
-					.min(frames as u64);
-				let state = if position_frames == frames as u64 {
-					State::Ended
-				} else if gate.paused.load(Ordering::Acquire) {
-					State::Paused
-				} else {
-					State::Playing
-				};
-				publish(Status {
-					state: state.clone(),
-					position: Duration::from_secs_f64(position_frames as f64 / rate as f64),
-					duration,
-				});
-				if state == State::Ended {
-					break;
-				}
-				runtime.block_on(async {
-					tokio::select! {
-						_ = wake.notified() => {},
-						_ = tokio::time::sleep(Duration::from_millis(100)) => {},
-					}
-				});
-			}
-			drop(stream);
-			Ok(())
-		})();
+		let result = streaming::play(&request, &gate, &wake, &runtime, &publish);
 		if let Err(error) = result {
 			publish(Status {
 				state: State::Failed(error),
@@ -289,6 +272,7 @@ fn worker(
 	}
 }
 
+#[cfg(test)]
 async fn fetch(
 	url: url::Url,
 	expected: usize,
@@ -355,12 +339,14 @@ async fn fetch(
 	}
 }
 
+#[cfg(any(test, debug_assertions))]
 struct Pcm {
 	samples: Vec<f32>,
 	channels: usize,
 	rate: u32,
 }
 
+#[cfg(any(test, debug_assertions))]
 fn decode(mut bytes: Vec<u8>, current: &impl Fn() -> bool) -> Result<Pcm, &'static str> {
 	if !current() {
 		return Err("Cancelled");
@@ -368,8 +354,40 @@ fn decode(mut bytes: Vec<u8>, current: &impl Fn() -> bool) -> Result<Pcm, &'stat
 	if bytes.is_empty() || bytes.len() > MAX_ENCODED {
 		return Err(TOO_LARGE);
 	}
+	if bytes.starts_with(b"OggS") {
+		check_ogg_headers(&bytes, current)?;
+	}
 	prepare_media(&mut bytes)?;
-	let source = MediaSourceStream::new(Box::new(Cursor::new(bytes)), Default::default());
+	let mut pcm = Pcm {
+		samples: Vec::new(),
+		channels: 0,
+		rate: 0,
+	};
+	decode_stream(
+		Box::new(Cursor::new(bytes)),
+		current,
+		&mut |samples, channels, rate, _| {
+			pcm.channels = channels;
+			pcm.rate = rate;
+			pcm.samples.extend(samples.iter().map(|sample| {
+				if sample.is_finite() {
+					sample.clamp(-1.0, 1.0)
+				} else {
+					0.0
+				}
+			}));
+			Ok(())
+		},
+	)?;
+	Ok(pcm)
+}
+
+fn decode_stream(
+	source: Box<dyn MediaSource>,
+	current: &impl Fn() -> bool,
+	emit: &mut impl FnMut(&[f32], usize, u32, Option<Duration>) -> Result<(), &'static str>,
+) -> Result<(), &'static str> {
+	let source = MediaSourceStream::new(source, Default::default());
 	let metadata = MetadataOptions::default()
 		.limit_tag_bytes(Limit::Maximum(0))
 		.limit_visual_bytes(Limit::Maximum(0));
@@ -402,11 +420,52 @@ fn decode(mut bytes: Vec<u8>, current: &impl Fn() -> bool) -> Result<Pcm, &'stat
 	{
 		return Err(TOO_LARGE);
 	}
+	let duration = track
+		.num_frames
+		.map(|frames| Duration::from_secs_f64(frames as f64 / f64::from(rate)));
 	let track_id = track.id;
-	let mut decoder = symphonia::default::get_codecs()
-		.make_audio_decoder(parameters, &AudioDecoderOptions::default())
+	let mut opus = if parameters.codec == CODEC_ID_OPUS {
+		let header = parameters.extra_data.as_deref().ok_or(INVALID)?;
+		// Family 0 is the mono/stereo voice-message mapping. Reject multistream mappings.
+		if header.len() < 19
+			|| &header[..8] != b"OpusHead"
+			|| header[8] > 15
+			|| usize::from(header[9]) != channels
+			|| header[18] != 0
+			|| rate != 48000
+		{
+			return Err(INVALID);
+		}
+		let mut decoder = opus2::Decoder::new(
+			rate,
+			if channels == 1 {
+				opus2::Channels::Mono
+			} else {
+				opus2::Channels::Stereo
+			},
+		)
 		.map_err(|_| INVALID)?;
-	let mut samples: Vec<f32> = Vec::new();
+		decoder
+			.set_gain(i32::from(i16::from_le_bytes([header[16], header[17]])))
+			.map_err(|_| INVALID)?;
+		Some((
+			decoder,
+			usize::from(u16::from_le_bytes([header[10], header[11]])),
+		))
+	} else {
+		None
+	};
+	let mut decoder = if opus.is_none() {
+		Some(
+			symphonia::default::get_codecs()
+				.make_audio_decoder(parameters, &AudioDecoderOptions::default())
+				.map_err(|_| INVALID)?,
+		)
+	} else {
+		None
+	};
+	let mut buffer = Vec::new();
+	let mut total_samples = 0;
 	let mut packets = 0;
 	loop {
 		if !current() {
@@ -422,48 +481,64 @@ fn decode(mut bytes: Vec<u8>, current: &impl Fn() -> bool) -> Result<Pcm, &'stat
 		if packet.track_id != track_id {
 			return Err(INVALID);
 		}
-		let decoded = decoder.decode(&packet).map_err(|_| INVALID)?;
-		if decoded.spec().rate() != rate
-			|| decoded.spec().channels().count() != channels
-			|| decoded.frames() > 65536
-		{
-			return Err(INVALID);
-		}
-		let count = decoded.samples_interleaved();
-		if count > max_samples - samples.len() {
+		let decoded = if let Some((decoder, pre_skip)) = &mut opus {
+			// Opus packets decode to at most 120 ms at 48 kHz.
+			buffer.resize(5760 * channels, 0.0);
+			if packet.data.is_empty() {
+				return Err(INVALID);
+			}
+			let frames = decoder
+				.decode_float(&packet.data, &mut buffer, false)
+				.map_err(|_| INVALID)?;
+			// Symphonia 0.6.1 exposes Opus pre-skip in OpusHead, but only applies end trim.
+			let skip = (*pre_skip).min(frames);
+			*pre_skip -= skip;
+			let start = usize::try_from(packet.trim_start.get())
+				.map_err(|_| INVALID)?
+				.max(skip);
+			let end = frames
+				.checked_sub(usize::try_from(packet.trim_end.get()).map_err(|_| INVALID)?)
+				.filter(|end| start <= *end)
+				.ok_or(INVALID)?;
+			&buffer[start * channels..end * channels]
+		} else {
+			let decoded = decoder
+				.as_mut()
+				.ok_or(INVALID)?
+				.decode(&packet)
+				.map_err(|_| INVALID)?;
+			if decoded.spec().rate() != rate
+				|| decoded.spec().channels().count() != channels
+				|| decoded.frames() > 65536
+			{
+				return Err(INVALID);
+			}
+			buffer.resize(decoded.samples_interleaved(), 0.0);
+			decoded.copy_to_slice_interleaved(&mut buffer);
+			&buffer[..]
+		};
+		let count = decoded.len();
+		if count > max_samples - total_samples {
 			return Err(TOO_LARGE);
 		}
-		let old_len = samples.len();
-		if old_len + count > samples.capacity() {
-			let capacity = (old_len + count).next_multiple_of(65536).min(max_samples);
-			samples
-				.try_reserve_exact(capacity - old_len)
-				.map_err(|_| TOO_LARGE)?;
+		total_samples += count;
+		if !decoded.is_empty() {
+			emit(decoded, channels, rate, duration)?;
 		}
-		samples.resize(old_len + count, 0.0);
-		decoded.copy_to_slice_interleaved(&mut samples[old_len..]);
 	}
-	if samples.is_empty() {
+	if total_samples == 0 {
 		return Err(INVALID);
 	}
-	for sample in &mut samples {
-		*sample = if sample.is_finite() {
-			sample.clamp(-1.0, 1.0)
-		} else {
-			0.0
-		};
-	}
-	Ok(Pcm {
-		samples,
-		channels,
-		rate,
-	})
+	Ok(())
 }
 
 // Skip metadata without decoding attacker-provided tag lengths/artwork. Compact in-place:
 // only bounded PCM fmt/data chunks reach the WAV demuxer; ID3 parsing is disabled entirely.
 fn prepare_media(bytes: &mut Vec<u8>) -> Result<(), &'static str> {
-	if bytes.starts_with(b"RIFF") {
+	if bytes.starts_with(b"OggS") {
+		// Preflight bounded the headers; Symphonia handles demuxing and CRC verification.
+		return Ok(());
+	} else if bytes.starts_with(b"RIFF") {
 		if bytes.get(8..12) != Some(b"WAVE") {
 			return Err(INVALID);
 		}
@@ -606,6 +681,110 @@ fn prepare_media(bytes: &mut Vec<u8>) -> Result<(), &'static str> {
 	Ok(())
 }
 
+// Symphonia's Ogg comments do not honor MetadataOptions. Bound header allocation before probing;
+// this only checks page framing/header sizes, leaving CRCs and stream decoding to Symphonia.
+#[cfg(any(test, debug_assertions))]
+fn check_ogg_headers(bytes: &[u8], current: &impl Fn() -> bool) -> Result<(), &'static str> {
+	let mut offset = 0;
+	let mut serial = None;
+	let mut packet = Vec::new();
+	let mut packet_len = 0usize;
+	let mut packets = 0;
+	let mut headers = 3;
+	let mut ended = false;
+	while offset < bytes.len() {
+		if !current() {
+			return Err("Cancelled");
+		}
+		let page = bytes.get(offset..offset + 27).ok_or(INVALID)?;
+		if &page[..4] != b"OggS" || page[4] != 0 || ended {
+			return Err(INVALID);
+		}
+		let page_serial = u32::from_le_bytes(page[14..18].try_into().map_err(|_| INVALID)?);
+		if serial.is_some_and(|serial| serial != page_serial)
+			|| (offset > 0 && page[5] & 2 != 0)
+			|| (offset == 0 && page[5] & 2 == 0)
+			|| (page[5] & 1 != 0) != (packet_len > 0)
+		{
+			return Err(INVALID);
+		}
+		serial = Some(page_serial);
+		ended = page[5] & 4 != 0;
+		let lacing = bytes
+			.get(offset + 27..offset + 27 + usize::from(page[26]))
+			.ok_or(INVALID)?;
+		offset += 27 + lacing.len();
+		for &lace in lacing {
+			let len = usize::from(lace);
+			let data = bytes.get(offset..offset + len).ok_or(INVALID)?;
+			offset += len;
+			packet_len += len;
+			if packet_len
+				> if packets < headers {
+					64 * 1024
+				} else {
+					1024 * 1024
+				} {
+				return Err(TOO_LARGE);
+			}
+			if packets < headers {
+				packet.extend_from_slice(data);
+			}
+			if lace < 255 {
+				if packets == 0 {
+					headers = if packet.starts_with(b"OpusHead") {
+						2
+					} else if packet.starts_with(b"\x01vorbis") {
+						3
+					} else {
+						return Err(INVALID);
+					};
+				} else if packets == 1 {
+					let comments = packet
+						.strip_prefix(b"OpusTags")
+						.or_else(|| packet.strip_prefix(b"\x03vorbis"))
+						.ok_or(INVALID)?;
+					let read_len = |offset: usize| -> Result<usize, &'static str> {
+						Ok(u32::from_le_bytes(
+							comments
+								.get(offset..offset + 4)
+								.ok_or(INVALID)?
+								.try_into()
+								.map_err(|_| INVALID)?,
+						) as usize)
+					};
+					let vendor_len = read_len(0)?;
+					if vendor_len > comments.len().saturating_sub(4) {
+						return Err(INVALID);
+					}
+					let count = read_len(4 + vendor_len)?;
+					if count > 128 {
+						return Err(TOO_LARGE);
+					}
+					let mut cursor = 8 + vendor_len;
+					for _ in 0..count {
+						let len = read_len(cursor)?;
+						cursor = cursor
+							.checked_add(4 + len)
+							.filter(|end| *end <= comments.len())
+							.ok_or(INVALID)?;
+					}
+				}
+				packets += 1;
+				if packets > 100_000 {
+					return Err(TOO_LARGE);
+				}
+				packet.clear();
+				packet_len = 0;
+			}
+		}
+	}
+	if !ended || packet_len != 0 || packets <= headers {
+		return Err(INVALID);
+	}
+	Ok(())
+}
+
 fn demo_wav() -> Vec<u8> {
 	let rate = 24000u32;
 	let frames = rate * 12;
@@ -631,61 +810,82 @@ fn demo_wav() -> Vec<u8> {
 	bytes
 }
 
-fn open_output(pcm: Pcm, gate: Arc<Gate>, generation: u64) -> Result<cpal::Stream, &'static str> {
-	let device = cpal::default_host()
-		.default_output_device()
-		.ok_or("No audio output device")?;
-	let supported = device
-		.default_output_config()
-		.map_err(|_| "Audio output unavailable")?;
-	let config = supported.config();
-	if config.channels == 0 || config.channels > 8 || !(8000..=192000).contains(&config.sample_rate)
-	{
-		return Err("Unsupported audio output configuration");
+#[cfg(debug_assertions)]
+pub fn debug_voice_message_check() {
+	source::debug_check();
+	streaming::debug_check();
+	let runtime = tokio::runtime::Builder::new_current_thread()
+		.enable_all()
+		.build()
+		.unwrap();
+	for voice_message in [false, true] {
+		let request = Request {
+			generation: 0,
+			url: None,
+			expected: 1,
+			voice_message,
+			duration: Duration::ZERO,
+		};
+		let make_source = || {
+			source::source(
+				&request,
+				Arc::new(Gate::default()),
+				Arc::new(Notify::new()),
+				runtime.handle().clone(),
+			)
+			.unwrap()
+		};
+		let mut frames = 0;
+		decode_stream(make_source(), &|| true, &mut |samples, channels, _, _| {
+			frames += samples.len() / channels;
+			Ok(())
+		})
+		.expect("forward-only source decodes");
+		assert_eq!(frames, if voice_message { 144000 } else { 288000 });
+		let mut first_frames = 0;
+		assert_eq!(
+			decode_stream(make_source(), &|| true, &mut |samples, channels, _, _| {
+				first_frames = samples.len() / channels;
+				Err("stop after first packet")
+			}),
+			Err("stop after first packet")
+		);
+		assert!(
+			first_frames > 0 && first_frames < frames,
+			"playback receives PCM before full decoding"
+		);
 	}
-	let playback = Playback {
-		pcm,
-		frame: 0.0,
-		output_rate: config.sample_rate,
-	};
-	let stream = match supported.sample_format() {
-		cpal::SampleFormat::F32 => output::<f32>(&device, config, playback, gate, generation),
-		cpal::SampleFormat::I16 => output::<i16>(&device, config, playback, gate, generation),
-		cpal::SampleFormat::I32 => output::<i32>(&device, config, playback, gate, generation),
-		cpal::SampleFormat::U16 => output::<u16>(&device, config, playback, gate, generation),
-		_ => return Err("Unsupported audio output sample format"),
-	}?;
-	stream.play().map_err(|_| "Could not start audio output")?;
-	Ok(stream)
+	let bytes = include_bytes!("../tests/fixtures/voice-message.ogg");
+	let pcm = decode(bytes.to_vec(), &|| true).expect("synthetic Ogg/Opus decodes");
+	assert_eq!(
+		(pcm.rate, pcm.channels, pcm.samples.len()),
+		(48000, 1, 144000)
+	);
+	assert!(pcm.samples.iter().any(|sample| sample.abs() > 0.01));
+	assert!(decode(bytes.to_vec(), &|| false).is_err());
+	assert!(decode(b"OggS\0".to_vec(), &|| true).is_err());
+	let mut oversized_comments = bytes.to_vec();
+	let tags = bytes
+		.windows(8)
+		.position(|window| window == b"OpusTags")
+		.unwrap();
+	let vendor = u32::from_le_bytes(bytes[tags + 8..tags + 12].try_into().unwrap()) as usize;
+	oversized_comments[tags + 12 + vendor..tags + 16 + vendor]
+		.copy_from_slice(&129u32.to_le_bytes());
+	assert_eq!(
+		check_ogg_headers(&oversized_comments, &|| true),
+		Err(TOO_LARGE)
+	);
+	assert!(check_ogg_headers(&[bytes.as_slice(), bytes.as_slice()].concat(), &|| true).is_err());
 }
-fn output<T: cpal::SizedSample + cpal::FromSample<f32>>(
-	device: &cpal::Device,
-	config: cpal::StreamConfig,
-	mut playback: Playback,
-	gate: Arc<Gate>,
-	generation: u64,
-) -> Result<cpal::Stream, &'static str> {
-	let failure = gate.clone();
-	device
-		.build_output_stream(
-			config,
-			move |data: &mut [T], _| {
-				playback.render(data, config.channels as usize, &gate, generation);
-			},
-			move |_| {
-				if failure.current(generation) {
-					failure.failed.store(true, Ordering::Release);
-				}
-			},
-			None,
-		)
-		.map_err(|_| "Could not open audio output")
-}
+
+#[cfg(test)]
 struct Playback {
 	pcm: Pcm,
 	frame: f64,
 	output_rate: u32,
 }
+#[cfg(test)]
 impl Playback {
 	fn render<T: cpal::SizedSample + cpal::FromSample<f32>>(
 		&mut self,
