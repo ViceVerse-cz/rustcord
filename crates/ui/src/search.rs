@@ -26,6 +26,7 @@ impl SearchUi {
 		self.open
 	}
 	/// Fixture-only: open a text search for `query` and submit it on the next frame.
+	#[cfg(any(test, feature = "demo"))]
 	pub fn preview(&mut self, query: &str) {
 		self.open = true;
 		self.pins = false;
@@ -33,6 +34,7 @@ impl SearchUi {
 		self.pending_submit = true;
 	}
 	/// Fixture-only: open the pins popout and request the first page on the next frame.
+	#[cfg(any(test, feature = "demo"))]
 	pub fn preview_pins(&mut self) {
 		self.open = true;
 		self.pins = true;

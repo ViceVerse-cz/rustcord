@@ -945,6 +945,7 @@ pub fn show(
 }
 
 // Explicit offline-only data; never a fallback for a failed service request.
+#[cfg(any(test, feature = "demo"))]
 pub fn synthetic(user: &User, guild: Option<Id>) -> model::UserProfile {
 	let hash = |c: char| c.to_string().repeat(32);
 	model::UserProfile {

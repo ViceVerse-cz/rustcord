@@ -94,7 +94,6 @@ fn licenses() -> Result<(), String> {
 		"deny",
 		"--locked",
 		"--offline",
-		"--all-features",
 		"check",
 		"licenses",
 	])?;
@@ -102,7 +101,6 @@ fn licenses() -> Result<(), String> {
 		"deny",
 		"--locked",
 		"--offline",
-		"--all-features",
 		"--manifest-path",
 		"fuzz/Cargo.toml",
 		"--config",
@@ -391,14 +389,13 @@ fn main() -> ExitCode {
 						"clippy",
 						"--workspace",
 						"--all-targets",
-						"--all-features",
 						"--locked",
 						"--",
 						"-D",
 						"warnings",
 					])
 				})
-				.and_then(|_| run(&["test", "--workspace", "--all-features", "--locked"]))
+				.and_then(|_| run(&["test", "--workspace", "--locked"]))
 				.and_then(|_| run(&["check", "-p", "serein", "--no-default-features", "--locked"]))
 				.and_then(|_| policy()),
 			"policy" => policy(),

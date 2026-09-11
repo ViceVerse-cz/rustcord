@@ -4,7 +4,7 @@ mod source;
 #[path = "audio/streaming.rs"]
 mod streaming;
 use model::Attachment;
-#[cfg(any(test, debug_assertions))]
+#[cfg(any(test, all(debug_assertions, feature = "demo")))]
 use std::io::Cursor;
 use std::{
 	sync::{
@@ -80,6 +80,7 @@ struct Request {
 	generation: u64,
 	url: Option<url::Url>,
 	expected: usize,
+	#[cfg(feature = "demo")]
 	voice_message: bool,
 	duration: Duration,
 }
@@ -164,6 +165,7 @@ impl Audio {
 			generation,
 			url,
 			expected: attachment.size as usize,
+			#[cfg(feature = "demo")]
 			voice_message: attachment.is_voice_message(),
 			duration: Duration::from_millis(u64::from(attachment.duration_ms.unwrap_or(0))),
 		}));
@@ -339,14 +341,14 @@ async fn fetch(
 	}
 }
 
-#[cfg(any(test, debug_assertions))]
+#[cfg(any(test, all(debug_assertions, feature = "demo")))]
 struct Pcm {
 	samples: Vec<f32>,
 	channels: usize,
 	rate: u32,
 }
 
-#[cfg(any(test, debug_assertions))]
+#[cfg(any(test, all(debug_assertions, feature = "demo")))]
 fn decode(mut bytes: Vec<u8>, current: &impl Fn() -> bool) -> Result<Pcm, &'static str> {
 	if !current() {
 		return Err("Cancelled");
@@ -683,7 +685,7 @@ fn prepare_media(bytes: &mut Vec<u8>) -> Result<(), &'static str> {
 
 // Symphonia's Ogg comments do not honor MetadataOptions. Bound header allocation before probing;
 // this only checks page framing/header sizes, leaving CRCs and stream decoding to Symphonia.
-#[cfg(any(test, debug_assertions))]
+#[cfg(any(test, all(debug_assertions, feature = "demo")))]
 fn check_ogg_headers(bytes: &[u8], current: &impl Fn() -> bool) -> Result<(), &'static str> {
 	let mut offset = 0;
 	let mut serial = None;
@@ -785,6 +787,7 @@ fn check_ogg_headers(bytes: &[u8], current: &impl Fn() -> bool) -> Result<(), &'
 	Ok(())
 }
 
+#[cfg(any(test, feature = "demo"))]
 fn demo_wav() -> Vec<u8> {
 	let rate = 24000u32;
 	let frames = rate * 12;
@@ -810,7 +813,7 @@ fn demo_wav() -> Vec<u8> {
 	bytes
 }
 
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "demo"))]
 pub fn debug_voice_message_check() {
 	source::debug_check();
 	streaming::debug_check();

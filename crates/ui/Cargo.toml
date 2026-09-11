@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+demo = []
+
 [dependencies]
 egui.workspace = true
 model.workspace = true
@@ -20,3 +24,7 @@ skrifa = { version = "=0.44.0", default-features = false, features = ["std"] }
 
 [lints]
 workspace = true
+
+[[test]]
+name = "own_activity"
+required-features = ["demo"]

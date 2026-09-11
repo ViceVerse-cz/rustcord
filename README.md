@@ -47,8 +47,8 @@ Rust **1.98.1** is pinned. Ensure you have the standard C/C++ toolchain and CMak
 ### Running Locally
 
 ```sh
-# 1. Launch offline synthetic demo (no network, no storage)
-cargo run --locked -- --demo
+# 1. Opt in to the offline synthetic demo (no network, no storage)
+cargo run --locked --features demo -- --demo
 
 # 2. Launch standard client with voice (uses saved login or official webview)
 cargo run --locked
@@ -155,3 +155,8 @@ Original Serein code is dual-licensed under either:
 - **Apache License, Version 2.0** ([LICENSE-APACHE](LICENSE-APACHE))
 
 at your option. Third-party library notices, bundled font licenses (Inter, Noto Sans CJK/Arabic), and Twemoji graphics licenses are cataloged in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+Demo fixtures and simulated actions are excluded from normal app and CI packages.
+Build with `--features demo` and launch with `--demo` to enable them; `--demo-*`
+scenario flags additionally require `--demo`. `cargo xtask package` always builds
+without demo support, while offline tests can still use synthetic fixtures.

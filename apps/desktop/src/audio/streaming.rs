@@ -267,7 +267,7 @@ pub(super) fn play(
 	}
 }
 
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "demo"))]
 pub(super) fn debug_check() {
 	let gate = Gate::default();
 	let (mut sender, frames) = RingBuffer::new(8);

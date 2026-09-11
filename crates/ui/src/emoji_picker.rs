@@ -172,10 +172,12 @@ impl Picker {
 	}
 
 	/// Fixture-only: open the popout on the next frame regardless of navigation resets.
+	#[cfg(any(test, feature = "demo"))]
 	pub(crate) fn preview(&mut self) {
 		self.pending_open = true;
 	}
 	/// Fixture-only: open the GIFs tab at `section` (`""`, `favorites`, `trending` or a query).
+	#[cfg(any(test, feature = "demo"))]
 	pub(crate) fn preview_gifs(&mut self, section: &str) {
 		self.pending_open = true;
 		self.tab = Tab::Gifs;

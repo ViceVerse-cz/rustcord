@@ -24,6 +24,7 @@ mod notifications;
 mod pending;
 mod profiles;
 /// Synthetic global profile used exclusively by the desktop's offline command adapter.
+#[cfg(any(test, feature = "demo"))]
 pub fn synthetic_own_profile(user: &model::User) -> model::UserProfile {
 	profiles::synthetic(user, None)
 }
@@ -215,6 +216,7 @@ impl MessagingUi {
 		)
 	}
 	/// Fixture-only entry point: opens People and the profile card for `user` as if clicked.
+	#[cfg(any(test, feature = "demo"))]
 	pub fn preview_profile(&mut self, user: model::User) {
 		self.members_narrow_open = true;
 		self.profile = Some(user);
@@ -222,6 +224,7 @@ impl MessagingUi {
 	/// Fixture-only entry point: opens the emoji popout as if the composer button was clicked.
 	/// Fixture-only entry point: stage a synthetic attachment as if it had been selected.
 	/// Repeated calls build up a batch, like choosing several files.
+	#[cfg(any(test, feature = "demo"))]
 	pub fn preview_attachment(
 		&mut self,
 		filename: &str,
@@ -297,6 +300,7 @@ impl MessagingUi {
 		}
 	}
 	/// Synthetic pending state only; no command is dispatched or file uploaded.
+	#[cfg(any(test, feature = "demo"))]
 	pub fn preview_sending(&mut self, ctx: &egui::Context, state: &mut State) {
 		if !state.demo {
 			return;
@@ -328,21 +332,26 @@ impl MessagingUi {
 		}
 	}
 	/// Fixture-only: open the pinned messages popout on the next frame.
+	#[cfg(any(test, feature = "demo"))]
 	pub fn preview_pins(&mut self) {
 		self.search.preview_pins();
 	}
+	#[cfg(any(test, feature = "demo"))]
 	pub fn preview_emoji_picker(&mut self) {
 		self.emoji_picker.preview();
 	}
 	/// Fixture-only: open the media viewer on `attachment` of `message` at startup.
+	#[cfg(any(test, feature = "demo"))]
 	pub fn preview_image_viewer(&mut self, message: model::Id, attachment: model::Id) {
 		self.timeline.preview_image_viewer(message, attachment);
 	}
 	/// Fixture-only: opens the GIFs tab at `section` (`""`, `favorites`, `trending` or a query).
+	#[cfg(any(test, feature = "demo"))]
 	pub fn preview_gif_picker(&mut self, section: &str) {
 		self.emoji_picker.preview_gifs(section);
 	}
 	/// Fixture-only entry point: opens the search pane and submits `query` on the first frame.
+	#[cfg(any(test, feature = "demo"))]
 	pub fn preview_search(&mut self, query: &str) {
 		self.search.preview(query);
 	}
@@ -2489,6 +2498,7 @@ impl MessagingUi {
 				.is_none_or(|p| p.user != user.id || p.guild != profile_guild)
 			{
 				self.profile_link = None;
+				#[cfg(any(test, feature = "demo"))]
 				if state.demo {
 					state.profile = Some(client_core::profile::ProfileView {
 						user: user.id,
@@ -2506,7 +2516,10 @@ impl MessagingUi {
 								.unwrap_or_else(|| profiles::synthetic(user, profile_guild)),
 						),
 					});
-				} else if let Some(command) = state.request_profile(user.id, profile_guild) {
+				}
+				if !state.demo
+					&& let Some(command) = state.request_profile(user.id, profile_guild)
+				{
 					commands.push(command);
 				}
 			}
