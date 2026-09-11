@@ -675,11 +675,21 @@ listed/hidden/missing observations and reconnect resets. No live account was use
 ### Server dropdown actions (September 11, 2026)
 
 Create Invite uses documented [Create Channel Invite](https://docs.discord.com/developers/resources/channel#create-channel-invite)
-(`POST /channels/{channel.id}/invites`) with a one-day expiry, unlimited uses,
-non-temporary membership and a new invite so an older code cannot expire early. It requires known effective
+(`POST /channels/{channel.id}/invites`) with editable expiry, use limits and temporary
+membership. The default is 30 days, unlimited uses, non-temporary membership and a
+new invite. The 30-day option follows the normal-user reference UI and exceeds the
+public developer documentation's 7-day maximum; acceptance remains unverified.
+The response must confirm the selected settings; rejection does not silently change them.
+It requires known effective
 Create Instant Invite and View Channel permissions for the selected guild channel.
 The bounded response must confirm guild/channel IDs and a safe code before the UI
 constructs a `https://discord.gg/` link. It never posts or shares the link automatically.
+Selecting Create invite generates the link once. Each friend's Invite button separately
+opens/reuses that friend's DM and sends the link through the existing message transport.
+Only current friend relationships appear; each send needs a confirmed message response
+before showing Sent. Ambiguous sends remain uncertain and cannot be retried for that link.
+The friend list comes from unofficial READY/relationship events; individual sends use the
+documented Create DM and Create Message routes. No live friend invites have been tested.
 Leave Server uses documented [Leave Guild](https://docs.discord.com/developers/resources/user#leave-guild)
 (`DELETE /users/@me/guilds/{guild.id}`). Known owners cannot leave here; pending
 messages or an active guild call prevent the request. Confirmed success removes

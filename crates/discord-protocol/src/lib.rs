@@ -51,7 +51,7 @@ pub fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, DecodeE
 	}
 	serde_json::from_slice(bytes).map_err(|_| DecodeError)
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct UserDto {
 	pub id: Id,
 	pub username: String,

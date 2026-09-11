@@ -60,6 +60,9 @@ pub fn created_code(
 	bytes: &[u8],
 	guild: model::Id,
 	channel: model::Id,
+	max_age: u32,
+	max_uses: u16,
+	temporary: bool,
 ) -> Result<String, crate::DecodeError> {
 	#[derive(Deserialize)]
 	struct Scope {
@@ -70,12 +73,18 @@ pub fn created_code(
 		code: String,
 		guild: Scope,
 		channel: Scope,
+		max_age: u32,
+		max_uses: u16,
+		temporary: bool,
 	}
 	if bytes.len() > 64 * 1024 {
 		return Err(crate::DecodeError);
 	}
 	let created: Created = serde_json::from_slice(bytes).map_err(|_| crate::DecodeError)?;
 	if created.guild.id != guild
+		|| created.max_age != max_age
+		|| created.max_uses != max_uses
+		|| created.temporary != temporary
 		|| created.channel.id != channel
 		|| guild.0 == 0
 		|| channel.0 == 0

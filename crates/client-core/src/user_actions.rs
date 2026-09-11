@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 pub const MAX_RELATIONSHIPS: usize = 4000;
 pub const MAX_RELATIONSHIP_BYTES: usize = 128 * 1024;
+pub const MAX_FRIEND_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
@@ -17,6 +18,13 @@ pub enum Action {
 }
 
 pub enum Event {
+	FriendProfile((model::User, String)),
+	Friends(Option<Vec<(model::User, String)>>),
+	Friend {
+		user: Id,
+		friend: bool,
+		profile: Option<(model::User, String)>,
+	},
 	Relationships(Option<Vec<(Id, bool)>>),
 	Relationship {
 		user: Id,
@@ -30,6 +38,8 @@ pub enum Event {
 }
 #[derive(Default)]
 pub struct Actions {
+	friends: BTreeMap<Id, (model::User, String)>,
+	friends_known: bool,
 	relationships: BTreeMap<Id, bool>,
 	known: bool,
 	sequence: u64,
@@ -45,6 +55,22 @@ impl Actions {
 	}
 }
 impl State {
+	pub fn friends(&self) -> impl Iterator<Item = &model::User> {
+		self.user_actions
+			.friends
+			.values()
+			.map(|(user, _)| user)
+			.filter(|u| self.user_blocked(u.id) == Some(false))
+	}
+	pub fn friends_known(&self) -> bool {
+		self.user_actions.friends_known
+	}
+	pub fn friend_username(&self, user: Id) -> Option<&str> {
+		self.user_actions
+			.friends
+			.get(&user)
+			.map(|(_, name)| name.as_str())
+	}
 	pub fn user_blocked(&self, user: Id) -> Option<bool> {
 		if let Some((
 			Action::Block {
@@ -87,7 +113,8 @@ impl State {
 		if !self.is_one_to_one_dm(channel) {
 			return None;
 		}
-		if self.pending.iter().any(|p| p.channel == channel)
+		if self.server_invite_pending()
+			|| self.pending.iter().any(|p| p.channel == channel)
 			|| self
 				.voice
 				.active
@@ -161,6 +188,77 @@ impl State {
 	}
 	pub(crate) fn apply_user_action(&mut self, event: Event) -> Result<(), &'static str> {
 		match event {
+			Event::FriendProfile(profile) => {
+				if self.user_actions.friends.contains_key(&profile.0.id) {
+					return self.apply_user_action(Event::Friend {
+						user: profile.0.id,
+						friend: true,
+						profile: Some(profile),
+					});
+				}
+			}
+			Event::Friends(entries) => {
+				self.user_actions.friends.clear();
+				self.user_actions.friends_known = false;
+				if let Some(entries) = entries {
+					if entries.len() > MAX_RELATIONSHIPS
+						|| entries.capacity() * size_of::<(model::User, String)>()
+							+ entries
+								.iter()
+								.map(|(u, n)| u.heap_bytes() + n.capacity() + 64)
+								.sum::<usize>() > MAX_FRIEND_BYTES
+					{
+						return Err("Friends exceed safe capacity");
+					}
+					for (user, name) in entries {
+						if !valid_friend(&user, &name)
+							|| self
+								.user_actions
+								.friends
+								.insert(user.id, (user, name))
+								.is_some()
+						{
+							self.user_actions.friends.clear();
+							return Err("Friends contain invalid or duplicate users");
+						}
+					}
+					self.user_actions.friends_known = true;
+				}
+			}
+			Event::Friend {
+				user,
+				friend,
+				profile,
+			} => {
+				if !friend {
+					self.user_actions.friends.remove(&user);
+				} else if let Some((record, name)) = profile {
+					let entries = &mut self.user_actions.friends;
+					if user != record.id || !valid_friend(&record, &name) {
+						return Err("Invalid friend update");
+					}
+					let old = entries.get(&user).map_or(0, |(u, n)| {
+						u.heap_bytes() + n.capacity() + size_of::<(Id, model::User, String)>() + 64
+					});
+					let bytes: usize = entries
+						.values()
+						.map(|(u, n)| {
+							u.heap_bytes()
+								+ n.capacity() + size_of::<(Id, model::User, String)>()
+								+ 64
+						})
+						.sum();
+					if (!entries.contains_key(&user) && entries.len() >= MAX_RELATIONSHIPS)
+						|| bytes - old
+							+ record.heap_bytes() + name.capacity()
+							+ size_of::<(Id, model::User, String)>()
+							+ 64 > MAX_FRIEND_BYTES
+					{
+						return Err("Friends exceed safe capacity");
+					}
+					entries.insert(user, (record, name));
+				}
+			}
 			Event::Relationships(entries) => {
 				if let Some((Action::Block { .. }, _, observed)) = &mut self.user_actions.pending {
 					*observed = true;
@@ -250,6 +348,9 @@ impl State {
 		Ok(())
 	}
 	fn store_relationship(&mut self, user: Id, blocked: bool) -> Result<(), &'static str> {
+		if blocked {
+			self.user_actions.friends.remove(&user);
+		}
 		let entries = &mut self.user_actions.relationships;
 		// Fixed-size IDs and booleans: <= 4000 entries and a conservative 32-byte entry estimate.
 		if user.0 == 0
@@ -263,6 +364,20 @@ impl State {
 		self.read_state.activity.clear_notifications();
 		Ok(())
 	}
+}
+
+fn valid_friend(user: &model::User, username: &str) -> bool {
+	user.id.0 != 0
+		&& !user.name.is_empty()
+		&& user.name.len() <= 512
+		&& !user.name.chars().any(char::is_control)
+		&& !username.is_empty()
+		&& username.len() <= 128
+		&& !username.chars().any(char::is_control)
+		&& user
+			.avatar
+			.as_ref()
+			.is_none_or(|hash| model::valid_avatar_hash(hash))
 }
 
 #[cfg(test)]
@@ -309,6 +424,66 @@ mod tests {
 				result,
 			}),
 		});
+	}
+	#[test]
+	fn friends_are_explicit_bounded_and_removed_by_relationship_changes() {
+		let mut state = state();
+		let user = state.channels[0].recipients[0].clone();
+		state
+			.apply_user_action(Event::Relationships(Some(vec![(user.id, false)])))
+			.unwrap();
+		state
+			.apply_user_action(Event::Friends(Some(vec![(
+				user.clone(),
+				"synthetic_friend".into(),
+			)])))
+			.unwrap();
+		assert!(state.friends_known());
+		assert_eq!(state.friends().count(), 1);
+		assert_eq!(state.friend_username(user.id), Some("synthetic_friend"));
+		let mut changed = user.clone();
+		changed.name = "New display".into();
+		state
+			.apply_user_action(Event::FriendProfile((changed, "new_username".into())))
+			.unwrap();
+		assert_eq!(state.friends().next().unwrap().name, "New display");
+		state
+			.apply_user_action(Event::Friend {
+				user: user.id,
+				friend: false,
+				profile: None,
+			})
+			.unwrap();
+		assert_eq!(state.friends().count(), 0);
+		state
+			.apply_user_action(Event::Friend {
+				user: user.id,
+				friend: true,
+				profile: Some((user.clone(), "user".into())),
+			})
+			.unwrap();
+		let command = state.set_user_blocked(user.id, true).unwrap();
+		assert_eq!(state.friends().count(), 0);
+		finish(&mut state, command, Err(Failure::Forbidden));
+		assert_eq!(state.friends().count(), 1);
+		state
+			.apply_user_action(Event::Relationship {
+				user: user.id,
+				blocked: true,
+			})
+			.unwrap();
+		assert_eq!(state.friends().count(), 0);
+		assert!(
+			state
+				.apply_user_action(Event::Friends(Some(vec![(
+					user,
+					"x".repeat(MAX_FRIEND_BYTES)
+				)])))
+				.is_err()
+		);
+		assert!(!state.friends_known());
+		state.logout();
+		assert_eq!(state.friends().count(), 0);
 	}
 	#[test]
 	fn user_actions_update_immediately_rollback_and_reject_stale_results() {

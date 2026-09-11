@@ -34,6 +34,7 @@ mod reactions;
 mod reading;
 pub mod screen;
 mod search;
+mod server_invite;
 mod server_menu;
 mod settings;
 mod switcher;
@@ -2170,7 +2171,7 @@ impl MessagingUi {
 			});
 		self.record_reading_sidebar(navigation.response.rect.width() - rail);
 		self.server_menu
-			.show(&ctx, state, self.guild, &mut commands);
+			.show(&ctx, state, self.guild, &mut commands, &mut self.avatars);
 		let selected_voice = state
 			.channels
 			.iter()

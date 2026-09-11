@@ -42,6 +42,13 @@ pub const EVENT_SLOTS: usize = 8; // UI drain batch; reliable events share a 32 
 pub const COMMAND_SLOTS: usize = 16; // ordinary commands <=16 KiB; one pending group icon <=350 KiB
 
 pub enum Command {
+	SendServerInvite {
+		guild: Id,
+		user: Id,
+		code: String,
+		nonce: String,
+		request: u64,
+	},
 	/// None loads the current settings; Some saves the complete folder layout.
 	GuildFolders(Option<model::guild_folders::Settings>),
 	GroupAction {
@@ -820,6 +827,23 @@ impl State {
 				request,
 				result: Err(auth::Failure::ProtocolAt(
 					"Group action was not queued; try again",
+				)),
+			});
+			return;
+		}
+		if let Command::SendServerInvite {
+			guild,
+			user,
+			request,
+			..
+		} = command
+		{
+			let _ = self.apply_server_action(server_actions::Event::InviteSent {
+				guild,
+				user,
+				request,
+				result: Err(auth::Failure::ProtocolAt(
+					"Invite was not queued; try again",
 				)),
 			});
 			return;
@@ -2179,6 +2203,25 @@ impl Event {
 					result: Ok(Some(code)),
 					..
 				}) => code.capacity(),
+				Self::ServerAction(server_actions::Event::InviteSent {
+					result: Ok((channel, message)),
+					..
+				}) => channel.bytes() + message.bytes(),
+				Self::UserAction(user_actions::Event::Friends(entries)) => {
+					entries.as_ref().map_or(0, |entries| {
+						entries.capacity() * size_of::<(User, String)>()
+							+ entries
+								.iter()
+								.map(|(u, n)| u.heap_bytes() + n.capacity())
+								.sum::<usize>()
+					})
+				}
+				Self::UserAction(user_actions::Event::Friend { profile, .. }) => profile
+					.as_ref()
+					.map_or(0, |(u, n)| u.heap_bytes() + n.capacity()),
+				Self::UserAction(user_actions::Event::FriendProfile((u, n))) => {
+					u.heap_bytes() + n.capacity()
+				}
 				Self::UserAction(user_actions::Event::Relationships(entries)) => entries
 					.as_ref()
 					.map_or(0, |e| e.capacity() * size_of::<(Id, bool)>()),

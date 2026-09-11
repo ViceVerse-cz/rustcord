@@ -1,4 +1,4 @@
-//! Unofficial normal-user relationship payloads; retain only ID and block status.
+//! Unofficial normal-user relationship payloads; bounded friend and block projections.
 use model::Id;
 use serde::Deserialize;
 
@@ -7,15 +7,52 @@ pub struct Relationship {
 	pub id: Id,
 	#[serde(rename = "type")]
 	pub kind: u8,
+	#[serde(default)]
+	pub user: Option<crate::UserDto>,
 }
 #[derive(Deserialize)]
 pub struct Snapshot(
 	#[serde(deserialize_with = "crate::read_state::entries")] pub Vec<Relationship>,
 );
 impl Snapshot {
-	pub fn entries(self) -> Vec<(Id, bool)> {
-		self.0.into_iter().map(|r| (r.id, r.kind == 2)).collect()
+	pub fn entries(&self) -> Vec<(Id, bool)> {
+		self.0.iter().map(|r| (r.id, r.kind == 2)).collect()
 	}
+	pub fn friends(
+		&self,
+		users: &[crate::UserDto],
+	) -> Result<Vec<(model::User, String)>, crate::DecodeError> {
+		let users: std::collections::BTreeMap<_, _> = users.iter().map(|u| (u.id, u)).collect();
+		let mut friends = Vec::new();
+		for relationship in self.0.iter().filter(|r| r.kind == 1) {
+			if let Some(user) = relationship
+				.user
+				.as_ref()
+				.or_else(|| users.get(&relationship.id).copied())
+			{
+				if user.id != relationship.id {
+					return Err(crate::DecodeError);
+				}
+				friends.push(friend(user.clone())?);
+			}
+		}
+		Ok(friends)
+	}
+}
+pub fn friend(user: crate::UserDto) -> Result<(model::User, String), crate::DecodeError> {
+	if user.id.0 == 0
+		|| user.username.is_empty()
+		|| user.username.len() > 128
+		|| user.username.chars().any(char::is_control)
+		|| user
+			.global_name
+			.as_ref()
+			.is_some_and(|n| n.is_empty() || n.len() > 512 || n.chars().any(char::is_control))
+	{
+		return Err(crate::DecodeError);
+	}
+	let username = user.username.clone();
+	Ok((user.into_model(), username))
 }
 
 #[cfg(test)]
@@ -24,12 +61,22 @@ mod tests {
 	#[test]
 	fn relationships_decode_only_bounded_typed_account_state() {
 		let rows: Snapshot = crate::decode(
-			br#"[{"id":"1","type":2,"user":{"username":"ignored"}},{"id":"2","type":1}]"#,
+			br#"[{"id":"1","type":2,"user":{"id":"1","username":"ignored"}},{"id":"2","type":1}]"#,
 		)
 		.unwrap();
 		assert_eq!(rows.entries(), vec![(Id(1), true), (Id(2), false)]);
 		assert!(crate::decode::<Snapshot>(br#"[{"id":"1"}]"#).is_err());
 		let large = format!("[{}]", vec![r#"{"id":"1","type":2}"#; 4001].join(","));
 		assert!(crate::decode::<Snapshot>(large.as_bytes()).is_err());
+		let rows:Snapshot=crate::decode(br#"[{"id":"2","type":1},{"id":"3","type":2,"user":{"id":"3","username":"blocked"}},{"id":"4","type":3}]"#).unwrap();
+		let users=crate::decode::<Vec<crate::UserDto>>(br#"[{"id":"2","username":"friend_name","global_name":"Friend display"},{"id":"4","username":"pending"}]"#).unwrap();
+		let friends = rows.friends(&users).unwrap();
+		assert_eq!(friends.len(), 1);
+		assert_eq!(friends[0].0.name, "Friend display");
+		assert_eq!(friends[0].1, "friend_name");
+		let invalid: Snapshot =
+			crate::decode(br#"[{"id":"2","type":1,"user":{"id":"3","username":"wrong"}}]"#)
+				.unwrap();
+		assert!(invalid.friends(&[]).is_err());
 	}
 }

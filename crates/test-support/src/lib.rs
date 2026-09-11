@@ -446,6 +446,29 @@ pub fn demo_state() -> State {
 			version: Some(1),
 		}),
 	});
+	state.apply(Envelope {
+		generation: state.generation,
+		event: Event::UserAction(client_core::user_actions::Event::Friends(Some(
+			[
+				"Robin", "Casey", "Morgan", "Alex", "Sam", "Taylor", "Jamie", "Jordan", "Avery",
+				"Quinn", "Riley", "Skyler", "Cameron", "Drew", "Reese", "Parker",
+			]
+			.into_iter()
+			.enumerate()
+			.map(|(i, name)| {
+				(
+					User {
+						id: Id(1001 + i as u64),
+						name: name.into(),
+						avatar: None,
+						discriminator: 0,
+					},
+					format!("{}.synthetic", name.to_lowercase()),
+				)
+			})
+			.collect(),
+		))),
+	});
 	state.status = "Offline fixture · no network access";
 	state
 }

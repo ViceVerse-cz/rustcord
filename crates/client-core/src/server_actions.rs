@@ -8,8 +8,39 @@ use std::time::{Duration, Instant};
 
 const CREATE_INSTANT_INVITE: u128 = 1;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InviteOptions {
+	pub max_age: u32,
+	pub max_uses: u16,
+	pub temporary: bool,
+}
+impl Default for InviteOptions {
+	fn default() -> Self {
+		Self {
+			max_age: 30 * 86400,
+			max_uses: 0,
+			temporary: false,
+		}
+	}
+}
+impl InviteOptions {
+	pub fn valid(self) -> bool {
+		// Normal-user 30-day invites exceed the public developer API's documented 7 days.
+		self.max_age <= 30 * 86400 && self.max_uses <= 100
+	}
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InviteStatus {
+	Sending,
+	Sent,
+	Failed(Failure),
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
-	CreateInvite { guild: Id, channel: Id },
+	CreateInvite {
+		guild: Id,
+		channel: Id,
+		options: InviteOptions,
+	},
 	Leave(Id),
 }
 impl Action {
@@ -20,6 +51,12 @@ impl Action {
 	}
 }
 pub enum Event {
+	InviteSent {
+		guild: Id,
+		user: Id,
+		request: u64,
+		result: Result<(model::Channel, model::Message), Failure>,
+	},
 	Written {
 		action: Action,
 		request: u64,
@@ -31,7 +68,9 @@ pub struct Actions {
 	sequence: u64,
 	pending: Option<(Action, u64, bool)>,
 	status: Option<(Id, &'static str)>,
-	invite: Option<(Id, Id, String, Instant)>,
+	invite: Option<(Id, Id, String, Instant, InviteOptions)>,
+	sending: Option<(Id, Id, u64, String)>,
+	sent: std::collections::BTreeMap<Id, InviteStatus>,
 }
 impl Actions {
 	pub(crate) fn reset(&mut self) {
@@ -42,6 +81,123 @@ impl Actions {
 	}
 }
 impl State {
+	pub fn server_invite_pending(&self) -> bool {
+		self.server_actions.sending.is_some()
+	}
+	pub fn server_invite_status(&self, guild: Id, user: Id) -> Option<InviteStatus> {
+		if self
+			.server_actions
+			.sending
+			.as_ref()
+			.is_some_and(|(g, u, _, _)| *g == guild && *u == user)
+		{
+			return Some(InviteStatus::Sending);
+		}
+		self.server_actions
+			.invite
+			.as_ref()
+			.filter(|i| i.0 == guild)?;
+		self.server_actions.sent.get(&user).copied()
+	}
+	pub fn send_server_invite(&mut self, guild: Id, user: Id) -> Option<Command> {
+		if self.server_invite_pending()
+			|| self.server_action_pending()
+			|| (!self.demo && (self.auth != AuthState::Authenticated || !self.gateway_connected))
+			|| !self.friends().any(|friend| friend.id == user)
+			|| self.user_blocked(user) != Some(false)
+			|| matches!(
+				self.server_invite_status(guild, user),
+				Some(InviteStatus::Sent | InviteStatus::Failed(Failure::Ambiguous))
+			) || self.server_actions.sent.len() >= crate::user_actions::MAX_RELATIONSHIPS
+		{
+			return None;
+		}
+		let url = self.created_invite(guild)?.to_owned();
+		let code = url.strip_prefix("https://discord.gg/")?.to_owned();
+		self.server_actions.sequence = self.server_actions.sequence.wrapping_add(1);
+		let request = self.server_actions.sequence;
+		self.send_sequence = self.send_sequence.wrapping_add(1);
+		let epoch = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.unwrap_or_default()
+			.as_millis();
+		let nonce = crate::fingerprint::nonce(epoch, self.send_sequence);
+		self.server_actions.sending = Some((guild, user, request, nonce.clone()));
+		self.server_actions.status = None;
+		Some(Command::SendServerInvite {
+			guild,
+			user,
+			code,
+			nonce,
+			request,
+		})
+	}
+	fn apply_server_invite_sent(
+		&mut self,
+		guild: Id,
+		user: Id,
+		request: u64,
+		result: Result<(model::Channel, model::Message), Failure>,
+	) -> Result<(), &'static str> {
+		let Some((g, u, r, nonce)) = self.server_actions.sending.as_ref() else {
+			return Ok(());
+		};
+		if (*g, *u, *r) != (guild, user, request) {
+			return Ok(());
+		}
+		let result = result.and_then(|(channel, message)| {
+			if channel.guild.is_some()
+				|| channel.kind != 1
+				|| channel.recipients.len() != 1
+				|| channel.recipients[0].id != user
+				|| channel.id.0 == 0
+				|| message.id.0 == 0
+				|| message.channel != channel.id
+				|| message.nonce.as_deref() != Some(nonce.as_str())
+				|| self
+					.user
+					.as_ref()
+					.is_none_or(|owner| owner.id != message.author.id)
+				|| self
+					.server_actions
+					.invite
+					.as_ref()
+					.is_none_or(|i| i.0 != guild || i.2 != message.content)
+			{
+				Err(Failure::Ambiguous)
+			} else {
+				Ok((channel, message))
+			}
+		});
+		self.server_actions.sending = None;
+		match result {
+			Ok((channel, message)) => {
+				self.server_actions.sent.insert(user, InviteStatus::Sent);
+				self.server_actions.status = Some((guild, "Invite sent"));
+				// Feed acknowledgements through normal bounded channel/message reconciliation.
+				if self.channel(channel.id).is_none() {
+					self.apply(crate::Envelope {
+						generation: self.generation,
+						event: crate::Event::ChannelCreated(channel),
+					});
+				}
+				self.apply(crate::Envelope {
+					generation: self.generation,
+					event: crate::Event::Message(message),
+				});
+			}
+			Err(failure) => {
+				self.server_actions
+					.sent
+					.insert(user, InviteStatus::Failed(failure));
+				self.server_actions.status = Some((guild, failure.label()));
+				if failure.ends_session() {
+					self.fail(failure);
+				}
+			}
+		}
+		Ok(())
+	}
 	pub fn server_action_pending(&self) -> bool {
 		self.server_actions.pending.is_some()
 	}
@@ -55,14 +211,27 @@ impl State {
 		self.server_actions
 			.invite
 			.as_ref()
-			.filter(|(id, channel, _, at)| {
+			.filter(|(id, channel, _, at, options)| {
 				*id == guild
 					&& self.can_create_server_invite(guild, *channel)
-					&& at.elapsed() < Duration::from_secs(86400)
+					&& (options.max_age == 0
+						|| at.elapsed() < Duration::from_secs(u64::from(options.max_age)))
 			})
-			.map(|(_, _, url, _)| url.as_str())
+			.map(|(_, _, url, _, _)| url.as_str())
+	}
+	pub fn created_invite_options(&self, guild: Id) -> Option<InviteOptions> {
+		self.created_invite(guild)?;
+		self.server_actions.invite.as_ref().map(|i| i.4)
 	}
 	pub fn clear_server_action_result(&mut self, guild: Id) {
+		if self
+			.server_actions
+			.sending
+			.as_ref()
+			.is_some_and(|s| s.0 == guild)
+		{
+			return;
+		}
 		if self
 			.server_actions
 			.status
@@ -74,9 +243,10 @@ impl State {
 			.server_actions
 			.invite
 			.as_ref()
-			.is_some_and(|(id, _, _, _)| *id == guild)
+			.is_some_and(|(id, _, _, _, _)| *id == guild)
 		{
 			self.server_actions.invite = None;
+			self.server_actions.sent.clear();
 		}
 	}
 	pub fn can_create_server_invite(&self, guild: Id, channel: Id) -> bool {
@@ -121,6 +291,17 @@ impl State {
 		None
 	}
 	pub fn create_server_invite(&mut self, guild: Id, channel: Id) -> Option<Command> {
+		self.create_server_invite_with_options(guild, channel, InviteOptions::default())
+	}
+	pub fn create_server_invite_with_options(
+		&mut self,
+		guild: Id,
+		channel: Id,
+		options: InviteOptions,
+	) -> Option<Command> {
+		if !options.valid() || self.server_invite_pending() {
+			return None;
+		}
 		if !self.can_create_server_invite(guild, channel) {
 			self.server_actions.status = Some((
 				guild,
@@ -128,7 +309,11 @@ impl State {
 			));
 			return None;
 		}
-		self.request_server_action(Action::CreateInvite { guild, channel })
+		self.request_server_action(Action::CreateInvite {
+			guild,
+			channel,
+			options,
+		})
 	}
 	pub fn leave_server(&mut self, guild: Id) -> Option<Command> {
 		if let Some(reason) = self.leave_server_reason(guild) {
@@ -138,7 +323,7 @@ impl State {
 		self.request_server_action(Action::Leave(guild))
 	}
 	fn request_server_action(&mut self, action: Action) -> Option<Command> {
-		if self.server_action_pending() {
+		if self.server_action_pending() || self.server_invite_pending() {
 			return None;
 		}
 		if !self.demo && (self.auth != AuthState::Authenticated || !self.gateway_connected) {
@@ -155,6 +340,12 @@ impl State {
 		Some(Command::ServerAction { action, request })
 	}
 	pub(crate) fn cancel_server_action(&mut self) {
+		if let Some((guild, user, _, _)) = self.server_actions.sending.take() {
+			self.server_actions
+				.sent
+				.insert(user, InviteStatus::Failed(Failure::Ambiguous));
+			self.server_actions.status = Some((guild, Failure::Ambiguous.label()));
+		}
 		if let Some((action, _, _)) = self.server_actions.pending.take() {
 			self.server_actions.status = Some((
 				action.guild(),
@@ -170,11 +361,23 @@ impl State {
 		}
 	}
 	pub(crate) fn apply_server_action(&mut self, event: Event) -> Result<(), &'static str> {
+		if let Event::InviteSent {
+			guild,
+			user,
+			request,
+			result,
+		} = event
+		{
+			return self.apply_server_invite_sent(guild, user, request, result);
+		}
 		let Event::Written {
 			action,
 			request,
 			result,
-		} = event;
+		} = event
+		else {
+			unreachable!()
+		};
 		let Some((pending, sequence, observed)) = self.server_actions.pending else {
 			return Ok(());
 		};
@@ -201,13 +404,19 @@ impl State {
 				failure.label()
 			}
 			Ok(code) => match action {
-				Action::CreateInvite { guild, channel } => {
+				Action::CreateInvite {
+					guild,
+					channel,
+					options,
+				} => {
 					if self.can_create_server_invite(guild, channel) {
+						self.server_actions.sent.clear();
 						self.server_actions.invite = Some((
 							guild,
 							channel,
 							format!("https://discord.gg/{}", code.unwrap()),
 							Instant::now(),
+							options,
 						));
 						"Invite created"
 					} else {
@@ -337,6 +546,124 @@ mod tests {
 			generation: state.generation,
 			event,
 		});
+	}
+	#[test]
+	fn server_invites_options_friends_acknowledgement_and_cancellation() {
+		let mut state = state();
+		let friend = model::User {
+			id: Id(8),
+			name: "Friend".into(),
+			avatar: None,
+			discriminator: 0,
+		};
+		state
+			.apply_user_action(crate::user_actions::Event::Relationships(Some(vec![(
+				friend.id, false,
+			)])))
+			.unwrap();
+		state
+			.apply_user_action(crate::user_actions::Event::Friends(Some(vec![(
+				friend.clone(),
+				"friend_user".into(),
+			)])))
+			.unwrap();
+		assert!(state.send_server_invite(Id(2), friend.id).is_none());
+		assert!(
+			!InviteOptions {
+				max_age: 2592001,
+				..Default::default()
+			}
+			.valid()
+		);
+		assert!(
+			!InviteOptions {
+				max_uses: 101,
+				..Default::default()
+			}
+			.valid()
+		);
+		let options = InviteOptions {
+			max_age: 0,
+			max_uses: 10,
+			temporary: true,
+		};
+		let command = state
+			.create_server_invite_with_options(Id(2), Id(3), options)
+			.unwrap();
+		finish(&mut state, command, Ok(Some("invite_test".into())));
+		assert_eq!(state.created_invite_options(Id(2)), Some(options));
+		assert!(state.send_server_invite(Id(2), Id(99)).is_none());
+		state.drafts.insert(Id(3), "Keep the draft".into());
+		let Command::SendServerInvite {
+			guild,
+			user,
+			nonce,
+			request,
+			..
+		} = state.send_server_invite(Id(2), friend.id).unwrap()
+		else {
+			panic!()
+		};
+		assert_eq!(
+			state.server_invite_status(guild, user),
+			Some(InviteStatus::Sending)
+		);
+		assert!(state.send_server_invite(guild, user).is_none());
+		assert!(state.create_server_invite(guild, Id(3)).is_none());
+		state.clear_server_action_result(guild);
+		assert!(state.created_invite(guild).is_some());
+		let mut channel = state.channel(Id(3)).unwrap().clone();
+		channel.id = Id(10);
+		channel.guild = None;
+		channel.kind = 1;
+		channel.recipients = vec![friend];
+		let mut message = crate::tests::message(100);
+		message.channel = channel.id;
+		message.author = state.user.clone().unwrap();
+		message.nonce = Some(nonce);
+		message.content = "https://discord.gg/invite_test".into();
+		state
+			.apply_server_action(Event::InviteSent {
+				guild,
+				user,
+				request: request + 1,
+				result: Ok((channel.clone(), message.clone())),
+			})
+			.unwrap();
+		assert!(state.server_invite_pending());
+		state
+			.apply_server_action(Event::InviteSent {
+				guild,
+				user,
+				request,
+				result: Ok((channel, message)),
+			})
+			.unwrap();
+		assert_eq!(
+			state.server_invite_status(guild, user),
+			Some(InviteStatus::Sent)
+		);
+		assert!(state.send_server_invite(guild, user).is_none());
+		assert_eq!(state.selected, Some(Id(3)));
+		assert_eq!(state.drafts[&Id(3)], "Keep the draft");
+		assert!(state.channel(Id(10)).is_some());
+		let command = state.create_server_invite(guild, Id(3)).unwrap();
+		finish(&mut state, command, Ok(Some("new_link".into())));
+		let command = state.send_server_invite(guild, user).unwrap();
+		state.command_rejected(command);
+		assert!(!state.server_invite_pending());
+		let command = state.send_server_invite(guild, user).unwrap();
+		state.cancel_server_action();
+		assert_eq!(
+			state.server_invite_status(guild, user),
+			Some(InviteStatus::Failed(Failure::Ambiguous))
+		);
+		assert!(state.send_server_invite(guild, user).is_none());
+		state.command_rejected(command);
+		assert_eq!(
+			state.server_invite_status(guild, user),
+			Some(InviteStatus::Failed(Failure::Ambiguous))
+		);
 	}
 	#[test]
 	fn server_actions_scope_permissions_and_confirmed_removal() {

@@ -313,6 +313,18 @@ impl DiscordApi {
 	}
 	pub async fn execute(&self, command: Command) -> Event {
 		match command {
+			Command::SendServerInvite {
+				guild,
+				user,
+				code,
+				nonce,
+				request,
+			} => Event::ServerAction(client_core::server_actions::Event::InviteSent {
+				guild,
+				user,
+				request,
+				result: self.send_server_invite(user, &code, &nonce).await,
+			}),
 			Command::GroupAction { action, request } => {
 				Event::GroupAction(client_core::group_actions::Event::Written {
 					channel: action.channel(),

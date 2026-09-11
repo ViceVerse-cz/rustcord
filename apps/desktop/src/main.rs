@@ -308,7 +308,11 @@ fn changes_active_history(state: &State, event: &Event) -> bool {
 		| Event::SendResult {
 			result: Ok(message),
 			..
-		} => &message.channel,
+		}
+		| Event::ServerAction(client_core::server_actions::Event::InviteSent {
+			result: Ok((_, message)),
+			..
+		}) => &message.channel,
 		Event::Patch(patch) => &patch.channel,
 		Event::Edited { channel, .. }
 		| Event::Delete { channel, .. }
@@ -1376,6 +1380,54 @@ impl Desktop {
 				Command::GuildFolders(settings) => {
 					Event::GuildFolders(Ok(settings.unwrap_or_default()))
 				}
+				Command::SendServerInvite {
+					guild,
+					user,
+					code,
+					nonce,
+					request,
+				} => {
+					let recipient = self
+						.state
+						.friends()
+						.find(|f| f.id == user)
+						.cloned()
+						.unwrap();
+					let channel = self
+						.state
+						.channels
+						.iter()
+						.find(|c| {
+							c.kind == 1
+								&& c.guild.is_none() && c.recipients.len() == 1
+								&& c.recipients[0].id == user
+						})
+						.cloned()
+						.unwrap_or_else(|| model::Channel {
+							id: model::Id(100_000 + user.0),
+							guild: None,
+							name: recipient.name.clone(),
+							kind: 1,
+							parent_id: None,
+							position: 0,
+							recipients: vec![recipient],
+							last_message: None,
+							icon: None,
+							member_list_id: None,
+							message_count: None,
+						});
+					self.synthetic_id += 1;
+					let mut message = test_support::message(self.synthetic_id, channel.id);
+					message.author = self.state.user.clone().unwrap();
+					message.content = format!("https://discord.gg/{code}");
+					message.nonce = Some(nonce);
+					Event::ServerAction(client_core::server_actions::Event::InviteSent {
+						guild,
+						user,
+						request,
+						result: Ok((channel, message)),
+					})
+				}
 				Command::ServerAction { action, request } => {
 					Event::ServerAction(client_core::server_actions::Event::Written {
 						action,
@@ -2406,7 +2458,11 @@ impl Desktop {
 					| Event::SendResult {
 						result: Ok(message),
 						..
-					} => {
+					}
+					| Event::ServerAction(client_core::server_actions::Event::InviteSent {
+						result: Ok((_, message)),
+						..
+					}) => {
 						changed_messages.insert(message.id);
 					}
 					Event::Edited { message, .. } => {
