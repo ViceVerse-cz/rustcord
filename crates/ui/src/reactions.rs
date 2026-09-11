@@ -97,43 +97,13 @@ pub fn add_button(
 	ui: &mut egui::Ui,
 	enabled: bool,
 	writing: bool,
-	can_react: impl Fn(&ReactionEmoji) -> bool,
-) -> Option<Option<ReactionEmoji>> {
-	let mut action = None;
-	ui.add_enabled_ui(enabled && !writing, |ui| {
-		let response = crate::icons::button(ui, crate::icons::Icon::Smile, 28.0, "Add reaction");
-		egui::Popup::menu(&response).show(|ui| {
-			for (name, label) in [
-				("👍", "Like"),
-				("❤️", "Love"),
-				("😂", "Laugh"),
-				("🎉", "Celebrate"),
-				("👀", "Eyes"),
-				("✅", "Done"),
-				("🙏", "Thanks"),
-				("😢", "Sad"),
-			] {
-				let emoji = ReactionEmoji {
-					id: None,
-					name: Some(name.into()),
-				};
-				if ui
-					.add_enabled(
-						can_react(&emoji),
-						crate::emoji::button(ui.ctx(), name, label.into()),
-					)
-					.clicked()
-				{
-					action = Some(Some(emoji));
-					ui.close();
-				}
-			}
-		});
-		response.widget_info(|| {
-			egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), "Add reaction")
-		});
-	});
-	action
+) -> Option<(egui::Rect, egui::Id)> {
+	let response = ui
+		.add_enabled_ui(enabled && !writing, |ui| {
+			crate::icons::button(ui, crate::icons::Icon::Smile, 28.0, "Add reaction")
+		})
+		.inner;
+	response.clicked().then_some((response.rect, response.id))
 }
 
 #[cfg(test)]

@@ -1,5 +1,46 @@
 # Implementation progress — 2026-09-10
 
+## Shared reaction emoji picker — September 11, 2026
+
+Add reaction now opens the composer's existing searchable, virtualized emoji
+popout, anchored to the message action. Unicode and available server emoji route
+to the existing reaction command; selecting one leaves the composer draft intact.
+GIF controls are absent in reaction mode. The top eight Frequently Used choices
+start with common emoji and rank Unicode selections from both pickers by session
+usage, with recent selections breaking ties. Tracking holds at most 32 catalog
+indices/counters (512 bytes on x64); no new persistence or dependencies. Custom
+emoji remain searchable but do not enter this Unicode favorites row.
+
+The picker closes on channel/session changes, missing targets, Escape, outside
+clicks, selection, or opening the composer picker. Disabled overlays, reaction
+permissions and busy state remain enforced, and keyboard focus returns to the
+original message action. Favorites reset with the session; they are not saved
+across restarts or synchronized with Discord.
+
+Work is isolated in `feat/reaction-emoji-picker` from clean fetched `origin/main`
+`4bbec5a53e0a9a767796e0d9a5d87fe6b38b8104`, Rust 1.98.1 on Windows 11.
+The five focused picker tests pass, including keyboard search/selection of a
+Unicode and custom reaction, unchanged drafts, permission/navigation/session
+gates, frequency ranking, deduplication and capacity limits. Independent review
+covered routing, focus, overlays, GIF cleanup and navigation.
+
+`cargo xtask check` passed on retry: formatting, strict all-feature Clippy,
+491 workspace tests, text-only build check and policy. The first full test run
+timed out in unchanged
+`discord_gateway::tests::unjoined_dm_call_discovery_and_lifecycle_over_local_gateway`
+at `crates/discord-gateway/src/lib.rs:1605`; that exact test passed in isolation
+and the complete check then passed. `cargo test --locked -p ui` separately passed
+136 unit and four integration tests. `cargo xtask policy` and diff review passed.
+
+Native before/after screenshots and interactive performance measurements are
+blocked: the supported `@oai/sky` package imports, but two `sky.list_windows()`
+attempts fail with `Computer Use native pipe is unavailable: failed to connect
+native pipe: The system cannot find the file specified. (os error 2)`.
+No screenshots, native visual validation, CPU/RSS comparison, live Discord
+actions, or cross-platform runtime compatibility are claimed. The PR remains a
+draft for this missing evidence. Release package comparisons are recorded in
+`docs/performance.md` after packaging completes.
+
 ## Own profile editing — September 11, 2026
 
 Added Settings → Profile, My Account → Edit profile, and Edit profile on your own

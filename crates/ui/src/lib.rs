@@ -175,6 +175,7 @@ pub struct MessagingUi {
 	ime_active: bool,
 	mention_menu: mentions::Menu,
 	emoji_picker: emoji_picker::Picker,
+	reaction_picker: emoji_picker::Picker,
 	/// Set when the user picks a theme preset; the host persists it.
 	pub theme_variant_changed: Option<design::Variant>,
 }
@@ -1701,8 +1702,15 @@ impl MessagingUi {
                             })
                             .inner;
                         // A chosen GIF is its own message; the typed draft stays untouched.
+                        if self.emoji_picker.is_open() {
+                            self.reaction_picker.dismiss(state, commands);
+                        }
                         let pick = match pick {
-                            Some(emoji_picker::Pick::Insert(text)) => Some(text),
+                            Some(emoji_picker::Pick::Insert(text)) => {
+                                self.reaction_picker.record(&text);
+                                Some(text)
+                            },
+                            Some(emoji_picker::Pick::React(_, _)) => None,
                             Some(emoji_picker::Pick::Send(url)) => {
                                 if editing_here {
                                     state.status = "Finish or cancel the edit before sending a GIF.";
@@ -2171,6 +2179,7 @@ impl MessagingUi {
 		{
 			commands.push(command);
 		}
+		self.reaction_picker.sync(state, state.selected);
 		egui::CentralPanel::default()
 			.frame(egui::Frame::new().fill(colors.chat).inner_margin(0))
 			.show(ui, |ui| {
@@ -2271,6 +2280,19 @@ impl MessagingUi {
 							&mut self.deleting,
 							(&mut self.avatars, &mut self.profile),
 							self.pending_upload.as_ref(),
+						);
+						if let Some((message, anchor, trigger)) =
+							self.timeline.reaction_picker.take()
+						{
+							self.emoji_picker.dismiss(state, &mut commands);
+							self.reaction_picker
+								.open_reaction(state, message, anchor, trigger);
+						}
+						self.reaction_picker.show_reaction(
+							ui,
+							state,
+							&mut self.avatars,
+							&mut commands,
 						);
 						if let Some((channel, message)) = self.timeline.quick_delete.take()
 							&& let Some(command) = state.prepare_delete(channel, message)
