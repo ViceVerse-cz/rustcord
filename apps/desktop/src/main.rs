@@ -1745,16 +1745,31 @@ impl Desktop {
 
 		#[cfg(target_os = "linux")]
 		if self.login.is_some() {
-			ctx.request_repaint_after(Duration::from_millis(16));
+			ctx.request_repaint_after(self.frame_period().unwrap_or(Duration::from_millis(16)));
 		}
 		if self.login.is_some() {
 			ctx.request_repaint_after(Duration::from_secs(1));
 		}
 	}
 }
+impl Desktop {
+	/// Frame period of the display the window is on; egui otherwise assumes 60 Hz.
+	fn frame_period(&self) -> Option<Duration> {
+		let millihertz = self.window.current_monitor()?.refresh_rate_millihertz()?;
+		(1_000..=1_000_000)
+			.contains(&millihertz)
+			.then(|| Duration::from_secs_f64(1000.0 / f64::from(millihertz)))
+	}
+}
 impl eframe::App for Desktop {
 	fn persist_egui_memory(&self) -> bool {
 		false
+	}
+	fn raw_input_hook(&mut self, _: &egui::Context, raw_input: &mut egui::RawInput) {
+		// Repaint timers and animation anticipation follow the real refresh rate (120 Hz ProMotion).
+		if let Some(period) = self.frame_period() {
+			raw_input.predicted_dt = period.as_secs_f32();
+		}
 	}
 	fn logic(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
 		self.messaging.sync_reading_zoom(ctx);
