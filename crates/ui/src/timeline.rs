@@ -1391,11 +1391,14 @@ impl TimelineView {
 		let distance_from_bottom =
 			(output.content_size.y - output.state.offset.y - output.inner_rect.height()).max(0.0);
 		let at_bottom = distance_from_bottom <= 3.0;
-		self.at_current_latest = state.timeline.iter().last().is_some_and(|message| {
-			state.channels.iter().any(|channel| {
-				Some(channel.id) == state.selected && channel.last_message == Some(message.id)
-			})
-		});
+		// The live edge counts even when service latest metadata outlived a deleted message;
+		// otherwise the unread banners could never resolve for that channel.
+		self.at_current_latest = state.live_edge_latest().is_some()
+			|| state.timeline.iter().last().is_some_and(|message| {
+				state.channels.iter().any(|channel| {
+					Some(channel.id) == state.selected && channel.last_message == Some(message.id)
+				})
+			});
 
 		let whole_conversation_visible =
 			state.older_exhausted && output.content_size.y <= output.inner_rect.height() + 3.0;
@@ -1434,14 +1437,14 @@ impl TimelineView {
 			&& state.history_before.is_none()
 			&& state.history_after.is_none()
 			&& ui.input(|i| i.focused)
-			&& let Some(message) = state.timeline.iter().last()
-			&& self.auto_read_attempt != Some(message.id)
+			&& let Some(latest) = state.live_edge_latest()
+			&& self.auto_read_attempt != Some(latest)
 			&& self.at_current_latest
-			&& state.can_mark_read(message.id)
+			&& state.can_mark_read(latest)
 		{
 			// One automatic attempt per viewed latest message; failed ACKs remain manually retryable.
-			self.auto_read_attempt = Some(message.id);
-			self.mark_read = Some(message.id);
+			self.auto_read_attempt = Some(latest);
+			self.mark_read = Some(latest);
 		}
 		let mut reflow = false;
 		for (id, key, height) in measurements {
@@ -1783,10 +1786,41 @@ mod tests {
 				}
 				assert!(!view.target_browsing && view.following);
 			}
-			assert_eq!(
-				view.mark_read,
-				(count == 1 && !tall && latest == 20).then_some(Id(20))
-			);
+			// Stale latest metadata (a deleted message) is acknowledged like the official
+			// client does, otherwise the channel would stay unread forever.
+			assert_eq!(view.mark_read, (!tall).then_some(Id(latest)));
+			if tall {
+				// Scrolling to the live edge of tall unread content resolves both banners,
+				// even when the service latest ID names a deleted message.
+				state.channels[0].last_message = Some(Id(21));
+				view.mark_read = None;
+				view.anchor = Some((Id(20), f32::MAX));
+				view.revision = u64::MAX;
+				banner_frame(&ctx, &mut view, &mut state, vec![], false);
+				let labels = banner_frame(
+					&ctx,
+					&mut view,
+					&mut state,
+					vec![
+						egui::Event::PointerMoved(egui::pos2(450.0, 300.0)),
+						egui::Event::MouseWheel {
+							unit: egui::MouseWheelUnit::Point,
+							delta: egui::vec2(0.0, -600.0),
+							modifiers: egui::Modifiers::NONE,
+							phase: egui::TouchPhase::Move,
+						},
+					],
+					false,
+				);
+				assert!(view.following && !view.target_browsing);
+				assert_eq!(view.mark_read.take(), Some(Id(21)));
+				for forbidden in ["Next messages", "New messages below", "Jump to present"] {
+					assert!(
+						!labels.iter().any(|(text, _)| text == forbidden),
+						"tall stale channel still showed {forbidden}"
+					);
+				}
+			}
 			if count == 1 && !tall && latest == 20 {
 				// A read snapshot arriving after a local reply jump must not resume reading.
 				state.read_state.reset();
@@ -3232,11 +3266,17 @@ mod tests {
 			.insert(text_message(2), false, false)
 			.unwrap();
 		state.revision += 1;
+		state.history_before = Some(Id(2));
 		frame(&mut view, &mut state, true);
 		assert!(
 			view.mark_read.is_none(),
 			"Historical window is not the latest message"
 		);
+		// The latest page is the live edge; latest metadata beyond it outlived a deletion.
+		state.history_before = None;
+		state.revision += 1;
+		frame(&mut view, &mut state, true);
+		assert_eq!(view.mark_read.take(), Some(Id(3)));
 	}
 	#[test]
 	fn underestimated_leading_row_does_not_hide_history_or_inflate_scroll_extent() {
@@ -3857,7 +3897,11 @@ mod tests {
 				);
 			}
 			assert!(view.revealed.is_empty() && view.viewing.is_none() && view.toolbar.is_none());
-			assert!(view.reaction.is_none() && view.mark_read.is_none());
+			assert!(view.reaction.is_none());
+			// Only the channel's own latest ID may be acknowledged, never the deleted row.
+			let selected = state.channel(state.selected.unwrap()).unwrap();
+			assert_ne!(selected.last_message, Some(message.id));
+			assert_eq!(view.mark_read, selected.last_message);
 		}
 	}
 	#[test]

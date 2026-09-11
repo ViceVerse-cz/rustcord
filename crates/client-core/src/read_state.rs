@@ -112,11 +112,37 @@ impl State {
 		let after = self.read_marker(self.selected?)?.unwrap_or(Id(0));
 		Some(self.open_after_window(after))
 	}
+	/// The message the service counts as the selected channel's latest while the loaded page
+	/// is the live edge: the newest page, without targeted browsing, older pages, or a page in
+	/// flight. Any newer message would arrive over the gateway, so latest-message metadata
+	/// above the timeline's newest row has outlived a deleted message. Acknowledging that ID,
+	/// as the official client does, is what clears the phantom unread.
+	pub fn live_edge_latest(&self) -> Option<Id> {
+		let channel = self.selected?;
+		if self.history_targeted
+			|| self.history_before.is_some()
+			|| self.history_after.is_some()
+			|| self.history_pending
+			|| self.freshness != Freshness::Fresh
+			|| !self.gateway_connected
+			|| !self.can_read_history(channel)
+		{
+			return None;
+		}
+		let latest = self.channel(channel)?.last_message?;
+		self.timeline
+			.iter()
+			.last()
+			.is_none_or(|newest| newest.id <= latest)
+			.then_some(latest)
+	}
 	pub fn can_load_newer(&self) -> bool {
 		self.auth == AuthState::Authenticated
 			&& self.gateway_connected
 			&& self.freshness == Freshness::Fresh
 			&& !self.history_pending
+			// Nothing newer exists beyond the live edge; stale latest metadata is not a page.
+			&& self.live_edge_latest().is_none()
 			&& self
 				.selected
 				.is_some_and(|channel| self.can_read_history(channel))
@@ -157,10 +183,11 @@ impl State {
 			&& self.gateway_connected
 			&& self.freshness == Freshness::Fresh
 			&& self.read_state.pending.is_none()
-			&& self
+			&& (self
 				.timeline
 				.get(message)
 				.is_some_and(|m| Some(m.channel) == self.selected)
+				|| self.live_edge_latest() == Some(message))
 			&& self.selected.is_some_and(|channel| {
 				self.can_view(channel)
 					&& self
