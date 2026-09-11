@@ -2167,3 +2167,8 @@ The text release package passed before this second integration; the superseded v
 was stopped to avoid measuring a stale tree. Native automation remains paused after the owner
 stopped it with Escape; edit focus is covered by the headless pointer/keyboard regression,
 with native focus behavior and full-client UI performance unmeasured.
+
+The integrated unread-gap test assumed one Tab reached the jump button. The new overlay
+comes after focusable messages, so the test now traverses a bounded 32 Tabs to the enabled
+named button, checks no acknowledgement/jump on every Tab, and activates with Enter.
+The focused regression passed; shipping keyboard behavior is unchanged.

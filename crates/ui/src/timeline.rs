@@ -2339,7 +2339,14 @@ mod tests {
 					},
 				);
 				assert!(output.platform_output.commands.is_empty());
+				let unread_focused = output.platform_output.events.iter().any(|event| {
+					matches!(event, egui::output::OutputEvent::FocusGained(info)
+						if info.typ == egui::WidgetType::Button
+							&& info.enabled
+							&& info.label.as_deref() == Some("Jump to unread"))
+				});
 				output.drop_without_applying_deltas();
+				unread_focused
 			};
 			for _ in 0..3 {
 				frame(&mut view, &mut state, vec![]);
@@ -2354,19 +2361,27 @@ mod tests {
 			}
 			assert!(view.target_browsing && view.unread_browsing);
 			assert!(view.mark_read.is_none());
-			for key in [egui::Key::Tab, egui::Key::Enter] {
-				frame(
-					&mut view,
-					&mut state,
-					vec![egui::Event::Key {
-						key,
-						physical_key: None,
-						pressed: true,
-						repeat: false,
-						modifiers: egui::Modifiers::NONE,
-					}],
-				);
+			let key = |key| egui::Event::Key {
+				key,
+				physical_key: None,
+				pressed: true,
+				repeat: false,
+				modifiers: egui::Modifiers::NONE,
+			};
+			let mut unread_focused = false;
+			// The overlay follows the keyboard-accessible message rows in widget order.
+			for _ in 0..32 {
+				unread_focused = frame(&mut view, &mut state, vec![key(egui::Key::Tab)]);
+				assert!(view.mark_read.is_none() && !view.unread_jump);
+				if unread_focused {
+					break;
+				}
 			}
+			assert!(
+				unread_focused,
+				"Keyboard navigation must reach Jump to unread"
+			);
+			frame(&mut view, &mut state, vec![key(egui::Key::Enter)]);
 			assert!(view.unread_jump);
 			assert!(view.mark_read.is_none());
 			assert_eq!(state.read_marker(Id(20)), Some(marker));
