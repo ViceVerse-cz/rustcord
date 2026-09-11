@@ -437,3 +437,12 @@ subtree is capped at 16 KiB and discarded after each request. No raw settings ar
 logged or saved. Server activity diagnostics borrow at most 64 KiB / 16 sessions /
 16 activities per list and retain only a fixed enum, never session identities or
 raw presence payloads. Connection teardown clears these reports and workers.
+
+### Account menu presence (September 12, 2026)
+
+Presence and custom status are session-only. The editor retains one draft capped at
+128 Unicode characters (512 UTF-8 bytes), and the host publishes one replaceable
+watch value. The gateway keeps the desired and last-attempted bounded values;
+there is no status history, disk write, or additional queue. A new login resets
+the choice and account generation changes clear the editor draft. Demo changes
+never publish, persist or initialize account transports.

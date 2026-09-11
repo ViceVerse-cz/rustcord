@@ -25,6 +25,7 @@ pub struct Connection {
 	pub typing: mpsc::Receiver<Envelope>,
 	pub terminal: watch::Receiver<Option<Failure>>,
 	pub share_activity: watch::Sender<bool>,
+	pub own_presence: watch::Sender<model::OwnPresence>,
 	pub game_activity: watch::Receiver<crate::game_activity::Detection>,
 	pub activity_observation: watch::Receiver<discord_gateway::ActivityObservation>,
 	pub activity_sharing: watch::Receiver<Result<Option<bool>, Failure>>,
@@ -61,6 +62,7 @@ impl Connection {
 		let (typing_send, typing) = mpsc::channel(8);
 		let (finished, terminal) = watch::channel(None);
 		let (share_activity, share_receive) = watch::channel(false);
+		let (own_presence, presence_receive) = watch::channel(model::OwnPresence::default());
 		let (game_report, game_activity) = watch::channel(Ok(None));
 		let (activity_observed, activity_observation) =
 			watch::channel(discord_gateway::ActivityObservation::Unconfirmed);
@@ -97,7 +99,7 @@ impl Connection {
                 let gateway_wake=wake.clone();
                 let activity_wake=wake.clone();
                 let mut gateway_task=AbortTask(tokio::spawn(async move {
-                    let error=discord_gateway::run_with_activity(secret,gateway,member_receive,voice_receive,activity_receive,move |observation| {
+                    let error=discord_gateway::run_with_activity(secret,gateway,member_receive,voice_receive,(activity_receive,presence_receive),move |observation| {
                         if activity_observed.send_if_modified(|current| { if *current == observation { false } else { *current = observation; true } }) { activity_wake.request_repaint(); }
                         Ok(())
                     },|event|{
@@ -321,6 +323,7 @@ impl Connection {
 			typing,
 			terminal,
 			share_activity,
+			own_presence,
 			game_activity,
 			activity_observation,
 			activity_sharing,

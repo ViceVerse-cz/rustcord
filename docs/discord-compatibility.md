@@ -701,3 +701,23 @@ successful invite responses are treated as uncertain writes.
 These routes are documented developer API protocol evidence, not approval or proof
 of normal-user compatibility. Synthetic state/HTTP checks cover this adapter; live
 normal-user creation/leaving, service challenges and restricted guilds remain unverified.
+
+### Account menu and session presence (September 12, 2026)
+
+Click the footer avatar or account name to preview the global profile, select Online,
+Idle, Do Not Disturb or Invisible, and apply/clear a custom status. Presence choices
+last for this login session; they do not write Discord account settings or local storage.
+Profile loading reuses the existing bounded global-profile adapter.
+
+The existing Gateway opcode 3 publisher coalesces both game and custom activity into
+one update, with at least five seconds between attempts and publication after
+READY/RESUMED. Invisible omits activities from outbound updates while retaining the
+local choices. Reidentification preserves the selected status. Do Not Disturb also
+suppresses this client's native notification alerts.
+
+[Discord's Update Presence and Activity Object documentation](https://docs.discord.com/developers/events/gateway-events#update-presence)
+documents the status values and type-4 custom activity shape. The 128-character /
+512-byte text ceiling is this client's limit. Normal-user custom-status acceptance,
+cross-client interactions and public visibility remain unverified. The menu says
+public visibility is unconfirmed; an outbound socket write is not confirmation.
+Synthetic tests exercise UI actions, bounds, coalescing, clearing and reconnect.

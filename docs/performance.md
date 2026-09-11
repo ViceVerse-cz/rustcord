@@ -1,5 +1,30 @@
 # Initial performance evidence
 
+## Profile and status menu — September 12, 2026
+
+Baseline `96d94285531f7ede3780187c858b786dd189bb2d` versus the profile/status menu
+implementation. Windows 11 Home 10.0.26200, Rust 1.98.1 x86_64-pc-windows-msvc,
+locked release profile. Both `cargo xtask package` builds include voice and omit
+demo/developer features. Before/after packages are retained in separate directories.
+Package measurements precede this report's addition to the bundled documentation.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Packaged executable bytes | 62,018,048 | 62,072,320 | +54,272 (+0.0875%) |
+| Installed package logical bytes | 66,503,839 | 66,559,935 | +56,096 (+0.0843%) |
+| ZIP bytes, PowerShell Compress-Archive | 39,643,012 | 39,666,084 | +23,072 (+0.0582%) |
+
+One build/archive per revision; totals sum regular file lengths. No dependency or
+storage schema change. One bounded 128-character/512-byte draft and replaceable
+presence value reuse the existing five-second Gateway publication cadence.
+
+Native CPU, process memory, frame/startup timings and visual inspection remain
+unmeasured: Computer Use failed with `Computer Use native pipe is unavailable ...
+(os error 2)`, and Orca CLI is not installed. Headless egui tests verify synthetic
+interaction/layout only; they do not establish native visual or performance results.
+No live Discord, call or microphone test was run. Build/archive logs and packages
+are local under `E:/codex-builds/rustcord-profile-status-menu/target` and `dist`.
+
 ## Signing and lint repair — September 12, 2026
 
 Baseline `ff5c125` versus runtime commit `f3f8869`, macOS 27.0 (26A428), Apple

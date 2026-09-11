@@ -404,14 +404,17 @@ pub async fn run_with_voice(
 	)
 	.await
 }
-/// Publishes the latest bounded game activity after READY/RESUMED.
+/// Publishes the latest bounded game activity and session presence after READY/RESUMED.
 /// The documented wire shape does not establish normal-user compatibility.
 pub async fn run_with_activity(
 	secret: Arc<SessionSecret>,
 	initial_url: String,
 	subscriptions: watch::Receiver<Option<MemberSubscription>>,
 	controls: mpsc::Receiver<client_core::voice::Command>,
-	activity: watch::Receiver<Option<discord_protocol::rpc::Activity>>,
+	activity: (
+		watch::Receiver<Option<discord_protocol::rpc::Activity>>,
+		watch::Receiver<model::OwnPresence>,
+	),
 	observe: impl Fn(ActivityObservation) -> Result<(), Failure> + Sync,
 	emit: impl Fn(Event) -> Result<(), Failure>,
 ) -> Result<(), Failure> {
@@ -421,7 +424,8 @@ pub async fn run_with_activity(
 		subscriptions,
 		controls,
 		Some(ActivityInput {
-			receiver: activity,
+			receiver: activity.0,
+			own_presence: activity.1,
 			observe: &observe,
 		}),
 		emit,
@@ -432,6 +436,7 @@ pub async fn run_with_activity(
 }
 struct ActivityInput<'a> {
 	receiver: watch::Receiver<Option<discord_protocol::rpc::Activity>>,
+	own_presence: watch::Receiver<model::OwnPresence>,
 	observe: &'a (dyn Fn(ActivityObservation) -> Result<(), Failure> + Sync),
 }
 async fn run_inner(
@@ -446,17 +451,21 @@ async fn run_inner(
 	let initial_url = validated_url(&initial_url)?;
 	let activity_enabled = activity.is_some();
 	let mut activity_open = activity_enabled;
+	let mut presence_open = activity_enabled;
 	let ignore_observation = |_| Ok(());
 	let ActivityInput {
 		receiver: mut activity,
+		mut own_presence,
 		observe,
 	} = activity.unwrap_or_else(|| ActivityInput {
 		receiver: watch::channel(None).1,
+		own_presence: watch::channel(model::OwnPresence::default()).1,
 		observe: &ignore_observation,
 	});
 	let mut last_observation = None;
 	let mut outgoing_activity = activity::Pending::default();
 	outgoing_activity.update(&activity.borrow_and_update())?;
+	outgoing_activity.update_presence(&own_presence.borrow_and_update())?;
 	let mut member_diagnostics = Diagnostics::new(
 		"members",
 		std::env::var_os("SEREIN_MEMBER_DIAGNOSTICS").as_deref() == Some(std::ffi::OsStr::new("1")),
@@ -527,6 +536,7 @@ async fn run_inner(
 		if !(1000..=120_000).contains(&hello.heartbeat_interval) {
 			return Err(Failure::Protocol);
 		}
+		outgoing_activity.update_presence(&own_presence.borrow_and_update())?;
 		let handshake = if let (Some(session), Some(sequence)) = (&state.session, state.sequence) {
 			serde_json::json!({"op":6,"d":{"token":secret.expose(),"session_id":session.as_str(),"seq":sequence}})
 		} else {
@@ -534,7 +544,7 @@ async fn run_inner(
 			// custom identity is what gets the account quarantined as spam.
 			let properties: serde_json::Value =
 				serde_json::from_str(&client_core::fingerprint::properties()).unwrap_or_default();
-			serde_json::json!({"op":2,"d":{"token":secret.expose(),"compress":false,"properties":properties,"presence":{"status":"online","since":0,"activities":[],"afk":false}}})
+			serde_json::json!({"op":2,"d":{"token":secret.expose(),"compress":false,"properties":properties,"presence":outgoing_activity.identify_presence()}})
 		};
 		let encoded = Zeroizing::new(handshake.to_string());
 		drop(handshake);
@@ -608,6 +618,10 @@ async fn run_inner(
 				None
 			};
 			tokio::select! {
+				changed = own_presence.changed(), if presence_open => {
+					presence_open = changed.is_ok();
+					outgoing_activity.update_presence(&own_presence.borrow_and_update())?;
+				}
 				changed = activity.changed(), if activity_open => {
 					activity_open = changed.is_ok();
 					outgoing_activity.update(&activity.borrow_and_update())?;
@@ -615,6 +629,7 @@ async fn run_inner(
 				_ = tokio::time::sleep_until(activity_deadline.unwrap_or(ready_deadline)), if activity_deadline.is_some() => {
 					// Read the latest value even if a watch notification races the timer.
 					outgoing_activity.update(&activity.borrow_and_update())?;
+					outgoing_activity.update_presence(&own_presence.borrow_and_update())?;
 					if let Some(packet) = outgoing_activity.packet(Instant::now())
 						&& !matches!(timeout(Duration::from_secs(5), socket.send(packet)).await, Ok(Ok(()))) { break; }
 				}
@@ -1048,6 +1063,9 @@ mod tests {
             let endpoint = format!("ws://{}/", listener.local_addr().unwrap());
             let game = |name: &str| discord_protocol::rpc::ActivityFields::default().into_activity(Id(42), name.into()).unwrap();
             let (activity, receiver) = watch::channel(Some(game("osu!")));
+			let (own_presence, presence_receiver) = watch::channel(model::OwnPresence {
+				status: model::PresenceStatus::DoNotDisturb, custom_status: "Synthetic focus".into(),
+			});
             let (observations, mut observed) = watch::channel(ActivityObservation::Unconfirmed);
             let (finished, done) = tokio::sync::oneshot::channel();
             let server = async {
@@ -1060,6 +1078,7 @@ mod tests {
                     assert_eq!(handshake["op"], if connection == 0 { 2 } else { 6 });
                     if connection == 0 {
                         assert_eq!(handshake["d"]["presence"]["activities"], json!([]));
+						assert_eq!(handshake["d"]["presence"]["status"], "dnd");
                     } else {
                         observed.wait_for(|value| *value == ActivityObservation::Unconfirmed).await.unwrap();
                     }
@@ -1081,8 +1100,9 @@ mod tests {
                             } else { break value; }
                         };
                         assert_eq!(value["op"], 3);
-                        assert_eq!(value["d"], json!({"since":null,"status":"online","afk":false,
-                            "activities": name.map_or_else(||json!([]), |name|json!([{"name":name,"type":0,"application_id":"42"}]))}));
+						let mut activities = name.map_or_else(Vec::new, |name| vec![json!({"name":name,"type":0,"application_id":"42"})]);
+						activities.push(json!({"name":"Custom Status","type":4,"state":if name == Some("osu!") { "Synthetic focus" } else { "On a break" }}));
+                        assert_eq!(value["d"], json!({"since":null,"status":"dnd","afk":false,"activities":activities}));
                         let now = Instant::now();
                         if let Some(previous) = previous {
                             assert!(now.duration_since(previous) >= Duration::from_millis(4900));
@@ -1104,6 +1124,7 @@ mod tests {
                                     observed.wait_for(|value| *value == expected).await.unwrap();
                                 }
                                 activity.send(Some(game("Skipped intermediate"))).unwrap();
+								own_presence.send_replace(model::OwnPresence {status:model::PresenceStatus::DoNotDisturb,custom_status:"On a break".into()});
                                 activity.send(Some(game("Minecraft"))).unwrap();
                                 observed.wait_for(|value| *value == ActivityObservation::Unconfirmed).await.unwrap();
                             }
@@ -1132,7 +1153,7 @@ mod tests {
                 let result = run_inner(
                     Arc::new(SessionSecret::from_owner_input("synthetic-owner-session".into()).unwrap()),
                     "wss://gateway.discord.gg/".into(), watch::channel(None).1,
-                    mpsc::channel(1).1, Some(ActivityInput { receiver, observe: &|value| { observations.send_replace(value); Ok(()) } }), |_| Ok(()), Some(&endpoint),
+                    mpsc::channel(1).1, Some(ActivityInput { receiver, own_presence: presence_receiver, observe: &|value| { observations.send_replace(value); Ok(()) } }), |_| Ok(()), Some(&endpoint),
                 ).await;
                 finished.send(()).unwrap();
                 result

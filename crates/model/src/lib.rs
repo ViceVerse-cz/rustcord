@@ -304,6 +304,51 @@ pub enum Delivery {
 
 pub const MAX_RICH_ACTIVITIES: usize = 4;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PresenceStatus {
+	#[default]
+	Online,
+	Idle,
+	DoNotDisturb,
+	Invisible,
+}
+impl PresenceStatus {
+	pub const ALL: [Self; 4] = [
+		Self::Online,
+		Self::Idle,
+		Self::DoNotDisturb,
+		Self::Invisible,
+	];
+	pub fn wire(self) -> &'static str {
+		match self {
+			Self::Online => "online",
+			Self::Idle => "idle",
+			Self::DoNotDisturb => "dnd",
+			Self::Invisible => "invisible",
+		}
+	}
+	pub fn label(self) -> &'static str {
+		match self {
+			Self::Online => "Online",
+			Self::Idle => "Idle",
+			Self::DoNotDisturb => "Do Not Disturb",
+			Self::Invisible => "Invisible",
+		}
+	}
+}
+
+/// Desired presence for this login session, not a confirmed public status or saved preference.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OwnPresence {
+	pub status: PresenceStatus,
+	pub custom_status: String,
+}
+impl OwnPresence {
+	pub fn valid(&self) -> bool {
+		self.custom_status.is_empty() || valid_presence_text(&self.custom_status)
+	}
+}
+
 /// A service image reference, never permission to fetch an arbitrary external URL.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ActivityImage {
@@ -479,6 +524,32 @@ pub struct MemberList {
 #[cfg(test)]
 mod presence_tests {
 	use super::*;
+
+	#[test]
+	fn own_presence_bounds_unicode_and_allows_explicit_clear() {
+		let mut presence = OwnPresence::default();
+		assert!(presence.valid());
+		assert_eq!(
+			PresenceStatus::ALL.map(PresenceStatus::wire),
+			["online", "idle", "dnd", "invisible"]
+		);
+		for text in [
+			" x".into(),
+			"x ".into(),
+			"line\nfeed".into(),
+			"\0".into(),
+			"x".repeat(129),
+			"🦀".repeat(129),
+		] {
+			presence.custom_status = text;
+			assert!(!presence.valid());
+		}
+		presence.custom_status = "🦀".repeat(128);
+		assert!(presence.valid());
+		assert_eq!(presence.custom_status.len(), 512);
+		presence.custom_status.clear();
+		assert!(presence.valid());
+	}
 
 	#[test]
 	fn rich_presence_validates_retained_fields_and_accounts_for_allocations() {
