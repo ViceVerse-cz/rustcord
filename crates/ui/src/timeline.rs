@@ -19,6 +19,7 @@ pub struct TimelineView {
 	pub(super) invite_requests: Vec<String>,
 	pub(super) invite_join: Option<String>,
 	pub(super) edit_started: bool,
+	pub(super) quick_delete: Option<(Id, Id)>,
 	pub(super) channel_reference: Option<Id>,
 	pub(super) reply_target: Option<Id>,
 	target_browsing: bool,
@@ -1254,22 +1255,41 @@ impl TimelineView {
 							*editing = Some((message.channel, *id, message.content.clone()));
 							self.edit_started = true;
 						}
-						message_actions(
-							&mut toolbar,
-							message,
-							(own, can_reply, can_edit, can_delete),
-							(
-								can_mark_read.then_some(&mut self.mark_read),
-								&mut selected_reply,
-							),
-							(editing, &mut self.edit_started),
-							deleting,
-							(
-								state.can_pin(message.channel, *id),
-								state.is_pinned(message.channel, *id),
-								&mut self.pin_request,
-							),
-						);
+						if can_delete
+							&& toolbar.input(|input| input.modifiers.shift)
+							&& !egui::Popup::is_any_open(toolbar.ctx())
+						{
+							if toolbar
+								.push_id("quick-delete", |ui| {
+									action_button(
+										ui,
+										crate::icons::Icon::Trash,
+										"Delete message immediately",
+									)
+								})
+								.inner
+								.clicked()
+							{
+								self.quick_delete = Some((message.channel, *id));
+							}
+						} else {
+							message_actions(
+								&mut toolbar,
+								message,
+								(own, can_reply, can_edit, can_delete),
+								(
+									can_mark_read.then_some(&mut self.mark_read),
+									&mut selected_reply,
+								),
+								(editing, &mut self.edit_started),
+								deleting,
+								(
+									state.can_pin(message.channel, *id),
+									state.is_pinned(message.channel, *id),
+									&mut self.pin_request,
+								),
+							);
+						}
 						self.toolbar = Some((*id, toolbar_rect));
 					}
 				});

@@ -1183,6 +1183,36 @@ impl MessagingUi {
 			return;
 		}
 		let colors = crate::design::palette(ui);
+		let keyboard_enabled = !self.switcher_frame
+			&& !self.switcher.is_open()
+			&& ctx.memory(|memory| memory.top_modal_layer().is_none());
+		if keyboard_enabled
+			&& self.editing.is_none()
+			&& !self.ime_active
+			&& !egui::Popup::is_any_open(ctx)
+			&& ctx.memory(|memory| memory.has_focus(ui.make_persistent_id("message-input")))
+			&& state.drafts.get(&channel).is_none_or(String::is_empty)
+			&& ctx.input_mut(|input| {
+				let up = !input
+					.events
+					.iter()
+					.any(|event| matches!(event, egui::Event::Ime(_)))
+					&& input.events.iter().any(|event| {
+						matches!(event, egui::Event::Key {
+							key: egui::Key::ArrowUp, pressed: true, repeat: false, modifiers, ..
+						} if *modifiers == egui::Modifiers::NONE)
+					});
+				up && input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)
+			}) && let Some(message) = state
+			.timeline
+			.iter()
+			.rev()
+			.find(|message| !message.unsupported && state.can_edit(channel, message.id))
+		{
+			self.editing = Some((channel, message.id, message.content.clone()));
+			self.edit_modified = None;
+			self.composer_edit = None;
+		}
 		let editing_key = self
 			.editing
 			.as_ref()
@@ -1224,9 +1254,6 @@ impl MessagingUi {
 				});
 			return;
 		}
-		let keyboard_enabled = !self.switcher_frame
-			&& !self.switcher.is_open()
-			&& ctx.memory(|memory| memory.top_modal_layer().is_none());
 		let focus_edit =
 			keyboard_enabled && editing_key.is_some() && self.composer_edit != editing_key;
 		let focus_composer = keyboard_enabled
@@ -2207,6 +2234,11 @@ impl MessagingUi {
 							(&mut self.avatars, &mut self.profile),
 							self.pending_upload.as_ref(),
 						);
+						if let Some((channel, message)) = self.timeline.quick_delete.take()
+							&& let Some(command) = state.prepare_delete(channel, message)
+						{
+							commands.push(command);
+						}
 						if let Some(nonce) = self.timeline.restore_pending.take() {
 							self.restore_pending(state, channel, &nonce);
 						}
