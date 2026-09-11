@@ -2,6 +2,7 @@ use std::{
 	path::PathBuf,
 	process::{Command, ExitCode},
 };
+mod notices;
 fn run(args: &[&str]) -> Result<(), String> {
 	run_tool("cargo", args)
 }
@@ -17,16 +18,20 @@ fn run_tool(program: &str, args: &[&str]) -> Result<(), String> {
 		Err(format!("{program} {} failed", args.join(" ")))
 	}
 }
-fn policy() -> Result<(), String> {
+fn rust_host() -> Result<String, String> {
 	let compiler = Command::new("rustc")
 		.args(["--version", "--verbose"])
 		.output()
 		.map_err(|e| e.to_string())?;
 	let compiler = String::from_utf8_lossy(&compiler.stdout);
-	let host = compiler
+	compiler
 		.lines()
 		.find_map(|line| line.strip_prefix("host: "))
-		.ok_or("Rust host target unavailable")?;
+		.map(str::to_owned)
+		.ok_or_else(|| "Rust host target unavailable".into())
+}
+fn policy() -> Result<(), String> {
+	let host = rust_host()?;
 	let output = Command::new("cargo")
 		.args([
 			"metadata",
@@ -34,7 +39,7 @@ fn policy() -> Result<(), String> {
 			"--locked",
 			"--offline",
 			"--filter-platform",
-			host,
+			&host,
 		])
 		.output()
 		.map_err(|e| e.to_string())?;
@@ -208,7 +213,7 @@ fn package(voice: bool) -> Result<(), String> {
 	if voice {
 		arguments.extend(["--features", "voice"]);
 	}
-	run(&arguments)?;
+	let artifacts = notices::build(&arguments)?;
 	let root = PathBuf::from(if voice { "dist/voice" } else { "dist" });
 	std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
 	let exe = if cfg!(windows) {
@@ -291,6 +296,11 @@ fn package(voice: bool) -> Result<(), String> {
 		resources.join("licenses/Phosphor-Icons-MIT.txt"),
 	)
 	.map_err(|e| e.to_string())?;
+	std::fs::copy(
+		"assets/icons/LICENSE-SIMPLE-ICONS",
+		resources.join("licenses/Simple-Icons-CC0.txt"),
+	)
+	.map_err(|e| e.to_string())?;
 	copy_directory(
 		std::path::Path::new("assets/licenses/files"),
 		&resources.join("licenses/files"),
@@ -317,6 +327,12 @@ fn package(voice: bool) -> Result<(), String> {
 	copy_directory(
 		std::path::Path::new("assets/licenses/audio"),
 		&resources.join("licenses/audio"),
+	)?;
+	notices::collect(
+		&std::env::current_dir().map_err(|e| e.to_string())?,
+		&resources.join("licenses/dependencies"),
+		&artifacts,
+		voice,
 	)?;
 	for file in [
 		"README.md",

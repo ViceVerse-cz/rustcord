@@ -1,6 +1,7 @@
 // Direct, origin-fixed REST adapter. No cookies, redirects, logging, persistence or bot SDK.
 mod archives;
 pub mod upload;
+mod user_actions;
 use client_core::{
 	Command, Event,
 	auth::{AuthProvider, Failure, SessionSecret},
@@ -283,6 +284,13 @@ impl DiscordApi {
 	}
 	pub async fn execute(&self, command: Command) -> Event {
 		match command {
+			Command::UserAction { action, request } => {
+				Event::UserAction(client_core::user_actions::Event::Written {
+					action,
+					request,
+					result: self.user_action(action).await,
+				})
+			}
 			Command::Invite { code } => {
 				let result = self.invite(&code).await.map(Box::new);
 				Event::Invite { code, result }
@@ -708,7 +716,7 @@ impl DiscordApi {
 		content: &str,
 		nonce: &str,
 		reply: Option<model::Id>,
-		attachment: Option<serde_json::Value>,
+		attachment: Option<Vec<serde_json::Value>>,
 	) -> Result<model::Message, Failure> {
 		if (content.trim().is_empty() && attachment.is_none())
 			|| content.chars().count() > client_core::MAX_CONTENT
@@ -721,7 +729,7 @@ impl DiscordApi {
 				serde_json::json!({"message_id":reply,"channel_id":channel});
 		}
 		if let Some(attachment) = attachment {
-			body["attachments"] = serde_json::json!([attachment]);
+			body["attachments"] = serde_json::json!(attachment);
 		}
 		// No enforce_nonce claim until normal-user semantics are live verified. Never auto-retry writes.
 		self.request(

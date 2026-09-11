@@ -52,7 +52,11 @@ pub fn install_async(ctx: &Context) -> std::io::Result<()> {
 		.map(|_| ())
 }
 
-fn lookup(text: &str) -> Option<usize> {
+pub(crate) fn inline_size(ui: &egui::Ui) -> f32 {
+	egui::TextStyle::Body.resolve(ui.style()).size * 1.6
+}
+
+pub(crate) fn lookup(text: &str) -> Option<usize> {
 	// Explicit text presentation must stay text. Do not partially match unknown sequences.
 	if text.is_ascii() || text.contains('\u{fe0e}') || text.len() > 128 {
 		return None;

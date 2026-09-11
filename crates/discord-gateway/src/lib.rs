@@ -698,6 +698,7 @@ async fn run_inner(
 										calls.allowed=channels.iter().filter(|c|(c.guild.is_none() && c.kind==1 && c.recipients.len()==1) || (c.guild.is_some() && c.kind==2)).map(|c|(c.id,c.guild)).collect();
 										if was_ready { emit(Event::Resync)?; }
 										emit(Event::Ready { user: ready.user.into_model(), guilds, channels, permissions })?; was_ready = true;
+										emit(Event::UserAction(client_core::user_actions::Event::Relationships(ready.relationships.take().map(|s| s.entries()))))?;
 										if let Some(friends) = ready.merged_presences.as_ref().and_then(|m| m.friends.as_deref()).or(ready.presences.as_deref()) {
 											direct_presence.friends(friends, Instant::now(), &emit)?;
 										}
@@ -768,6 +769,10 @@ async fn run_inner(
 									}
 									"CHANNEL_RECIPIENT_ADD" => {let d:RecipientAdded=decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;emit(Event::RecipientAdded {channel:d.channel_id,user:d.user.into_model()})?;}
 									"CHANNEL_RECIPIENT_REMOVE" => {let d:RecipientRemoved=decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;emit(Event::RecipientRemoved {channel:d.channel_id,user:d.user.id})?;}
+									"RELATIONSHIP_ADD" | "RELATIONSHIP_UPDATE" | "RELATIONSHIP_REMOVE" => {
+										let relationship: discord_protocol::relationships::Relationship = decode(packet.d.get().as_bytes()).map_err(|_| Failure::ProtocolAt("Unsupported relationship update"))?;
+										emit(Event::UserAction(client_core::user_actions::Event::Relationship { user: relationship.id, blocked: packet.t.as_deref() != Some("RELATIONSHIP_REMOVE") && relationship.kind == 2 }))?;
+									}
 									"USER_GUILD_SETTINGS_UPDATE" => {
 										let setting=decode::<discord_protocol::notifications::Setting>(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
 										emit(notification_settings(vec![setting],false))?;
@@ -1415,6 +1420,9 @@ mod tests {
 						Event::ReadState(client_core::read_state::Event::Snapshot { .. }) => {
 							return Ok(());
 						}
+						Event::UserAction(client_core::user_actions::Event::Relationships(
+							None,
+						)) => return Ok(()),
 						_ => return Err(Failure::Protocol),
 					};
 					let mut events = events.lock().unwrap();

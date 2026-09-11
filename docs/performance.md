@@ -1,5 +1,95 @@
 # Initial performance evidence
 
+## Emoji size and loading flicker - September 11, 2026
+
+Baseline `bd7d26ae0a4332a78617e2a6a6d8402b0a81cfd2`, compared with
+`fix/emoji-size-flicker`. Both locked text-only and optional-voice release packages
+built successfully with Rust 1.98.1, thin LTO, one codegen unit, wgpu, on Windows
+11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical CPUs), 33,410,678,784 bytes RAM.
+Separate before/after package copies prevent baseline overwrite. Installed/ZIP
+figures include bundled docs/licenses at measurement time, before these final
+evidence updates; text packages exclude `dist/voice`. ZIPs use PowerShell
+`Compress-Archive` default Optimal compression. No dependency/assets were added.
+
+| Metric | Baseline | After | Delta |
+| --- | --- | --- | --- |
+| Text executable, bytes | 54,099,456 | 54,103,552 | +4,096 (+0.0076%) |
+| Text installed package, bytes | 55,242,006 | 55,247,680 | +5,674 (+0.0103%) |
+| Text ZIP, bytes | 33,403,603 | 33,406,136 | +2,533 (+0.0076%) |
+| Voice executable, bytes | 59,205,632 | 59,209,728 | +4,096 (+0.0069%) |
+| Voice installed package, bytes | 60,651,489 | 60,657,163 | +5,674 (+0.0094%) |
+| Voice ZIP, bytes | 35,594,103 | 35,596,216 | +2,113 (+0.0059%) |
+| Text working set, sampled peak/final, bytes | 161,533,952 | 166,764,544 | +5,230,592 (+3.24%) |
+| Text private bytes, sampled peak/final | 393,166,848 | 396,890,112 | +3,723,264 (+0.95%) |
+| Text CPU seconds during 10 s observation | 0 | 0.15625 | +0.15625 s |
+
+Process method: launch each copied text executable with `--demo --demo-chat`
+and `Start-Process -WindowStyle Hidden`; warm up 8 seconds, then sample
+`Get-Process` WorkingSet64/PrivateMemorySize64/CPU ten times at one-second intervals.
+One process run per revision; no scripted input. CPU after corresponds to 1.56%
+of one core over that short interval (not a whole-machine percentage). The
+sampled peak excludes startup. These are noisy, short synthetic idle observations,
+not evidence of an emoji-rendering performance improvement. No extra emoji cache
+or worker was added; its existing limits remain unchanged.
+
+Native automation was unavailable (`orca` absent; `@oai/sky` native pipe missing,
+Windows error 2). Thus rendered viewport/display scale, light/dark/narrow visual
+checks, interactive typing/scrolling samples and helper-process verification
+remain unverified. The configured initial viewport is 1120×760 logical pixels.
+Frame/startup p95, GPU memory and voice-call usage were not measured. Focused
+offline egui checks verify cold/ready geometry and editing; no screenshots or
+live Discord compatibility are claimed. See `docs/progress.md` for baseline
+Clippy/UI-runner blockers.
+
+## User context menu - September 11, 2026
+
+Baseline `ea68e0e9afaa822e64e6bea1e144d48816aab339`, compared with integrated code `de73c85`.
+The after column includes the pending-upload UI merged from `d8cb031`; it cannot
+isolate this menu's overhead. Before that merge, the menu-only text/voice executables
+grew by 56,832 / 57,856 bytes. Reducer samples predate the UI-only integration;
+client-core is unchanged by that merge.
+Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical cores), 31.1 GiB visible RAM,
+Rust 1.98.1, locked release, thin LTO/one codegen unit, wgpu. Both
+`cargo xtask package` and `cargo xtask package-voice` passed on both revisions.
+Final releases use the isolated `E:/codex-builds/rustcord-user-menu-target`; source
+builds replaced stale artifacts encountered in the shared build cache. No new dependencies.
+
+| Metric | Baseline | After | Delta |
+| --- | --- | --- | --- |
+| text executable, bytes | 53,986,304 | 54,098,432 | +112,128 (+0.208%) |
+| text installed package, bytes | 55,106,039 | 55,227,192 | +121,153 (+0.220%) |
+| text ZIP (DEFLATE 9), bytes | 33,243,781 | 33,289,588 | +45,807 (+0.138%) |
+| voice executable, bytes | 59,091,968 | 59,205,120 | +113,152 (+0.191%) |
+| voice installed package, bytes | 60,317,494 | 60,439,743 | +122,249 (+0.203%) |
+| voice ZIP (DEFLATE 9), bytes | 35,345,246 | 35,390,825 | +45,579 (+0.129%) |
+| Reducer median, 100,000 events | 39.3572 ms | 38.4854 ms | -0.8718 ms (-2.22%); noisy |
+| Idle CPU, % of one logical core | 2.275 | 0.000 | -2.275 |
+| Median working set, MiB | 157.254 | 157.199 | -0.055 |
+| Peak sampled working set, MiB | 159.766 | 157.199 | -2.566 |
+| Median private bytes, MiB | 375.941 | 375.672 | -0.270 |
+
+Package samples include all declared shipped files (65 text / 92 voice), measured
+before this performance addendum; the baseline's stale, untracked
+`docs/agent-orchestration.md` was excluded from its text archive for identical file sets.
+The text ZIP remains above the initial 30 MiB compressed target.
+One reducer warmup plus five runs per revision, direct release `replay-bench.exe`:
+baseline 40.1823, 39.3572, 40.3051, 36.3527, 36.1438 ms; after 43.8780, 36.7993,
+41.1610, 38.4854, 37.9227 ms. Both retain 500 messages / 236992..237477 estimated
+bytes. This measures the synthetic reducer, not UI latency or RSS; overlapping
+ranges do not establish a speed improvement.
+
+Native process samples: one fresh text-only `--demo` process per revision, 10-second
+warmup, 20 samples at requested 500 ms intervals (10.303 / 10.285 actual seconds),
+System.Diagnostics.Process working set/private bytes and TotalProcessorTime delta.
+No scripted input because native Computer Use was unavailable; default requested
+1120x760-point viewport, actual display scale/occlusion unverified. No auth/audio
+helpers were started. GPU memory, startup/frame p95 and menu-interaction memory
+remain unmeasured. Builds and other desktop activity were present, so these short
+single-process samples are noisy. The observed CPU/memory differences are recorded,
+not attributed to menu rendering or represented as a performance improvement.
+Working-set samples exceed the original 80 MiB settled-idle target on both revisions.
+
+
 ## Combined DM/group activity ordering - September 11, 2026
 
 Baseline `fd20dc9`, compared with this change on Windows 11 Home 10.0.26200,
@@ -2093,6 +2183,7 @@ unmeasured. Test-only rendering assertions now identify the actual activity text
 keyboard navigation reaches the unread button by accessible label. Neither changes shipped
 layout or adds runtime instrumentation.
 
+
 ### Optional outgoing game activity (September 11, 2026)
 
 Baseline `11d0416` versus final `feat/own-activity` implementation.
@@ -2125,3 +2216,156 @@ Packages use `cargo xtask package` / `package-voice`; installed totals sum all p
 text excludes nested voice, ZIP uses sorted Python zipfile DEFLATE level 9. Text/voice each
 contain 65/128 files. Documentation totals are snapshots at packaging time, before this report
 append. No reducer or wire parser changed, so replay-bench would not exercise this feature.
+
+
+## Dependency notice assembly - September 11, 2026
+
+Windows x86_64 MSVC / pinned Rust 1.98.1. Clean baseline `11d0416` and task tree
+`chore/dependency-notice-assembly` built in the same private E: target directory, with
+CARGO_INCREMENTAL=0. Both release variants use the locked no-default-features package
+commands, adding `voice` only for voice. One package-size sample per variant/revision:
+sorted Python zipfile DEFLATE9, text excludes nested voice, no PR evidence is bundled.
+Installed/ZIP sizes include documentation at packaging time, before this evidence append.
+
+| Metric (bytes unless files) | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| text executable | 53,877,248 | 53,877,248 | +0 (+0.00%) |
+| text installed | 54,997,004 | 58,677,556 | +3,680,552 (+6.69%) |
+| text zip | 33,203,585 | 34,897,031 | +1,693,446 (+5.10%) |
+| text files | 65 | 668 | +603 (+927.69%) |
+| voice executable | 58,981,888 | 58,981,888 | +0 (+0.00%) |
+| voice installed | 60,404,951 | 65,105,373 | +4,700,422 (+7.78%) |
+| voice zip | 35,389,027 | 37,521,548 | +2,132,521 (+6.03%) |
+| voice files | 128 | 910 | +782 (+610.94%) |
+
+Executable sizes are unchanged. Growth is the per-build notice inventory, texts and
+corresponding component sources; build dependencies are conservatively included.
+Baseline Cargo release builds reported 1m37s text / 1m44s voice; after 1m42s / 1m45s.
+These are single warm-cache build observations, not a statistically controlled speed claim
+or isolated collector timing. No app/runtime dependencies changed. The mechanical permission
+lint repair preserves outcomes; avatar changes only repair tests for the existing map cache.
+Reducer, native UI, process memory and live audio were not remeasured for packaging tooling.
+Linux synthetic Debian assembly passed in WSL; actual Linux/macOS packages remain CI evidence.
+
+
+The notice-only after column above is revision `584163e`, before integrating later main.
+Final integration includes `ea68e0e` (GIF/media/autocomplete UI work). Both Windows packages
+passed again with the same toolchain/flags/size method; the following are absolute combined
+measurements before this evidence append, not a notice-only growth comparison.
+
+| Combined metric | Text | Voice |
+| --- | ---: | ---: |
+| Executable bytes | 53,986,304 | 59,091,968 |
+| Installed bytes | 58,793,234 | 65,218,622 |
+| DEFLATE9 ZIP bytes | 34,939,566 | 37,558,925 |
+| Files | 668 | 910 |
+
+Cargo reported 1m37s text / 1m42s voice. The final conflict resolution only repairs test
+assumptions relative to incoming animation code; it does not change that production renderer.
+No native visual or full-client performance claim is added for the separately authored main UI.
+
+
+The next combined measurement includes main `d8cb031` pending-message UI plus the integration
+Clippy and scroll-reflow repairs. Same Windows toolchain, flags and DEFLATE9 method as above;
+measured before this evidence append. These are absolute combined sizes, not notice-only deltas.
+
+| Combined pending-UI metric | Text | Voice |
+| --- | ---: | ---: |
+| Executable bytes | 54,037,504 | 59,143,168 |
+| Installed bytes | 58,848,537 | 65,273,925 |
+| DEFLATE9 ZIP bytes | 34,958,789 | 37,578,520 |
+| Files | 668 | 910 |
+
+Cargo release build observations: 1m40s text / 1m41s voice. The integration repair removes one
+immediate layout retry; all 106 synthetic UI tests pass, including wheel displacement and
+anchor preservation. Native screenshot/process/frame measurements remain owner-paused; no
+native UI performance improvement is claimed.
+
+
+## Optimistic message rows ? September 11, 2026
+
+Baseline `ea68e0e9afaa822e64e6bea1e144d48816aab339`; task branch
+`feat/optimistic-message-rows`. Windows 11 Home 10.0.26200, Rust 1.98.1,
+x86_64-pc-windows-msvc, pinned lockfile and existing release profile. Baseline packages
+were rebuilt before production edits; baseline and changed packages were kept separately.
+Both `cargo xtask package` (text, no default features) and `cargo xtask package-voice`
+passed before and after. One package per variant/revision; these are size measurements,
+not latency or throughput measurements.
+
+| Metric, bytes | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable | 53,986,304 | 54,011,904 | +25,600 (+0.047%) |
+| Text installed, 65 files | 55,106,060 | 55,131,660 | +25,600 (+0.046%) |
+| Text ZIP | 33,243,793 | 33,254,716 | +10,923 (+0.033%) |
+| Voice executable | 59,091,968 | 59,117,568 | +25,600 (+0.043%) |
+| Voice installed, 128 files | 60,515,031 | 60,540,631 | +25,600 (+0.042%) |
+| Voice ZIP | 35,425,347 | 35,434,915 | +9,568 (+0.027%) |
+
+Installed sums include all package files; text excludes nested `voice/`. ZIPs use Python
+`zipfile`, sorted relative paths and DEFLATE level 9. Bundled documentation is the snapshot
+copied during packaging, before this evidence append. No dependencies or network workers
+were added. Pending bodies stay in the existing 64-item / shared 2 MiB input budget;
+the UI retains only up to 64 nonce/height entries, prunes them on confirmation/channel
+changes, and lays out nearby pending rows with 100-point overscan.
+
+Native before/after CPU, memory, renderer/display-scale and frame/startup latency are
+unmeasured: `orca` is not installed and the bundled Windows Computer Use API returned
+`Computer Use native pipe is unavailable: failed to connect native pipe: The system
+cannot find the file specified. (os error 2)`. Native screenshots could not be captured.
+Headless egui tests cover dark/light wrapping and scroll behavior; they are not native
+screenshots or proof of Discord compatibility. No runtime speed or memory improvement
+is claimed. No account, message, microphone or call actions were performed.
+
+
+The later owner-requested integration with main `d8cb031` preserves #68's shared
+pending/upload renderer and removes this branch's duplicate implementation. The table
+above remains historical evidence for the pre-integration revision; no size or native
+performance delta is attributed to the combined implementation.
+
+
+Notice-assembly integration with main `36b5c33` also preserves user context menus and DM
+actions. Both combined Windows release packages passed with the same size method above.
+These absolute measurements precede this evidence append and are not notice-only deltas.
+
+| Combined user-menu metric | Text | Voice |
+| --- | ---: | ---: |
+| Executable bytes | 54,099,456 | 59,205,632 |
+| Installed bytes | 58,929,204 | 65,355,104 |
+| DEFLATE9 ZIP bytes | 34,990,295 | 37,608,788 |
+| Files | 668 | 910 |
+
+Cargo reported 1m38s text / 1m47s voice. No native UI performance claim is added.
+
+
+## Chat alignment - September 11, 2026
+
+Baseline `36b5c33180a90353ece9fde18b9c86695c1c9ef4`; branch `fix/chat-control-alignment`.
+Windows 11 Home 10.0.26200, Rust 1.98.1, x86_64-pc-windows-msvc, pinned lockfile.
+Both variants were rebuilt before production edits and kept separate from changed packages.
+One package per variant/revision, same release profile. Main advanced during this task;
+these deltas isolate alignment work against the recorded baseline, not the later main.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text exe, bytes | 54,099,456 | 54,100,480 | +1,024 (+0.002%) |
+| Text installed, bytes | 55,236,270 | 55,237,294 | +1,024 (+0.002%) |
+| Text zip, bytes | 33,292,420 | 33,292,471 | +51 (+0.000%) |
+| Voice exe, bytes | 59,205,632 | 59,207,168 | +1,536 (+0.003%) |
+| Voice installed, bytes | 60,645,753 | 60,647,289 | +1,536 (+0.003%) |
+| Voice zip, bytes | 35,473,550 | 35,473,705 | +155 (+0.000%) |
+
+`cargo xtask package` and `cargo xtask package-voice` pass before and after. Installed
+sums include all 65 text / 128 voice files; text excludes the nested voice directory.
+ZIPs use Python zipfile, sorted relative paths, DEFLATE level 9. Package documentation
+was copied before this evidence append. Tiny size differences are not speed improvements.
+No dependency changes, new caches or background work.
+
+Synthetic egui geometry with bundled Inter fonts reproduces a -2 logical-pixel composer
+text center offset at 100% scale before the fix, and centered text afterward. The new
+check covers light/dark, 100/125/150/200% scale, 320/900-point widths and multiline text.
+The scroll check detects an 8-point jump with original spacing and independently a
+2-point jump with the original voice row height; both corrections pass.
+
+Native screenshots and process CPU/RSS/frame/startup measurements remain unavailable:
+`orca` is not installed; Windows Computer Use reports its native pipe unavailable with
+OS error 2 (file not found). No runtime performance or live Discord compatibility claim.

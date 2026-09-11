@@ -1,5 +1,95 @@
 # Implementation progress — 2026-09-10
 
+## Emoji size and loading flicker — September 11, 2026
+
+Based on fetched `origin/main` at `bd7d26a`, in isolated branch
+`fix/emoji-size-flicker`. The original checkout and its untracked
+`target-relocation-remainder/` were preserved. Rust 1.98.1; locked text/voice builds.
+
+Composer and message emoji now share a 1.6× body-font size (24 px at the default
+15 px text size, previously 20 / 18.75 px). Recognized Unicode sequences reserve
+their final geometry while the bounded atlas worker loads, using a neutral `?`
+instead of briefly displaying font emoji. Original wire text, selection, code
+presentation, custom-image aspect ratio and editing remain intact. The composer
+also avoids painting newly typed artwork against egui's previous empty hint galley.
+No dependency, network, account or storage changes.
+
+`cargo test --locked -p ui emoji`: 11 passed, including cold-to-ready geometry,
+absence of font artwork, first/subsequent keystrokes and existing emoji checks.
+Independent read-only code review found no must-fix. `cargo xtask check` passes
+formatting but stops before tests at the unchanged baseline Clippy
+`question_mark` error in `crates/client-core/src/permissions.rs:439`.
+
+`cargo test --locked -p ui composer_text`: all 5 passed (including copy, undo,
+deletion, IME and wrapped cursor geometry). `cargo xtask policy` passed. Both
+`cargo xtask package` and `cargo xtask package-voice` passed; executable growth
+is 4,096 bytes each. Package/process measurements are in `docs/performance.md`.
+Separate `cargo test --workspace --all-features --locked` stops in the UI runner:
+`avatar_artwork_matches_fallback_in_justified_layout` and
+`service_order_orphans_collapsed_selection_and_category_buttons` fail, followed
+by Windows `0xc0000409 STATUS_STACK_BUFFER_OVERRUN`. A clean detached `bd7d26a`
+worktree running `cargo test --locked -p ui --lib` reproduces the same two
+failures and abort. The broader suite is not green.
+
+Native before/after capture and interactive light/dark checks are blocked:
+`orca` is not installed; initialized `@oai/sky` cannot connect its native pipe
+(Windows error 2, system cannot find the file specified). No screenshots or
+visual approval are claimed. Keep the PR draft pending that evidence and the
+repository check blockers. All fixtures are synthetic; no live Discord activity.
+
+## User context menu — September 11, 2026
+
+Integration: `main` advanced to `d8cb031` (pending message uploads) while PR #69
+was being opened. Its timeline state fields were combined with the menu action
+field without removing either feature. Both focused menu tests pass after the
+merge. The integrated UI suite also encounters the new upstream
+`pending_rows_share_scroll_and_only_measure_near_viewport` failure, reproduced
+directly on `d8cb031`; the full UI runner aborts with Windows `0xc0000409`
+while exercising the underestimated-leading-row test. That abort also reproduces
+on `d8cb031` without this feature; neither full UI run is reported green.
+
+Implemented Profile, Close DM, Block/Unblock and Mute/Unmute through a shared native
+context menu on DM rows/avatars, people rows, message authors, DM header avatars,
+unread DM avatars and resolved voice participants. Shift+F10 opens the focused
+user's menu. Mute changes the existing DM's notification setting until unmuted;
+Close DM is limited to one-to-one conversations and preserves messages/drafts.
+Self menus expose Profile only. No-open-DM mute is visibly disabled. Writes use
+the bounded authenticated worker, update only after confirmation, expose failures,
+and preserve later Gateway updates. READY does not recycle outstanding action IDs.
+Demo actions affect synthetic RAM only; no account, message, call or microphone test ran.
+
+Baseline: `ea68e0e9afaa822e64e6bea1e144d48816aab339` (`origin/main` after fetch).
+Original checkout's unrelated `target-relocation-remainder/` was preserved; implementation
+is isolated on `feat/user-context-menu` in `E:/codex-builds/rustcord-user-menu`.
+Windows 11 Home 10.0.26200, Rust 1.98.1, locked text-only and optional voice variants.
+
+Verification: `cargo test --locked -p ui user_menu -- --nocapture` passed both new
+headless input tests: all four actions, right-click/Shift+F10, both themes, 320-point
+menu bounds, and real DM row/avatar dispatch without navigation. Full workspace
+all-feature tests passed 92 core, 49 protocol, 17 API, 28 Gateway, 37 desktop and
+other non-UI suites; UI passed 103 with two pre-existing failures. Both failures
+were reproduced at the exact baseline in a separate worktree:
+`avatars::tests::avatar_artwork_matches_fallback_in_justified_layout` (avatars.rs:892)
+and `categories::tests::service_order_orphans_collapsed_selection_and_category_buttons`
+(categories.rs:273). `cargo xtask check` stops at the pre-existing
+`clippy::question_mark` warning in `crates/client-core/src/permissions.rs:439`.
+The additional Clippy diagnostic pass found one task warning (test-module order),
+which was fixed. Independent review found the READY request-ID race; the fix and
+regression passed the workspace run. Formatting and `cargo xtask policy` passed.
+No check was disabled. PR: https://github.com/ViceVerse-cz/rustcord/pull/69 (draft;
+CI pending at final inspection).
+
+Native evidence is blocked: Orca CLI is absent and Windows Computer Use repeatedly
+returned `Computer Use native pipe is unavailable: failed to connect native pipe:
+The system cannot find the file specified. (os error 2)`, including after session
+reset. No screenshot is fabricated or labeled verified. Native menu appearance,
+scrolling, screen-reader interaction and macOS/Linux remain unverified. Draft PR
+required for the missing images and baseline check failures. See performance.md
+for separately labeled release package, reducer and idle-process measurements.
+Both integrated release packages passed. Text executable: 54,098,432 bytes;
+voice: 59,205,120 bytes. These include the pending-upload merge from main. Reducer median: 39.3572 to 38.4854 ms,
+with overlapping samples and unchanged retained timeline bounds.
+
 ## Image clipping investigation — 2026-09-11
 
 The owner reports cropped inline images while the enlarged viewer is correct. The
@@ -2190,6 +2280,7 @@ avoid spam quarantine, contrary to SPEC section 3.2. This task preserves that se
 change without developing, tuning or live-testing it. Offline checks do not resolve the
 product-boundary conflict or validate its anti-spam claims; the full spec goal is incomplete.
 
+
 ### Optional outgoing game activity (September 11, 2026)
 
 Implemented on `feat/own-activity`, isolated from the owner's `main` checkout and its
@@ -2248,3 +2339,230 @@ and all three desktop game_activity tests passed with all features. `cargo xtask
 was retried and still stops at the existing permissions.rs:439 Clippy question_mark warning.
 Earlier release packages/performance figures describe `ed28dbb`, not this integrated merge;
 no new release/package, native screenshot or live Discord claim is made for the merge.
+
+
+## September 11, 2026 - per-build dependency notice assembly
+
+Baseline: clean `11d041676f47824332b812c6e53c4dd57a9893f0`, branch
+`chore/dependency-notice-assembly`, Windows x86_64 MSVC, pinned Rust 1.98.1.
+The original checkout and its relocated target junction/backup remain untouched.
+
+Text and optional voice packaging now capture actual Cargo compiler-artifact package IDs,
+join locked offline metadata filtered to the host, and assemble license/notice files plus
+reviewed exact-version/source supplements in `licenses/dependencies`. The inventory includes
+host build dependencies and procedural macros conservatively; it is not linker precision.
+The collector rejects unknown missing coverage, changed override sources, path escapes,
+symlinks and oversized input, then refreshes only its four explicitly owned package subtrees.
+Limits: 4,096 packages, 8,192 notice files, 8 MiB per file, 128 MiB total, 1 MiB inventory,
+32 MiB metadata. Linux packages copy only inventory-listed files with bounded reads.
+
+The provenance records and 24 original registry source archives were reviewed; every archive
+SHA-256 matched Cargo.lock. Existing font/direct-component notices and MPL sources are reused.
+Modern objc2, dispatch and realfft upstream omissions stay explicitly unresolved with original
+source/declarations and an unmodified, labeled MIT reference. They set `complete: false` when
+selected; this does not assert a copyright grant or close redistribution review. Unknown new
+missing texts still stop packaging. Supplement bytes are preserved by scoped Git attributes.
+
+Independent review caught unfiltered offline metadata, which could fail in fresh native caches;
+assembly now reuses host discovery from the policy check. Linux reads were also bounded during
+copying to handle growth after the initial size check. Its synthetic Debian regression passed
+(2 tests, 2.188 seconds) with both variant allowlists, archive contents and unsafe-input checks.
+No app launch, account traffic or microphone capture was used; screenshots are not applicable.
+
+Baseline main also contained a formatting failure, a mechanical permission-helper Clippy lint
+and five stale avatar test compile errors after the cache became a HashMap. These are repaired
+without changing permission outcomes or texture behavior; tests use semantic keys and retain
+the existing rendering and byte-bound assertions. Final validation and package measurements
+are recorded below and in performance.md.
+
+
+Final local validation passed: `cargo xtask check` (385 tests, strict Clippy, text-only
+and policy checks), `node tests/xtask-workspace.cjs`, both Windows release package commands,
+and the Linux synthetic package regression above. The category fixture now advances its
+revision and invalidates navigation after direct replacement, matching the reducer contract;
+its final focused rerun and format check passed. The avatar test compares real unloaded and
+synthetically loaded frames rather than requiring a fallback behind an already loaded image.
+These last edits are test-only; measured release runtime code is unchanged.
+
+Windows text: 324 dependency entries / 602 notice payload files / 3,679,554 notice bytes.
+Windows voice: 421 / 781 / 4,695,971 bytes, with realfft explicitly unresolved. All 61 staged
+supplement/source files match their recorded provenance hashes. Per-package installed and
+DEFLATE9 sizes are in performance.md; executable sizes stayed unchanged. Diff review passed
+with Git's cr-at-eol whitespace interpretation for exact upstream CRLF notice bytes.
+GitHub native/security/license/fuzz checks are pending at this commit; no cross-platform or
+live-client completion is claimed. Full redistribution and the existing project gates remain
+incomplete.
+
+
+Main advanced to `ea68e0e` during CI (GIF animation/media preferences and composer
+autocomplete). Integrated those commits; the avatar conflict preserves incoming production
+animation code and our semantic-key/unloaded-to-loaded test assertions. Incoming desktop
+formatting was normalized. The combined `cargo xtask check` passes 395 tests plus Clippy,
+text-only and policy checks. Both combined Windows release packages pass (1m37s / 1m42s).
+Their absolute sizes are recorded separately in performance.md; the original notice-only
+comparison is tied to `584163e` and is not attributed to the newer main UI work. Earlier-head
+native CI has reached packaging on all three OSes, but final integrated CI remains pending.
+
+
+Integrated Windows CI exposed the incoming long-GIF fixture's dependence on runner speed:
+100 frames at 320x320 exceeded the unchanged production three-second decode guard. Temporal
+compaction now uses 100 small frames while retaining total duration, frame and byte assertions;
+the existing two-frame case separately verifies 320x160-to-160x80 resizing, timing and colors.
+Both focused tests passed locally in 0.05 seconds. This is a test-only repair; production
+budgets and the measured integrated release binaries remain unchanged. Linux integrated CI
+already passed both packages; final-head CI is checked on the PR.
+
+The full `cargo xtask check` also passed after the GIF fixture repair (395 tests and policy checks).
+
+
+macOS CI then exposed a temporary-directory naming collision between parallel notice tests:
+the clock returned the same timestamp twice. Fixture names now include a process-local atomic
+sequence in addition to PID/time. This changes only test isolation, and the full local check
+passed again (395 tests); no packaging/runtime limits or release code changed.
+
+
+Main then advanced to `d8cb031` (pending upload/message UI). The PR merge checks exposed two
+new UI functions above Clippy's argument limit. That main commit was integrated without
+conflicts. The repair groups related mutable arguments using existing tuple conventions;
+no lint is disabled and upload/render behavior is retained. Validation of this combined tree
+follows; earlier measurements remain explicitly scoped to their recorded main revisions.
+
+
+The new compact pending-row fixture assumed fewer rows fit within the viewport. Its test
+now checks measured geometry against the viewport and overscan, and verifies unseen middle
+rows remain unmeasured. Integration also exposed a real scroll regression: the new immediate
+retry for existing timeline-row measurements applied wheel input twice and could replace the
+compensated bottom view with the tall leading row. Removing that immediate retry restores the
+existing next-frame repaint and anchor behavior. Pending-row handling is unchanged. All 106
+UI tests pass, including an explicit forced reflow while browsing that preserves the anchor.
+The leading-row test consumes its synthetic texture output before assertions so future failures
+report normally instead of aborting during a second destructor panic. Native automation remains
+paused by the owner; native screenshots and UI process measurements were not resumed.
+
+Final local validation of the d8cb031 integration and repairs passed: `cargo xtask check`
+(399 tests, strict Clippy and policy checks) and both Windows release packages. Cargo reported
+1m40s text and 1m41s voice. Separate combined sizes are in performance.md. Native automation
+remains paused and latest-head CI is pending at this commit.
+
+
+## Optimistic message rows ? September 11, 2026
+
+Implemented on `feat/optimistic-message-rows` from fetched `origin/main` at
+`ea68e0e9afaa822e64e6bea1e144d48816aab339` in a separate worktree. The original
+checkout's untracked `target-relocation-remainder/` was preserved.
+
+Outgoing messages now appear as gray, full-text rows inside the chat scroll area,
+with the current user's avatar/name and sending status. The existing nonce reconciliation
+replaces them with normal theme-colored server messages after REST or Gateway confirmation,
+in either arrival order, without duplicate rows. Rejected messages are red; unknown
+outcomes retain their warning and explicit restore-to-draft action. Restoring keeps newer
+drafts, capacity guards and attachment reselect guidance, and never automatically resends.
+Sending returns to the bottom; when browsing targeted history it requests the latest page.
+Pending rows use viewport culling and a bounded nonce/height cache; no service, transport,
+persistence or dependency behavior changed. Pending previews show the composed text;
+confirmed rows retain the existing rich-message renderer.
+
+Verification on Windows with Rust 1.98.1 and the locked dependencies:
+
+- Five new headless UI tests pass, including dark/light and narrow long text, both
+  confirmation orders, failure/restore/channel isolation, 40 pending rows, and an observed
+  composer click followed by Enter from ordinary or targeted history.
+- `cargo test --locked -p ui`: 106 passed, 2 pre-existing failures. Both failures reproduce
+  individually on unchanged baseline main: `avatar_artwork_matches_fallback_in_justified_layout`
+  (`avatars.rs:892`, unwrap) and `service_order_orphans_collapsed_selection_and_category_buttons`
+  (`categories.rs:273`, index out of bounds).
+- `cargo test --workspace --all-features --locked` reached the same two UI failures;
+  preceding crate suites passed. The final UI suite was rerun after the follow-latest change.
+- `cargo clippy --locked -p ui --all-targets --no-deps -- -D warnings` and
+  `cargo xtask policy` pass. Changed Rust files are formatted; `git diff --check` passes.
+- `cargo xtask check` is blocked by baseline formatting in `apps/desktop/src/main.rs:1535`.
+  With the mechanical formatting applied temporarily, it also reported the pre-existing
+  `client-core/src/permissions.rs:439` question-mark lint. The unrelated desktop formatting
+  was restored; no unrelated test/lint repairs are included.
+- Baseline and changed `cargo xtask package` / `cargo xtask package-voice` pass.
+  Both executables grow by 25,600 bytes; complete package measurements and methods are in
+  `docs/performance.md`.
+
+Native evidence is blocked: `orca` is unavailable and the bundled Windows Computer Use
+helper cannot connect its native pipe (OS error 2). No before/after screenshot, native
+interaction or process-performance claim is made. Other OSes and live Discord sending
+remain untested; the tests use synthetic offline data. PR remains draft for these evidence
+and pre-existing check blockers. No Discord account actions, calls or microphone use.
+
+
+### Owner-requested main integration
+
+The owner explicitly requested pushing this change to main after the draft handoff.
+Main had advanced to `d8cb031` (#68) with overlapping gray pending rows, grouping,
+attachment previews and upload progress. Conflict resolution retains that renderer and
+its restore/upload lifecycle, plus this task's targeted-history return, clamped bottom
+scroll offset, selectable/red failed text, and regression coverage. No duplicate pending
+renderer or queue remains. The upstream culling test now checks that distant/middle rows
+remain unmeasured instead of assuming a count based on the old ungrouped row height.
+
+Integrated `cargo test --locked -p ui pending`: all 9 tests pass. The all-feature desktop
+`cargo check` passes. `cargo xtask check` passes formatting but remains blocked by the
+existing `permissions.rs:439` lint; UI-only strict Clippy also finds the two 8-argument
+render functions introduced by #68. The whole UI suite additionally aborts in the upstream
+`underestimated_leading_row_does_not_hide_history_or_inflate_scroll_extent` test: its
+visible-row assertion panics, then an unapplied texture-delta drop panics while unwinding.
+This reproduces with the exact `origin/main` timeline source, independently of this task's
+timeline edits. It is not a passing suite; the existing avatar/category failures remain.
+Native evidence is still unavailable. The earlier package measurements describe the
+pre-integration implementation, not the combined #68 tree.
+
+Both integrated release builds pass: text (cargo build --locked --release -p serein --no-default-features, 1m32s) and voice (same command plus --features voice, 1m45s). No live launch was performed. The owner-requested main merge retains the check limitations above.
+
+
+Main advanced to `36b5c33` (user context menus and DM actions) after the previous push.
+The integration preserves those features and both documentation records. Pending-row test
+conflicts retain the geometric culling checks plus the same distant-row assertions; the new
+pending test module uses the grouped timeline arguments. Validation of this combined revision
+is recorded separately below; earlier size tables retain their original scopes.
+
+The `36b5c33` combined integration passed `cargo xtask check`: 412 tests, strict Clippy,
+text-only and policy checks. Both Windows release packages passed (Cargo 1m38s text / 1m47s
+voice). Combined package sizes are recorded separately in performance.md. Latest integrated
+CI is pending; native automation remains owner-paused and live compatibility unverified.
+
+
+## Chat placeholder and sidebar alignment - September 11, 2026
+
+Branch `fix/chat-control-alignment`, baseline main `36b5c33`. Original checkout's unrelated
+`target-relocation-remainder/` was preserved; implementation used a separate worktree.
+The message editor now reserves the existing horizontal interaction height (32 points),
+so its placeholder and typed text align with the box and icons rather than sitting
+2 points high. Empty rich-text layout retains body-font metrics for a full-height caret.
+Channel and People lists set zero row spacing before virtualized measurement and restore
+caller spacing afterward. Voice participant rows share the channel list's 34-point height.
+
+Validation:
+- `cargo test --locked -p ui composer`: 25 passed, including new bundled-font geometry
+  coverage in light/dark, four scales, narrow/wide and multiline states. New regression
+  failed on the original composer before edits.
+- `cargo test --locked -p ui member_pane_virtualizes_and_preview_never_requests_network` passed.
+- Category tests: 3 passed, existing `service_order_orphans_collapsed_selection_and_category_buttons`
+  index-out-of-bounds failure remains. New `channel_rows_scroll_continuously_past_voice_participants`
+  passes; restoring original spacing or original voice height independently fails it.
+- `cargo xtask check`: formatting passed; blocked by existing Clippy question_mark lint
+  at `client-core/src/permissions.rs:439`. UI-only strict Clippy also reports existing
+  too_many_arguments in `pending.rs:12` and `timeline.rs:364`. No lint suppressions added.
+- `cargo xtask policy` and `git diff --check` passed.
+- Both release packages pass before/after. Text executable +1,024 bytes; voice +1,536 bytes.
+  Full installed/archive measurements are in docs/performance.md.
+
+Native capture/interaction evidence and native CPU/memory/frame timing are blocked:
+Windows Computer Use cannot connect its native pipe (OS error 2); `orca` is unavailable.
+No screenshot is fabricated and the owner's screenshot is not committed. Draft PR for
+these evidence and pre-existing check blockers. Other OSes and live Discord remain untested.
+Offline manual reproduction: run `cargo run --locked -p serein -- --demo --demo-chat`,
+inspect the empty composer/caret and a multiline draft, then scroll channel/People lists.
+
+### Game activity PR integration - September 11, 2026
+
+Merged main `68e79aa` into PR #67, preserving both documentation histories.
+`cargo xtask check` passes: 427 tests, strict Clippy, text-only and policy checks.
+The older permission/avatar blockers are resolved on this combined revision.
+CI will rerun on the updated head. Native capture remains owner-paused; live
+Discord publication remains unverified. Prior package measurements retain their
+original revision scope. No new activity or network session was launched.

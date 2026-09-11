@@ -112,7 +112,7 @@ impl Connection {
                 let mut writes=AbortTask(tokio::spawn(async move {
                     while let Some(command)=write_receive.recv().await {
                         let event=write_api.execute(command).await;
-                        let failure=match &event {Event::Failure(f)=>Some(*f),Event::SendResult{result:Err(f),..}=>Some(*f),Event::Reactions(client_core::reactions::Event::Written{result:Err(f),..})=>Some(*f),Event::ReadState(client_core::read_state::Event::Result{result:Err(f),..})=>Some(*f),_=>None};
+                        let failure=match &event {Event::Failure(f)=>Some(*f),Event::SendResult{result:Err(f),..}=>Some(*f),Event::UserAction(client_core::user_actions::Event::Written{result:Err(f),..})=>Some(*f),Event::Reactions(client_core::reactions::Event::Written{result:Err(f),..})=>Some(*f),Event::ReadState(client_core::read_state::Event::Result{result:Err(f),..})=>Some(*f),_=>None};
                         let error=write_emit(event).err().or(failure.filter(|f|f.ends_session()));
                         if let Some(error)=error {write_api.stop();let _=write_finished.send(Some(error));write_wake.request_repaint();break;}
                     }
@@ -148,7 +148,7 @@ impl Connection {
                             let api=api.clone();let emit=emit.clone();let finished=finished.clone();let wake=wake.clone();
                             upload=Some(AbortTask(tokio::spawn(async move {
                                 let mut updates=request.progress.subscribe();
-                                let operation=api.upload_message(request.command,request.source,request.progress,request.cancel.subscribe());
+                                let operation=api.upload_messages(request.command,request.source,request.progress,request.cancel.subscribe());
                                 tokio::pin!(operation);
                                 let mut observing=true;
                                 let event=loop {

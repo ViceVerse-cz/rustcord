@@ -9,6 +9,10 @@ use std::{
 
 #[derive(Default)]
 pub struct TimelineView {
+	pub(super) user_action: Option<crate::user_menu::Action>,
+	pub(super) restore_pending: Option<String>,
+	pub(super) cancel_upload: bool,
+	pending_heights: BTreeMap<String, f32>,
 	pub(super) hide_media_links: bool,
 	applied_hide_media_links: bool,
 	pub(super) gif_favorite: Option<model::Gif>,
@@ -363,8 +367,8 @@ impl TimelineView {
 		state: &mut State,
 		editing: &mut Option<(Id, Id, String)>,
 		deleting: &mut Option<(Id, Id)>,
-		avatars: &mut crate::avatars::Avatars,
-		profile: &mut Option<model::User>,
+		(avatars, profile): (&mut crate::avatars::Avatars, &mut Option<model::User>),
+		upload: Option<&crate::pending::Upload>,
 	) {
 		let width = ui.available_width();
 		let channel_changed = self.channel != state.selected;
@@ -449,6 +453,7 @@ impl TimelineView {
 		if changed {
 			if dimensions_changed {
 				self.heights.clear();
+				self.pending_heights.clear();
 			}
 			self.width = width;
 			self.text_size = text_size;
@@ -516,7 +521,13 @@ impl TimelineView {
 		if !history_available {
 			ui.weak("Message history is unavailable with current permission information.");
 		}
-		if state.timeline.row_count() == 0 && history_available {
+		if state.timeline.row_count() == 0
+			&& history_available
+			&& !state
+				.pending
+				.iter()
+				.any(|p| Some(p.channel) == state.selected)
+		{
 			ui.label(match state.freshness {
 				model::Freshness::Loading => "Loading messages…",
 				model::Freshness::Unavailable => "You cannot view this conversation.",
@@ -547,8 +558,44 @@ impl TimelineView {
 			.auto_shrink([false, false])
 			.stick_to_bottom(self.following);
 		let total: f32 = self.rows.iter().map(|(_, height)| height).sum();
+		self.pending_heights.retain(|nonce, _| {
+			state
+				.pending
+				.iter()
+				.any(|p| &p.nonce == nonce && Some(p.channel) == state.selected)
+		});
+		let pending_rows: Vec<_> = state
+			.pending
+			.iter()
+			.filter(|p| Some(p.channel) == state.selected)
+			.map(|p| {
+				let height = self
+					.pending_heights
+					.get(&p.nonce)
+					.copied()
+					.unwrap_or_else(|| {
+						80.0 + p
+							.content
+							.lines()
+							.map(|line| {
+								(line.chars().count() as f32 / ((width - 88.0) / 8.0).max(1.0))
+									.ceil()
+									.max(1.0) * 20.0
+							})
+							.sum::<f32>() + if p.attachment.is_some() { 320.0 } else { 0.0 }
+					});
+				self.pending_heights
+					.entry(p.nonce.clone())
+					.or_insert(height);
+				(p, height)
+			})
+			.collect();
 		if std::mem::take(&mut self.jump) {
-			offset = Some(total);
+			offset = Some(
+				(total + pending_rows.iter().map(|(_, height)| height).sum::<f32>()
+					- ui.available_height())
+				.max(0.0),
+			);
 		}
 		if let Some(offset) = offset {
 			scroll = scroll.vertical_scroll_offset(offset);
@@ -772,11 +819,19 @@ impl TimelineView {
 										)
 										.0,
 									);
-								} else if avatars
-									.show(ui, &message.author, 40.0, state.demo)
-									.clicked()
-								{
-									*profile = Some(message.author.clone());
+								} else {
+									let avatar =
+										avatars.show(ui, &message.author, 40.0, state.demo);
+									crate::user_menu::show(
+										&avatar,
+										state,
+										&message.author,
+										profile,
+										&mut self.user_action,
+									);
+									if avatar.clicked() {
+										*profile = Some(message.author.clone());
+									}
 								}
 								ui.vertical(|ui| {
 									ui.set_width(ui.available_width());
@@ -797,6 +852,13 @@ impl TimelineView {
 													)
 													.truncate()
 													.sense(egui::Sense::click()),
+												);
+												crate::user_menu::show(
+													&author,
+													state,
+													&message.author,
+													profile,
+													&mut self.user_action,
 												);
 												if author.clicked() {
 													*profile = Some(message.author.clone());
@@ -1121,6 +1183,46 @@ impl TimelineView {
 			}
 			let used: f32 = self.rows[..end].iter().map(|(_, height)| *height).sum();
 			ui.add_space((total - used).max(0.0));
+			for (index, (pending, height)) in pending_rows.iter().enumerate() {
+				let compact = index > 0
+					|| state
+						.timeline
+						.row_ids()
+						.last()
+						.and_then(|id| state.timeline.get(id))
+						.is_some_and(|previous| {
+							let now = time::OffsetDateTime::now_utc();
+							state
+								.user
+								.as_ref()
+								.is_some_and(|user| user.id == previous.author.id)
+								&& !previous.unsupported && !previous.extra_content.any()
+								&& timestamp(previous.id).date() == now.date()
+								&& (now - timestamp(previous.id)).whole_seconds() < 300
+						});
+				let top = ui.cursor().top() - content_top;
+				if top + height < viewport.min.y - 100.0 || top > viewport.max.y + 100.0 {
+					ui.add_space(*height);
+					continue;
+				}
+				let response = ui.push_id(("pending", &pending.nonce), |ui| {
+					crate::pending::show(
+						ui,
+						pending,
+						compact,
+						state,
+						avatars,
+						upload,
+						(&mut self.restore_pending, &mut self.cancel_upload),
+					);
+				});
+				let measured = response.response.rect.height();
+				if (measured - height).abs() > 1.0 {
+					ui.ctx().request_discard("Pending message height settled");
+					ui.ctx().request_repaint();
+				}
+				self.pending_heights.insert(pending.nonce.clone(), measured);
+			}
 			// Visible rows occupy their measured height immediately; leading overscan
 			// still occupies its old height until the next anchored pass.
 			for (index, (_, _, height)) in (first..end).zip(&measurements) {
@@ -1141,8 +1243,9 @@ impl TimelineView {
 			.get(anchor)
 			.map(|(id, _)| (*id, output.state.offset.y - anchor_top));
 		state.reply = selected_reply;
-		let at_bottom =
-			output.state.offset.y + output.inner_rect.height() >= output.content_size.y - 3.0;
+		let distance_from_bottom =
+			(output.content_size.y - output.state.offset.y - output.inner_rect.height()).max(0.0);
+		let at_bottom = distance_from_bottom <= 3.0;
 		if at_bottom
 			&& !self.unread_browsing
 			&& ui.input(|input| {
@@ -1271,7 +1374,10 @@ impl TimelineView {
 		let browsing_history = state.history_targeted
 			|| state.history_before.is_some()
 			|| state.history_after.is_some();
-		if !self.following || browsing_history {
+		if (!self.following && distance_from_bottom > 120.0)
+			|| self.target_browsing
+			|| browsing_history
+		{
 			let unread = state
 				.selected
 				.is_some_and(|channel| state.unread(channel) == Some(true));
@@ -1345,8 +1451,99 @@ impl TimelineView {
 	}
 }
 #[cfg(test)]
+#[path = "pending_tests.rs"]
+mod pending_tests;
+#[cfg(test)]
 mod tests {
 	use super::*;
+	#[test]
+	fn pending_rows_share_scroll_and_only_measure_near_viewport() {
+		let ctx = egui::Context::default();
+		let mut state = State {
+			demo: true,
+			selected: Some(Id(20)),
+			..Default::default()
+		};
+		state.pending = (0..64)
+			.map(|i| client_core::Pending {
+				channel: Id(20),
+				nonce: i.to_string(),
+				content: format!("Pending message {i}"),
+				attachment: None,
+				delivery: model::Delivery::Sending,
+				confirmed: None,
+			})
+			.collect();
+		let mut view = TimelineView {
+			channel: state.selected,
+			..Default::default()
+		};
+		let render = |view: &mut TimelineView, state: &mut State| {
+			ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(400.0, 300.0),
+					)),
+					..Default::default()
+				},
+				|ui| {
+					view.show(
+						ui,
+						state,
+						&mut None,
+						&mut None,
+						(&mut crate::avatars::Avatars::default(), &mut None),
+						None,
+					);
+				},
+			)
+			.drop_without_applying_deltas();
+		};
+		for _ in 0..3 {
+			render(&mut view, &mut state);
+		}
+		assert_ne!(view.pending_heights["0"], 100.0);
+		let measured_at_top: Vec<_> = view
+			.pending_heights
+			.iter()
+			.filter(|(_, height)| **height != 100.0)
+			.map(|(nonce, _)| nonce.parse::<usize>().unwrap())
+			.collect();
+		let mut top = 0.0;
+		for index in 0..64 {
+			if measured_at_top.contains(&index) {
+				assert!(
+					top <= 300.0 + 100.0,
+					"only rows near the viewport should be measured"
+				);
+			}
+			top += view.pending_heights[&index.to_string()];
+		}
+		assert_eq!(view.pending_heights["63"], 100.0);
+		view.follow_latest();
+		for _ in 0..5 {
+			render(&mut view, &mut state);
+		}
+		assert_ne!(view.pending_heights["63"], 100.0);
+		assert!(view.following);
+		let mut bottom = 0.0;
+		for index in (0..64).rev() {
+			let height = view.pending_heights[&index.to_string()];
+			if height != 100.0 && !measured_at_top.contains(&index) {
+				assert!(
+					bottom <= 300.0 + 100.0,
+					"jumping should only measure rows near the bottom viewport"
+				);
+			}
+			bottom += height;
+		}
+		assert_eq!(view.pending_heights["32"], 100.0);
+		state.pending.clear();
+		render(&mut view, &mut state);
+		assert!(view.pending_heights.is_empty());
+	}
+
 	fn text_message(id: u64) -> Message {
 		Message {
 			id: Id(id),
@@ -1539,7 +1736,16 @@ mod tests {
 						)),
 						..Default::default()
 					},
-					|ui| view.show(ui, state, &mut None, &mut None, &mut images, &mut None),
+					|ui| {
+						view.show(
+							ui,
+							state,
+							&mut None,
+							&mut None,
+							(&mut images, &mut None),
+							None,
+						)
+					},
 				);
 				assert!(output.platform_output.commands.is_empty());
 				let mut labels = vec![];
@@ -1690,8 +1896,8 @@ mod tests {
 							&mut state,
 							&mut None,
 							&mut None,
-							&mut avatars,
-							&mut None,
+							(&mut avatars, &mut None),
+							None,
 						)
 					},
 				);
@@ -1778,7 +1984,16 @@ mod tests {
 						)),
 						..Default::default()
 					},
-					|ui| view.show(ui, &mut state, &mut None, &mut None, &mut images, &mut None),
+					|ui| {
+						view.show(
+							ui,
+							&mut state,
+							&mut None,
+							&mut None,
+							(&mut images, &mut None),
+							None,
+						)
+					},
 				)
 				.drop_without_applying_deltas();
 			}
@@ -1836,8 +2051,8 @@ mod tests {
 							&mut state,
 							&mut None,
 							&mut None,
-							&mut avatars,
-							&mut None,
+							(&mut avatars, &mut None),
+							None,
 						)
 					},
 				);
@@ -1919,7 +2134,16 @@ mod tests {
 					events,
 					..Default::default()
 				},
-				|ui| view.show(ui, state, &mut None, &mut None, &mut avatars, &mut None),
+				|ui| {
+					view.show(
+						ui,
+						state,
+						&mut None,
+						&mut None,
+						(&mut avatars, &mut None),
+						None,
+					)
+				},
 			);
 			assert!(
 				output.platform_output.commands.is_empty(),
@@ -2083,7 +2307,16 @@ mod tests {
 							events,
 							..Default::default()
 						},
-						|ui| view.show(ui, state, &mut editing, &mut None, &mut avatars, &mut None),
+						|ui| {
+							view.show(
+								ui,
+								state,
+								&mut editing,
+								&mut None,
+								(&mut avatars, &mut None),
+								None,
+							)
+						},
 					);
 					let mut painted = vec![];
 					for shape in &output.shapes {
@@ -2232,7 +2465,16 @@ mod tests {
 						events,
 						..Default::default()
 					},
-					|ui| view.show(ui, state, &mut None, &mut None, &mut avatars, &mut None),
+					|ui| {
+						view.show(
+							ui,
+							state,
+							&mut None,
+							&mut None,
+							(&mut avatars, &mut None),
+							None,
+						)
+					},
 				);
 				assert!(output.platform_output.commands.is_empty());
 				let mut labels = vec![];
@@ -2353,7 +2595,14 @@ mod tests {
 						..Default::default()
 					},
 					|ui| {
-						view.show(ui, state, &mut None, &mut None, &mut avatars, &mut None);
+						view.show(
+							ui,
+							state,
+							&mut None,
+							&mut None,
+							(&mut avatars, &mut None),
+							None,
+						);
 						assert!(ui.min_rect().right() <= ui.max_rect().right() + 1.0);
 					},
 				);
@@ -2442,7 +2691,14 @@ mod tests {
 					..Default::default()
 				},
 				|ui| {
-					view.show(ui, state, &mut None, &mut None, &mut avatars, &mut None);
+					view.show(
+						ui,
+						state,
+						&mut None,
+						&mut None,
+						(&mut avatars, &mut None),
+						None,
+					);
 				},
 			)
 			.drop_without_applying_deltas();
@@ -2508,7 +2764,16 @@ mod tests {
 					)),
 					..Default::default()
 				},
-				|ui| view.show(ui, state, &mut None, &mut None, &mut avatars, &mut None),
+				|ui| {
+					view.show(
+						ui,
+						state,
+						&mut None,
+						&mut None,
+						(&mut avatars, &mut None),
+						None,
+					)
+				},
 			)
 		};
 		for _ in 0..8 {
@@ -2529,22 +2794,23 @@ mod tests {
 		view.anchor = Some((Id(3), 5.0));
 		view.revision = u64::MAX;
 		let output = frame(&mut view, &mut state);
+		let final_visible = output
+			.shapes
+			.iter()
+			.any(|shape| shape.clip_rect.is_positive() && contains_final_row(&shape.shape));
+		output.drop_without_applying_deltas();
 		assert!(
 			view.heights[&Id(1)].1 > 600.0,
 			"Fixture must measure a tall leading row"
 		);
 		assert!(
-			output
-				.shapes
-				.iter()
-				.any(|shape| { shape.clip_rect.is_positive() && contains_final_row(&shape.shape) }),
+			final_visible,
 			"Leading measurement must not blank the visible rows"
 		);
 		assert!(
 			view.following,
 			"The compensated short content must reach its real bottom; hidden leading bounds must not create phantom scroll space"
 		);
-		output.drop_without_applying_deltas();
 	}
 
 	#[test]
@@ -2611,8 +2877,8 @@ mod tests {
 							&mut state,
 							&mut None,
 							&mut None,
-							&mut avatars,
-							&mut None,
+							(&mut avatars, &mut None),
+							None,
 						)
 					},
 				);
@@ -2699,7 +2965,14 @@ mod tests {
 						..Default::default()
 					},
 					|ui| {
-						view.show(ui, state, &mut None, &mut None, &mut avatars, &mut None);
+						view.show(
+							ui,
+							state,
+							&mut None,
+							&mut None,
+							(&mut avatars, &mut None),
+							None,
+						);
 					},
 				)
 				.drop_without_applying_deltas();
@@ -2721,6 +2994,17 @@ mod tests {
 			assert!(!view.following);
 			let anchor = view.anchor.unwrap();
 			assert_eq!(anchor.0, Id(200));
+			// A newly measured leading row while browsing must not opt into the
+			// bottom restoration used for a following layout retry.
+			let (key, height) = view.heights[&Id(199)];
+			assert!(height > 1.0);
+			let reflows = view.reflow_frames;
+			view.heights.insert(Id(199), (key, 1.0));
+			view.revision = u64::MAX;
+			render(&mut view, &mut state);
+			assert!(view.reflow_frames > reflows);
+			assert!(!view.following && !view.jump);
+			assert_eq!(view.anchor, Some(anchor));
 			crate::MessagingUi::default().apply_reading_preferences(
 				&ctx,
 				model::ReadingPreferences {
@@ -2828,7 +3112,14 @@ mod tests {
 							..Default::default()
 						},
 						|ui| {
-							view.show(ui, state, &mut None, &mut None, &mut avatars, &mut None);
+							view.show(
+								ui,
+								state,
+								&mut None,
+								&mut None,
+								(&mut avatars, &mut None),
+								None,
+							);
 							assert!(ui.min_rect().right() <= ui.max_rect().right() + 1.0);
 						},
 					);
@@ -2980,7 +3271,14 @@ mod tests {
 						..Default::default()
 					},
 					|ui| {
-						view.show(ui, state, &mut None, &mut None, &mut avatars, &mut None);
+						view.show(
+							ui,
+							state,
+							&mut None,
+							&mut None,
+							(&mut avatars, &mut None),
+							None,
+						);
 						assert!(ui.min_rect().right() <= ui.max_rect().right() + 1.0);
 					},
 				);
@@ -3107,7 +3405,7 @@ mod tests {
 							)),
 							..Default::default()
 						},
-						|ui| view.show(ui, state, &mut None, &mut None, images, &mut None),
+						|ui| view.show(ui, state, &mut None, &mut None, (images, &mut None), None),
 					)
 					.drop_without_applying_deltas();
 			};
@@ -3170,8 +3468,8 @@ mod tests {
 						&mut state,
 						&mut None,
 						&mut None,
-						&mut crate::avatars::Avatars::default(),
-						&mut None,
+						(&mut crate::avatars::Avatars::default(), &mut None),
+						None,
 					);
 				})
 				.drop_without_applying_deltas();
@@ -3237,8 +3535,8 @@ mod tests {
 				&mut state,
 				&mut None,
 				&mut None,
-				&mut crate::avatars::Avatars::default(),
-				&mut None,
+				(&mut crate::avatars::Avatars::default(), &mut None),
+				None,
 			);
 		});
 		output.drop_without_applying_deltas();
@@ -3360,7 +3658,7 @@ mod tests {
 						)),
 						..Default::default()
 					},
-					|ui| view.show(ui, state, &mut None, &mut None, images, &mut None),
+					|ui| view.show(ui, state, &mut None, &mut None, (images, &mut None), None),
 				);
 				assert!(
 					output.platform_output.commands.is_empty(),

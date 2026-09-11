@@ -529,6 +529,7 @@ The voice-only dependency nnnoiseless 0.5.2 embeds its default RNNoise model. De
 
 Available license texts/notices and provenance are under `assets/licenses/voice`; existing voice packaging stages that directory. Realfft omits its standalone MIT text from both the registry archive and the pinned Git tree; full redistribution notice assembly remains outstanding. Default text-only builds do not select this processor.
 
+
 ### Game process enumeration (September 11, 2026)
 
 The existing pinned `windows` 0.61.3 dependency additionally enables
@@ -536,3 +537,18 @@ The existing pinned `windows` 0.61.3 dependency additionally enables
 Platform keeps `unsafe_code = deny` with one narrowly allowed Windows detector function
 for the reviewed ToolHelp/CloseHandle FFI. Other workspace crates retain their existing
 forbid policy. The snapshot handle is owned once and closed on every return path.
+
+
+## Per-build notice inventory - September 11, 2026
+
+The static tables above describe resolved dependencies. Each new text/voice package also
+contains `licenses/dependencies/inventory.json`, selected from Cargo compiler-artifact IDs
+with locked, offline, host-filtered metadata. Its conservative scope includes build-time
+crates; it does not prove linker-level inclusion. Exact-version/source overrides supplement
+missing root texts, nested notices and corresponding MPL sources. No dependencies changed.
+
+See `assets/licenses/dependencies/PROVENANCE.md` for hashes and known upstream omissions.
+`complete: false` records unresolved grants for realfft/dispatch and modern objc2 components
+when selected; source archives and a labeled MIT reference do not close those omissions.
+New unreviewed missing texts fail packaging. Native system-library redistribution and a
+complete transitive notice review remain separate release gates.

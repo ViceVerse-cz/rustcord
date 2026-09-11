@@ -1,5 +1,14 @@
 # Local storage policy and audit
 
+User context actions (September 11): close-DM, block and notification-mute preferences are
+written directly to Discord through the existing authenticated transport, never a new local
+settings file. Relationship state keeps at most 4000 fixed ID/bool entries with a 128 KiB
+estimated allocation ceiling; only one fixed-size action may be pending. DM mute state reuses
+the existing bounded notification overrides. Logout clears both with other account RAM state.
+Closing a DM preserves its local draft. Accepted navigation removal uses the existing account
+history invalidation path, which can clear other cached history but preserves drafts. The
+standalone offline fixture changes synthetic RAM only and issues no service or storage writes.
+
 Current reply metadata schema is 10. It adds one constrained reply_deleted boolean to each
 bounded message row; legacy rows default to unknown (false). Only an explicit service-null
 reference on a valid same-channel reply/context-menu message establishes deletion. Nested

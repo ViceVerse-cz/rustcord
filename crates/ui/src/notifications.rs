@@ -142,6 +142,9 @@ impl MessagingUi {
                             } else {
                                 design::avatar(ui, &channel.name, 48.0)
                             };
+                            if channel.kind == 1 && let Some(user) = channel.recipients.first() {
+                                crate::user_menu::show(&response, state, user, &mut self.profile, &mut self.user_action);
+                            }
                             let count = state.unread_count(channel.id);
                             indicator(ui, response.rect, true, count);
                             response.widget_info(|| {

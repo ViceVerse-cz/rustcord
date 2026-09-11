@@ -1,0 +1,344 @@
+//! Shared user actions; rendering only records intent, dispatched after borrowed rows finish.
+use client_core::{Command, State};
+use model::User;
+
+pub(super) use client_core::user_actions::Action;
+
+pub(super) fn prepare(action: Action, state: &mut State) -> Option<Command> {
+	match action {
+		Action::CloseDm(channel) => state.close_dm(channel),
+		Action::Block { user, blocked } => state.set_user_blocked(user, blocked),
+		Action::Mute { channel, muted } => state.set_dm_muted(channel, muted),
+	}
+}
+
+pub(super) fn show(
+	response: &egui::Response,
+	state: &State,
+	user: &User,
+	profile: &mut Option<User>,
+	action: &mut Option<Action>,
+) {
+	let keyboard = response.has_focus()
+		&& response
+			.ctx
+			.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::F10));
+	let mut popup = egui::Popup::context_menu(response);
+	if keyboard {
+		popup = popup
+			.open_memory(Some(egui::SetOpenCommand::Bool(true)))
+			.at_position(response.rect.right_bottom());
+	} else if !response.secondary_clicked()
+		&& egui::Popup::position_of_id(&response.ctx, egui::Popup::default_response_id(response))
+			.is_none()
+	{
+		// Keyboard-opened menus have no remembered pointer position.
+		popup = popup.at_position(response.rect.right_bottom());
+	}
+	popup.show(|ui| {
+		let colors = crate::design::palette(ui);
+		ui.set_min_width(200.0);
+		ui.spacing_mut().button_padding = egui::vec2(8.0, 6.0);
+		if ui.button("Profile").clicked() {
+			*profile = Some(user.clone());
+			ui.close();
+		}
+		if state.user.as_ref().is_some_and(|own| own.id == user.id) {
+			return;
+		}
+		let dm = state.channels.iter().find(|c| {
+			c.guild.is_none() && c.kind == 1 && c.recipients.iter().any(|u| u.id == user.id)
+		});
+		let enabled = (state.demo || state.gateway_connected) && !state.user_action_pending();
+		ui.separator();
+		if let Some(dm) = dm {
+			let muted = state.dm_muted(dm.id) == Some(true);
+			if ui
+				.add_enabled(
+					enabled,
+					egui::Button::new(if muted { "Unmute" } else { "Mute" }),
+				)
+				.on_hover_text("Mute this direct message's notifications until you unmute it.")
+				.clicked()
+			{
+				*action = Some(Action::Mute {
+					channel: dm.id,
+					muted: !muted,
+				});
+				ui.close();
+			}
+			if ui
+				.add_enabled(enabled, egui::Button::new("Close DM"))
+				.on_hover_text("Remove this conversation from your DM list. Messages are kept.")
+				.clicked()
+			{
+				*action = Some(Action::CloseDm(dm.id));
+				ui.close();
+			}
+		} else {
+			ui.add_enabled(false, egui::Button::new("Mute"))
+				.on_disabled_hover_text("No open direct message with this user.");
+		}
+		ui.separator();
+		let blocked = state.user_blocked(user.id) == Some(true);
+		if ui
+			.add_enabled(
+				enabled,
+				egui::Button::new(
+					egui::RichText::new(if blocked { "Unblock" } else { "Block" })
+						.color(colors.danger),
+				),
+			)
+			.clicked()
+		{
+			*action = Some(Action::Block {
+				user: user.id,
+				blocked: !blocked,
+			});
+			ui.close();
+		}
+		if let Some(status) = state.user_action_status() {
+			ui.add(
+				egui::Label::new(egui::RichText::new(status).small().color(colors.muted)).wrap(),
+			);
+		}
+	});
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use egui::{Event, Modifiers, PointerButton, Pos2, Rect};
+
+	fn labels(shape: &egui::Shape, out: &mut Vec<(String, Rect)>) {
+		match shape {
+			egui::Shape::Text(t) => out.push((
+				t.galley.job.text.clone(),
+				t.galley.rect.translate(t.pos.to_vec2()),
+			)),
+			egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| labels(s, out)),
+			_ => {}
+		}
+	}
+	fn pointer(pos: Pos2, button: PointerButton, pressed: bool) -> Vec<Event> {
+		vec![
+			Event::PointerMoved(pos),
+			Event::PointerButton {
+				pos,
+				button,
+				pressed,
+				modifiers: Modifiers::NONE,
+			},
+		]
+	}
+	fn frame(
+		ctx: &egui::Context,
+		state: &State,
+		user: &User,
+		events: Vec<Event>,
+		profile: &mut Option<User>,
+		action: &mut Option<Action>,
+	) -> (egui::Response, Vec<(String, Rect)>) {
+		let mut response = None;
+		let mut output = ctx.run_ui(
+			egui::RawInput {
+				screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(320.0, 300.0))),
+				events,
+				..Default::default()
+			},
+			|ui| {
+				let row = ui.button(&user.name);
+				show(&row, state, user, profile, action);
+				response = Some(row);
+			},
+		);
+		output.textures_delta.clear();
+		let mut text = vec![];
+		for shape in output.shapes {
+			labels(&shape.shape, &mut text);
+		}
+		(response.unwrap(), text)
+	}
+
+	#[test]
+	fn user_menu_mouse_keyboard_and_actions_in_both_themes() {
+		for light in [false, true] {
+			for label in ["Profile", "Mute", "Close DM", "Block"] {
+				let ctx = egui::Context::default();
+				ctx.set_visuals(if light {
+					egui::Visuals::light()
+				} else {
+					egui::Visuals::dark()
+				});
+				let state = test_support::demo_state();
+				let dm = state.channels.iter().find(|c| c.kind == 1).unwrap();
+				let user = &dm.recipients[0];
+				let (mut profile, mut action) = (None, None);
+				let (row, _) = frame(&ctx, &state, user, vec![], &mut profile, &mut action);
+				if light {
+					row.request_focus();
+					frame(
+						&ctx,
+						&state,
+						user,
+						vec![Event::Key {
+							key: egui::Key::F10,
+							physical_key: None,
+							pressed: true,
+							repeat: false,
+							modifiers: Modifiers::SHIFT,
+						}],
+						&mut profile,
+						&mut action,
+					);
+				} else {
+					for pressed in [true, false] {
+						frame(
+							&ctx,
+							&state,
+							user,
+							pointer(row.rect.center(), PointerButton::Secondary, pressed),
+							&mut profile,
+							&mut action,
+						);
+					}
+				}
+				let (_, text) = frame(&ctx, &state, user, vec![], &mut profile, &mut action);
+				assert!(profile.is_none() && action.is_none());
+				for expected in ["Profile", "Mute", "Close DM", "Block"] {
+					let rect = text
+						.iter()
+						.find(|(s, _)| s == expected)
+						.unwrap_or_else(|| panic!("Missing {expected}: {text:?}"))
+						.1;
+					assert!(
+						Rect::from_min_size(Pos2::ZERO, egui::vec2(320.0, 300.0))
+							.contains_rect(rect)
+					);
+				}
+				let pos = text.iter().find(|(s, _)| s == label).unwrap().1.center();
+				for pressed in [true, false] {
+					frame(
+						&ctx,
+						&state,
+						user,
+						pointer(pos, PointerButton::Primary, pressed),
+						&mut profile,
+						&mut action,
+					);
+				}
+				match label {
+					"Profile" => assert_eq!(profile.unwrap().id, user.id),
+					"Mute" => assert_eq!(
+						action,
+						Some(Action::Mute {
+							channel: dm.id,
+							muted: true
+						})
+					),
+					"Close DM" => assert_eq!(action, Some(Action::CloseDm(dm.id))),
+					_ => assert_eq!(
+						action,
+						Some(Action::Block {
+							user: user.id,
+							blocked: true
+						})
+					),
+				}
+				assert!(!egui::Popup::is_any_open(&ctx));
+			}
+		}
+	}
+
+	#[test]
+	fn dm_row_and_avatar_open_menu_without_navigation_and_dispatch_once() {
+		for avatar in [false, true] {
+			let ctx = egui::Context::default();
+			let mut view = crate::MessagingUi::default();
+			let mut state = test_support::demo_state();
+			let selected = state.selected;
+			let render = |view: &mut crate::MessagingUi, state: &mut State, events| {
+				let mut commands = vec![];
+				let mut output = ctx.run_ui(
+					egui::RawInput {
+						screen_rect: Some(Rect::from_min_size(
+							Pos2::ZERO,
+							egui::vec2(1000.0, 700.0),
+						)),
+						events,
+						..Default::default()
+					},
+					|ui| {
+						view.channel_list(ui, state);
+						if let Some(action) = view.user_action.take()
+							&& let Some(command) = prepare(action, state)
+						{
+							commands.push(command);
+						}
+					},
+				);
+				output.textures_delta.clear();
+				let mut text = vec![];
+				for shape in output.shapes {
+					labels(&shape.shape, &mut text);
+				}
+				(commands, text)
+			};
+			render(&mut view, &mut state, vec![]);
+			let (_, text) = render(&mut view, &mut state, vec![]);
+			let name = text
+				.iter()
+				.find(|(s, _)| s == "Robin (synthetic)")
+				.unwrap()
+				.1;
+			let pos = if avatar {
+				egui::pos2(name.left() - 28.0, name.center().y)
+			} else {
+				name.center()
+			};
+			for pressed in [true, false] {
+				let (commands, _) = render(
+					&mut view,
+					&mut state,
+					pointer(pos, PointerButton::Secondary, pressed),
+				);
+				assert!(commands.is_empty());
+			}
+			let (_, text) = render(&mut view, &mut state, vec![]);
+			assert_eq!(state.selected, selected);
+			assert!(view.profile.is_none());
+			let pos = text
+				.iter()
+				.find(|(s, _)| s == "Close DM")
+				.unwrap()
+				.1
+				.center();
+			let mut writes = 0;
+			for pressed in [true, false] {
+				let (commands, _) = render(
+					&mut view,
+					&mut state,
+					pointer(pos, PointerButton::Primary, pressed),
+				);
+				writes += commands
+					.iter()
+					.filter(|c| {
+						matches!(
+							c,
+							Command::UserAction {
+								action: Action::CloseDm(model::Id(22)),
+								..
+							}
+						)
+					})
+					.count();
+			}
+			assert_eq!(writes, 1);
+			assert!(
+				state.channels.iter().any(|c| c.id == model::Id(22)),
+				"Wait for transport confirmation"
+			);
+			assert!(render(&mut view, &mut state, vec![]).0.is_empty());
+		}
+	}
+}

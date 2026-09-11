@@ -19,6 +19,7 @@ mod invites;
 mod markdown;
 mod mentions;
 mod notifications;
+mod pending;
 mod profiles;
 mod reactions;
 mod reading;
@@ -27,10 +28,11 @@ mod settings;
 mod switcher;
 mod timeline;
 mod typing;
+mod user_menu;
 mod voice;
 use client_core::{Command, MAX_CONTENT, MAX_DRAFT_BYTES, State};
 use egui::{RichText, TextEdit};
-use model::{Delivery, Freshness, Id};
+use model::{Freshness, Id};
 
 pub struct VoiceGain {
 	pub input_percent: u16,
@@ -78,6 +80,7 @@ pub struct MessagingUi {
 	edit_closed_channel: Option<Id>,
 	avatars: avatars::Avatars,
 	profile: Option<model::User>,
+	user_action: Option<user_menu::Action>,
 	profile_link: Option<String>,
 	pub reading_preferences: model::ReadingPreferences,
 	pub reading_status: &'static str,
@@ -100,6 +103,8 @@ pub struct MessagingUi {
 	pub draft_changes: Vec<Id>,
 	pub draft_restore_pending: bool,
 	pub attachment: Option<(String, u64)>,
+	pub attachment_files: Vec<(String, u64)>,
+	pub remove_attachment_index: Option<usize>,
 	/// Downscaled pixels of the selected image attachment, produced off the render thread.
 	pub attachment_preview: Option<std::sync::Arc<egui::ColorImage>>,
 	attachment_texture: Option<(usize, egui::TextureHandle)>,
@@ -112,6 +117,7 @@ pub struct MessagingUi {
 	pub cancel_upload_requested: bool,
 	pub upload_busy: bool,
 	pub upload_status: Option<String>,
+	pending_upload: Option<pending::Upload>,
 	pub clear_cache_requested: bool,
 	pub voice_available: bool,
 	pub voice_inputs: Vec<(String, String)>,
@@ -169,6 +175,60 @@ impl MessagingUi {
 	) {
 		self.attachment = Some((filename.to_owned(), bytes));
 		self.attachment_preview = preview.map(std::sync::Arc::new);
+	}
+	fn stage_pending_upload(&mut self, command: &Command) {
+		if let Command::Send { nonce, .. } = command
+			&& let Some((_, bytes)) = self.attachment.take()
+		{
+			self.pending_upload = Some(pending::Upload {
+				nonce: nonce.clone(),
+				bytes,
+				preview: self.attachment_texture.take().map(|(_, texture)| texture),
+				progress: None,
+			});
+			self.attachment_preview = None;
+			self.upload_busy = true;
+		}
+	}
+	/// Synthetic pending state only; no command is dispatched or file uploaded.
+	pub fn preview_sending(&mut self, ctx: &egui::Context, state: &mut State) {
+		if !state.demo {
+			return;
+		}
+		let Some(channel) = state.selected else {
+			return;
+		};
+		state
+			.drafts
+			.insert(channel, "Here’s the attachment — sending it now.".into());
+		if let Some(image) = &self.attachment_preview {
+			self.attachment_texture = Some((
+				std::sync::Arc::as_ptr(image) as usize,
+				ctx.load_texture(
+					"synthetic-pending",
+					egui::ImageData::Color(image.clone()),
+					egui::TextureOptions::LINEAR,
+				),
+			));
+		}
+		if let Some(command) = state
+			.prepare_send_with_attachment(self.attachment.as_ref().map(|(name, _)| name.as_str()))
+		{
+			self.stage_pending_upload(&command);
+			if let Some(upload) = &mut self.pending_upload {
+				upload.progress = Some((upload.bytes * 42 / 100, upload.bytes));
+			}
+		}
+	}
+	/// Byte counts describe data supplied to HTTP, never message delivery.
+	pub fn update_upload_progress(&mut self, progress: Option<(u64, u64)>, sending: bool) {
+		if let Some(upload) = &mut self.pending_upload {
+			upload.progress = if sending {
+				Some((upload.bytes, upload.bytes))
+			} else {
+				progress
+			};
+		}
 	}
 	/// Fixture-only: open the pinned messages popout on the next frame.
 	pub fn preview_pins(&mut self) {
@@ -286,10 +346,7 @@ impl MessagingUi {
 			.frame(egui::Frame::new().fill(colors.base))
 			.show(ui, |ui| {
 				let rect = ui.max_rect();
-				let drag = ui.interact(rect, ui.id().with("drag"), egui::Sense::click_and_drag());
-				if drag.drag_started() {
-					ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
-				}
+				design::window_drag(ui, rect);
 				let title_rect = egui::Rect::from_center_size(
 					rect.center(),
 					egui::vec2(rect.width() * 0.3, rect.height()),
@@ -314,6 +371,7 @@ impl MessagingUi {
 						))
 						.layout(egui::Layout::right_to_left(egui::Align::Center)),
 					|ui| {
+						design::window_controls(ui);
 						ui.spacing_mut().item_spacing.x = 10.0;
 						design::build_badge(ui, self.build);
 						if state.demo {
@@ -456,11 +514,12 @@ impl MessagingUi {
 		} else {
 			None
 		};
+		let row_spacing = ui.spacing().item_spacing.y;
+		ui.spacing_mut().item_spacing.y = 0.0;
 		egui::ScrollArea::vertical()
 			.id_salt(("people", list.channel))
 			.auto_shrink([false, false])
 			.show_rows(ui, 42.0, self.member_cache.len(), |ui, range| {
-				ui.spacing_mut().item_spacing.y = 0.0;
 				for index in range {
 					match &self.member_cache[index] {
 						MemberRow::Header(text) => {
@@ -520,6 +579,13 @@ impl MessagingUi {
 							inner.spacing_mut().item_spacing.x = 12.0;
 							inner.push_id(member.user.id.0, |ui| {
 								let avatar = self.avatars.show(ui, &member.user, 32.0, state.demo);
+								user_menu::show(
+									&avatar,
+									state,
+									&member.user,
+									&mut self.profile,
+									&mut self.user_action,
+								);
 								if avatar.clicked() {
 									self.profile = Some(member.user.clone());
 								}
@@ -574,6 +640,13 @@ impl MessagingUi {
 									);
 								});
 							});
+							user_menu::show(
+								&response,
+								state,
+								&member.user,
+								&mut self.profile,
+								&mut self.user_action,
+							);
 							if response.clicked() {
 								self.profile = Some(member.user.clone());
 							}
@@ -581,6 +654,7 @@ impl MessagingUi {
 					}
 				}
 			});
+		ui.spacing_mut().item_spacing.y = row_spacing;
 		if let Some(hint) = hint {
 			ui.label(RichText::new(hint).size(11.0).color(colors.muted));
 		}
@@ -690,6 +764,13 @@ impl MessagingUi {
 					ui.spacing_mut().item_spacing.x = 8.0;
 					if let Some(user) = &state.user {
 						let avatar = self.avatars.show(ui, user, 32.0, state.demo);
+						user_menu::show(
+							&avatar,
+							state,
+							user,
+							&mut self.profile,
+							&mut self.user_action,
+						);
 						design::presence_dot(ui, avatar.rect, colors.positive, colors.raised);
 						if avatar.clicked() {
 							self.profile = Some(user.clone());
@@ -784,6 +865,15 @@ impl MessagingUi {
 						Some(c) if c.guild.is_none() => {
 							if let Some(user) = c.recipients.first() {
 								let avatar = self.avatars.show(ui, user, 24.0, state.demo);
+								if dm {
+									user_menu::show(
+										&avatar,
+										state,
+										user,
+										&mut self.profile,
+										&mut self.user_action,
+									);
+								}
 								if dm
 									&& let Some(status) = profiles::presence(state, user.id, None).0
 								{
@@ -1037,6 +1127,25 @@ impl MessagingUi {
 		}
 		self.draft_changes.push(channel);
 	}
+	fn restore_pending(&mut self, state: &mut State, channel: Id, nonce: &str) {
+		if let Some(index) = state.pending.iter().position(|p| {
+			p.nonce == nonce && p.channel == channel && p.delivery != model::Delivery::Sending
+		}) {
+			if !state.drafts.contains_key(&channel) && state.drafts.len() >= 64 {
+				state.status =
+					"Draft budget full. Clear an existing draft before restoring pending text";
+			} else if state.drafts.get(&channel).is_none_or(String::is_empty) {
+				let pending = state.pending.remove(index);
+				if pending.attachment.is_some() {
+					state.status = "Text restored; reselect the attachment before sending again";
+				}
+				state.drafts.insert(channel, pending.content);
+				self.draft_changes.push(channel);
+			} else {
+				state.status = "Keep or clear the existing draft before restoring pending text";
+			}
+		}
+	}
 	fn composer(
 		&mut self,
 		ui: &mut egui::Ui,
@@ -1115,60 +1224,35 @@ impl MessagingUi {
 			self.emoji_picker = emoji_picker::Picker::default();
 		}
 		let mut cancel_edit = false;
-		let mut discard = None;
 		if ctx.input(|input| !input.raw.hovered_files.is_empty()) {
-			ui.label(if self.upload_busy || self.attachment.is_some() {
-				"Remove the current attachment or wait before dropping another file"
-			} else if state.can_attach(channel) {
-				"Drop one file up to 20 MB to attach it here; Send starts the upload"
-			} else {
-				"Attaching files is unavailable in this conversation"
-			});
-		}
-		for (index, pending) in state
-			.pending
-			.iter()
-			.enumerate()
-			.filter(|(_, p)| p.channel == channel)
-		{
-			ui.horizontal_wrapped(|ui| {
-				ui.strong(match pending.delivery {
-					Delivery::Sending => "Sending…",
-					Delivery::Confirmed => "Delivered",
-					Delivery::Rejected => "Not sent",
-					Delivery::Ambiguous => "Delivery unknown",
+			let available = state.can_attach(channel) && !self.upload_busy && !editing_here;
+			egui::Frame::new()
+				.fill(colors.accent.gamma_multiply(0.12))
+				.stroke(egui::Stroke::new(1.5, colors.accent))
+				.corner_radius(12)
+				.inner_margin(20)
+				.show(ui, |ui| {
+					ui.set_min_width((ui.available_width() - 2.0).max(0.0));
+					ui.label(design::semibold(
+						ui,
+						if available {
+							"Drop files to attach"
+						} else {
+							"Attachments unavailable right now"
+						},
+						18.0,
+					));
+					ui.add_space(6.0);
+					ui.label(
+						egui::RichText::new(if available {
+							"Up to 10 files · 20 MB total · Review before sending"
+						} else {
+							"Return to an available conversation after the current operation finishes"
+						})
+						.color(colors.muted),
+					);
 				});
-				let preview: String = pending.content.chars().take(80).collect();
-				ui.label(preview);
-				if let Some(filename) = &pending.attachment {
-					ui.label(format!("File: {filename}"));
-				}
-				if pending.delivery != Delivery::Sending
-					&& ui
-						.small_button("Restore to draft")
-						.on_hover_text(
-							"For an unknown outcome, check the official client first; sending again can duplicate it.",
-						)
-						.clicked()
-				{
-					discard = Some(index);
-				}
-			});
-		}
-		if let Some(index) = discard {
-			if !state.drafts.contains_key(&channel) && state.drafts.len() >= 64 {
-				state.status =
-					"Draft budget full. Clear an existing draft before restoring pending text";
-			} else if state.drafts.get(&channel).is_none_or(String::is_empty) {
-				let pending = state.pending.remove(index);
-				if pending.attachment.is_some() {
-					state.status = "Text restored; reselect the attachment before sending again";
-				}
-				state.drafts.insert(channel, pending.content);
-				self.draft_changes.push(channel);
-			} else {
-				state.status = "Keep or clear the existing draft before restoring pending text";
-			}
+			ui.add_space(8.0);
 		}
 		if editing_here {
 			let unavailable = editing_key.is_some_and(|(_, id)| state.timeline.get(id).is_none());
@@ -1222,7 +1306,17 @@ impl MessagingUi {
 			});
 			ui.add_space(6.0);
 		}
-		if !editing_here && (self.upload_busy || self.upload_status.is_some()) {
+		let upload_in_timeline = self.pending_upload.as_ref().is_some_and(|upload| {
+			state.pending.iter().any(|p| {
+				p.nonce == upload.nonce
+					&& p.channel == channel
+					&& p.delivery == model::Delivery::Sending
+			})
+		});
+		if !editing_here
+			&& !upload_in_timeline
+			&& (self.upload_busy || self.upload_status.is_some())
+		{
 			ui.horizontal_wrapped(|ui| {
 				ui.label(
 					self.upload_status
@@ -1437,7 +1531,7 @@ impl MessagingUi {
 		let can_attach = !editing_here
 			&& state.can_attach(channel)
 			&& !self.upload_busy
-			&& self.attachment.is_none();
+			&& self.attachment_files.len() < 10;
 		let can_send = if let Some((edit_channel, message)) = editing_key {
 			state.freshness == Freshness::Fresh
 				&& state.can_edit(edit_channel, message)
@@ -1466,10 +1560,10 @@ impl MessagingUi {
                     ui.spacing_mut().item_spacing.x = 8.0;
                     let attach = ui
                         .add_enabled_ui(can_attach, |ui| {
-                            icons::button(ui, icons::Icon::Attach, 28.0, "Attach a file")
+                            icons::button(ui, icons::Icon::Attach, 28.0, "Attach files")
                         })
                         .inner
-                        .on_hover_text("Choose, drop, or paste one file (Ctrl/Cmd/Option+V) up to 20 MB. Send starts the upload.");
+                        .on_hover_text("Choose, drop, or paste files (Ctrl/Cmd/Option+V). Up to 10 files and 20 MB total. Send starts the upload.");
                     if attach.clicked() {
                         self.attach_requested = true;
                     }
@@ -1519,6 +1613,7 @@ impl MessagingUi {
                                         }
                                     }
                                     if let Some(command) = command {
+                                        self.timeline.follow_latest();
                                         commands.push(command);
                                     }
                                 }
@@ -1608,8 +1703,8 @@ impl MessagingUi {
                             .char_limit(MAX_CONTENT)
                             .desired_rows(1)
                             .desired_width(f32::INFINITY)
-                            // Match the 28px icon row so the hint sits on the same centre line.
-                            .min_size(egui::vec2(0.0, 28.0))
+                            // Horizontal layouts reserve the interaction height, including around icons.
+                            .min_size(egui::vec2(0.0, ui.spacing().interact_size.y))
                             .align(egui::Align2::LEFT_CENTER)
                             .frame(egui::Frame::NONE)
                             .hint_text(placeholder.as_str())
@@ -1675,9 +1770,8 @@ impl MessagingUi {
                                 && let Some(command) = state.prepare_send_with_attachment(self.attachment.as_ref().map(|(name, _)| name.as_str())) {
                                 // Consume the selection in this UI pass, before desktop dispatch.
                                 // A second render or Send gesture must not enqueue it again.
-                                if self.attachment.take().is_some() {
-                                    self.upload_busy = true;
-                                }
+                                self.stage_pending_upload(&command);
+                                self.timeline.follow_latest();
                                 commands.push(command);
                             }
                             edit.request_focus();
@@ -1734,16 +1828,31 @@ impl MessagingUi {
 			}
 		};
 		ui.add_space(4.0);
-		let remove = ui
-			.horizontal(|ui| {
-				ui.spacing_mut().item_spacing.x = 12.0;
-				ui.add_space(4.0);
-				attachments::pending_card(ui, filename, bytes, texture, !self.upload_busy)
-			})
-			.inner;
-		if remove {
-			self.remove_attachment_requested = true;
-		}
+		let files = if self.attachment_files.is_empty() {
+			vec![(filename.to_owned(), bytes)]
+		} else {
+			self.attachment_files.clone()
+		};
+		egui::ScrollArea::horizontal()
+			.id_salt("pending-attachments")
+			.show(ui, |ui| {
+				ui.horizontal(|ui| {
+					ui.spacing_mut().item_spacing.x = 12.0;
+					for (index, (filename, bytes)) in files.iter().enumerate() {
+						ui.push_id(index, |ui| {
+							if attachments::pending_card(
+								ui,
+								filename,
+								*bytes,
+								if index == 0 { texture } else { None },
+								!self.upload_busy,
+							) {
+								self.remove_attachment_index = Some(index);
+							}
+						});
+					}
+				});
+			});
 		ui.add_space(2.0);
 		ui.horizontal(|ui| {
 			ui.add_space(4.0);
@@ -1753,7 +1862,7 @@ impl MessagingUi {
 				} else if !state.can_attach(state.selected.unwrap_or(Id(0))) {
 					"Attaching files is unavailable here"
 				} else {
-					"Not uploaded yet · Send uploads this file with your message"
+					"Not uploaded yet · Send uploads these files with your message"
 				})
 				.size(12.0)
 				.color(colors.muted),
@@ -1767,6 +1876,13 @@ impl MessagingUi {
 		ui.add_space(6.0);
 	}
 	pub fn show(&mut self, ui: &mut egui::Ui, state: &mut State) -> Vec<Command> {
+		if self
+			.pending_upload
+			.as_ref()
+			.is_some_and(|upload| !state.pending.iter().any(|p| p.nonce == upload.nonce))
+		{
+			self.pending_upload = None;
+		}
 		self.timeline.audio.seen = false;
 		let mut commands = Vec::new();
 		let ctx = ui.ctx().clone();
@@ -1986,6 +2102,13 @@ impl MessagingUi {
 					.show(ui, |ui| {
 						self.composer(ui, state, channel, &ctx, &mut commands);
 					});
+				if commands
+					.iter()
+					.any(|command| matches!(command, Command::Send { .. }))
+					&& state.history_targeted
+				{
+					commands.push(state.history(None));
+				}
 				let notices: Vec<String> = [
 					match state.freshness {
 						Freshness::Fresh => None,
@@ -2054,9 +2177,14 @@ impl MessagingUi {
 							state,
 							&mut self.editing,
 							&mut self.deleting,
-							&mut self.avatars,
-							&mut self.profile,
+							(&mut self.avatars, &mut self.profile),
+							self.pending_upload.as_ref(),
 						);
+						if let Some(nonce) = self.timeline.restore_pending.take() {
+							self.restore_pending(state, channel, &nonce);
+						}
+						self.cancel_upload_requested |=
+							std::mem::take(&mut self.timeline.cancel_upload);
 						if let Some(gif) = self.timeline.gif_favorite.take() {
 							state.toggle_gif_favorite(&gif);
 						}
@@ -2162,6 +2290,11 @@ impl MessagingUi {
 			} else {
 				state.refresh_reactions(message);
 			}
+		}
+		if let Some(action) = self.user_action.take().or(self.timeline.user_action.take())
+			&& let Some(command) = user_menu::prepare(action, state)
+		{
+			commands.push(command);
 		}
 		if let Some(user) = &self.profile {
 			let profile_guild = state
@@ -2284,6 +2417,77 @@ impl MessagingUi {
 #[cfg(test)]
 mod composer_tests {
 	use super::*;
+
+	#[test]
+	fn composer_placeholder_alignment() {
+		for scale in [1.0, 1.25, 1.5, 2.0] {
+			for theme in [egui::Theme::Dark, egui::Theme::Light] {
+				let ctx = egui::Context::default();
+				fonts::install(&ctx);
+				design::apply(&ctx);
+				ctx.set_theme(theme);
+				ctx.set_pixels_per_point(scale);
+				let mut state = edit_state();
+				state.channels[0].name = "Alex".into();
+				let mut view = MessagingUi::default();
+				for width in [320.0, 900.0] {
+					for draft in ["", "Message @Alex", "First line\nSecond line"] {
+						state.drafts.insert(Id(10), draft.into());
+						for _ in 0..2 {
+							let mut empty_height = 0.0;
+							let output = ctx.run_ui(
+								egui::RawInput {
+									screen_rect: Some(egui::Rect::from_min_size(
+										egui::Pos2::ZERO,
+										egui::vec2(width, 300.0),
+									)),
+									..Default::default()
+								},
+								|ui| {
+									view.composer(ui, &mut state, Id(10), &ctx, &mut vec![]);
+									empty_height = view
+										.composer_layout
+										.galley(ui, "", 300.0, &[], &mut view.avatars, true)
+										.rect
+										.height();
+								},
+							);
+							let frame = output
+								.shapes
+								.iter()
+								.find_map(|s| match &s.shape {
+									egui::Shape::Rect(r) => Some(r.rect),
+									_ => None,
+								})
+								.unwrap();
+							let text = output
+								.shapes
+								.iter()
+								.find_map(|s| match &s.shape {
+									egui::Shape::Text(t)
+										if t.galley.job.text == draft
+											|| t.galley.job.text == "Message @Alex" =>
+									{
+										Some(t.galley.rect.translate(t.pos.to_vec2()))
+									}
+									_ => None,
+								})
+								.unwrap();
+							output.drop_without_applying_deltas();
+							assert!(
+								(text.center().y - frame.center().y).abs() <= 0.5 / scale,
+								"{draft:?}, scale {scale}, width {width}: text {text:?}, frame {frame:?}"
+							);
+							assert!(
+								empty_height >= 15.0,
+								"empty editor must retain a full-height caret"
+							);
+						}
+					}
+				}
+			}
+		}
+	}
 
 	#[test]
 	fn download_cancel_remains_visible_without_a_text_composer() {
@@ -4099,6 +4303,66 @@ mod composer_tests {
 				&& !view.remove_attachment_requested
 				&& !view.cancel_upload_requested
 		);
+	}
+
+	#[test]
+	fn pending_preview_waits_for_confirmation_and_restore_preserves_new_drafts() {
+		let ctx = egui::Context::default();
+		let mut state = test_support::demo_state();
+		let channel = state.selected.unwrap();
+		let mut view = MessagingUi::default();
+		view.preview_attachment(
+			"synthetic.png",
+			100,
+			Some(egui::ColorImage::filled([2, 2], egui::Color32::WHITE)),
+		);
+		view.preview_sending(&ctx, &mut state);
+		let nonce = state.pending.last().unwrap().nonce.clone();
+		assert!(view.pending_upload.as_ref().unwrap().preview.is_some());
+		assert!(view.attachment.is_none());
+		view.update_upload_progress(None, true);
+		assert_eq!(
+			view.pending_upload.as_ref().unwrap().progress,
+			Some((100, 100))
+		);
+		assert_eq!(
+			state.pending.last().unwrap().delivery,
+			model::Delivery::Sending
+		);
+		state.pending.last_mut().unwrap().delivery = model::Delivery::Ambiguous;
+		state.drafts.insert(channel, "New draft".into());
+		view.restore_pending(&mut state, channel, &nonce);
+		assert_eq!(state.drafts[&channel], "New draft");
+		assert!(state.pending.iter().any(|p| p.nonce == nonce));
+		state.drafts.remove(&channel);
+		view.restore_pending(&mut state, channel, &nonce);
+		assert!(state.drafts[&channel].contains("sending it now"));
+		assert!(!state.pending.iter().any(|p| p.nonce == nonce));
+		ctx.run_ui(Default::default(), |ui| {
+			view.show(ui, &mut state);
+		})
+		.drop_without_applying_deltas();
+		assert!(view.pending_upload.is_none());
+
+		view.preview_attachment("synthetic.png", 100, None);
+		view.preview_sending(&ctx, &mut state);
+		let nonce = state.pending.last().unwrap().nonce.clone();
+		let mut confirmed = test_support::message(999_999, channel);
+		confirmed.author = state.user.clone().unwrap();
+		confirmed.nonce = Some(nonce.clone());
+		state.apply(client_core::Envelope {
+			generation: state.generation,
+			event: client_core::Event::SendResult {
+				nonce,
+				result: Ok(confirmed),
+			},
+		});
+		ctx.run_ui(Default::default(), |ui| {
+			view.show(ui, &mut state);
+		})
+		.drop_without_applying_deltas();
+		assert!(view.pending_upload.is_none());
+		assert!(state.timeline.get(Id(999_999)).is_some());
 	}
 
 	#[test]

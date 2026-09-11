@@ -35,6 +35,9 @@ fn main() -> eframe::Result {
 					.with_title_shown(false)
 					.with_titlebar_shown(false)
 					.with_fullsize_content_view(true)
+			} else if cfg!(target_os = "windows") {
+				// The app paints its own caption strip and buttons; see `ui::design::window_controls`.
+				builder.with_decorations(false)
 			} else {
 				builder
 			}
@@ -173,6 +176,11 @@ fn access_candidates(state: &State, event: &Event) -> Vec<model::Id> {
 		}
 		Event::ChannelChanged(patch) | Event::ThreadChanged { patch, .. } => (None, Some(patch.id)),
 		Event::ThreadRemoved { id, .. } => (None, Some(*id)),
+		Event::UserAction(client_core::user_actions::Event::Written {
+			action: client_core::user_actions::Action::CloseDm(channel),
+			result: Ok(()),
+			..
+		}) => (None, Some(*channel)),
 		Event::ThreadsSync { guild, .. } => (Some(vec![*guild]), None),
 		_ => return Vec::new(),
 	};
@@ -547,6 +555,10 @@ impl Desktop {
 			messaging.preview_attachment("synthetic-holiday.png", 2_437_120, Some(image));
 			state.status = "Offline fixture · synthetic attachment staged in the composer";
 		}
+		if demo && std::env::args().any(|arg| arg == "--demo-sending") {
+			messaging.preview_sending(&cc.egui_ctx, &mut state);
+			state.status = "Offline fixture · synthetic pending message; no upload or send";
+		}
 		// `--demo-gifs`, `--demo-gifs=favorites`, `--demo-gifs=trending` or `--demo-gifs=<query>`.
 		if demo
 			&& let Some(section) = std::env::args().find_map(|arg| {
@@ -584,6 +596,11 @@ impl Desktop {
 			});
 			state.history_targeted = true;
 			state.status = "Offline fixture · unread strip and older-messages bar shown";
+		}
+		if demo && std::env::args().any(|arg| arg == "--demo-login") {
+			// Fixture-only: render the sign-in screen without a session.
+			state.user = None;
+			state.status = "Disconnected";
 		}
 		Ok(Self {
 			login: None,
@@ -1022,6 +1039,13 @@ impl Desktop {
 		}
 		if self.state.demo {
 			let event = match command {
+				Command::UserAction { action, request } => {
+					Event::UserAction(client_core::user_actions::Event::Written {
+						action,
+						request,
+						result: Ok(()),
+					})
+				}
 				Command::MarkRead {
 					channel,
 					message,
@@ -1350,22 +1374,61 @@ impl Desktop {
 	fn sign_in_screen(&mut self, ui: &mut egui::Ui) {
 		let p = ui::design::palette(ui);
 		egui::CentralPanel::default()
-			.frame(egui::Frame::NONE.fill(p.canvas).inner_margin(32))
+			.frame(egui::Frame::NONE.fill(p.canvas))
 			.show(ui, |ui| {
-				egui::ScrollArea::vertical()
-					.id_salt("sign-in-scroll")
+				// Soft radial accent glow behind the card instead of a flat canvas.
+				let rect = ui.max_rect();
+				let glow = rect.center() - egui::vec2(0.0, rect.height() * 0.1);
+				let radius = rect.width().max(rect.height()) * 0.55;
+				let mut mesh = egui::Mesh::default();
+				let alpha = if ui.visuals().dark_mode { 0.16 } else { 0.10 };
+				mesh.colored_vertex(glow, p.accent.gamma_multiply(alpha));
+				const SEGMENTS: u32 = 48;
+				for i in 0..=SEGMENTS {
+					let angle = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+					mesh.colored_vertex(
+						glow + egui::vec2(angle.cos(), angle.sin()) * radius,
+						egui::Color32::TRANSPARENT,
+					);
+				}
+				for i in 1..=SEGMENTS {
+					mesh.add_triangle(0, i, i + 1);
+				}
+				ui.painter().add(egui::Shape::mesh(mesh));
+				let header = egui::Frame::NONE
+					.inner_margin(egui::Margin {
+						left: (16.0 + ui::design::TRAFFIC_LIGHT_INSET) as i8,
+						right: if ui::design::WINDOW_CONTROLS_WIDTH > 0.0 {
+							0
+						} else {
+							24
+						},
+						top: if ui::design::WINDOW_CONTROLS_WIDTH > 0.0 {
+							0
+						} else {
+							18
+						},
+						bottom: 12,
+					})
 					.show(ui, |ui| {
 						ui.horizontal(|ui| {
-							ui.label(egui::RichText::new("Serein").size(24.0).strong());
-							ui.add_space(4.0);
-							ui.label(
-								egui::RichText::new("EARLY PREVIEW")
-									.size(10.0)
-									.color(p.accent),
-							);
+							ui.label(ui::design::semibold(ui, "Serein", 20.0).color(p.text_strong));
+							ui.add_space(6.0);
+							egui::Frame::NONE
+								.fill(p.accent.gamma_multiply(0.16))
+								.corner_radius(4)
+								.inner_margin(egui::Margin::symmetric(6, 2))
+								.show(ui, |ui| {
+									ui.label(
+										ui::design::semibold(ui, "EARLY PREVIEW", 10.0)
+											.color(p.accent),
+									);
+								});
 							ui.with_layout(
 								egui::Layout::right_to_left(egui::Align::Center),
 								|ui| {
+									ui::design::window_controls(ui);
+									ui.add_space(12.0);
 									ui.menu_button("Appearance", |ui| {
 										egui::widgets::global_theme_preference_buttons(ui);
 										self.messaging.reading_settings(
@@ -1376,144 +1439,150 @@ impl Desktop {
 								},
 							);
 						});
-						let wide = ui.available_width() >= 900.0;
-						ui.add_space(if wide {
-							((ui.available_height() - 460.0) * 0.4).max(30.0)
-						} else {
-							24.0
+					});
+				ui::design::window_drag(ui, header.response.rect);
+				egui::ScrollArea::vertical()
+					.id_salt("sign-in-scroll")
+					.show(ui, |ui| {
+						ui.add_space(((ui.available_height() - 560.0) * 0.4).max(8.0));
+						ui.vertical_centered(|ui| {
+							ui.allocate_ui_with_layout(
+								egui::vec2(ui.available_width().min(460.0), 0.0),
+								egui::Layout::top_down(egui::Align::Min),
+								|ui| self.sign_in_card(ui),
+							);
+							ui.add_space(20.0);
+							ui.label(
+								egui::RichText::new(
+									"Independent and open source. Not affiliated with Discord.",
+								)
+								.size(12.0)
+								.color(p.muted),
+							);
+							ui.add_space(24.0);
 						});
-						if wide {
-							let left = (ui.available_width() - 438.0).min(530.0);
-							ui.horizontal_top(|ui| {
-								ui.allocate_ui_with_layout(
-									egui::vec2(left, 390.0),
-									egui::Layout::top_down(egui::Align::Min),
-									|ui| {
-										ui.add_space(30.0);
-										ui.label(
-											egui::RichText::new(
-												"Your conversations.\nA little more calm.",
-											)
-											.size(42.0)
-											.color(p.text),
-										);
-										ui.add_space(16.0);
-										ui.add(
-											egui::Label::new(
-												egui::RichText::new(
-													"A lightweight home for the servers and people you already know.",
-												)
-												.size(18.0)
-												.color(p.muted),
-											)
-											.wrap(),
-										);
-										ui.add_space(36.0);
-										ui.label(
-											egui::RichText::new("YOUR ACCOUNT. YOUR COMMUNITIES.")
-												.size(11.0)
-												.color(p.accent),
-										);
-										ui.add_space(4.0);
-										ui.label(
-											egui::RichText::new(
-												"Connect to Discord, then pick up the conversation.",
-											)
-											.color(p.muted),
-										);
-									},
-								);
-								ui.add_space(40.0);
-								ui.allocate_ui_with_layout(
-									egui::vec2(390.0, 390.0),
-									egui::Layout::top_down(egui::Align::Min),
-									|ui| self.sign_in_card(ui),
-								);
-							});
-						} else {
-							ui.vertical_centered(|ui| {
-								ui.label(
-									egui::RichText::new("A little more room to talk.").size(30.0),
-								);
-								ui.add_space(18.0);
-								ui.allocate_ui_with_layout(
-									egui::vec2(ui.available_width().min(430.0), 390.0),
-									egui::Layout::top_down(egui::Align::Min),
-									|ui| self.sign_in_card(ui),
-								);
-							});
-						}
-						ui.add_space(28.0);
-						ui.label(
-							egui::RichText::new(
-								"Independent. Open source. Not affiliated with Discord.",
-							)
-							.size(12.0)
-							.color(p.muted),
-						);
 					});
 			});
 	}
 	fn sign_in_card(&mut self, ui: &mut egui::Ui) {
 		let ctx = ui.ctx().clone();
 		let p = ui::design::palette(ui);
-		egui::Frame::NONE.fill(p.surface).stroke(egui::Stroke::new(1.0, p.border))
-            .corner_radius(16).inner_margin(28).show(ui, |ui| {
-                ui.set_width((ui.available_width()).min(350.0));
-                ui.heading("Welcome to Serein");
-                ui.add_space(4.0);
-                ui.label(egui::RichText::new("Continue with your Discord account.").color(p.muted));
-                ui.add_space(22.0);
-                {
-                    ui.add_enabled(!self.fixture_only, egui::Checkbox::new(&mut self.authorized, "I own this account and authorize this test session."));
-                    ui.add_space(8.0);
-                    let can_sign_in = !self.fixture_only && self.authorized && !self.forgetting && self.state.auth != AuthState::Authenticating;
-                    if ui.add_enabled_ui(can_sign_in, |ui| ui::design::primary_button(ui, "Sign in with Discord  →")).inner.clicked() {
-                        if let Some(store)=&mut self.store {store.cancel_load();}
-                        self.credential_status="Sign in through Discord; saved-login lookup stopped";
-                        let wake = ctx.clone();
-                        match platform::LoginView::open(self.window.clone(), move || wake.request_repaint()) {
-                            Ok(login) => { self.login = Some(login); self.state.auth = AuthState::Authenticating; self.state.status = "Waiting for Discord login"; }
-                            Err(_) => { self.state.auth = AuthState::Failed; self.state.status = "Platform login webview unavailable; see platform-support.md"; }
-                        }
-                    }
-                    if self.fixture_only { ui.small("Offline preview. Launch normally to sign in."); }
-                    ui.add_space(8.0);
-                    ui.label(egui::RichText::new("Opens Discord’s login page. Your device’s credential store remembers your login.").size(12.0).color(p.muted));
-                    ui.add_space(12.0);
-                    if self.state.auth != AuthState::Unauthenticated || self.state.status != "Disconnected" || self.forgetting {
-                        ui.label(self.state.status);
-                    }
-                    ui.label(egui::RichText::new(self.credential_status).size(12.0));
-                    if self.cache_error || self.cache_pending > 0 || self.cache_clears.pending() { ui.small(self.cache_status); }
-                    ui.label(egui::RichText::new("Unofficial clients may put your Discord account at risk.").size(12.0).color(p.muted));
-                }
-                ui.add_space(18.0);
-                ui.separator();
-                ui.add_space(10.0);
-                if ui.add(egui::Button::new("Preview the interface  →").frame(false)).clicked() {
-                    if let Some(store)=&mut self.store {store.cancel_load();}
-                    self.connection = None; self.pending_save = None;
-                    let generation = self.state.generation + 1;
-                    self.state = test_support::demo_state(); self.state.generation = generation; self.messaging.clear();
-                }
-                ui.label(egui::RichText::new("Sample conversations. No Discord connection.").size(12.0).color(p.muted));
-                ui.add_space(12.0);
-                ui.collapsing("About this preview", |ui| {
-                    ui.small("Messaging, reactions, search and read markers have offline tests. Real Discord interoperability is still unverified; attachment uploads and advanced search remain incomplete.");
-                    ui.small("Messages and drafts are cached locally. Login tokens use the operating system credential store.");
-                    ui.small(self.credential_status);
-                    if !self.fixture_only && ui.button("Forget saved login").clicked() { self.logout(&ctx); }
-                });
-                #[cfg(feature = "developer-session")]
-                if !self.fixture_only { ui.collapsing("Developer session", |ui| {
-                    ui.add(egui::TextEdit::singleline(&mut *self.token_input).password(true).char_limit(2048).hint_text("Owner-supplied test credential"));
-                    if ui.add_enabled(self.authorized, egui::Button::new("Connect imported session (RAM only)")).clicked() {
-                        let input = std::mem::take(&mut *self.token_input);
-                        match SessionSecret::from_owner_input(input) { Ok(secret) => self.connect(secret, false, &ctx), Err(f) => self.state.status = f.label() }
-                    }
-                }); }
-            });
+		let shadow = egui::epaint::Shadow {
+			offset: [0, 8],
+			blur: 24,
+			spread: 0,
+			color: egui::Color32::from_black_alpha(if ui.visuals().dark_mode { 90 } else { 30 }),
+		};
+		egui::Frame::NONE
+			.fill(p.surface)
+			.stroke(egui::Stroke::new(1.0, p.border))
+			.shadow(shadow)
+			.corner_radius(12)
+			.inner_margin(32)
+			.show(ui, |ui| {
+				ui.vertical_centered(|ui| {
+					let (rect, _) = ui.allocate_exact_size(egui::vec2(56.0, 56.0), egui::Sense::hover());
+					ui.painter().rect_filled(rect, 14, p.accent);
+					ui::icons::paint(ui.painter(), ui::icons::Icon::Discord, rect.shrink(13.0), p.accent_text);
+					ui.add_space(16.0);
+					ui.label(ui::design::semibold(ui, "Welcome to Serein", 24.0).color(p.text_strong));
+					ui.add_space(6.0);
+					ui.label(egui::RichText::new("Sign in with your Discord account to pick up where you left off.").size(15.0).color(p.muted));
+				});
+				ui.add_space(24.0);
+				let can_sign_in = !self.fixture_only && self.authorized && !self.forgetting && self.state.auth != AuthState::Authenticating;
+				let label = if self.state.auth == AuthState::Authenticating { "Waiting for Discord…" } else { "Continue with Discord" };
+				let button = ui
+					.add_enabled_ui(can_sign_in, |ui| {
+						ui::design::primary_icon_button(ui, ui::icons::Icon::Discord, label)
+					})
+					.inner;
+				if button.clicked() {
+					if let Some(store) = &mut self.store { store.cancel_load(); }
+					self.credential_status = "Sign in through Discord; saved-login lookup stopped";
+					let wake = ctx.clone();
+					match platform::LoginView::open(self.window.clone(), move || wake.request_repaint()) {
+						Ok(login) => { self.login = Some(login); self.state.auth = AuthState::Authenticating; self.state.status = "Waiting for Discord login"; }
+						Err(_) => { self.state.auth = AuthState::Failed; self.state.status = "Platform login webview unavailable; see platform-support.md"; }
+					}
+				}
+				ui.add_space(12.0);
+				ui.add_enabled_ui(!self.fixture_only, |ui| {
+					ui.horizontal_wrapped(|ui| {
+						ui.spacing_mut().item_spacing.x = 8.0;
+						ui.checkbox(&mut self.authorized, "");
+						ui.label(egui::RichText::new("I own this account and authorize this session.").size(13.0).color(p.text));
+					});
+				});
+				ui.add_space(6.0);
+				ui.label(egui::RichText::new("Discord's own login page opens inside Serein. Passwords and 2FA stay there; only the session token is kept, in your OS credential store.").size(12.0).color(p.muted));
+				// Status: one banner, only when something is happening or went wrong.
+				let attention = matches!(self.state.auth, AuthState::Failed | AuthState::Expired | AuthState::Challenged);
+				let busy = self.state.auth == AuthState::Authenticating || self.forgetting || self.cache_pending > 0 || self.cache_clears.pending();
+				let show_status = attention || busy || self.state.status != "Disconnected" || (!self.fixture_only && self.credential_status != "Checking saved login…" && !self.credential_status.is_empty());
+				if show_status && !(self.fixture_only && self.state.status == "Disconnected") {
+					ui.add_space(14.0);
+					let (fill, color) = if attention { (p.warning.gamma_multiply(0.14), p.warning) } else { (p.raised, p.text) };
+					egui::Frame::NONE.fill(fill).corner_radius(8).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
+						ui.set_width(ui.available_width());
+						if self.state.status != "Disconnected" || attention {
+							ui.label(egui::RichText::new(self.state.status).size(13.0).color(color));
+						}
+						if !self.fixture_only && !self.credential_status.is_empty() {
+							ui.label(egui::RichText::new(self.credential_status).size(12.0).color(p.muted));
+						}
+						if self.cache_error || self.cache_pending > 0 || self.cache_clears.pending() {
+							ui.label(egui::RichText::new(self.cache_status).size(12.0).color(p.muted));
+						}
+					});
+				}
+				ui.add_space(22.0);
+				ui.horizontal(|ui| {
+					let y = ui.cursor().top() + 8.0;
+					let left = ui.cursor().left();
+					let width = ui.available_width();
+					let galley = ui.painter().layout_no_wrap("or".into(), egui::FontId::proportional(12.0), p.muted);
+					let text_w = galley.size().x + 20.0;
+					ui.painter().hline(left..=left + (width - text_w) * 0.5, y, egui::Stroke::new(1.0, p.border));
+					ui.painter().galley(egui::pos2(left + (width - galley.size().x) * 0.5, y - galley.size().y * 0.5), galley, p.muted);
+					ui.painter().hline(left + (width + text_w) * 0.5..=left + width, y, egui::Stroke::new(1.0, p.border));
+					ui.allocate_space(egui::vec2(width, 16.0));
+				});
+				ui.add_space(14.0);
+				if ui::design::secondary_button(ui, "Explore the offline preview").clicked() {
+					if let Some(store) = &mut self.store { store.cancel_load(); }
+					self.connection = None;
+					self.pending_save = None;
+					let generation = self.state.generation + 1;
+					self.state = test_support::demo_state();
+					self.state.generation = generation;
+					self.messaging.clear();
+				}
+				ui.add_space(8.0);
+				ui.vertical_centered(|ui| {
+					ui.label(egui::RichText::new("Sample conversations. No Discord connection.").size(12.0).color(p.muted));
+				});
+				ui.add_space(16.0);
+				ui.collapsing("About this preview", |ui| {
+						ui.small("Messaging, reactions, search and read markers have offline tests. Real Discord interoperability is still unverified; attachment uploads and advanced search remain incomplete.");
+						ui.small("Messages and drafts are cached locally. Login tokens use the operating system credential store.");
+						ui.small("Unofficial clients may put your Discord account at risk.");
+						if !self.fixture_only {
+							ui.small(self.credential_status);
+							if ui.button("Forget saved login").clicked() { self.logout(&ctx); }
+						}
+					});
+				#[cfg(feature = "developer-session")]
+				if !self.fixture_only {
+					ui.collapsing("Developer session", |ui| {
+						ui.add(egui::TextEdit::singleline(&mut *self.token_input).password(true).char_limit(2048).hint_text("Owner-supplied test credential"));
+						if ui.add_enabled(self.authorized, egui::Button::new("Connect imported session (RAM only)")).clicked() {
+							let input = std::mem::take(&mut *self.token_input);
+							match SessionSecret::from_owner_input(input) { Ok(secret) => self.connect(secret, false, &ctx), Err(f) => self.state.status = f.label() }
+						}
+					});
+				}
+			});
 	}
 	fn clear_avatars(&mut self, ctx: &egui::Context) {
 		self.avatar_start_failed = false;
@@ -1873,6 +1942,7 @@ impl Desktop {
 					|| matches!(
 						&event.event,
 						Event::NotificationPreferences(_)
+							| Event::UserAction(_)
 							| Event::Disconnected | Event::ReadState(
 							client_core::read_state::Event::Ack { .. }
 						) | Event::ReadState(client_core::read_state::Event::Result {
@@ -2195,9 +2265,14 @@ impl eframe::App for Desktop {
 				.selection()
 				.map(|(name, size)| (name.to_owned(), size));
 			self.messaging.attachment_preview = self.uploads.preview();
+			self.messaging.attachment_files = self.uploads.files();
 		}
 		self.messaging.upload_busy = self.uploads.busy() || self.clipboard.is_some();
 		self.messaging.upload_status = self.uploads.status();
+		if !self.state.demo {
+			let (progress, sending) = self.uploads.transfer_progress();
+			self.messaging.update_upload_progress(progress, sending);
+		}
 		if self.state.user.is_none() {
 			self.downloads.cancel();
 		}
@@ -2250,10 +2325,71 @@ impl eframe::App for Desktop {
 			self.confirming_close = true;
 		}
 		if self.login.is_some() {
-			egui::CentralPanel::default().show(ui,|ui|{
-                ui.heading("Discord sign-in");ui.horizontal(|ui|{ui.label("Official discord.com page · temporary login webview · Serein is unofficial");if ui.button("Cancel login").clicked(){self.login=None;self.state.auth=AuthState::Unauthenticated;}});
-                ui.small("Complete login here. Passwords and QR challenges stay in the webview; only the resulting token is saved.");
-            });
+			let p = ui::design::palette(ui);
+			egui::Panel::top("login-header")
+				.exact_size(platform::LOGIN_HEADER_HEIGHT)
+				.show_separator_line(false)
+				.frame(
+					egui::Frame::NONE
+						.fill(p.surface)
+						.stroke(egui::Stroke::new(1.0, p.border))
+						.inner_margin(egui::Margin::symmetric(16, 0)),
+				)
+				.show(ui, |ui| {
+					ui::design::window_drag(ui, ui.max_rect());
+					ui.horizontal_centered(|ui| {
+						ui.add_space(ui::design::TRAFFIC_LIGHT_INSET);
+						let (rect, _) =
+							ui.allocate_exact_size(egui::vec2(32.0, 32.0), egui::Sense::hover());
+						ui.painter().rect_filled(rect, 8, p.accent);
+						ui::icons::paint(
+							ui.painter(),
+							ui::icons::Icon::Discord,
+							rect.shrink(7.0),
+							p.accent_text,
+						);
+						ui.add_space(4.0);
+						ui.vertical(|ui| {
+							ui.spacing_mut().item_spacing.y = 1.0;
+							ui.label(
+								ui::design::semibold(ui, "Sign in to Discord", 15.0)
+									.color(p.text_strong),
+							);
+							ui.label(
+								egui::RichText::new(
+									"discord.com · temporary login window · passwords and 2FA never leave the page",
+								)
+								.size(12.0)
+								.color(p.muted),
+							);
+						});
+						ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+							ui::design::window_controls(ui);
+							if ui
+								.add(
+									egui::Button::new(
+										ui::design::medium(ui, "Cancel", 13.0).color(p.text_strong),
+									)
+									.fill(p.raised)
+									.stroke(egui::Stroke::new(1.0, p.border))
+									.corner_radius(6)
+									.min_size(egui::vec2(0.0, 32.0)),
+								)
+								.clicked()
+							{
+								self.login = None;
+								self.state.auth = AuthState::Unauthenticated;
+							}
+						});
+					});
+				});
+			egui::CentralPanel::default()
+				.frame(egui::Frame::NONE.fill(p.canvas))
+				.show(ui, |ui| {
+					ui.centered_and_justified(|ui| {
+						ui.label(egui::RichText::new("Loading discord.com…").color(p.muted));
+					});
+				});
 			if let Some(login) = &self.login {
 				login.resize(&self.window);
 			}
@@ -2311,6 +2447,13 @@ impl eframe::App for Desktop {
 				.is_some_and(|channel| self.state.can_attach(channel))
 			{
 				self.uploads.cancel();
+			}
+			if let Some(index) = self.messaging.remove_attachment_index.take() {
+				self.uploads.remove_at(index);
+				if self.state.demo {
+					self.messaging.attachment = None;
+					self.messaging.attachment_preview = None;
+				}
 			}
 			if std::mem::take(&mut self.messaging.remove_attachment_requested) {
 				self.uploads.remove();
