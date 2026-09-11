@@ -374,11 +374,11 @@ impl Voice {
 					true
 				}
 			});
-			let devices = Devices {
-				input: ui.voice_input.clone(),
-				output: ui.voice_output.clone(),
-			};
-			if devices != live.devices {
+			if ui.voice_input != live.devices.input || ui.voice_output != live.devices.output {
+				let devices = Devices {
+					input: ui.voice_input.clone(),
+					output: ui.voice_output.clone(),
+				};
 				live.audio.set_devices(devices.clone());
 				live.devices = devices;
 				live.device_deadline = None;

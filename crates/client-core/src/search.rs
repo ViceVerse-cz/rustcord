@@ -33,7 +33,7 @@ impl State {
 		if !self.can_search() || !model::valid_search_query(&query) {
 			return None;
 		}
-		let channel = self.channels.iter().find(|c| Some(c.id) == self.selected)?;
+		let channel = self.channel(self.selected?)?;
 		let (channel, guild) = (channel.id, channel.guild);
 		if before.is_some()
 			&& !self.search.as_ref().is_some_and(|s| {

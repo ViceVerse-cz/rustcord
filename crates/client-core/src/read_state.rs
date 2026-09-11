@@ -75,7 +75,7 @@ impl State {
 		})
 	}
 	pub fn unread(&self, channel: Id) -> Option<bool> {
-		self.channel_unread(self.channels.iter().find(|c| c.id == channel)?)
+		self.channel_unread(self.channel(channel)?)
 	}
 	/// Shared unread visibility for sidebar rows and notification badges.
 	pub fn channel_unread(&self, channel: &model::Channel) -> Option<bool> {

@@ -49,6 +49,59 @@ fn main() -> eframe::Result {
 		Box::new(move |cc| Ok(Box::new(Desktop::new(cc, demo)?))),
 	)
 }
+/// Opt-in aggregate CPU callback timings; no payloads, per-frame logs, or repaint timer.
+struct FrameMetrics {
+	enabled: bool,
+	started: Option<std::time::Instant>,
+	frames: u64,
+	inputless: u64,
+	buckets: [u64; 8],
+	reflows: (u64, u64),
+}
+impl Default for FrameMetrics {
+	fn default() -> Self {
+		Self {
+			enabled: std::env::var_os("SEREIN_FRAME_DIAGNOSTICS").is_some_and(|v| v == "1"),
+			started: None,
+			frames: 0,
+			inputless: 0,
+			buckets: [0; 8],
+			reflows: (0, 0),
+		}
+	}
+}
+impl FrameMetrics {
+	fn begin(&mut self, ctx: &egui::Context) {
+		if self.enabled {
+			self.started = Some(std::time::Instant::now());
+			self.inputless += u64::from(ctx.input(|i| i.events.is_empty()));
+		}
+	}
+	fn finish(&mut self) {
+		if let Some(started) = self.started.take() {
+			let micros = started.elapsed().as_micros();
+			let bucket = [1000, 2000, 4000, 8000, 16000, 32000, 64000]
+				.partition_point(|limit| *limit < micros);
+			self.buckets[bucket] += 1;
+			self.frames += 1;
+		}
+	}
+}
+impl Drop for FrameMetrics {
+	fn drop(&mut self) {
+		if self.enabled {
+			use std::io::Write;
+			let _ = writeln!(
+				std::io::stderr(),
+				"[Serein frames] callbacks={} without_input={} cpu_us_buckets(1000,2000,4000,8000,16000,32000,64000,above)={:?} reflows(total,consecutive)={:?}",
+				self.frames,
+				self.inputless,
+				self.buckets,
+				self.reflows
+			);
+		}
+	}
+}
 struct Desktop {
 	login: Option<platform::LoginView>,
 	connection: Option<connection::Connection>,
@@ -61,6 +114,9 @@ struct Desktop {
 	clipboard: Option<clipboard::Paste>,
 	download_close_pending: bool,
 	window: Arc<winit::window::Window>,
+	monitor_geometry: Option<(Option<egui::Rect>, Option<f32>)>,
+	monitor_period: Option<Duration>,
+	frame_metrics: FrameMetrics,
 	avatars: Option<avatars::AvatarWorker>,
 	avatar_start_failed: bool,
 	avatar_clear_account: Option<model::Id>,
@@ -89,6 +145,47 @@ struct Desktop {
 	synthetic_id: u64,
 	#[cfg(feature = "developer-session")]
 	token_input: Zeroizing<String>,
+}
+/// Check only navigation whose effective access can change with this event.
+fn access_candidates(state: &State, event: &Event) -> Vec<model::Id> {
+	use client_core::permissions::Event as Permission;
+	let (guilds, channel): (Option<Vec<model::Id>>, Option<model::Id>) = match event {
+		Event::Ready { .. } | Event::Permissions(Permission::Snapshot(_)) => (None, None),
+		Event::Permissions(permission) => match permission {
+			Permission::Guild(guild) => (Some(vec![guild.id]), None),
+			Permission::Role { guild, .. }
+			| Permission::RoleRemoved { guild, .. }
+			| Permission::Member { guild, .. }
+			| Permission::Owner { guild, .. }
+			| Permission::UnavailableGuild(guild) => (Some(vec![*guild]), None),
+			Permission::Members(members) => (Some(members.iter().map(|m| m.0).collect()), None),
+			Permission::Channel { channel, .. } => (None, Some(*channel)),
+			Permission::Snapshot(_) => unreachable!(),
+		},
+		Event::ChannelCreated(channel) | Event::ChannelRestored(channel) => {
+			// A new channel cannot revoke existing access. Duplicate IDs can replace metadata.
+			if state.channel(channel.id).is_none() {
+				return Vec::new();
+			}
+			(None, Some(channel.id))
+		}
+		Event::ChannelChanged(patch) | Event::ThreadChanged { patch, .. } => (None, Some(patch.id)),
+		Event::ThreadRemoved { id, .. } => (None, Some(*id)),
+		Event::ThreadsSync { guild, .. } => (Some(vec![*guild]), None),
+		_ => return Vec::new(),
+	};
+	state
+		.channels
+		.iter()
+		.filter(|c| {
+			c.supports_text()
+				&& channel.is_none_or(|id| c.id == id || c.parent_id == Some(id))
+				&& guilds
+					.as_ref()
+					.is_none_or(|ids| c.guild.is_some_and(|id| ids.contains(&id)))
+		})
+		.map(|c| c.id)
+		.collect()
 }
 fn wants_cached_history(state: &State, channel: model::Id, request: u64) -> bool {
 	state.selected == Some(channel)
@@ -248,7 +345,7 @@ impl Desktop {
 		demo: bool,
 	) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
 		ui::fonts::install(&cc.egui_ctx);
-		ui::emoji::install(&cc.egui_ctx)?;
+		ui::emoji::install_async(&cc.egui_ctx)?;
 		ui::icons::install(&cc.egui_ctx);
 		if demo {
 			// Fixture-only preset preview, e.g. `--demo --demo-theme=onyx --demo-light`.
@@ -378,8 +475,7 @@ impl Desktop {
 			&& let Some(page) = std::env::args().find_map(|arg| {
 				arg.strip_prefix("--demo-settings")
 					.map(|rest| rest.trim_start_matches('=').to_lowercase())
-			})
-		{
+			}) {
 			// `--demo-settings` or `--demo-settings=account` etc.
 			messaging.preview_settings(&page);
 		}
@@ -489,6 +585,9 @@ impl Desktop {
 				.winit_window()
 				.ok_or("Native window unavailable")?
 				.clone(),
+			monitor_geometry: None,
+			monitor_period: None,
+			frame_metrics: FrameMetrics::default(),
 			avatars: None,
 			avatar_cleanup: None,
 			avatar_start_failed: false,
@@ -626,7 +725,9 @@ impl Desktop {
 		if let Some(cache) = &self.cache {
 			if matches!(
 				operation,
-				cache::Operation::LoadChannel { .. } | cache::Operation::SaveChannel { .. }
+				cache::Operation::LoadChannel { .. }
+					| cache::Operation::SaveChannel { .. }
+					| cache::Operation::SaveChanges { .. }
 			) && !cache.history.allows(cache.history.epoch())
 			{
 				return false;
@@ -1630,6 +1731,8 @@ impl Desktop {
 			terminal = *connection.terminal.borrow();
 		}
 		let mut persist_timeline = false;
+		let mut full_window = false;
+		let mut changed_messages = std::collections::BTreeSet::new();
 		for mut event in events {
 			if event.generation != self.state.generation {
 				continue;
@@ -1652,28 +1755,8 @@ impl Desktop {
 			let ready = matches!(event.event, Event::Ready { .. });
 			let resumed = matches!(event.event, Event::Resumed);
 			let confirmed_channel = confirmed_recovery_channel(&self.state, &event.event);
-			let mut removed_channels: std::collections::BTreeSet<_> = if matches!(
-				&event.event,
-				Event::Ready { .. }
-					| Event::Permissions(_)
-					| Event::ChannelChanged(_)
-					| Event::ThreadChanged { .. }
-					| Event::ChannelCreated(_)
-					| Event::ChannelRestored(_)
-					| Event::ThreadsSync { .. }
-					| Event::ThreadRemoved { .. }
-			) {
-				self.state
-					.channels
-					.iter()
-					.filter(|channel| {
-						channel.supports_text() && self.state.can_read_history(channel.id)
-					})
-					.map(|channel| channel.id)
-					.collect()
-			} else {
-				Default::default()
-			};
+			let mut removed_channels = access_candidates(&self.state, &event.event);
+			removed_channels.retain(|id| self.state.can_read_history(*id));
 			let invalidate = matches!(
 				event.event,
 				Event::Resync | Event::PermissionsChanged | Event::Unavailable(_)
@@ -1682,6 +1765,21 @@ impl Desktop {
 				|| matches!(&event.event, Event::HistoryFailed { channel, request, failure: Failure::Forbidden }
                 if self.state.selected == Some(*channel) && self.state.request == *request && self.state.history_pending);
 			let history_changed = changes_active_history(&self.state, &event.event);
+			if history_changed {
+				match &event.event {
+					Event::Message(message)
+					| Event::SendResult {
+						result: Ok(message),
+						..
+					} => {
+						changed_messages.insert(message.id);
+					}
+					Event::Patch(patch) => {
+						changed_messages.insert(patch.id);
+					}
+					_ => full_window = true,
+				}
+			}
 			if event.generation == self.state.generation
 				&& (invalidate
 					|| event.event.changes_access()
@@ -1702,20 +1800,12 @@ impl Desktop {
 			// Fence pending disk writes before the post-drain timeline snapshot is saved.
 			let deleted_replies = self.state.take_reply_deletions();
 			if let Some(&(channel, _)) = deleted_replies.first() {
+				full_window = true;
 				let ids: Vec<_> = deleted_replies.into_iter().map(|(_, id)| id).collect();
 				self.messaging.messages_deleted(ctx, channel, &ids);
 				self.delete_cached_ids(channel, ids);
 			}
-			if !removed_channels.is_empty() {
-				for channel in self
-					.state
-					.channels
-					.iter()
-					.filter(|c| c.supports_text() && self.state.can_read_history(c.id))
-				{
-					removed_channels.remove(&channel.id);
-				}
-			}
+			removed_channels.retain(|id| !self.state.can_read_history(*id));
 			#[cfg(feature = "voice")]
 			if let Some(error) = voice_failure
 				&& let Some(command) = self.voice.fail(&mut self.state, error)
@@ -1766,10 +1856,23 @@ impl Desktop {
 			&& let Some(channel) = self.state.selected
 			&& self.state.can_read_history(channel)
 		{
-			self.queue_cache(cache::Operation::SaveChannel {
-				channel,
-				messages: self.state.timeline.iter().cloned().collect(),
-			});
+			let messages = self
+				.state
+				.timeline
+				.iter()
+				.filter(|m| full_window || changed_messages.contains(&m.id))
+				.cloned()
+				.collect();
+			let operation = if full_window {
+				cache::Operation::SaveChannel { channel, messages }
+			} else {
+				cache::Operation::SaveChanges {
+					channel,
+					messages,
+					retained: self.state.timeline.iter().map(|m| m.id).collect(),
+				}
+			};
+			self.queue_cache(operation);
 		}
 		if let Some(failure) = terminal {
 			for (setting, scope) in [
@@ -1841,6 +1944,9 @@ impl Desktop {
 impl Desktop {
 	/// Frame period of the display the window is on; egui otherwise assumes 60 Hz.
 	fn frame_period(&self) -> Option<Duration> {
+		self.monitor_period
+	}
+	fn refresh_frame_period(&mut self) -> Option<Duration> {
 		let millihertz = self.window.current_monitor()?.refresh_rate_millihertz()?;
 		(1_000..=1_000_000)
 			.contains(&millihertz)
@@ -1852,24 +1958,34 @@ impl eframe::App for Desktop {
 		false
 	}
 	fn raw_input_hook(&mut self, _: &egui::Context, raw_input: &mut egui::RawInput) {
-		// Repaint timers and animation anticipation follow the real refresh rate (120 Hz ProMotion).
+		// Viewport position/scale comes from native events; avoid an OS monitor query on paints.
+		if let Some(viewport) = raw_input.viewports.get(&raw_input.viewport_id) {
+			let geometry = (viewport.outer_rect, viewport.native_pixels_per_point);
+			if self.monitor_geometry != Some(geometry) {
+				self.monitor_geometry = Some(geometry);
+				self.monitor_period = self.refresh_frame_period();
+			}
+		}
 		if let Some(period) = self.frame_period() {
 			raw_input.predicted_dt = period.as_secs_f32();
 		}
 	}
 	fn logic(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+		self.frame_metrics.begin(ctx);
 		self.messaging.sync_reading_zoom(ctx);
-		if !self.fixture_only && !self.state.demo {
-			self.reading.observe(
-				self.messaging.reading_preferences,
-				std::time::Instant::now(),
-			);
-		}
 		self.poll(ctx);
+		let (focused, hidden_or_closing, ptt_down) = ctx.input(|input| {
+			(
+				input.focused,
+				input.viewport().visible() == Some(false) || input.viewport().close_requested(),
+				input.key_down(egui::Key::V),
+			)
+		});
+		#[cfg(not(feature = "voice"))]
+		let _ = ptt_down;
 		if self.state.user.is_none()
 			|| (!self.state.demo && self.state.auth != AuthState::Authenticated)
-			|| ctx
-				.input(|i| i.viewport().visible() == Some(false) || i.viewport().close_requested())
+			|| hidden_or_closing
 		{
 			self.audio.stop();
 			self.messaging.audio().stop();
@@ -1893,22 +2009,25 @@ impl eframe::App for Desktop {
 		while let Some(notification) = self.state.take_notification() {
 			if !self.fixture_only
 				&& self.messaging.notifications_enabled
-				&& !(ctx.input(|i| i.focused)
-					&& self.messaging.viewing_latest(notification.channel))
+				&& !(focused && self.messaging.viewing_latest(notification.channel))
 			{
 				self.notifications.notify();
 			}
 		}
 		#[cfg(feature = "voice")]
 		{
-			self.messaging.voice_ptt_active = ctx
-				.input(|input| input.focused && input.key_down(egui::Key::V))
-				&& !ctx.egui_wants_keyboard_input();
-			self.poll_voice(ctx);
+			self.messaging.voice_ptt_active =
+				focused && ptt_down && !ctx.egui_wants_keyboard_input();
 		}
 	}
 	fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
 		let ctx = ui.ctx().clone();
+		let (close_requested, dropped) = ctx.input_mut(|input| {
+			(
+				input.viewport().close_requested(),
+				std::mem::take(&mut input.raw.dropped_files),
+			)
+		});
 		ui::design::paint_backdrop(&ctx);
 		let upload_allowed = self.state.user.is_some()
 			&& self.state.gateway_connected
@@ -1958,7 +2077,6 @@ impl eframe::App for Desktop {
 			&ctx,
 		);
 		// Move native handles once; never load dropped bytes on the rendering thread.
-		let dropped = ctx.input_mut(|input| std::mem::take(&mut input.raw.dropped_files));
 		if !dropped.is_empty() {
 			if upload_allowed
 				&& can_attach
@@ -2009,7 +2127,7 @@ impl eframe::App for Desktop {
 		};
 		self.messaging.downloads().active = self.downloads.is_active();
 		self.messaging.downloads().status = download_status;
-		if ctx.input(|i| i.viewport().close_requested()) && self.downloads.is_active() {
+		if close_requested && self.downloads.is_active() {
 			self.downloads.cancel();
 			self.download_close_pending = true;
 			ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -2022,10 +2140,8 @@ impl eframe::App for Desktop {
 			ctx.send_viewport_cmd(egui::ViewportCommand::Close);
 		}
 		self.poll_avatars(&ctx);
-		#[cfg(feature = "voice")]
-		self.poll_voice(&ctx);
 		self.messaging.voice_available = cfg!(feature = "voice");
-		if ctx.input(|i| i.viewport().close_requested())
+		if close_requested
 			&& !self.close_approved
 			&& ((self.state.demo && self.state.has_unsent())
 				|| self
@@ -2095,12 +2211,11 @@ impl eframe::App for Desktop {
 			{
 				self.notifications.notify();
 			}
-			// Selection may have changed during this frame; never reuse another channel's file.
-			self.uploads.poll(
+			// Revalidate scope after navigation without polling workers a second time.
+			self.uploads.revalidate_scope(
 				self.state.generation,
 				self.state.selected,
 				self.state.user.is_some() && self.state.gateway_connected,
-				&ctx,
 			);
 			if !self
 				.state
@@ -2243,6 +2358,8 @@ impl eframe::App for Desktop {
                 });
             });
 		}
+		self.frame_metrics.reflows = self.messaging.timeline_reflows();
+		self.frame_metrics.finish();
 	}
 }
 

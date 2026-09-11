@@ -32,6 +32,26 @@ pub fn install(ctx: &Context) -> Result<(), image::ImageError> {
 	Ok(())
 }
 
+pub(crate) fn ready(ctx: &Context) -> bool {
+	ctx.data(|data| {
+		data.get_temp::<TextureHandle>(egui::Id::unique("twemoji"))
+			.is_some()
+	})
+}
+
+/// Startup decoding uses a single bounded worker; the context is thread-safe.
+pub fn install_async(ctx: &Context) -> std::io::Result<()> {
+	let ctx = ctx.clone();
+	std::thread::Builder::new()
+		.name("emoji-atlas".into())
+		.spawn(move || {
+			if install(&ctx).is_ok() {
+				ctx.request_repaint();
+			}
+		})
+		.map(|_| ())
+}
+
 fn lookup(text: &str) -> Option<usize> {
 	// Explicit text presentation must stay text. Do not partially match unknown sequences.
 	if text.is_ascii() || text.contains('\u{fe0e}') || text.len() > 128 {
@@ -83,29 +103,55 @@ pub(crate) fn selectable(
 	size: f32,
 	link: bool,
 ) -> egui::Response {
-	let mut galley = ui.fonts_mut(|fonts| {
-		fonts.layout_no_wrap(
-			text.to_owned(),
-			egui::FontId::proportional(size),
-			egui::Color32::TRANSPARENT,
-		)
+	type Cache = std::sync::Arc<
+		std::sync::Mutex<std::collections::HashMap<egui::Id, std::sync::Arc<egui::Galley>>>,
+	>;
+	let key = egui::Id::unique((
+		"emoji-selectable",
+		text,
+		size.to_bits(),
+		ui.ctx().pixels_per_point().to_bits(),
+		ui.ctx().fonts(|fonts| fonts.definitions().font_data.len()),
+	));
+	let cache = ui.ctx().data_mut(|data| {
+		data.get_temp_mut_or_default::<Cache>(egui::Id::unique("emoji-selection-cache"))
+			.clone()
 	});
-	let glyphs = std::sync::Arc::make_mut(&mut galley);
-	glyphs.rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::Vec2::splat(size));
-	glyphs.mesh_bounds = glyphs.rect;
-	glyphs.num_vertices = 0;
-	glyphs.num_indices = 0;
-	for placed in &mut glyphs.rows {
-		let row = std::sync::Arc::make_mut(&mut placed.row);
-		// One hit target: selection endpoints must never split a Unicode sequence or markup.
-		for glyph in &mut row.glyphs {
-			glyph.pos.x = 0.0;
-			glyph.advance_width = size;
-			glyph.first_vertex = 0;
+	let cached = cache.lock().expect("emoji cache").get(&key).cloned();
+	let galley = cached.unwrap_or_else(|| {
+		let mut galley = ui.fonts_mut(|fonts| {
+			fonts.layout_no_wrap(
+				text.to_owned(),
+				egui::FontId::proportional(size),
+				egui::Color32::TRANSPARENT,
+			)
+		});
+		let glyphs = std::sync::Arc::make_mut(&mut galley);
+		glyphs.rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::Vec2::splat(size));
+		glyphs.mesh_bounds = glyphs.rect;
+		glyphs.num_vertices = 0;
+		glyphs.num_indices = 0;
+		for placed in &mut glyphs.rows {
+			let row = std::sync::Arc::make_mut(&mut placed.row);
+			// One hit target: selection endpoints must never split a Unicode sequence or markup.
+			for glyph in &mut row.glyphs {
+				glyph.pos.x = 0.0;
+				glyph.advance_width = size;
+				glyph.first_vertex = 0;
+			}
+			row.size = egui::Vec2::splat(size);
+			row.visuals = Default::default();
 		}
-		row.size = egui::Vec2::splat(size);
-		row.visuals = Default::default();
-	}
+		// At most 64 short emoji layouts, independent of message history length.
+		if text.len() <= 128 {
+			let mut cache = cache.lock().expect("emoji cache");
+			if cache.len() >= 64 {
+				cache.clear();
+			}
+			cache.insert(key, galley.clone());
+		}
+		galley
+	});
 	let mut label = egui::Label::new(galley).selectable(true);
 	if link {
 		label = label.sense(egui::Sense::click());

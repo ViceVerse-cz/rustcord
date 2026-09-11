@@ -53,7 +53,7 @@ impl State {
 		{
 			return None;
 		}
-		let guild = self.channels.iter().find(|c| c.id == parent)?.guild?;
+		let guild = self.channel(parent)?.guild?;
 		self.posting.request = self.posting.request.wrapping_add(1);
 		self.posting.pending = Some((parent, self.posting.request));
 		self.posting.error = None;

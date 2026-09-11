@@ -263,14 +263,42 @@ pub fn paint_backdrop(ctx: &egui::Context) {
 pub const SEMIBOLD: &str = "semibold";
 pub const MEDIUM: &str = "medium";
 const WEIGHTS_KEY: &str = "serein-font-weights";
-/// Called by `fonts::install` for one context; until then the weight families resolve to
-/// the default face so headless contexts (tests) never reference an unknown family.
+// Called by `fonts::install` for one context; until then the weight families resolve to
+// the default face so headless contexts (tests) never reference an unknown family.
+thread_local! {
+	// One context per UI thread, compared by egui's Arc identity; headless contexts stay isolated.
+	static WEIGHT_CONTEXT: std::cell::RefCell<Option<(egui::Context, bool)>> = const { std::cell::RefCell::new(None) };
+}
 pub fn weights_installed(ctx: &egui::Context) {
 	ctx.data_mut(|d| d.insert_temp(egui::Id::unique(WEIGHTS_KEY), true));
+	WEIGHT_CONTEXT.with(|cache| *cache.borrow_mut() = Some((ctx.clone(), true)));
 }
 fn weight(ctx: &egui::Context, name: &str) -> FontFamily {
-	if ctx.data(|d| d.get_temp::<bool>(egui::Id::unique(WEIGHTS_KEY))) == Some(true) {
-		FontFamily::Name(name.into())
+	let installed = WEIGHT_CONTEXT.with(|cache| {
+		let mut cache = cache.borrow_mut();
+		if let Some((cached, installed)) = &*cache
+			&& cached == ctx
+		{
+			return *installed;
+		}
+		let installed =
+			ctx.data(|d| d.get_temp::<bool>(egui::Id::unique(WEIGHTS_KEY))) == Some(true);
+		*cache = Some((ctx.clone(), installed));
+		installed
+	});
+	if installed {
+		{
+			static MEDIUM_NAME: std::sync::OnceLock<std::sync::Arc<str>> =
+				std::sync::OnceLock::new();
+			static SEMIBOLD_NAME: std::sync::OnceLock<std::sync::Arc<str>> =
+				std::sync::OnceLock::new();
+			let cached = if name == MEDIUM {
+				&MEDIUM_NAME
+			} else {
+				&SEMIBOLD_NAME
+			};
+			FontFamily::Name(cached.get_or_init(|| name.into()).clone())
+		}
 	} else {
 		FontFamily::Proportional
 	}
@@ -395,6 +423,10 @@ fn fallback_avatar_color(name: &str) -> Color32 {
 }
 pub fn avatar(ui: &mut egui::Ui, name: &str, size: f32) -> egui::Response {
 	let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+	paint_avatar(ui, name, size, rect);
+	response.on_hover_text(name)
+}
+pub(crate) fn paint_avatar(ui: &egui::Ui, name: &str, size: f32, rect: egui::Rect) {
 	let initials: String = name
 		.split_whitespace()
 		.take(2)
@@ -411,7 +443,6 @@ pub fn avatar(ui: &mut egui::Ui, name: &str, size: f32) -> egui::Response {
 		FontId::new(size * 0.36, semibold_family(ui.ctx())),
 		Color32::WHITE,
 	);
-	response.on_hover_text(name)
 }
 /// Presence dot with a surface-coloured ring, bottom-right of an avatar `rect`.
 pub fn presence_dot(ui: &egui::Ui, rect: egui::Rect, color: Color32, ring: Color32) {
@@ -543,16 +574,23 @@ pub fn build_badge(ui: &mut egui::Ui, build: Build) -> Option<egui::Response> {
 	const GLYPH: f32 = 12.0;
 	let width = PAD
 		+ GLYPH
-		+ 5.0
-		+ title.size().x
+		+ 5.0 + title.size().x
 		+ version.as_ref().map_or(0.0, |v| 13.0 + v.size().x)
 		+ PAD;
 	let (rect, response) = ui.allocate_exact_size(egui::vec2(width, HEIGHT), egui::Sense::hover());
 	let painter = ui.painter();
 	let radius = HEIGHT / 2.0;
 	// Soft glow, then a pill whose caps carry the gradient end colours.
-	painter.rect_filled(rect.expand(3.0), radius + 3.0, stops[0].gamma_multiply(0.14));
-	painter.rect_filled(rect.expand(1.0), radius + 1.0, stops[0].gamma_multiply(0.22));
+	painter.rect_filled(
+		rect.expand(3.0),
+		radius + 3.0,
+		stops[0].gamma_multiply(0.14),
+	);
+	painter.rect_filled(
+		rect.expand(1.0),
+		radius + 1.0,
+		stops[0].gamma_multiply(0.22),
+	);
 	let left = egui::pos2(rect.left() + radius, rect.center().y);
 	let right = egui::pos2(rect.right() - radius, rect.center().y);
 	painter.circle_filled(left, radius, stops[0]);
@@ -619,7 +657,6 @@ pub fn build_badge(ui: &mut egui::Ui, build: Build) -> Option<egui::Response> {
 	Some(response.on_hover_text(hint))
 }
 
-
 /// Discord-style settings row with a pill switch on the right. Clicking anywhere on the row
 /// toggles `enabled`; the accessible label is `label`.
 pub fn switch(
@@ -638,8 +675,12 @@ pub fn switch(
 		text_width,
 	);
 	let detail = description.map(|text| {
-		ui.painter()
-			.layout(text.to_owned(), FontId::proportional(13.0), p.muted, text_width)
+		ui.painter().layout(
+			text.to_owned(),
+			FontId::proportional(13.0),
+			p.muted,
+			text_width,
+		)
 	});
 	let text_height = title.size().y + detail.as_ref().map_or(0.0, |d| d.size().y + 4.0);
 	let (rect, mut response) = ui.allocate_exact_size(
@@ -651,12 +692,7 @@ pub fn switch(
 		response.mark_changed();
 	}
 	response.widget_info(|| {
-		egui::WidgetInfo::selected(
-			egui::WidgetType::Checkbox,
-			ui.is_enabled(),
-			*enabled,
-			label,
-		)
+		egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *enabled, label)
 	});
 	let painter = ui.painter();
 	if response.hovered() && ui.is_enabled() {

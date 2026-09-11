@@ -2,7 +2,11 @@
 use crate::{avatars::Avatars, emoji};
 use egui::{Color32, Image, text::CCursor, text::LayoutJob, text::TextFormat};
 use model::User;
-use std::{ops::Range, sync::Arc};
+use std::{
+	hash::{DefaultHasher, Hash, Hasher},
+	ops::Range,
+	sync::Arc,
+};
 use unicode_segmentation::UnicodeSegmentation;
 
 struct Inline {
@@ -16,6 +20,7 @@ struct Inline {
 #[derive(Default)]
 pub(crate) struct Layout {
 	inlines: Vec<Inline>,
+	cache: Option<(u64, Arc<egui::Galley>)>,
 }
 
 impl Layout {
@@ -28,6 +33,39 @@ impl Layout {
 		avatars: &mut Avatars,
 		demo: bool,
 	) -> Arc<egui::Galley> {
+		let mut key = DefaultHasher::new();
+		text.hash(&mut key);
+		width.to_bits().hash(&mut key);
+		ui.ctx()
+			.fonts(|fonts| fonts.definitions().font_data.len())
+			.hash(&mut key);
+		ui.ctx().pixels_per_point().to_bits().hash(&mut key);
+		egui::TextStyle::Body.resolve(ui.style()).hash(&mut key);
+		let colors = crate::design::palette(ui);
+		colors.text.hash(&mut key);
+		colors.accent.hash(&mut key);
+		colors.muted.hash(&mut key);
+		avatars.revision.hash(&mut key);
+		emoji::ready(ui.ctx()).hash(&mut key);
+		demo.hash(&mut key);
+		if text.contains("<:") || text.contains("<a:") {
+			static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+			(START
+				.get_or_init(std::time::Instant::now)
+				.elapsed()
+				.as_secs() / 60)
+				.hash(&mut key);
+		}
+		for user in users {
+			user.id.hash(&mut key);
+			user.name.hash(&mut key);
+		}
+		let key = key.finish();
+		if let Some((cached, galley)) = &self.cache
+			&& *cached == key
+		{
+			return galley.clone();
+		}
 		self.inlines.clear();
 		let font = egui::TextStyle::Body.resolve(ui.style());
 		let colors = crate::design::palette(ui);
@@ -102,7 +140,9 @@ impl Layout {
 			source += count;
 		}
 		if self.inlines.is_empty() {
-			return ui.fonts_mut(|f| f.layout_job(job));
+			let galley = ui.fonts_mut(|f| f.layout_job(job));
+			self.cache = Some((key, galley.clone()));
+			return galley;
 		}
 		let mut galley = ui.fonts_mut(|f| f.layout_job(job));
 		let galley_mut = Arc::make_mut(&mut galley);
@@ -134,6 +174,7 @@ impl Layout {
 		}
 		// TextEdit's galley and TextBuffer must expose exactly the same original characters.
 		galley_mut.job = Arc::new(LayoutJob::simple(text.to_owned(), font, colors.text, width));
+		self.cache = Some((key, galley.clone()));
 		galley
 	}
 

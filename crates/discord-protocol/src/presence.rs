@@ -16,6 +16,18 @@ pub struct PresenceUpdate {
 }
 
 #[derive(Deserialize)]
+pub struct Friends<'a>(
+	#[serde(borrow, deserialize_with = "crate::read_state::entries")]
+	pub  Vec<&'a serde_json::value::RawValue>,
+);
+
+#[derive(Deserialize)]
+pub struct MergedPresences {
+	#[serde(default)]
+	pub friends: Option<Box<serde_json::value::RawValue>>,
+}
+
+#[derive(Deserialize)]
 pub struct ApplicationIcon {
 	pub id: Id,
 	#[serde(default)]
@@ -210,7 +222,10 @@ struct Identity {
 struct PresenceDto {
 	#[serde(default)]
 	guild_id: Option<Id>,
-	user: Identity,
+	#[serde(default)]
+	user: Option<Identity>,
+	#[serde(default)]
+	user_id: Option<Id>,
 	#[serde(default)]
 	status: Patch<String>,
 	#[serde(default)]
@@ -219,6 +234,14 @@ struct PresenceDto {
 
 pub fn decode(bytes: &[u8]) -> Result<PresenceUpdate, DecodeError> {
 	let presence: PresenceDto = crate::decode(bytes)?;
+	let embedded = presence.user.map(|user| user.id);
+	if embedded.zip(presence.user_id).is_some_and(|(a, b)| a != b) {
+		return Err(DecodeError);
+	}
+	let user = embedded
+		.or(presence.user_id)
+		.filter(|id| id.0 != 0)
+		.ok_or(DecodeError)?;
 	let status = match presence.status {
 		Patch::Value(status)
 			if matches!(status.as_str(), "online" | "idle" | "dnd" | "offline") =>
@@ -237,7 +260,7 @@ pub fn decode(bytes: &[u8]) -> Result<PresenceUpdate, DecodeError> {
 	};
 	Ok(PresenceUpdate {
 		guild: presence.guild_id,
-		user: presence.user.id,
+		user,
 		status,
 		custom_status,
 		activities,

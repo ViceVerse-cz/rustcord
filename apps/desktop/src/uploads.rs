@@ -186,6 +186,14 @@ impl Uploads {
 		self.last = None;
 		self.choosing = Some(Choosing { result, cancelled });
 	}
+	pub fn revalidate_scope(&mut self, generation: u64, channel: Option<Id>, allowed: bool) {
+		if self
+			.scope
+			.is_some_and(|scope| !allowed || Some(scope) != channel.map(|id| (generation, id)))
+		{
+			self.remove();
+		}
+	}
 	pub fn poll(
 		&mut self,
 		generation: u64,
@@ -193,12 +201,7 @@ impl Uploads {
 		allowed: bool,
 		context: &egui::Context,
 	) {
-		if self
-			.scope
-			.is_some_and(|scope| !allowed || Some(scope) != channel.map(|id| (generation, id)))
-		{
-			self.remove();
-		}
+		self.revalidate_scope(generation, channel, allowed);
 		if let Some(choosing) = &self.choosing {
 			let result = match choosing.result.try_recv() {
 				Ok(result) => Some(result),

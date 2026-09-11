@@ -76,6 +76,36 @@ pub(crate) fn presence(
 		})
 }
 
+pub(crate) fn member_presence<'a>(
+	state: &'a State,
+	member: &'a model::Member,
+	guild: Option<Id>,
+) -> (Option<&'a str>, Option<&'a str>, &'a [model::RichActivity]) {
+	if guild.is_some()
+		&& state
+			.members
+			.as_ref()
+			.is_some_and(|list| list.guild == guild && list.freshness == model::Freshness::Fresh)
+		&& (state.demo || state.gateway_connected)
+	{
+		(
+			member.status.as_deref(),
+			member.custom_status.as_deref(),
+			&member.activities,
+		)
+	} else {
+		state
+			.presence_for(member.user.id)
+			.map_or((None, None, &[]), |p| {
+				(
+					p.status.as_deref(),
+					p.custom_status.as_deref(),
+					p.activities.as_slice(),
+				)
+			})
+	}
+}
+
 pub(crate) fn subtitle(custom: Option<&str>, activities: &[model::RichActivity]) -> Option<String> {
 	activities
 		.first()

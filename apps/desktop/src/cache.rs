@@ -18,10 +18,27 @@ pub enum Operation {
 	LoadDrafts,
 	LoadGifFavorites,
 	SaveGifFavorites(Vec<model::Gif>),
-	LoadChannel { channel: Id, request: u64 },
-	SaveDraft { channel: Id, content: String },
-	SaveChannel { channel: Id, messages: Vec<Message> },
-	DeleteMessages { channel: Id, ids: Vec<Id> },
+	LoadChannel {
+		channel: Id,
+		request: u64,
+	},
+	SaveDraft {
+		channel: Id,
+		content: String,
+	},
+	SaveChannel {
+		channel: Id,
+		messages: Vec<Message>,
+	},
+	SaveChanges {
+		channel: Id,
+		messages: Vec<Message>,
+		retained: Vec<Id>,
+	},
+	DeleteMessages {
+		channel: Id,
+		ids: Vec<Id>,
+	},
 	ClearHistory,
 	Forget,
 }
@@ -138,7 +155,9 @@ impl Cache {
 		let epoch = self.history.epoch();
 		if matches!(
 			operation,
-			Operation::LoadChannel { .. } | Operation::SaveChannel { .. }
+			Operation::LoadChannel { .. }
+				| Operation::SaveChannel { .. }
+				| Operation::SaveChanges { .. }
 		) && !self.history.allows(epoch)
 		{
 			return false;
@@ -195,7 +214,9 @@ fn execute(
 	}
 	if matches!(
 		operation,
-		Operation::LoadChannel { .. } | Operation::SaveChannel { .. }
+		Operation::LoadChannel { .. }
+			| Operation::SaveChannel { .. }
+			| Operation::SaveChanges { .. }
 	) && !history.allows(epoch)
 	{
 		return Outcome::Saved;
@@ -223,7 +244,9 @@ fn execute(
 		Operation::SaveDraft { .. } => {
 			"Could not save a draft; latest text may exist only in memory"
 		}
-		Operation::SaveChannel { .. } => "Could not save cached history",
+		Operation::SaveChannel { .. } | Operation::SaveChanges { .. } => {
+			"Could not save cached history"
+		}
 		Operation::LoadDrafts => "Could not restore drafts from local storage",
 		Operation::LoadGifFavorites => "Could not restore GIF favorites from local storage",
 		Operation::SaveGifFavorites(_) => {
@@ -261,6 +284,13 @@ fn execute(
 				}),
 			Operation::SaveDraft { channel, content } => store
 				.save_draft(account, channel, &content)
+				.map(|_| Outcome::Saved),
+			Operation::SaveChanges {
+				channel,
+				messages,
+				retained,
+			} => store
+				.save_changes(account, channel, &messages, &retained)
 				.map(|_| Outcome::Saved),
 			Operation::SaveChannel { channel, messages } => store
 				.save_channel(account, channel, &messages)

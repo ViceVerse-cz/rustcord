@@ -246,6 +246,14 @@ pub struct Pending {
 	pub delivery: Delivery,
 	pub confirmed: Option<Id>,
 }
+#[derive(Default)]
+pub struct NavigationIndex {
+	bytes: std::cell::Cell<Option<(usize, usize, usize)>>,
+	channels: std::cell::RefCell<BTreeMap<Id, usize>>,
+	channel_stamp: std::cell::Cell<Option<(usize, usize)>>,
+	guilds: std::cell::RefCell<BTreeMap<Id, usize>>,
+}
+
 pub struct State {
 	pub typing: typing::Typing,
 	pub permissions: permissions::Permissions,
@@ -274,9 +282,13 @@ pub struct State {
 	pub user: Option<User>,
 	pub members: Option<MemberList>,
 	pub direct_presences: Vec<MemberPresence>,
+	#[doc(hidden)]
+	pub direct_presence_bytes: Option<(usize, usize)>,
 	pub member_request: u64,
 	pub guilds: Vec<Guild>,
 	pub channels: Vec<Channel>,
+	#[doc(hidden)]
+	pub navigation_index: NavigationIndex,
 	pub selected: Option<Id>,
 	pub timeline: Timeline,
 	pub resident: resident::Windows,
@@ -325,9 +337,11 @@ impl Default for State {
 			user: None,
 			members: None,
 			direct_presences: vec![],
+			direct_presence_bytes: None,
 			member_request: 0,
 			guilds: vec![],
 			channels: vec![],
+			navigation_index: NavigationIndex::default(),
 			selected: None,
 			timeline: Timeline::default(),
 			resident: resident::Windows::default(),
@@ -357,6 +371,80 @@ fn navigable(channel: &Channel) -> bool {
 		|| (channel.guild.is_some() && matches!(channel.kind, 15 | 16))
 }
 impl State {
+	pub(crate) fn navigation_bytes(&self) -> usize {
+		if let Some((channels, guilds, bytes)) = self.navigation_index.bytes.get()
+			&& channels == self.channels.len()
+			&& guilds == self.guilds.len()
+		{
+			return bytes;
+		}
+		let bytes = self.channels.iter().map(Channel::bytes).sum::<usize>()
+			+ self.guilds.iter().map(Guild::bytes).sum::<usize>();
+		self.set_navigation_bytes(bytes);
+		bytes
+	}
+	fn set_navigation_bytes(&self, bytes: usize) {
+		self.navigation_index
+			.bytes
+			.set(Some((self.channels.len(), self.guilds.len(), bytes)));
+	}
+
+	fn channel_stamp(&self) -> (usize, usize) {
+		(self.channels.as_ptr() as usize, self.channels.len())
+	}
+	fn channel_index(&self, id: Id) -> Option<usize> {
+		let stamp = self.channel_stamp();
+		if self.navigation_index.channel_stamp.get() == Some(stamp) {
+			let cached = self.navigation_index.channels.borrow().get(&id).copied();
+			if cached.is_none_or(|index| {
+				self.channels
+					.get(index)
+					.is_some_and(|channel| channel.id == id)
+			}) {
+				return cached;
+			}
+		}
+		let mut index = self.navigation_index.channels.borrow_mut();
+		*index = self
+			.channels
+			.iter()
+			.take(MAX_NAV)
+			.enumerate()
+			.map(|(index, channel)| (channel.id, index))
+			.collect();
+		self.navigation_index.channel_stamp.set(Some(stamp));
+		index.get(&id).copied()
+	}
+	pub fn channel(&self, id: Id) -> Option<&Channel> {
+		self.channel_index(id)
+			.and_then(|index| self.channels.get(index))
+	}
+	/// Call after replacing IDs or payloads directly in synthetic navigation vectors.
+	pub fn invalidate_navigation(&self) {
+		self.navigation_index.channel_stamp.set(None);
+		self.navigation_index.guilds.borrow_mut().clear();
+		self.navigation_index.bytes.set(None);
+	}
+
+	pub fn guild(&self, id: Id) -> Option<&Guild> {
+		let cached = self.navigation_index.guilds.borrow().get(&id).copied();
+		if let Some(guild) = cached
+			.and_then(|index| self.guilds.get(index))
+			.filter(|guild| guild.id == id)
+		{
+			return Some(guild);
+		}
+		let mut index = self.navigation_index.guilds.borrow_mut();
+		*index = self
+			.guilds
+			.iter()
+			.take(MAX_NAV)
+			.enumerate()
+			.map(|(index, guild)| (guild.id, index))
+			.collect();
+		index.get(&id).and_then(|index| self.guilds.get(*index))
+	}
+
 	pub fn logout(&mut self) {
 		let generation = self.generation.wrapping_add(1);
 		*self = Self {
@@ -422,7 +510,8 @@ impl State {
 		Some(command)
 	}
 	pub fn request_members(&mut self) -> Option<Command> {
-		let channel = self.channels.iter().find(|c| Some(c.id) == self.selected)?;
+		let index = self.channel_index(self.selected?)?;
+		let channel = &self.channels[index];
 		self.member_request = self.member_request.wrapping_add(1);
 		if !self.can_view(channel.id) {
 			return None;
@@ -798,6 +887,13 @@ impl State {
 			}
 			return;
 		}
+		// Preserve the running total through channel-create/permission bursts at guild admission.
+		if !matches!(
+			&envelope.event,
+			Event::ChannelCreated(_) | Event::ChannelRestored(_) | Event::Permissions(_)
+		) {
+			self.navigation_index.bytes.set(None);
+		}
 		let access_changed = envelope.event.changes_access();
 		// Ephemeral names must not outlive navigation identity/permission replacement.
 		if access_changed {
@@ -805,9 +901,8 @@ impl State {
 		}
 		let previous_access = access_changed.then(|| self.permission_access()).flatten();
 		let previous_member_list = (access_changed && self.members.is_some()).then(|| {
-			self.channels
-				.iter()
-				.find(|channel| Some(channel.id) == self.selected)
+			self.selected
+				.and_then(|id| self.channel(id))
 				.and_then(|channel| self.member_list_id(channel))
 		});
 		if let Event::ChannelRestored(channel) = &envelope.event
@@ -815,7 +910,7 @@ impl State {
 				|| !matches!(channel.kind, 0 | 2 | 4 | 5 | 13..=16)
 				|| !channel.guild.is_some_and(|guild| {
 					guild.0 != 0 && self.guilds.iter().any(|known| known.id == guild)
-				}) || self.channels.iter().any(|known| known.id == channel.id))
+				}) || self.channel(channel.id).is_some())
 		{
 			return;
 		}
@@ -874,7 +969,7 @@ impl State {
 		let result = match envelope.event {
 			Event::Typing(_) => unreachable!("typing is handled before timeline invalidation"),
 			Event::Permissions(mut event) => {
-				let known = |id: Id| self.guilds.iter().any(|guild| guild.id == id);
+				let known = |id: Id| self.guild(id).is_some();
 				match &mut event {
 					permissions::Event::Snapshot(snapshot)
 						if snapshot.guilds.iter().any(|guild| !known(guild.id)) =>
@@ -900,11 +995,7 @@ impl State {
 					_ => {}
 				}
 				if let permissions::Event::Channel { channel, guild, .. } = &mut event {
-					let actual = self
-						.channels
-						.iter()
-						.find(|c| c.id == *channel)
-						.and_then(|c| c.guild);
+					let actual = self.channel(*channel).and_then(|c| c.guild);
 					if guild.is_some() && actual.is_some() && *guild != actual {
 						return;
 					}
@@ -979,17 +1070,18 @@ impl State {
 						.emojis
 						.as_ref()
 						.map_or(0, custom_emoji_bytes);
-					let navigation_bytes = self.guilds.iter().map(Guild::bytes).sum::<usize>()
-						+ self.channels.iter().map(Channel::bytes).sum::<usize>();
+					let navigation_bytes = self.navigation_bytes();
 					if !valid_custom_emojis(&emojis)
 						|| navigation_bytes - previous + custom_emoji_bytes(&emojis)
 							> MAX_EVENT_BYTES
 					{
 						self.guilds[index].emojis = None;
+						self.navigation_index.bytes.set(None);
 						self.fail(auth::Failure::Capacity);
 						return;
 					}
 					self.guilds[index].emojis = Some(emojis);
+					self.navigation_index.bytes.set(None);
 				}
 				Ok(())
 			}
@@ -1019,24 +1111,22 @@ impl State {
 					return;
 				}
 				if matches!(channel.kind, 10..=12)
-					&& (!self.guilds.iter().any(|g| Some(g.id) == channel.guild)
+					&& (!channel
+						.guild
+						.is_some_and(|guild| self.guild(guild).is_some())
 						|| self.channels.iter().any(|old| {
 							old.id == channel.id
 								&& (old.guild != channel.guild || !matches!(old.kind, 10..=12))
 						})) {
 					return;
 				}
-				let old = self.channels.iter().position(|c| c.id == channel.id);
+				let old = self.channel_index(channel.id);
+				let navigation_bytes = self.navigation_bytes()
+					- old.map_or(0, |index| self.channels[index].bytes())
+					+ channel.bytes();
 				if channel.recipients.len() > 64
 					|| (old.is_none() && self.channels.len() + self.guilds.len() >= MAX_NAV)
-					|| self
-						.channels
-						.iter()
-						.filter(|c| c.id != channel.id)
-						.map(Channel::bytes)
-						.sum::<usize>() + channel.bytes()
-						+ self.guilds.iter().map(Guild::bytes).sum::<usize>()
-						> MAX_EVENT_BYTES
+					|| navigation_bytes > MAX_EVENT_BYTES
 				{
 					self.fail(auth::Failure::Capacity);
 					return;
@@ -1061,8 +1151,17 @@ impl State {
 					}
 					self.channels[index] = channel;
 				} else {
+					let id = channel.id;
+					self.navigation_index
+						.channels
+						.get_mut()
+						.insert(id, self.channels.len());
 					self.channels.push(channel);
+					self.navigation_index
+						.channel_stamp
+						.set(Some(self.channel_stamp()));
 				}
+				self.set_navigation_bytes(navigation_bytes);
 				Ok(())
 			}
 			Event::ChannelChanged(patch) | Event::ThreadChanged { patch, .. } => {
@@ -1199,6 +1298,7 @@ impl State {
 				channels,
 			} => {
 				self.direct_presences.clear();
+				self.direct_presence_bytes = None;
 				if self
 					.user
 					.as_ref()
@@ -1612,6 +1712,7 @@ impl State {
 			}
 			Event::Resync | Event::PermissionsChanged => {
 				self.direct_presences.clear();
+				self.direct_presence_bytes = None;
 				self.permissions = permissions::Permissions::default();
 				self.read_state.cancel();
 				self.clear_profile();
@@ -1654,9 +1755,8 @@ impl State {
 			self.reconcile_permissions(previous_access);
 			if let Some(previous) = previous_member_list {
 				let current = self
-					.channels
-					.iter()
-					.find(|channel| Some(channel.id) == self.selected)
+					.selected
+					.and_then(|id| self.channel(id))
 					.and_then(|channel| self.member_list_id(channel));
 				if previous != current {
 					// Let the visible pane request the new list; late snapshots lose their request scope.
@@ -1690,6 +1790,7 @@ impl State {
 		}
 	}
 	fn remove_channels(&mut self, removed: &BTreeSet<Id>) {
+		self.invalidate_navigation();
 		for id in removed {
 			self.resident.remove(*id);
 		}
@@ -1746,6 +1847,7 @@ impl State {
 		}
 		if failure.ends_session() {
 			self.direct_presences.clear();
+			self.direct_presence_bytes = None;
 			self.clear_cached_history();
 			self.clear_search();
 			self.search_target = None;

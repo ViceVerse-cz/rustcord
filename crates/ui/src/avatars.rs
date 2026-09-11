@@ -2,7 +2,7 @@
 use egui::{ColorImage, TextureHandle};
 use model::User;
 use std::{
-	collections::{HashMap, VecDeque},
+	collections::HashMap,
 	time::{Duration, Instant},
 };
 
@@ -11,9 +11,21 @@ const TEXTURE_BYTES: usize = 16 * 1024 * 1024;
 const REQUESTS: usize = 128;
 const RETRY: Duration = Duration::from_secs(60);
 
+struct AvatarKey {
+	avatar: Option<String>,
+	discriminator: u16,
+	demo: bool,
+	key: std::sync::Arc<str>,
+	used: u64,
+}
+
 #[derive(Default)]
 pub(crate) struct Avatars {
-	textures: VecDeque<(String, TextureHandle)>,
+	textures: HashMap<String, (u64, TextureHandle)>,
+	avatar_keys: HashMap<model::Id, AvatarKey>,
+	clock: u64,
+	bytes: usize,
+	pub revision: u64,
 	attempts: HashMap<String, (Instant, bool)>,
 	requests: Vec<String>,
 }
@@ -60,20 +72,29 @@ impl Avatars {
 			return;
 		};
 		self.attempts.remove(&key);
-		self.textures.retain(|(old, _)| *old != key);
-		while self.textures.len() >= TEXTURES
-			|| self
+		if let Some((_, old)) = self.textures.remove(&key) {
+			self.bytes -= old.byte_size();
+		}
+		while self.textures.len() >= TEXTURES || self.bytes + image.pixels.len() * 4 > TEXTURE_BYTES
+		{
+			let oldest = self
 				.textures
 				.iter()
-				.map(|(_, t)| t.byte_size())
-				.sum::<usize>()
-				+ image.pixels.len() * 4
-				> TEXTURE_BYTES
-		{
-			self.textures.pop_front();
+				.min_by_key(|(_, (age, _))| *age)
+				.map(|(key, _)| key.clone())
+				.expect("texture cache over budget");
+			self.bytes -= self
+				.textures
+				.remove(&oldest)
+				.expect("oldest texture")
+				.1
+				.byte_size();
 		}
 		let texture = ctx.load_texture("service-image", image, egui::TextureOptions::LINEAR);
-		self.textures.push_back((key, texture));
+		self.bytes += texture.byte_size();
+		self.clock += 1;
+		self.revision += 1;
+		self.textures.insert(key, (self.clock, texture));
 	}
 	pub(crate) fn custom_image(
 		&mut self,
@@ -83,10 +104,7 @@ impl Avatars {
 		demo: bool,
 	) -> Option<egui::Image<'static>> {
 		let key = format!("emoji-{id}");
-		if demo
-			&& matches!(id.0, 9001 | 9002)
-			&& !self.textures.iter().any(|(stored, _)| stored == &key)
-		{
+		if demo && matches!(id.0, 9001 | 9002) && !self.textures.contains_key(&key) {
 			let mut image = ColorImage::filled([32, 32], egui::Color32::TRANSPARENT);
 			for y in 3..29 {
 				for x in 3..29 {
@@ -102,10 +120,10 @@ impl Avatars {
 			self.attempts.insert(key.clone(), (Instant::now(), false));
 			self.accept(ctx, key.clone(), Some(image));
 		}
-		if let Some(index) = self.textures.iter().position(|(stored, _)| stored == &key) {
-			let entry = self.textures.remove(index).expect("located emoji texture");
+		if let Some(entry) = self.textures.get_mut(&key) {
+			self.clock += 1;
+			entry.0 = self.clock;
 			let image = egui::Image::new(&entry.1).fit_to_exact_size(egui::Vec2::splat(size));
-			self.textures.push_back(entry);
 			Some(image)
 		} else {
 			if !demo {
@@ -122,17 +140,14 @@ impl Avatars {
 		demo: bool,
 	) -> Option<(egui::TextureId, [usize; 2])> {
 		let key = format!("gif:{}", gif.preview);
-		if demo
-			&& gif.preview.contains("/synthetic/")
-			&& !self.textures.iter().any(|(stored, _)| stored == &key)
-		{
+		if demo && gif.preview.contains("/synthetic/") && !self.textures.contains_key(&key) {
 			self.attempts.insert(key.clone(), (Instant::now(), false));
 			self.accept(ctx, key.clone(), Some(synthetic_gif(gif)));
 		}
-		if let Some(index) = self.textures.iter().position(|(stored, _)| stored == &key) {
-			let entry = self.textures.remove(index).expect("located gif texture");
+		if let Some(entry) = self.textures.get_mut(&key) {
+			self.clock += 1;
+			entry.0 = self.clock;
 			let texture = (entry.1.id(), entry.1.size());
-			self.textures.push_back(entry);
 			Some(texture)
 		} else {
 			if !demo {
@@ -159,7 +174,7 @@ impl Avatars {
 		if ui.is_rect_visible(rect)
 			&& let Some(key) = profile.banner_key()
 		{
-			if demo && !self.textures.iter().any(|(stored, _)| stored == &key) {
+			if demo && !self.textures.contains_key(&key) {
 				let mut image = ColorImage::filled([128, 48], color);
 				let stripe = color.lerp_to_gamma(egui::Color32::WHITE, 0.16);
 				for y in 0..48 {
@@ -172,8 +187,9 @@ impl Avatars {
 				self.attempts.insert(key.clone(), (Instant::now(), false));
 				self.accept(ui.ctx(), key.clone(), Some(image));
 			}
-			if let Some(index) = self.textures.iter().position(|(stored, _)| stored == &key) {
-				let entry = self.textures.remove(index).expect("located texture");
+			if let Some(entry) = self.textures.get_mut(&key) {
+				self.clock += 1;
+				entry.0 = self.clock;
 				let source = entry.1.size_vec2();
 				let scale = (rect.width() / source.x).max(rect.height() / source.y);
 				let uv_size = rect.size() / (source * scale);
@@ -182,7 +198,6 @@ impl Avatars {
 					.uv(uv)
 					.corner_radius(corner)
 					.paint_at(ui, rect);
-				self.textures.push_back(entry);
 			} else if !demo {
 				self.request(key);
 			}
@@ -202,7 +217,7 @@ impl Avatars {
 		if ui.is_rect_visible(rect) {
 			let colors = crate::design::palette(ui);
 			if let Some(key) = key {
-				if demo && !self.textures.iter().any(|(stored, _)| stored == &key) {
+				if demo && !self.textures.contains_key(&key) {
 					// Original synthetic emblem; never bundled third-party badge artwork.
 					let seed = key
 						.bytes()
@@ -257,10 +272,11 @@ impl Avatars {
 		if profile.guild.as_ref().is_none_or(|g| g.avatar.is_none()) {
 			return self.show(ui, &profile.user, size, demo);
 		}
-		let response = crate::design::avatar(ui, &profile.user.name, size);
+		let (_, response) = ui.allocate_exact_size(egui::Vec2::splat(size), egui::Sense::click());
+		let response = response.on_hover_text(&profile.user.name);
 		if ui.is_rect_visible(response.rect) {
 			let key = profile.avatar_key();
-			if demo && !self.textures.iter().any(|(stored, _)| stored == &key) {
+			if demo && !self.textures.contains_key(&key) {
 				let image = ColorImage::filled([32, 32], crate::design::palette(ui).accent);
 				self.attempts.insert(key.clone(), (Instant::now(), false));
 				self.accept(ui.ctx(), key.clone(), Some(image));
@@ -271,9 +287,11 @@ impl Avatars {
 				ui.layout()
 					.align_size_within_rect(egui::Vec2::splat(size), response.rect),
 				(size * 0.5) as u8,
-			) && !demo
-			{
-				self.request(key);
+			) {
+				crate::design::paint_avatar(ui, &profile.user.name, size, response.rect);
+				if !demo {
+					self.request(key);
+				}
 			}
 		}
 		response.widget_info(|| {
@@ -286,10 +304,11 @@ impl Avatars {
 		response
 	}
 	fn paint(&mut self, ui: &mut egui::Ui, key: &str, rect: egui::Rect, radius: u8) -> bool {
-		let Some(index) = self.textures.iter().position(|(stored, _)| stored == key) else {
+		let Some(entry) = self.textures.get_mut(key) else {
 			return false;
 		};
-		let entry = self.textures.remove(index).expect("located texture");
+		self.clock += 1;
+		entry.0 = self.clock;
 		// paint_at stretches to its rectangle; fit actual pixels inside the stable layout slot.
 		let source = entry.1.size_vec2();
 		let scale = (rect.width() / source.x).min(rect.height() / source.y);
@@ -297,7 +316,6 @@ impl Avatars {
 		egui::Image::new(&entry.1)
 			.corner_radius(radius)
 			.paint_at(ui, fitted);
-		self.textures.push_back(entry);
 		true
 	}
 	pub fn show_guild(
@@ -322,7 +340,7 @@ impl Avatars {
 		if ui.is_rect_visible(rect)
 			&& let Some(key) = guild.icon_key()
 		{
-			if demo && !self.textures.iter().any(|(stored, _)| stored == &key) {
+			if demo && !self.textures.contains_key(&key) {
 				let mut image = ColorImage::filled([32, 32], egui::Color32::from_rgb(88, 101, 242));
 				for row in [8, 14, 20] {
 					for y in row..row + 3 {
@@ -425,7 +443,7 @@ impl Avatars {
 				.map(|source| format!("embed:{source}"));
 			if demo
 				&& let Some(key) = &key
-				&& !self.textures.iter().any(|(stored, _)| stored == key)
+				&& !self.textures.contains_key(key)
 			{
 				let mut image = ColorImage::filled([320, 180], egui::Color32::from_rgb(40, 50, 70));
 				for y in 0..180 {
@@ -500,14 +518,49 @@ impl Avatars {
 		size: f32,
 		demo: bool,
 	) -> egui::Response {
-		let response = crate::design::avatar(ui, &user.name, size);
+		let (_, response) = ui.allocate_exact_size(egui::Vec2::splat(size), egui::Sense::click());
+		let response = response.on_hover_text(&user.name);
 		if ui.is_rect_visible(response.rect) {
-			let key = if demo {
-				format!("preview-{}", user.id)
-			} else {
-				user.avatar_key()
-			};
-			if demo && !self.textures.iter().any(|(stored, _)| stored == &key) {
+			self.clock += 1;
+			let avatar = user
+				.avatar
+				.as_deref()
+				.filter(|hash| model::valid_avatar_hash(hash));
+			let valid = self.avatar_keys.get(&user.id).is_some_and(|entry| {
+				entry.avatar.as_deref() == avatar
+					&& entry.discriminator == user.discriminator
+					&& entry.demo == demo
+			});
+			if !valid {
+				if self.avatar_keys.len() >= TEXTURES {
+					let oldest = *self
+						.avatar_keys
+						.iter()
+						.min_by_key(|(_, entry)| entry.used)
+						.expect("avatar key cache")
+						.0;
+					self.avatar_keys.remove(&oldest);
+				}
+				let key = if demo {
+					format!("preview-{}", user.id)
+				} else {
+					user.avatar_key()
+				};
+				self.avatar_keys.insert(
+					user.id,
+					AvatarKey {
+						avatar: avatar.map(str::to_owned),
+						discriminator: user.discriminator,
+						demo,
+						key: key.into(),
+						used: self.clock,
+					},
+				);
+			}
+			let entry = self.avatar_keys.get_mut(&user.id).expect("avatar key");
+			entry.used = self.clock;
+			let key = entry.key.clone();
+			if demo && !self.textures.contains_key(key.as_ref()) {
 				// Original, synthetic silhouettes exercise the image path without network or assets.
 				let background = if user.id.0.is_multiple_of(2) {
 					egui::Color32::from_rgb(63, 99, 111)
@@ -525,14 +578,18 @@ impl Avatars {
 						}
 					}
 				}
-				self.attempts.insert(key.clone(), (Instant::now(), false));
-				self.accept(ui.ctx(), key.clone(), Some(image));
+				self.attempts
+					.insert(key.to_string(), (Instant::now(), false));
+				self.accept(ui.ctx(), key.to_string(), Some(image));
 			}
 			let rect = ui
 				.layout()
 				.align_size_within_rect(egui::Vec2::splat(size), response.rect);
-			if !self.paint(ui, &key, rect, (size * 0.5) as u8) && !demo {
-				self.request(key);
+			if !self.paint(ui, &key, rect, (size * 0.5) as u8) {
+				crate::design::paint_avatar(ui, &user.name, size, rect);
+				if !demo {
+					self.request(key.to_string());
+				}
 			}
 		}
 		if response.hovered() || response.has_focus() {
@@ -727,7 +784,7 @@ mod tests {
 			avatars
 				.textures
 				.iter()
-				.map(|(_, t)| t.byte_size())
+				.map(|(_, (_, t))| t.byte_size())
 				.sum::<usize>(),
 			4 * 1024 * 1024
 		);
@@ -751,7 +808,7 @@ mod tests {
 			avatars
 				.textures
 				.iter()
-				.map(|(_, texture)| texture.byte_size())
+				.map(|(_, (_, texture))| texture.byte_size())
 				.sum::<usize>(),
 			TEXTURE_BYTES
 		);

@@ -27,6 +27,8 @@ pub struct TimelineView {
 	pub(super) pin_request: Option<(Id, Id, bool)>,
 	toolbar: Option<(Id, egui::Rect)>,
 	heights: BTreeMap<Id, (u64, f32)>,
+	pub(super) reflow_frames: u64,
+	pub(super) consecutive_reflows: u64,
 	width: f32,
 	rows: Vec<(Id, f32)>,
 	revision: u64,
@@ -286,7 +288,8 @@ fn overlay_bar(
 	if radius.sw == 0 {
 		// Bottom bars cast a soft shadow upward onto the messages behind them.
 		ui.painter().rect_filled(
-			rect.expand2(egui::vec2(1.0, 0.0)).translate(egui::vec2(0.0, -1.0)),
+			rect.expand2(egui::vec2(1.0, 0.0))
+				.translate(egui::vec2(0.0, -1.0)),
 			egui::CornerRadius {
 				nw: 9,
 				ne: 9,
@@ -1173,8 +1176,13 @@ impl TimelineView {
 			}
 		}
 		if reflow {
+			self.reflow_frames = self.reflow_frames.saturating_add(1);
+			self.consecutive_reflows = self.consecutive_reflows.saturating_add(1);
 			self.revision = u64::MAX;
 			ui.ctx().request_repaint();
+		}
+		if !reflow {
+			self.consecutive_reflows = 0;
 		}
 		// A user scroll near the top requests one page; a short initial view never drains history.
 		self.load_older = !self.following

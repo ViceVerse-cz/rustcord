@@ -13,6 +13,7 @@ pub struct Timeline {
 	bytes: usize,
 	changed: BTreeSet<Id>,
 	patches: BTreeMap<Id, MessagePatch>,
+	patch_bytes: usize,
 	deleted: BTreeSet<Id>,
 	loading: bool,
 	retain_older: bool,
@@ -56,11 +57,8 @@ impl Timeline {
 			+ tree_bytes::<Id>(self.changed.len())
 			+ tree_bytes::<Id>(self.deleted.len())
 			+ tree_bytes::<(Id, MessagePatch)>(self.patches.len())
-			+ self
-				.patches
-				.values()
-				.map(|patch| patch_bytes(patch) - size_of::<MessagePatch>())
-				.sum::<usize>()
+			+ self.patch_bytes
+			- self.patches.len() * size_of::<MessagePatch>()
 	}
 	pub fn begin_page(&mut self, older: bool) {
 		// Set eviction direction before live events can race the history response.
@@ -68,6 +66,7 @@ impl Timeline {
 		self.loading = true;
 		self.changed.clear();
 		self.patches.clear();
+		self.patch_bytes = 0;
 	}
 	pub fn cancel_page(&mut self) {
 		// Failure stops reconciliation, but preserves the window the user is reading.
@@ -75,6 +74,7 @@ impl Timeline {
 		self.loading = false;
 		self.changed.clear();
 		self.patches.clear();
+		self.patch_bytes = 0;
 	}
 	fn remember(&mut self, id: Id) -> Result<(), &'static str> {
 		if self.loading {
@@ -199,9 +199,14 @@ impl Timeline {
 		// mutations observed during this request, never missing cached/old RAM records.
 		self.retain_older = older;
 		if !older {
-			self.messages.retain(|id, _| self.changed.contains(id));
-			self.bytes = self.iter().map(Message::bytes).sum();
-			self.live_count = self.iter().count();
+			self.messages.retain(|id, message| {
+				let keep = self.changed.contains(id);
+				if !keep && let Some(message) = message {
+					self.bytes -= message.bytes();
+					self.live_count -= 1;
+				}
+				keep
+			});
 		}
 		for item in items {
 			self.insert(item, false, older)?;
@@ -209,6 +214,7 @@ impl Timeline {
 		self.loading = false;
 		self.changed.clear();
 		self.patches.clear();
+		self.patch_bytes = 0;
 		Ok(())
 	}
 	pub fn patch(&mut self, patch: MessagePatch) -> Result<(), &'static str> {
@@ -228,7 +234,9 @@ impl Timeline {
 			self.bytes -= message.bytes();
 			self.live_count -= 1;
 			// Once hydrated, changed protects this record from the in-flight history page.
-			self.patches.remove(&patch.id);
+			if let Some(old) = self.patches.remove(&patch.id) {
+				self.patch_bytes -= patch_bytes(&old);
+			}
 			apply_patch(&mut message, &patch);
 			self.insert(message, true, false)?;
 		} else if self.loading {
@@ -237,7 +245,7 @@ impl Timeline {
             }) {
                 return Ok(());
             }
-			let bytes: usize = self.patches.values().map(patch_bytes).sum();
+			let bytes = self.patch_bytes;
 			let mut merged = self
 				.patches
 				.get(&patch.id)
@@ -269,6 +277,7 @@ impl Timeline {
 			if bytes - replaced + patch_bytes(&merged) > 1024 * 1024 {
 				return Err("Pending patch byte budget exceeded; reload required");
 			}
+			self.patch_bytes = bytes - replaced + patch_bytes(&merged);
 			self.patches.insert(merged.id, merged);
 		}
 		Ok(())
@@ -279,7 +288,9 @@ impl Timeline {
 		}
 		self.remember(id)?;
 		self.deleted.insert(id);
-		self.patches.remove(&id);
+		if let Some(old) = self.patches.remove(&id) {
+			self.patch_bytes -= patch_bytes(&old);
+		}
 		if let Some(old) = self.messages.get_mut(&id).and_then(Option::take) {
 			self.bytes -= old.bytes();
 			self.live_count -= 1;

@@ -2,7 +2,7 @@
 use egui::{FontId, Stroke, TextFormat, text::LayoutJob};
 use model::Id;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
-use std::collections::VecDeque;
+use std::collections::HashMap;
 use unicode_segmentation::UnicodeSegmentation;
 
 const MAX_INPUT: usize = 8192;
@@ -34,42 +34,58 @@ pub struct Formatted {
 
 #[derive(Default)]
 pub struct FormatCache {
-	entries: VecDeque<((Id, u16), String, Formatted)>,
+	entries: HashMap<(Id, u16), (String, Formatted, u64)>,
 	bytes: usize,
+	clock: u64,
 }
 impl FormatCache {
 	pub fn retain(&mut self, mut keep: impl FnMut(Id) -> bool) {
-		self.entries.retain(|((id, _), _, _)| keep(*id));
-		self.bytes = self
-			.entries
-			.iter()
-			.map(|(_, source, parsed)| source.capacity() + parsed.bytes())
-			.sum();
+		self.entries.retain(|(id, _), (source, parsed, _)| {
+			if keep(*id) {
+				true
+			} else {
+				self.bytes -= source.capacity() + parsed.bytes();
+				false
+			}
+		});
 	}
 	pub fn get(&mut self, id: Id, source: &str) -> &Formatted {
 		self.get_part(id, 0, source)
 	}
 	pub fn get_part(&mut self, message: Id, part: u16, source: &str) -> &Formatted {
 		let id = (message, part);
-		let existing = self.entries.iter().position(|(cached, _, _)| *cached == id);
-		let entry = existing.and_then(|index| self.entries.remove(index));
-		let entry = match entry {
-			Some((id, cached, parsed)) if cached == source => (id, cached, parsed),
-			_ => {
-				let mut end = source.len().min(64 * 1024);
-				while !source.is_char_boundary(end) {
-					end -= 1;
-				}
-				(id, source[..end].to_owned(), Formatted::parse(source))
+		self.clock += 1;
+		if self
+			.entries
+			.get(&id)
+			.is_some_and(|(cached, _, _)| cached == source)
+		{
+			let entry = self.entries.get_mut(&id).expect("cached message");
+			entry.2 = self.clock;
+		} else {
+			if let Some((source, parsed, _)) = self.entries.remove(&id) {
+				self.bytes -= source.capacity() + parsed.bytes();
 			}
-		};
-		self.entries.push_back(entry);
-		self.retain(|_| true);
-		while self.entries.len() > 64 || self.bytes > 1024 * 1024 {
-			let (_, source, parsed) = self.entries.pop_front().expect("cache over budget");
-			self.bytes -= source.capacity() + parsed.bytes();
+			let mut end = source.len().min(64 * 1024);
+			while !source.is_char_boundary(end) {
+				end -= 1;
+			}
+			let parsed = Formatted::parse(source);
+			let source = source[..end].to_owned();
+			self.bytes += source.capacity() + parsed.bytes();
+			self.entries.insert(id, (source, parsed, self.clock));
+			while self.entries.len() > 64 || self.bytes > 1024 * 1024 {
+				let oldest = *self
+					.entries
+					.iter()
+					.min_by_key(|(_, entry)| entry.2)
+					.expect("cache over budget")
+					.0;
+				let (source, parsed, _) = self.entries.remove(&oldest).expect("oldest entry");
+				self.bytes -= source.capacity() + parsed.bytes();
+			}
 		}
-		&self.entries.back().expect("one bounded message fits").2
+		&self.entries.get(&id).expect("one bounded message fits").1
 	}
 }
 

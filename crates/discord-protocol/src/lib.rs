@@ -12,6 +12,7 @@ pub mod presence;
 pub mod profile;
 mod reactions;
 pub mod read_state;
+pub mod ready;
 pub mod search;
 pub mod threads;
 pub mod typing;
@@ -288,6 +289,10 @@ impl GuildPatchDto {
 }
 #[derive(Deserialize)]
 pub struct Ready {
+	#[serde(default)]
+	pub presences: Option<Box<RawValue>>,
+	#[serde(default)]
+	pub merged_presences: Option<presence::MergedPresences>,
 	#[serde(default)]
 	pub users: Vec<UserDto>,
 	#[serde(default)]
@@ -1196,12 +1201,18 @@ pub struct VoiceMemberDto {
 #[derive(Deserialize)]
 pub struct ReadySupplemental {
 	#[serde(default)]
+	pub presences: Option<Box<RawValue>>,
+	#[serde(default)]
+	pub merged_presences: Option<presence::MergedPresences>,
+	#[serde(default)]
 	pub guilds: Vec<GuildDto>,
 	#[serde(default)]
 	pub merged_members: Vec<Vec<VoiceMemberDto>>,
 }
 #[derive(Deserialize)]
 pub struct PassiveVoiceUpdate {
+	#[serde(default, deserialize_with = "read_state::entries")]
+	pub updated_channels: Vec<read_state::LatestChannel>,
 	#[serde(default)]
 	pub guild_id: Option<Id>,
 	#[serde(default)]

@@ -235,7 +235,7 @@ impl ClientState {
 		if !self.can_call(channel) || self.voice.active.is_some() {
 			return None;
 		}
-		let guild = self.channels.iter().find(|c| c.id == channel)?.guild;
+		let guild = self.channel(channel)?.guild;
 		let participants: Vec<_> = self
 			.voice
 			.roster

@@ -1,5 +1,11 @@
 # Third-party notices
 
+REST gzip decoding adds **async-compression 0.4.42**, **compression-codecs 0.4.38**
+and **compression-core 0.4.32**. Gateway zlib-stream decoding directly uses the
+already-resolved **flate2 1.1.10**. Rusqlite statement caching adds **hashlink 0.12.2**.
+All five declare **MIT OR Apache-2.0** in their corresponding registry release
+manifests; their versions and archive checksums are recorded in `Cargo.lock`.
+
 Inline MP3/WAV attachment playback uses **Symphonia 0.6.1** and its core, metadata,
 MP3, PCM and RIFF components (MPL-2.0), plus existing **CPAL 0.18.2** (Apache-2.0)
 for output in both default and voice builds. Additional resolved dependencies are

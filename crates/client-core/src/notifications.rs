@@ -289,7 +289,7 @@ impl State {
 		Ok(())
 	}
 	fn mention_matches(&self, channel: Id, direct: bool, everyone: bool, roles: &[Id]) -> bool {
-		let Some(channel) = self.channels.iter().find(|c| c.id == channel) else {
+		let Some(channel) = self.channel(channel) else {
 			return false;
 		};
 		if direct || channel.guild.is_none() {

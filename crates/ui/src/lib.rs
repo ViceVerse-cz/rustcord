@@ -50,8 +50,18 @@ pub struct AttachmentPaste {
 	pub image: Option<std::sync::Arc<egui::ColorImage>>,
 }
 
+enum MemberRow {
+	Header(String),
+	Member(usize, bool),
+}
+
 #[derive(Default)]
 pub struct MessagingUi {
+	member_cache_key: Option<(u64, u64, Option<Id>, bool)>,
+	member_cache: Vec<MemberRow>,
+	member_count: usize,
+	composer_layout: composer_text::Layout,
+	channel_cache: categories::Cache,
 	search: search::SearchUi,
 	settings: settings::Settings,
 	switcher: switcher::Switcher,
@@ -134,6 +144,9 @@ pub struct MessagingUi {
 }
 
 impl MessagingUi {
+	pub fn timeline_reflows(&self) -> (u64, u64) {
+		(self.timeline.reflow_frames, self.timeline.consecutive_reflows)
+	}
 	/// Fixture-only entry point: opens People and the profile card for `user` as if clicked.
 	pub fn preview_profile(&mut self, user: model::User) {
 		self.members_narrow_open = true;
@@ -352,50 +365,72 @@ impl MessagingUi {
 			ui.add_space(8.0);
 			ui.label(RichText::new("Loading people…").small().color(colors.muted));
 		}
-		let members: Vec<_> = list.rows.iter().flatten().collect();
-		let online = |member: &&model::Member| {
-			profiles::presence(state, member.user.id, list.guild)
-				.0
-				.is_some_and(|s| matches!(s, "online" | "idle" | "dnd"))
-		};
-		let (online_members, offline_members): (Vec<_>, Vec<_>) =
-			members.iter().copied().partition(online);
-		enum Row<'a> {
-			Header(String),
-			Member(&'a model::Member, bool),
-		}
-		let mut rows = Vec::with_capacity(members.len() + 2);
-		if let Some(guild) = list.guild {
-			let mut online_members: Vec<_> = online_members
-				.into_iter()
-				.map(|member| (member, state.member_roles(guild, member).0))
+		let cache_key = (
+			state.generation,
+			state.revision,
+			state.selected,
+			state.gateway_connected,
+		);
+		if self.member_cache_key != Some(cache_key) {
+			let members: Vec<_> = list
+				.rows
+				.iter()
+				.enumerate()
+				.filter_map(|(i, m)| m.as_ref().map(|m| (i, m)))
 				.collect();
-			online_members.sort_by(|a, b| match (a.1, b.1) {
-				(Some(a), Some(b)) => b.cmp_hierarchy(a),
-				(Some(_), None) => std::cmp::Ordering::Less,
-				(None, Some(_)) => std::cmp::Ordering::Greater,
-				(None, None) => std::cmp::Ordering::Equal,
-			});
-			for members in online_members.chunk_by(|a, b| a.1.map(|r| r.id) == b.1.map(|r| r.id)) {
-				let name = members[0].1.map_or("Online", |r| {
-					if r.name.is_empty() {
-						"Role"
-					} else {
-						r.name.as_str()
-					}
+			let online = |(_, member): &(usize, &model::Member)| {
+				profiles::member_presence(state, member, list.guild)
+					.0
+					.is_some_and(|s| matches!(s, "online" | "idle" | "dnd"))
+			};
+			let (online_members, offline_members): (Vec<_>, Vec<_>) =
+				members.iter().copied().partition(online);
+			let mut rows = Vec::with_capacity(members.len() + 2);
+			if let Some(guild) = list.guild {
+				let mut online_members: Vec<_> = online_members
+					.into_iter()
+					.map(|member| (member, state.member_roles(guild, member.1).0))
+					.collect();
+				online_members.sort_by(|a, b| match (a.1, b.1) {
+					(Some(a), Some(b)) => b.cmp_hierarchy(a),
+					(Some(_), None) => std::cmp::Ordering::Less,
+					(None, Some(_)) => std::cmp::Ordering::Greater,
+					(None, None) => std::cmp::Ordering::Equal,
 				});
-				rows.push(Row::Header(format!("{name} — {}", members.len())));
-				rows.extend(members.iter().map(|(m, _)| Row::Member(m, true)));
+				for members in
+					online_members.chunk_by(|a, b| a.1.map(|r| r.id) == b.1.map(|r| r.id))
+				{
+					let name = members[0].1.map_or("Online", |r| {
+						if r.name.is_empty() {
+							"Role"
+						} else {
+							r.name.as_str()
+						}
+					});
+					rows.push(MemberRow::Header(format!("{name} — {}", members.len())));
+					rows.extend(members.iter().map(|(m, _)| MemberRow::Member(m.0, true)));
+				}
+				if !offline_members.is_empty() {
+					rows.push(MemberRow::Header(format!(
+						"Offline — {}",
+						offline_members.len()
+					)));
+					rows.extend(
+						offline_members
+							.iter()
+							.map(|m| MemberRow::Member(m.0, false)),
+					);
+				}
+			} else {
+				rows.push(MemberRow::Header(format!("Members — {}", members.len())));
+				rows.extend(members.iter().map(|m| MemberRow::Member(m.0, online(m))));
 			}
-			if !offline_members.is_empty() {
-				rows.push(Row::Header(format!("Offline — {}", offline_members.len())));
-				rows.extend(offline_members.iter().map(|m| Row::Member(m, false)));
-			}
-		} else {
-			rows.push(Row::Header(format!("Members — {}", members.len())));
-			rows.extend(members.iter().map(|m| Row::Member(m, online(m))));
+			self.member_count = members.len();
+			self.member_cache = rows;
+			self.member_cache_key = Some(cache_key);
 		}
-		if members.is_empty() && list.freshness == Freshness::Fresh {
+		let member_count = self.member_count;
+		if member_count == 0 && list.freshness == Freshness::Fresh {
 			ui.add_space(8.0);
 			ui.label(
 				RichText::new("No people returned for this view.")
@@ -403,11 +438,10 @@ impl MessagingUi {
 					.color(colors.muted),
 			);
 		}
-		let hint = if list.guild.is_some() && list.total > members.len() as u64 {
+		let hint = if list.guild.is_some() && list.total > member_count as u64 {
 			Some(format!(
 				"Showing {} of {} members",
-				members.len(),
-				list.total
+				member_count, list.total
 			))
 		} else {
 			None
@@ -415,11 +449,11 @@ impl MessagingUi {
 		egui::ScrollArea::vertical()
 			.id_salt(("people", list.channel))
 			.auto_shrink([false, false])
-			.show_rows(ui, 42.0, rows.len(), |ui, range| {
+			.show_rows(ui, 42.0, self.member_cache.len(), |ui, range| {
 				ui.spacing_mut().item_spacing.y = 0.0;
 				for index in range {
-					match &rows[index] {
-						Row::Header(text) => {
+					match &self.member_cache[index] {
+						MemberRow::Header(text) => {
 							let (rect, _) = ui.allocate_exact_size(
 								egui::vec2(ui.available_width(), 42.0),
 								egui::Sense::hover(),
@@ -441,10 +475,13 @@ impl MessagingUi {
 								)
 								.on_hover_text(text);
 						}
-						Row::Member(member, online) => {
+						MemberRow::Member(member_index, online) => {
+							let member = list.rows[*member_index]
+								.as_ref()
+								.expect("cached member row");
 							let name = member.nick.as_deref().unwrap_or(&member.user.name);
 							let (status, custom, activities) =
-								profiles::presence(state, member.user.id, list.guild);
+								profiles::member_presence(state, member, list.guild);
 							let subtitle = profiles::subtitle(custom, activities);
 							let (rect, response) = ui.allocate_exact_size(
 								egui::vec2(ui.available_width(), 42.0),
@@ -1509,7 +1546,7 @@ impl MessagingUi {
                             edit_state.store(ctx, composer_id);
                             mention_changed = true;
                         }
-                        let mut rich_layout = composer_text::Layout::default();
+                        let rich_layout = &mut self.composer_layout;
                         if !self.ime_active
                             && !ime_this_frame
                             && ctx.input(|i| {

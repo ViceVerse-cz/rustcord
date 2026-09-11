@@ -82,7 +82,7 @@ impl LocalStore {
 		if version > 10 {
 			return Err(StoreError::Incompatible);
 		}
-		connection.execute_batch("PRAGMA page_size=4096; PRAGMA max_page_count=16384; PRAGMA cache_size=-2048; PRAGMA temp_store=MEMORY; PRAGMA journal_mode=DELETE; PRAGMA secure_delete=ON; PRAGMA auto_vacuum=FULL;
+		connection.execute_batch("PRAGMA page_size=4096; PRAGMA max_page_count=16384; PRAGMA cache_size=-2048; PRAGMA temp_store=MEMORY; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA wal_autocheckpoint=256; PRAGMA journal_size_limit=8388608; PRAGMA secure_delete=ON; PRAGMA auto_vacuum=INCREMENTAL;
             CREATE TABLE IF NOT EXISTS messages(account TEXT NOT NULL,channel TEXT NOT NULL,id TEXT NOT NULL,author TEXT NOT NULL,name TEXT NOT NULL,content TEXT NOT NULL,edited INTEGER NOT NULL,reply TEXT,unsupported INTEGER NOT NULL,PRIMARY KEY(account,channel,id));
             CREATE TABLE IF NOT EXISTS channels(account TEXT NOT NULL,channel TEXT NOT NULL,touched INTEGER NOT NULL,PRIMARY KEY(account,channel));
             CREATE TABLE IF NOT EXISTS drafts(account TEXT NOT NULL,channel TEXT NOT NULL,content TEXT NOT NULL,PRIMARY KEY(account,channel));
@@ -263,6 +263,35 @@ impl LocalStore {
 		}
 		Ok(())
 	}
+	/// Apply a bounded changed-row batch while retaining exactly the current window IDs.
+	pub fn save_changes(
+		&mut self,
+		account: Id,
+		channel: Id,
+		messages: &[Message],
+		retained: &[Id],
+	) -> Result<()> {
+		if retained.len() > 500
+			|| messages.len() > 500
+			|| messages.iter().map(Message::bytes).sum::<usize>() > MAX_WINDOW_BYTES
+		{
+			return Err(StoreError::Capacity);
+		}
+		let retained: std::collections::BTreeSet<_> = retained.iter().copied().collect();
+		let mut window: BTreeMap<_, _> = self
+			.load_channel(account, channel)?
+			.into_iter()
+			.filter(|m| retained.contains(&m.id))
+			.map(|m| (m.id, m))
+			.collect();
+		for message in messages {
+			if !retained.contains(&message.id) {
+				return Err(StoreError::Capacity);
+			}
+			window.insert(message.id, message.clone());
+		}
+		self.save_channel(account, channel, &window.into_values().collect::<Vec<_>>())
+	}
 	pub fn save_channel(&mut self, account: Id, channel: Id, messages: &[Message]) -> Result<()> {
 		if messages.len() > 500
 			|| messages.iter().map(Message::bytes).sum::<usize>() > MAX_WINDOW_BYTES
@@ -277,15 +306,29 @@ impl LocalStore {
 			}) {
 			return Err(StoreError::Capacity);
 		}
-		// ponytail: replace one <=500-row window transactionally; switch to mutation UPSERTs if write cost is measured to matter.
+		// Compare on the storage worker; unchanged rows need no serialization or write.
+		let existing = self.load_channel(account, channel)?;
 		let transaction = self.0.transaction()?;
 		let account = account.to_string();
 		let channel = channel.to_string();
-		transaction.execute(
-			"DELETE FROM messages WHERE account=?1 AND channel=?2",
-			params![account, channel],
-		)?;
+		let retained: std::collections::BTreeSet<_> = messages.iter().map(|m| m.id).collect();
+		let previous: BTreeMap<_, _> = existing.iter().map(|m| (m.id, m)).collect();
+		{
+			let mut delete = transaction
+				.prepare_cached("DELETE FROM messages WHERE account=?1 AND channel=?2 AND id=?3")?;
+			for message in &existing {
+				if !retained.contains(&message.id) {
+					delete.execute(params![account, channel, message.id.to_string()])?;
+				}
+			}
+		}
 		for message in messages {
+			if previous
+				.get(&message.id)
+				.is_some_and(|old| **old == *message)
+			{
+				continue;
+			}
 			let mentions =
 				serde_json::to_string(&message.mentions).map_err(|_| StoreError::Incompatible)?;
 			if mentions.len() > 128 * 1024 {
@@ -298,8 +341,8 @@ impl LocalStore {
 			if embeds.len() > MAX_MEDIA_JSON || attachments.len() > MAX_MEDIA_JSON {
 				return Err(StoreError::Capacity);
 			}
-			transaction.execute(
-                "INSERT INTO messages(account,channel,id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions,extra_content,message_kind,reply_deleted) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
+			transaction.prepare_cached(
+                "INSERT OR REPLACE INTO messages(account,channel,id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions,extra_content,message_kind,reply_deleted) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)")?.execute(
                 params![
                     account,
                     channel,
@@ -344,6 +387,7 @@ impl LocalStore {
 			)?;
 		}
 		transaction.commit()?;
+		self.0.execute_batch("PRAGMA incremental_vacuum(64);")?;
 		Ok(())
 	}
 	pub fn load_channel(&self, account: Id, channel: Id) -> Result<Vec<Message>> {
@@ -522,6 +566,8 @@ impl LocalStore {
 			[account.to_string()],
 		)?;
 		transaction.commit()?;
+		self.0
+			.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA incremental_vacuum(64);")?;
 		Ok(())
 	}
 	pub fn delete_messages(&mut self, account: Id, channel: Id, ids: &[Id]) -> Result<()> {
@@ -541,6 +587,8 @@ impl LocalStore {
 			}
 		}
 		transaction.commit()?;
+		self.0
+			.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA incremental_vacuum(64);")?;
 		Ok(())
 	}
 	/// Saved GIF favorites for one account, newest first. Rejected rows are skipped.
@@ -608,6 +656,8 @@ impl LocalStore {
 			)?;
 		}
 		transaction.commit()?;
+		self.0
+			.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA incremental_vacuum(64);")?;
 		Ok(())
 	}
 }

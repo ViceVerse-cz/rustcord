@@ -10,6 +10,18 @@ enum Row<'a> {
 	Participant(&'a client_core::voice::RosterEntry),
 }
 
+#[derive(Clone, Copy)]
+enum CachedRow {
+	Category(usize, usize),
+	Channel(usize, bool),
+	Participant(usize),
+}
+#[derive(Default)]
+pub(super) struct Cache {
+	key: Option<(u64, u64, Option<Id>, Option<Id>)>,
+	rows: Vec<CachedRow>,
+}
+
 fn rows<'a>(
 	state: &'a State,
 	guild: Option<Id>,
@@ -102,59 +114,89 @@ fn kind_label(kind: u8) -> &'static str {
 
 impl MessagingUi {
 	pub(super) fn channel_list(&mut self, ui: &mut egui::Ui, state: &State) -> Option<Id> {
-		// Session-only keys are pruned on navigation updates, never accumulated in egui memory.
-		let categories: BTreeSet<_> = state
-			.channels
-			.iter()
-			.filter(|c| c.kind == 4)
-			.map(|c| c.id)
-			.collect();
-		self.collapsed_categories
-			.retain(|id| categories.contains(id));
-		let channel_rows = rows(
-			state,
-			self.guild,
-			&self.collapsed_categories,
-			state.selected,
-		);
-		let mut participants = BTreeMap::<Id, Vec<_>>::new();
-		for entry in &state.voice.roster {
-			if Some(entry.guild) == self.guild && state.can_view(entry.channel) {
-				participants.entry(entry.channel).or_default().push(entry);
+		let key = (state.generation, state.revision, self.guild, state.selected);
+		if self.channel_cache.key != Some(key) {
+			// Session-only keys are pruned on navigation updates, never accumulated in egui memory.
+			let categories: BTreeSet<_> = state
+				.channels
+				.iter()
+				.filter(|c| c.kind == 4)
+				.map(|c| c.id)
+				.collect();
+			self.collapsed_categories
+				.retain(|id| categories.contains(id));
+			let channel_rows = rows(
+				state,
+				self.guild,
+				&self.collapsed_categories,
+				state.selected,
+			);
+			let mut participants = BTreeMap::<Id, Vec<_>>::new();
+			for entry in &state.voice.roster {
+				if Some(entry.guild) == self.guild && state.can_view(entry.channel) {
+					participants.entry(entry.channel).or_default().push(entry);
+				}
 			}
-		}
-		let mut rows = Vec::with_capacity(channel_rows.len() + state.voice.roster.len());
-		for row in channel_rows {
-			let channel = match &row {
-				Row::Channel(channel, _) if channel.kind == 2 => Some(channel.id),
-				_ => None,
-			};
-			rows.push(row);
-			if let Some(entries) = channel.and_then(|id| participants.remove(&id)) {
-				rows.extend(entries.into_iter().map(Row::Participant));
+			let mut rows = Vec::with_capacity(channel_rows.len() + state.voice.roster.len());
+			for row in channel_rows {
+				let channel = match &row {
+					Row::Channel(channel, _) if channel.kind == 2 => Some(channel.id),
+					_ => None,
+				};
+				rows.push(row);
+				if let Some(entries) = channel.and_then(|id| participants.remove(&id)) {
+					rows.extend(entries.into_iter().map(Row::Participant));
+				}
 			}
+			let indices: BTreeMap<_, _> = state
+				.channels
+				.iter()
+				.enumerate()
+				.map(|(i, c)| (c.id, i))
+				.collect();
+			let participants: BTreeMap<_, _> = state
+				.voice
+				.roster
+				.iter()
+				.enumerate()
+				.map(|(i, p)| ((p.channel, p.participant.user), i))
+				.collect();
+			self.channel_cache.rows = rows
+				.into_iter()
+				.map(|row| match row {
+					Row::Category(c, n) => CachedRow::Category(indices[&c.id], n),
+					Row::Channel(c, n) => CachedRow::Channel(indices[&c.id], n),
+					Row::Participant(p) => {
+						CachedRow::Participant(participants[&(p.channel, p.participant.user)])
+					}
+				})
+				.collect();
+			self.channel_cache.key = Some(key);
 		}
 		let colors = design::palette(ui);
 		let mut selected = None;
-		if rows.is_empty() {
+		if self.channel_cache.rows.is_empty() {
 			ui.label(RichText::new("No conversations available here.").color(colors.muted));
 		}
 		let dm_list = self.guild.is_none();
 		let row_height = if dm_list { 44.0 } else { 34.0 };
+		let row_count = self.channel_cache.rows.len();
 		egui::ScrollArea::vertical()
 			.id_salt(("channel-list", self.guild))
 			.auto_shrink([false, false])
-			.show_rows(ui, row_height, rows.len(), |ui, range| {
+			.show_rows(ui, row_height, row_count, |ui, range| {
 				ui.spacing_mut().item_spacing.y = 0.0;
 				for index in range {
-					match rows[index] {
-						Row::Participant(entry) => {
+					match self.channel_cache.rows[index] {
+						CachedRow::Participant(entry) => {
+							let entry = &state.voice.roster[entry];
 							ui.horizontal(|ui| {
 								ui.add_space(28.0);
 								self.voice_participant(ui, state, entry);
 							});
 						}
-						Row::Category(category, count) => {
+						CachedRow::Category(category, count) => {
+							let category = &state.channels[category];
 							let collapsed = self.collapsed_categories.contains(&category.id);
 							let (rect, response) = ui
 								.push_id(category.id, |ui| {
@@ -219,6 +261,7 @@ impl MessagingUi {
 								)
 							});
 							if response.clicked() {
+								self.channel_cache.key = None;
 								if collapsed {
 									self.collapsed_categories.remove(&category.id);
 								} else {
@@ -226,7 +269,8 @@ impl MessagingUi {
 								}
 							}
 						}
-						Row::Channel(channel, nested) => {
+						CachedRow::Channel(channel, nested) => {
+							let channel = &state.channels[channel];
 							let active = state.selected == Some(channel.id);
 							if channel.kind == 2 {
 								let response =

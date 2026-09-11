@@ -7,6 +7,7 @@ use std::{collections::BTreeMap, time::Duration};
 #[derive(Default)]
 pub(crate) struct Pending {
 	updates: BTreeMap<Id, Update>,
+	bytes: usize,
 	pub bootstrap_users: std::collections::BTreeSet<Id>,
 	pub deadline: Option<Instant>,
 }
@@ -31,27 +32,24 @@ impl Pending {
 		if self.updates.len() >= 100 && !self.updates.contains_key(&merged.user) {
 			return;
 		}
-		let projected = self
-			.updates
-			.iter()
-			.filter(|(id, _)| **id != merged.user)
-			.map(|(_, value)| value.heap_bytes())
-			.sum::<usize>()
-			+ merged.heap_bytes()
-			+ 100 * size_of::<Update>()
-			+ size_of::<Event>();
+		let bytes = self.bytes - self.updates.get(&merged.user).map_or(0, Update::heap_bytes)
+			+ merged.heap_bytes();
+		let projected = bytes + 100 * size_of::<Update>() + size_of::<Event>();
 		if projected > MAX_MEMBER_PRESENCE_BYTES {
 			return;
 		}
+		self.bytes = bytes;
 		self.updates.insert(merged.user, merged);
 		self.deadline
 			.get_or_insert(now + Duration::from_millis(100));
 	}
 	pub fn take(&mut self) -> Option<Event> {
 		self.deadline = None;
+		self.bytes = 0;
 		let updates = std::mem::take(&mut self.updates);
 		(!updates.is_empty()).then(|| Event::DirectPresence(updates.into_values().collect()))
 	}
+	#[cfg(test)]
 	pub fn supplemental(
 		&mut self,
 		bytes: &[u8],
@@ -61,43 +59,50 @@ impl Pending {
 		// Identify sends no DEDUPE_USER_OBJECTS capability, so READY uses presences.
 		// Also accept merged_presences.friends from the unofficial supplemental format.
 		// Decode only bounded wire data; no assets/secrets survive the presence decoder.
-		let Ok(mut data) = discord_protocol::decode::<serde_json::Value>(bytes) else {
+		#[derive(serde::Deserialize)]
+		struct Snapshot<'a> {
+			#[serde(default, borrow)]
+			presences: Option<&'a serde_json::value::RawValue>,
+			#[serde(default, borrow)]
+			merged_presences: Option<Merged<'a>>,
+		}
+		#[derive(serde::Deserialize)]
+		struct Merged<'a> {
+			#[serde(default, borrow)]
+			friends: Option<&'a serde_json::value::RawValue>,
+		}
+		if bytes.len() > discord_protocol::MAX_WIRE {
+			return Ok(());
+		}
+		let Ok(data) = serde_json::from_slice::<Snapshot<'_>>(bytes) else {
 			return Ok(());
 		};
-		let path = if data.pointer("/merged_presences/friends").is_some() {
-			"/merged_presences/friends"
-		} else {
-			"/presences"
-		};
 		let Some(friends) = data
-			.pointer_mut(path)
-			.and_then(serde_json::Value::as_array_mut)
+			.merged_presences
+			.and_then(|m| m.friends)
+			.or(data.presences)
 		else {
 			return Ok(());
 		};
-		for friend in friends {
-			let Some(object) = friend.as_object_mut() else {
-				continue;
-			};
-			if !object.contains_key("user")
-				&& let Some(user_id) = object.remove("user_id")
-			{
-				object.insert("user".into(), serde_json::json!({"id": user_id}));
-			}
-			let Some(id) = object.get("user").and_then(|u| u.get("id")) else {
-				continue;
-			};
-			let Ok(id) = serde_json::from_value::<Id>(id.clone()) else {
-				continue;
-			};
-			if !self.bootstrap_users.contains(&id) {
-				continue;
-			}
-			if let Ok(bytes) = serde_json::to_vec(friend)
-				&& let Ok(update) = discord_protocol::presence::decode(&bytes)
-			{
-				if (self.updates.len() >= 100
-					|| self.updates.values().map(Update::heap_bytes).sum::<usize>() > 96 * 1024)
+		self.friends(friends, now, emit)
+	}
+	pub fn friends(
+		&mut self,
+		friends: &serde_json::value::RawValue,
+		now: Instant,
+		emit: &impl Fn(Event) -> Result<(), client_core::auth::Failure>,
+	) -> Result<(), client_core::auth::Failure> {
+		let Ok(friends) =
+			serde_json::from_str::<discord_protocol::presence::Friends<'_>>(friends.get())
+		else {
+			return Ok(());
+		};
+		for friend in friends.0 {
+			if let Ok(update) = discord_protocol::presence::decode(friend.get().as_bytes()) {
+				if !self.bootstrap_users.contains(&update.user) {
+					continue;
+				}
+				if (self.updates.len() >= 100 || self.bytes > 96 * 1024)
 					&& let Some(event) = self.take()
 				{
 					emit(event)?;

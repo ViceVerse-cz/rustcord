@@ -310,56 +310,62 @@ async fn run(
 		.build()
 		.ok();
 	let mut cooldown = Instant::now();
+	// Four bounded downloads overlap; disk access and image decode stay on this worker.
+	let mut downloads = tokio::task::JoinSet::new();
 	loop {
-		let key = tokio::select! {
+		let (key, bytes, mut error, fetched, cached_image) = tokio::select! {
 			biased;
 			_ = cancelled.changed() => break,
-			key = requests.recv() => match key { Some(key) => key, None => break },
+			completed = downloads.join_next(), if !downloads.is_empty() => {
+				let Some(Ok((key, bytes, until))) = completed else { break };
+				cooldown = cooldown.max(until);
+				(key, bytes, disk.is_none().then_some(CACHE_ERROR), true, None)
+			},
+			key = requests.recv(), if downloads.len() < 4 => {
+				let Some(key) = key else { break };
+				if *cancelled.borrow() { break; }
+				let Some(url) = cdn_url(&key) else { continue };
+				let mut error = disk.is_none().then_some(CACHE_ERROR);
+				let cached = disk.as_mut().and_then(|disk| match disk.read(&key) {
+					Ok(bytes) => bytes,
+					Err(_) => { error = Some(CACHE_ERROR); None }
+				});
+				let embed = key.starts_with("embed:") || key.starts_with("gif:")
+					|| key.starts_with("banner-") || key.starts_with("member-banner-");
+				let image = cached.as_deref().and_then(|bytes| decode(bytes, embed));
+				if image.is_none() && Instant::now() >= cooldown && let Some(client) = &client {
+					let client = client.clone();
+					downloads.spawn(async move {
+						let mut until = cooldown;
+						let bytes = async {
+							let url = if key.starts_with("app-icon-") {
+								let metadata = download(&client, &url, &mut until, MAX_APPLICATION_METADATA).await?;
+								application_icon_url(&key, &metadata)?
+							} else { url };
+							download(&client, &url, &mut until, MAX_ENCODED).await
+						}.await;
+						(key, bytes, until)
+					});
+					continue;
+				}
+				(key, cached, error, false, image)
+			},
 		};
 		if *cancelled.borrow() {
 			break;
 		}
-		let Some(url) = cdn_url(&key) else { continue };
-		let mut error = disk.is_none().then_some(CACHE_ERROR);
-		let cached = disk.as_mut().and_then(|disk| match disk.read(&key) {
-			Ok(bytes) => bytes,
-			Err(_) => {
-				error = Some(CACHE_ERROR);
-				None
-			}
-		});
 		let embed = key.starts_with("embed:")
 			|| key.starts_with("gif:")
 			|| key.starts_with("banner-")
 			|| key.starts_with("member-banner-");
-		let mut image = cached.as_deref().and_then(|bytes| decode(bytes, embed));
-		if image.is_none()
-			&& Instant::now() >= cooldown
-			&& let Some(client) = &client
+		let image =
+			cached_image.or_else(|| bytes.as_deref().and_then(|bytes| decode(bytes, embed)));
+		if fetched
+			&& image.is_some()
+			&& let (Some(disk), Some(bytes)) = (&mut disk, &bytes)
+			&& disk.write(&key, bytes).is_err()
 		{
-			let downloaded = tokio::select! {
-				biased;
-				_ = cancelled.changed() => break,
-				bytes = async {
-					let url = if key.starts_with("app-icon-") {
-						let metadata = download(client, &url, &mut cooldown, MAX_APPLICATION_METADATA).await?;
-						application_icon_url(&key, &metadata)?
-					} else { url };
-					download(client, &url, &mut cooldown, MAX_ENCODED).await
-				} => bytes,
-			};
-			if let Some(bytes) = downloaded {
-				image = decode(&bytes, embed);
-				if *cancelled.borrow() {
-					break;
-				}
-				if image.is_some()
-					&& let Some(disk) = &mut disk
-					&& disk.write(&key, &bytes).is_err()
-				{
-					error = Some(CACHE_ERROR);
-				}
-			}
+			error = Some(CACHE_ERROR);
 		}
 		if *cancelled.borrow() {
 			break;
@@ -371,6 +377,7 @@ async fn run(
 		}
 		ctx.request_repaint();
 	}
+	downloads.abort_all();
 }
 
 async fn download(

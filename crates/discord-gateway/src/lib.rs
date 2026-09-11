@@ -1,5 +1,6 @@
-//! Bounded, uncompressed JSON Gateway. Normal-user Identify remains live-unverified.
+//! Bounded, zlib-stream JSON Gateway. Normal-user Identify remains live-unverified.
 mod channel_events;
+mod compression;
 mod presence;
 mod thread_events;
 mod voice;
@@ -52,7 +53,7 @@ pub fn validated_url(value: &str) -> Result<String, Failure> {
 	{
 		return Err(Failure::Protocol);
 	}
-	url.set_query(Some("v=10&encoding=json"));
+	url.set_query(Some("v=10&encoding=json&compress=zlib-stream"));
 	Ok(url.to_string())
 }
 #[derive(Default)]
@@ -452,8 +453,21 @@ async fn run_inner(
 			attempt += 1;
 			continue;
 		};
-		let hello = timeout(Duration::from_secs(10), socket.next()).await;
-		let Ok(Some(Ok(Frame::Text(text)))) = hello else {
+		let mut compression = compression::Decoder::default();
+		let hello = timeout(Duration::from_secs(10), async {
+			while let Some(frame) = socket.next().await {
+				let frame = frame.map_err(|_| Failure::Network)?;
+				if let Some(frame) = compression.frame(frame)? {
+					match frame {
+						Frame::Ping(_) | Frame::Pong(_) => continue,
+						frame => return Ok(frame),
+					}
+				}
+			}
+			Err(Failure::Network)
+		})
+		.await;
+		let Ok(Ok(Frame::Text(text))) = hello else {
 			attempt += 1;
 			continue;
 		};
@@ -580,6 +594,13 @@ async fn run_inner(
 					if !matches!(timeout(Duration::from_secs(5), socket.send(Frame::Text(packet.into()))).await, Ok(Ok(()))) { break; }
 				}
 				frame = socket.next() => {
+					let frame = match frame {
+						Some(Ok(frame)) => match compression.frame(frame)? {
+							Some(frame) => Some(Ok(frame)),
+							None => continue,
+						},
+						other => other,
+					};
 					match frame {
 						Some(Ok(Frame::Text(text))) => {
 							let packet: GatewayPacket = decode(text.as_bytes()).map_err(|_| Failure::Protocol)?;
@@ -603,10 +624,11 @@ async fn run_inner(
 									"READY" => {
 										direct_presence=presence::Pending::default();
 										active_members=None;members_deadline=None;sent_members = !subscriptions_open;
-										let mut ready: Ready = decode(packet.d.get().as_bytes()).map_err(|_| Failure::ProtocolAt("Gateway login: unsupported READY payload"))?;
+										let envelope = ready::decode(packet.d.get().as_bytes()).map_err(|_| Failure::ProtocolAt("Gateway login: unsupported READY payload"))?;
+										if envelope.user.bot { return Err(Failure::InvalidCredential); }
+										let permissions = envelope.permissions().map_err(|_|Failure::ProtocolAt("Gateway login: invalid permission metadata"))?;
+										let mut ready = envelope.navigation().map_err(|_| Failure::ProtocolAt("Gateway login: unsupported READY payload"))?;
 										owner_id=Some(ready.user.id);
-										if ready.user.bot { return Err(Failure::InvalidCredential); }
-										let permissions=permissions::ready(packet.d.get().as_bytes(),ready.user.id).map_err(|_|Failure::ProtocolAt("Gateway login: invalid permission metadata"))?;
 										if ready.session_id.len() > 2048 { return Err(Failure::Capacity); }
 										state.url = Some(validated_url(&ready.resume_gateway_url).map_err(|f|f.protocol_at("Gateway login: resume address rejected"))?);
 										state.session = Some(Zeroizing::new(std::mem::take(&mut ready.session_id)));
@@ -629,7 +651,9 @@ async fn run_inner(
 										calls.allowed=channels.iter().filter(|c|(c.guild.is_none() && c.kind==1 && c.recipients.len()==1) || (c.guild.is_some() && c.kind==2)).map(|c|(c.id,c.guild)).collect();
 										if was_ready { emit(Event::Resync)?; }
 										emit(Event::Ready { user: ready.user.into_model(), guilds, channels, permissions })?; was_ready = true;
-										direct_presence.supplemental(packet.d.get().as_bytes(),Instant::now(),&emit)?;
+										if let Some(friends) = ready.merged_presences.as_ref().and_then(|m| m.friends.as_deref()).or(ready.presences.as_deref()) {
+											direct_presence.friends(friends, Instant::now(), &emit)?;
+										}
 										emit(Event::ReadState(client_core::read_state::Event::Snapshot{entries:read_entries,version:read_version,partial}))?;
 										if let Some(snapshot) = ready.user_guild_settings.take() {
 											let (entries,replace)=snapshot.entries();
@@ -640,13 +664,16 @@ async fn run_inner(
 										ready_at = Some(Instant::now());
 									}
 									"READY_SUPPLEMENTAL" => {
-										direct_presence.supplemental(packet.d.get().as_bytes(),Instant::now(),&emit)?;
+										let mut extra: ReadySupplemental = decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
+										if let Some(friends) = extra.merged_presences.as_ref().and_then(|m| m.friends.as_deref()).or(extra.presences.as_deref()) {
+											direct_presence.friends(friends, Instant::now(), &emit)?;
+										}
 										direct_presence.bootstrap_users.clear();
 										if let Some(owner)=owner_id {
 											let updates=permissions::supplemental(packet.d.get().as_bytes(),owner).map_err(|_|Failure::Protocol)?;
 											if !updates.is_empty() {emit(Event::Permissions(client_core::permissions::Event::Members(updates)))?;}
 										}
-										let mut extra: ReadySupplemental = decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
+
 										if extra.guilds.len() > MAX_NAV || extra.merged_members.len() > MAX_NAV { return Err(Failure::Capacity); }
 										let mut participants = Vec::new();
 										let mut roster_bytes = 0;
@@ -709,12 +736,14 @@ async fn run_inner(
 										emit(Event::ReadState(client_core::read_state::Event::Ack{channel:ack.channel_id,message:ack.message_id,manual:ack.manual,mention_count:ack.mention_count,version:ack.version}))?;
 									}
 									"PASSIVE_UPDATE_V2" => {
-										if let Some(owner)=owner_id && let Some((guild,roles,timeout_until))=permissions::passive(packet.d.get().as_bytes(),owner).map_err(|_|Failure::Protocol)? {
+										let envelope = ready::passive(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
+										if let Some(owner)=owner_id && let Some((guild,roles,timeout_until))=envelope.permissions(owner).map_err(|_|Failure::Protocol)? {
 											emit(Event::Permissions(client_core::permissions::Event::Member {guild,roles,timeout_until}))?;
 										}
-										calls.passive(decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?,owner_id,&emit)?;
-										let update=decode::<read_state::PassiveUpdate>(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
-										emit(Event::ReadState(client_core::read_state::Event::Latest(update.updated_channels.into_iter().map(|c|(c.id,c.last_message_id)).collect())))?;
+										let mut update = envelope.voice().map_err(|_|Failure::Protocol)?;
+										let latest = std::mem::take(&mut update.updated_channels);
+										calls.passive(update,owner_id,&emit)?;
+										emit(Event::ReadState(client_core::read_state::Event::Latest(latest.into_iter().map(|c|(c.id,c.last_message_id)).collect())))?;
 									}
 									"MESSAGE_UPDATE" => emit(Event::Patch(decode::<PatchDto>(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?.into_model()))?,
 									"MESSAGE_REACTION_ADD" | "MESSAGE_REACTION_REMOVE" | "MESSAGE_REACTION_REMOVE_ALL" | "MESSAGE_REACTION_REMOVE_EMOJI" => {
@@ -812,7 +841,7 @@ async fn run_inner(
 						}
 						Some(Ok(Frame::Ping(data))) => { if !matches!(timeout(Duration::from_secs(5), socket.send(Frame::Pong(data))).await, Ok(Ok(()))) { break; } }
 						Some(Ok(Frame::Pong(_))) => {},
-						Some(Ok(Frame::Binary(_))) => return Err(Failure::Protocol), // compression was not negotiated
+						Some(Ok(Frame::Binary(_))) => return Err(Failure::Protocol),
 						_ => break,
 					}
 				}
@@ -1376,7 +1405,7 @@ mod tests {
 		}
 		assert_eq!(
 			validated_url("wss://gateway.discord.gg/?compress=zlib-stream").unwrap(),
-			"wss://gateway.discord.gg/?v=10&encoding=json"
+			"wss://gateway.discord.gg/?v=10&encoding=json&compress=zlib-stream"
 		);
 	}
 }
