@@ -90,6 +90,9 @@ ICONS = [
     ("file-audio", "fill/file-audio-fill.svg", "835c6bfde42e68d716db3dd4db0e02843f6a7bd704a4377287a4b022d80ace7a"),
     ("file-video", "fill/file-video-fill.svg", "2940d83bf3560f389d6a826ca639741a9098d5bfe8910ea371fdc4c83790b827"),
     ("trash", "fill/trash-fill.svg", "f78767cc15e1a7d6eea49c4efb515cf6fceaf07fbc421e8ce18373d07c14b673"),
+    ("arrow-down", "bold/arrow-down-bold.svg", "193222b87a796f1c56336f51cb041cfd2a6c899ae0a027248a63fc183758a364"),
+    ("arrow-up", "bold/arrow-up-bold.svg", "87dade5b87b48190dae13370375e2d84f6c22548eebac93ff2f46d091882fb78"),
+    ("check", "bold/check-bold.svg", "d0ca4e324ff5bb3a1a3bacb9f7580359b8e03cc6862a614d5ed14458db64bedf"),
 ]
 LICENSE_SHA256 = "ddbe6082ec3cf979db47e5af549d2849c5d6182b3e005ef91ce1dbb9eb122f11"
 

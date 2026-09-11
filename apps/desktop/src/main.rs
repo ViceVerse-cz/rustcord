@@ -374,8 +374,14 @@ impl Desktop {
 		if messaging.notification_test_available {
 			state.status = "Offline fixture · explicit system notification test";
 		}
-		if demo && std::env::args().any(|arg| arg == "--demo-settings") {
-			messaging.preview_settings();
+		if demo
+			&& let Some(page) = std::env::args().find_map(|arg| {
+				arg.strip_prefix("--demo-settings")
+					.map(|rest| rest.trim_start_matches('=').to_lowercase())
+			})
+		{
+			// `--demo-settings` or `--demo-settings=account` etc.
+			messaging.preview_settings(&page);
 		}
 		if demo && std::env::args().any(|arg| arg == "--demo-profile") {
 			// Presence for the fixture card comes from the same synthetic People rows.
@@ -394,7 +400,11 @@ impl Desktop {
 			messaging.preview_emoji_picker();
 			state.status = "Offline fixture · emoji popout opened at startup";
 		}
-		if demo && std::env::args().any(|arg| arg == "--demo-attachment") {
+		if demo && std::env::args().any(|arg| arg == "--demo-attachment=file") {
+			// Non-image variant: exercises the file-kind glyph and extension badge.
+			messaging.preview_attachment("quarterly-report.pdf", 1_482_311, None);
+			state.status = "Offline fixture · synthetic file attachment staged in the composer";
+		} else if demo && std::env::args().any(|arg| arg == "--demo-attachment") {
 			// Synthetic gradient stands in for a decoded photo; no file is read or uploaded.
 			let (width, height) = (320usize, 200usize);
 			let pixels = (0..width * height)
@@ -429,6 +439,21 @@ impl Desktop {
 		{
 			messaging.preview_search(&query);
 			state.status = "Offline fixture · synthetic search opened at startup";
+		}
+		if demo
+			&& std::env::args().any(|arg| arg == "--demo-browsing")
+			&& let Some(channel) = state.selected
+		{
+			// Fixture-only: an unread marker on the oldest loaded message plus a targeted history
+			// page, so both timeline overlays render without pointer input.
+			let oldest = state.timeline.iter().next().map(|message| message.id);
+			let _ = state.apply_read_state(client_core::read_state::Event::Snapshot {
+				entries: Some(vec![(channel, oldest, 0)]),
+				version: Some(1),
+				partial: false,
+			});
+			state.history_targeted = true;
+			state.status = "Offline fixture · unread strip and older-messages bar shown";
 		}
 		Ok(Self {
 			login: None,
@@ -1890,7 +1915,7 @@ impl eframe::App for Desktop {
 							self.state.status = error;
 						}
 					}
-					Ok(clipboard::Content::File(_)) => {
+					Ok(clipboard::Content::File(..)) => {
 						self.state.status = "Attaching files is unavailable here"
 					}
 					Err(error) => self.state.status = error,

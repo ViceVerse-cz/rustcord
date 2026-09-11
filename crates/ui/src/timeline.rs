@@ -275,9 +275,74 @@ fn message_actions(
 		)
 	});
 }
+/// Flat strip painted over the timeline edge; `add` lays out its contents left to right.
+fn overlay_bar(
+	ui: &mut egui::Ui,
+	rect: egui::Rect,
+	fill: egui::Color32,
+	radius: egui::CornerRadius,
+	add: impl FnOnce(&mut egui::Ui),
+) {
+	if radius.sw == 0 {
+		// Bottom bars cast a soft shadow upward onto the messages behind them.
+		ui.painter().rect_filled(
+			rect.expand2(egui::vec2(1.0, 0.0)).translate(egui::vec2(0.0, -1.0)),
+			egui::CornerRadius {
+				nw: 9,
+				ne: 9,
+				sw: 0,
+				se: 0,
+			},
+			egui::Color32::from_black_alpha(48),
+		);
+	}
+	ui.painter().rect_filled(rect, radius, fill);
+	let mut bar = ui.new_child(
+		egui::UiBuilder::new()
+			.max_rect(rect.shrink2(egui::vec2(12.0, 0.0)))
+			.layout(egui::Layout::left_to_right(egui::Align::Center)),
+	);
+	bar.spacing_mut().item_spacing.x = 8.0;
+	add(&mut bar);
+}
+/// Frameless text action with a trailing arrow glyph, for use inside [`overlay_bar`].
+fn bar_button(
+	ui: &mut egui::Ui,
+	label: &str,
+	icon: crate::icons::Icon,
+	color: egui::Color32,
+) -> egui::Response {
+	// Right-to-left layouts place the first item at the right edge, so the glyph goes first.
+	let rtl = ui.layout().horizontal_placement() == egui::Align::Max;
+	let glyph = |ui: &mut egui::Ui| {
+		crate::icons::inline(ui, icon, 14.0, color);
+	};
+	if rtl {
+		glyph(ui);
+	}
+	ui.spacing_mut().item_spacing.x = 4.0;
+	let response = ui.add(
+		egui::Button::new(crate::design::medium(ui, label, 13.0).color(color))
+			.frame(false)
+			.small(),
+	);
+	if !rtl {
+		glyph(ui);
+	}
+	ui.spacing_mut().item_spacing.x = 12.0;
+	response
+}
 impl TimelineView {
 	pub(super) fn viewing_latest(&self, channel: Id) -> bool {
 		self.channel == Some(channel) && self.following && self.at_current_latest
+	}
+	/// Leaving the latest page is deliberate reading; nothing is acknowledged automatically.
+	fn browse_away(&mut self) {
+		self.target_browsing = true;
+		self.unread_browsing = true;
+		self.following = false;
+		self.jump = false;
+		self.mark_read = None;
 	}
 	pub(super) fn follow_latest(&mut self) {
 		self.target_browsing = false;
@@ -329,22 +394,8 @@ impl TimelineView {
 		}
 		let can_jump_unread = state.can_jump_unread();
 		let can_load_newer = state.can_load_newer();
-		if can_jump_unread || can_load_newer {
-			ui.horizontal_wrapped(|ui| {
-				if can_jump_unread && ui.button("Jump to unread").clicked() {
-					self.unread_jump = true;
-				}
-				if can_load_newer && ui.button("Next messages").clicked() {
-					self.load_newer = true;
-				}
-			});
-		}
 		if self.unread_jump || self.load_newer {
-			self.target_browsing = true;
-			self.unread_browsing = true;
-			self.following = false;
-			self.jump = false;
-			self.mark_read = None;
+			self.browse_away();
 		}
 		let boundary = state
 			.selected
@@ -483,7 +534,6 @@ impl TimelineView {
 			}
 		}
 		let mut scroll = egui::ScrollArea::vertical()
-			.max_height((ui.available_height() - 36.0).max(0.0))
 			.id_salt(("timeline", state.selected))
 			.auto_shrink([false, false])
 			.stick_to_bottom(self.following);
@@ -1137,40 +1187,118 @@ impl TimelineView {
 						.hover_pos()
 						.is_some_and(|pos| output.inner_rect.contains(pos))
 			}) && state.can_load_older();
-		if (!self.following
-			|| state.history_targeted
-			|| state.history_before.is_some()
-			|| state.history_after.is_some())
-			&& ui
-				.add(
-					egui::Button::new(
-						crate::design::medium(
-							ui,
-							if state
-								.selected
-								.is_some_and(|channel| state.unread(channel) == Some(true))
-							{
-								"New messages · Jump to present"
-							} else {
-								"Jump to present"
-							},
-							13.0,
-						)
-						.color(crate::design::palette(ui).accent_text),
-					)
-					.fill(crate::design::palette(ui).accent)
-					.corner_radius(6),
-				)
-				.clicked()
-		{
-			if state.history_targeted
-				|| state.history_before.is_some()
-				|| state.history_after.is_some()
-			{
-				self.latest = true;
+		// Discord-style overlays: an unread strip hangs from the top edge, and a translucent
+		// "older messages" bar floats above the composer while the user is not following. They
+		// are painted after the scroll area so they sit above the messages and win the hit-test.
+		let colors = crate::design::palette(ui);
+		let area = output.inner_rect;
+		if can_jump_unread || can_load_newer {
+			let mut jump_unread = false;
+			let mut load_newer = false;
+			overlay_bar(
+				ui,
+				egui::Rect::from_min_size(
+					egui::pos2(area.left() + 16.0, area.top()),
+					egui::vec2((area.width() - 32.0).max(120.0), 28.0),
+				),
+				colors.accent,
+				egui::CornerRadius {
+					nw: 0,
+					ne: 0,
+					sw: 8,
+					se: 8,
+				},
+				|ui| {
+					ui.label(
+						crate::design::medium(ui, "Unread messages", 13.0)
+							.color(colors.accent_text),
+					);
+					ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+						if can_jump_unread
+							&& bar_button(
+								ui,
+								"Jump to unread",
+								crate::icons::Icon::ArrowUp,
+								colors.accent_text,
+							)
+							.clicked()
+						{
+							jump_unread = true;
+						}
+						if can_load_newer
+							&& bar_button(
+								ui,
+								"Next messages",
+								crate::icons::Icon::ArrowDown,
+								colors.accent_text,
+							)
+							.clicked()
+						{
+							load_newer = true;
+						}
+					});
+				},
+			);
+			if jump_unread {
+				self.unread_jump = true;
+				self.browse_away();
 			}
-			self.follow_latest();
-			ui.ctx().request_repaint();
+			if load_newer {
+				self.load_newer = true;
+				self.browse_away();
+			}
+		}
+		let browsing_history = state.history_targeted
+			|| state.history_before.is_some()
+			|| state.history_after.is_some();
+		if !self.following || browsing_history {
+			let unread = state
+				.selected
+				.is_some_and(|channel| state.unread(channel) == Some(true));
+			let mut present = false;
+			let rect = egui::Rect::from_min_size(
+				egui::pos2(area.left() + 16.0, area.bottom() - 30.0),
+				egui::vec2((area.width() - 32.0).max(120.0), 30.0),
+			);
+			let base = colors.base.to_opaque();
+			overlay_bar(
+				ui,
+				rect,
+				egui::Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), 236),
+				egui::CornerRadius {
+					nw: 8,
+					ne: 8,
+					sw: 0,
+					se: 0,
+				},
+				|ui| {
+					ui.label(
+						RichText::new(if unread {
+							"New messages below"
+						} else {
+							"You're viewing older messages"
+						})
+						.size(13.0)
+						.color(colors.text),
+					);
+					ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+						present = bar_button(
+							ui,
+							"Jump to present",
+							crate::icons::Icon::ArrowDown,
+							colors.text_strong,
+						)
+						.clicked();
+					});
+				},
+			);
+			if present {
+				if browsing_history {
+					self.latest = true;
+				}
+				self.follow_latest();
+				ui.ctx().request_repaint();
+			}
 		}
 		if let Some((message_id, attachment_id)) = self.viewing {
 			let attachment = state

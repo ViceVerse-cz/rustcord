@@ -625,3 +625,106 @@ pub fn build_badge(ui: &mut egui::Ui, build: Build) -> Option<egui::Response> {
 	}
 	Some(response.on_hover_text(hint))
 }
+
+
+/// Discord-style settings row with a pill switch on the right. Clicking anywhere on the row
+/// toggles `enabled`; the accessible label is `label`.
+pub fn switch(
+	ui: &mut egui::Ui,
+	label: &str,
+	description: Option<&str>,
+	enabled: &mut bool,
+) -> egui::Response {
+	let p = palette(ui);
+	let width = ui.available_width();
+	let text_width = (width - 64.0).max(80.0);
+	let title = ui.painter().layout(
+		label.to_owned(),
+		FontId::new(16.0, medium_family(ui.ctx())),
+		p.text_strong,
+		text_width,
+	);
+	let detail = description.map(|text| {
+		ui.painter()
+			.layout(text.to_owned(), FontId::proportional(13.0), p.muted, text_width)
+	});
+	let text_height = title.size().y + detail.as_ref().map_or(0.0, |d| d.size().y + 4.0);
+	let (rect, mut response) = ui.allocate_exact_size(
+		egui::vec2(width, text_height.max(24.0) + 16.0),
+		egui::Sense::click(),
+	);
+	if response.clicked() {
+		*enabled = !*enabled;
+		response.mark_changed();
+	}
+	response.widget_info(|| {
+		egui::WidgetInfo::selected(
+			egui::WidgetType::Checkbox,
+			ui.is_enabled(),
+			*enabled,
+			label,
+		)
+	});
+	let painter = ui.painter();
+	if response.hovered() && ui.is_enabled() {
+		painter.rect_filled(rect.expand2(egui::vec2(8.0, 0.0)), 6, p.hover);
+	}
+	let mut y = rect.top() + 8.0;
+	painter.galley(egui::pos2(rect.left(), y), title.clone(), p.text_strong);
+	y += title.size().y + 4.0;
+	if let Some(detail) = detail {
+		painter.galley(egui::pos2(rect.left(), y), detail, p.muted);
+	}
+	let pill = egui::Rect::from_center_size(
+		egui::pos2(rect.right() - 20.0, rect.top() + 8.0 + title.size().y / 2.0),
+		egui::vec2(40.0, 24.0),
+	);
+	let mut fill = if *enabled { p.positive } else { p.muted };
+	if !ui.is_enabled() {
+		fill = fill.gamma_multiply(0.4);
+	}
+	painter.rect_filled(pill, 12, fill);
+	let knob = egui::pos2(
+		if *enabled {
+			pill.right() - 12.0
+		} else {
+			pill.left() + 12.0
+		},
+		pill.center().y,
+	);
+	painter.circle_filled(knob, 9.0, Color32::WHITE);
+	crate::icons::paint(
+		painter,
+		if *enabled {
+			crate::icons::Icon::Check
+		} else {
+			crate::icons::Icon::Close
+		},
+		egui::Rect::from_center_size(knob, egui::Vec2::splat(10.0)),
+		fill,
+	);
+	if response.has_focus() {
+		painter.rect_stroke(
+			pill.expand(3.0),
+			15,
+			Stroke::new(2.0, p.accent),
+			egui::StrokeKind::Outside,
+		);
+	}
+	response
+}
+
+/// Rounded settings card that groups related rows on the raised surface.
+pub fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+	let p = palette(ui);
+	egui::Frame::new()
+		.fill(p.raised)
+		.stroke(Stroke::new(1.0, p.border))
+		.corner_radius(8)
+		.inner_margin(egui::Margin::symmetric(16, 12))
+		.show(ui, |ui| {
+			ui.set_width(ui.available_width());
+			add(ui)
+		})
+		.inner
+}
