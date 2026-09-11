@@ -25,6 +25,7 @@ jobs:
       - run: node tests/login-handoff.cjs
       - run: node tests/xtask-workspace.cjs
       - run: cargo replay
+      - run: cargo replay --soak 5
       - name: Linux package regression
         if: runner.os == 'Linux'
         run: PYTHONDONTWRITEBYTECODE=1 python3 packaging/linux/test_package.py

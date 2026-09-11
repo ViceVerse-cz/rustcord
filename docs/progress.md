@@ -2100,3 +2100,52 @@ Clippy errors in unchanged `crates/discord-voice/src/audio/echo.rs:39,48`.
 Package measurements are in `docs/performance.md`. Native before/after screenshots,
 process CPU/RSS/frame timing and live attachment playback remain unverified because
 the owner stopped Computer Use with Escape; automation was not resumed.
+
+
+## Repeated synthetic session soak - September 11, 2026
+
+Baseline `c83f973`, isolated branch `test/repeated-session-soak`. PR #56 was independently
+merged while the previous session was interrupted; all its final-head native/security/license/
+fuzz checks passed. The redundant old local build was stopped after verifying remote state.
+
+The new `cargo replay --soak SECONDS` workload repeatedly visits 32 DMs using real reducer
+selection/history APIs and shipping cache limits. It generates pages of at most 50 messages and
+one live event at a time, with 128-byte and 16-KiB bodies to force both row and byte eviction.
+It checks pending-page edits/deletes, obsolete same-channel requests, ordered unique rows,
+selected-channel isolation, fresh-state revalidation after resume, resync invalidation, and
+pending-send/draft cleanup plus old-generation rejection after logout. No command is dispatched
+to a service. Request bookkeeping is a fixed 32-slot array and measurements are scalar ranges;
+there is no growing fixture or trace archive. CI adds a five-second smoke run.
+
+Required validation exposed existing main failures: formatting in four core/UI files, an
+oversized unboxed invite event, a redundant unit binding, two fixed-frame echo loop lints and
+the newly expanded message-action argument list. The fixes preserve behavior, box only the
+invite payload with complete byte accounting, group related action outputs and use the two
+480-sample slices of each fixed 960-sample echo frame. No lint is suppressed or check disabled.
+The short smoke passed. The 120-second soak completed 106,483,200 live inserts across
+177,472 channel visits and 22 logout cycles; retained history remained within shipping bounds.
+External replay-process samples stayed within 15,364,096..18,960,384 private bytes and
+18,579,456..22,130,688 working-set bytes after warmup (methods/limits in performance.md).
+
+The first full run passed Clippy but reproduced the existing guild-voice fixture's 10-second
+timeout; its isolated pre-fix retry passed in 0.56 seconds. Inspection found one-shot capture
+could be discarded by intentional stale-audio handling under load, and UDP/resume phases raced
+unacknowledged signaling/playback. The test now feeds a bounded continuous synthetic source
+until peer receipt, fences signaling with acknowledgments and waits for observed playback.
+Existing deadlines and production transport behavior are unchanged. Final suite/repeated voice
+verification and release comparisons are in progress.
+Native scrolling/images, storage tracing, physical audio, platform accessibility and owner-
+controlled live interoperability remain separate incomplete spec gates.
+
+
+The repaired DM/guild fixtures passed 20 repeated local scenarios (10 runs), alongside a
+concurrent 10-second core soak. The next full suite exposed four existing UI regressions:
+read-only navigation skipped editor focus bookkeeping, reply tests targeted labels replaced
+by the intentional reply layout, and a guild-mention fixture lacked permission metadata.
+The runtime fix clears only the stale composer focus key; tests retain pointer/Tab/Enter and
+no-send assertions using current controls, and the mention fixture supplies ordinary explicit
+VIEW_CHANNEL/SEND_MESSAGES grants. Send/compose authorization remains unchanged.
+
+Main subsequently advanced to `46df1a2` (profile and attachment card work). The c83 package
+comparison above predates that integration; its source scope is preserved explicitly. Final
+combined verification follows on the integrated tree.

@@ -565,35 +565,35 @@ impl MessagingUi {
 			.show(ui, |ui| {
 				let ctx = ui.ctx().clone();
 				if self.guild.is_none() {
-				let find = ui
-					.add_enabled_ui(
-						!self.ime_active
-							&& !ctx.input(|input| {
-								input
-									.events
-									.iter()
-									.any(|event| matches!(event, egui::Event::Ime(_)))
-							}),
-						|ui| {
-							ui.add_sized(
-								[ui.available_width(), 30.0],
-								egui::Button::new("Find conversation").truncate(),
-							)
-						},
-					)
-					.inner
-					.on_hover_text("Search loaded conversations (Ctrl/Cmd+K)");
-				find.widget_info(|| {
-					egui::WidgetInfo::labeled(
-						egui::WidgetType::Button,
-						ui.is_enabled(),
-						"Find conversation, Ctrl or Command K",
-					)
-				});
-				if find.clicked() {
-					self.switcher.open(&ctx);
-				}
-				ui.add_space(8.0);
+					let find = ui
+						.add_enabled_ui(
+							!self.ime_active
+								&& !ctx.input(|input| {
+									input
+										.events
+										.iter()
+										.any(|event| matches!(event, egui::Event::Ime(_)))
+								}),
+							|ui| {
+								ui.add_sized(
+									[ui.available_width(), 30.0],
+									egui::Button::new("Find conversation").truncate(),
+								)
+							},
+						)
+						.inner
+						.on_hover_text("Search loaded conversations (Ctrl/Cmd+K)");
+					find.widget_info(|| {
+						egui::WidgetInfo::labeled(
+							egui::WidgetType::Button,
+							ui.is_enabled(),
+							"Find conversation, Ctrl or Command K",
+						)
+					});
+					if find.clicked() {
+						self.switcher.open(&ctx);
+					}
+					ui.add_space(8.0);
 				}
 				if self.guild.is_none() {
 					ui.horizontal(|ui| {
@@ -1010,6 +1010,8 @@ impl MessagingUi {
 			}
 		}
 		if !editing_here && !state.can_compose(channel) {
+			// Returning to an edit must restore its focus after visiting a read-only channel.
+			self.composer_edit = None;
 			self.mention_menu = mentions::Menu::default();
 			self.emoji_picker = emoji_picker::Picker::default();
 			self.ime_active = false;
@@ -1704,10 +1706,8 @@ impl MessagingUi {
 		}
 		let wide_members = ui.available_width() >= 720.0;
 		self.search.sync(&ctx, state, &mut commands);
-		let search_open = self.search.open
-			&& !self.search.pins()
-			&& state.selected.is_some()
-			&& !selected_voice;
+		let search_open =
+			self.search.open && !self.search.pins() && state.selected.is_some() && !selected_voice;
 		let show_members = !selected_voice
 			&& !search_open
 			&& state.selected.is_some()
@@ -2906,17 +2906,15 @@ mod composer_tests {
 			}
 			let labels = frame(&mut view, &mut state, vec![]);
 			if blocked < 2 {
-				assert!(
-					labels
-						.iter()
-						.any(|(text, _)| text == "\u{21b3} Message deleted")
-				);
+				assert!(labels.iter().any(|(text, _)| text == "Message deleted"));
 			}
 			// Activate the visible disabled controls (and the inert deleted label) with real input.
-			for (_, rect) in labels
-				.iter()
-				.filter(|(text, _)| text == "View original" || text.starts_with('\u{21b3}'))
-			{
+			for (_, rect) in labels.iter().filter(|(text, _)| {
+				text == "View original"
+					|| text == "Message deleted"
+					|| text.starts_with("@Alex  ")
+					|| text.starts_with("Earlier message")
+			}) {
 				let pos = rect.center();
 				for pressed in [true, false] {
 					frame(
@@ -3022,8 +3020,10 @@ mod composer_tests {
 			let label_matches = |text: &str| {
 				if composer {
 					text == "View original"
+				} else if loaded {
+					text == "@Alex  Spoiler"
 				} else {
-					text.starts_with("↳")
+					text == "Earlier message \u{b7} View original"
 				}
 			};
 			let (labels, _) = frame(&mut view, &mut state, vec![]);

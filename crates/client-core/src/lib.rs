@@ -111,7 +111,7 @@ pub enum Command {
 pub enum Event {
 	Invite {
 		code: String,
-		result: Result<model::Embed, auth::Failure>,
+		result: Result<Box<model::Embed>, auth::Failure>,
 	},
 	Typing(typing::Signal),
 	PostCreated {
@@ -643,7 +643,7 @@ impl State {
 			pinned,
 		} = command
 		{
-			let _ = self.apply(Envelope {
+			self.apply(Envelope {
 				generation: self.generation,
 				event: Event::Pinned {
 					channel,
@@ -939,7 +939,7 @@ impl State {
 			} => self.apply_threads_sync(guild, parents, threads, removed),
 			Event::Reactions(event) => self.apply_reactions(event),
 			Event::Invite { code, result } => {
-				self.apply_invite(code, result);
+				self.apply_invite(code, result.map(|embed| *embed));
 				Ok(())
 			}
 			Event::Profile {
@@ -1444,7 +1444,10 @@ impl State {
 						} else {
 							"Message unpinned"
 						};
-						if let Some(view) = self.search.as_mut().filter(|view| view.pins && view.channel == channel)
+						if let Some(view) = self
+							.search
+							.as_mut()
+							.filter(|view| view.pins && view.channel == channel)
 							&& let Some(page) = view.page.as_mut()
 							&& !pinned
 						{
@@ -1456,8 +1459,12 @@ impl State {
 					Err(failure) => {
 						self.status = if pinned {
 							match failure {
-								auth::Failure::Forbidden => "Pinning is unavailable with the current permissions or the pin limit was reached",
-								_ => "Pin was not applied; check the pinned messages before retrying",
+								auth::Failure::Forbidden => {
+									"Pinning is unavailable with the current permissions or the pin limit was reached"
+								}
+								_ => {
+									"Pin was not applied; check the pinned messages before retrying"
+								}
 							}
 						} else {
 							"Unpin was not applied; check the pinned messages before retrying"
@@ -1788,7 +1795,7 @@ impl Event {
 					result.as_ref().map_or(0, |r| model::reaction_bytes(r))
 				}
 				Self::Invite { code, result } => {
-					code.capacity() + result.as_ref().map_or(0, model::Embed::bytes)
+					code.capacity() + result.as_ref().map_or(0, |embed| embed.bytes())
 				}
 				Self::Profile { result, .. } => result.as_ref().map_or(0, |p| p.bytes()),
 				Self::Voice(event) => event.bytes(),

@@ -32,3 +32,12 @@ sharing one directory can reuse stale application/test artifacts across simultan
 directories, instead of embedding the checkout where its cached executable was compiled.
 After `cargo xtask check`, `node tests/xtask-workspace.cjs` checks that behavior without
 building or accessing an owner session.
+
+
+Run `cargo replay --soak 120` for sustained offline lifecycle pressure (default 60 seconds,
+accepted range 1..3600). The workload generates one bounded history page/live event at a time
+across 32 synthetic DMs, exercises row/byte eviction, edit/delete races, stale requests,
+reconnect/resync and logout, and asserts the shipping reducer budgets. It keeps fixed-size
+counters and ranges instead of retaining a trace. CI runs a five-second smoke; longer local
+runs are needed for sustained evidence. Output reports actual duration, visits and logout
+cycles. This is a core-only workload: no Discord traffic, storage, GUI, image or audio devices.

@@ -543,16 +543,23 @@ pub fn build_badge(ui: &mut egui::Ui, build: Build) -> Option<egui::Response> {
 	const GLYPH: f32 = 12.0;
 	let width = PAD
 		+ GLYPH
-		+ 5.0
-		+ title.size().x
+		+ 5.0 + title.size().x
 		+ version.as_ref().map_or(0.0, |v| 13.0 + v.size().x)
 		+ PAD;
 	let (rect, response) = ui.allocate_exact_size(egui::vec2(width, HEIGHT), egui::Sense::hover());
 	let painter = ui.painter();
 	let radius = HEIGHT / 2.0;
 	// Soft glow, then a pill whose caps carry the gradient end colours.
-	painter.rect_filled(rect.expand(3.0), radius + 3.0, stops[0].gamma_multiply(0.14));
-	painter.rect_filled(rect.expand(1.0), radius + 1.0, stops[0].gamma_multiply(0.22));
+	painter.rect_filled(
+		rect.expand(3.0),
+		radius + 3.0,
+		stops[0].gamma_multiply(0.14),
+	);
+	painter.rect_filled(
+		rect.expand(1.0),
+		radius + 1.0,
+		stops[0].gamma_multiply(0.22),
+	);
 	let left = egui::pos2(rect.left() + radius, rect.center().y);
 	let right = egui::pos2(rect.right() - radius, rect.center().y);
 	painter.circle_filled(left, radius, stops[0]);

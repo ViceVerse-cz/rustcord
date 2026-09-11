@@ -197,12 +197,12 @@ fn message_actions(
 	ui: &mut egui::Ui,
 	message: &Message,
 	actions: (bool, bool, bool, bool),
-	mark_read: Option<&mut Option<Id>>,
-	reply: &mut Option<Id>,
+	selection: (Option<&mut Option<Id>>, &mut Option<Id>),
 	editing: (&mut Option<(Id, Id, String)>, &mut bool),
 	deleting: &mut Option<(Id, Id)>,
 	pin: (bool, bool, &mut Option<(Id, Id, bool)>),
 ) {
+	let (mark_read, reply) = selection;
 	let (editing, edit_started) = editing;
 	let (own, can_reply, can_edit, can_delete) = actions;
 	let (can_pin, pinned, pin_request) = pin;
@@ -1033,8 +1033,10 @@ impl TimelineView {
 							&mut toolbar,
 							message,
 							(own, can_reply, can_edit, can_delete),
-							can_mark_read.then_some(&mut self.mark_read),
-							&mut selected_reply,
+							(
+								can_mark_read.then_some(&mut self.mark_read),
+								&mut selected_reply,
+							),
 							(editing, &mut self.edit_started),
 							deleting,
 							(
@@ -1265,8 +1267,7 @@ mod tests {
 							ui,
 							&message,
 							(own, true, true, can_delete),
-							None,
-							&mut reply,
+							(None, &mut reply),
 							(&mut editing, &mut edit_started),
 							&mut deleting,
 							(false, false, &mut None),
