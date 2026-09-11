@@ -1,5 +1,50 @@
 # Initial performance evidence
 
+## Server dropdown - September 11, 2026
+
+Baseline `88d0c11` versus runtime commit `768d357`, Windows 11 Home, AMD Ryzen
+7 7800X3D (16 logical processors), 31.1 GiB visible RAM, Rust 1.98.1. Both isolated
+worktrees passed `cargo xtask package`, including standard voice support. Packages
+below are measured at those commits, before this measurement report was added.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Release executable, bytes | 61,799,424 | 61,864,448 | +65,024 (+0.1052%) |
+| Installed package, bytes | 66,264,678 | 66,331,261 | +66,583 (+0.1005%) |
+| PowerShell ZIP, bytes | 39,556,327 | 39,577,975 | +21,648 (+0.0547%) |
+| Synthetic reducer median, ms | 41.1795 | 39.3013 | -1.8782 (-4.56%) |
+| Demo peak/last private bytes | 396,316,672 | 395,911,168 | -405,504 (-0.10%) |
+| Demo CPU seconds over 10 samples | 0.015625 | 0.265625 | +0.250000 |
+
+Reducer: locked release `replay-bench`, one warmup and five direct executable runs
+per revision, 100,000 synthetic events each. Both retain 500 records and
+236,992..237,477 estimated timeline bytes. The workload does not exercise invite
+or leave requests; the timing difference is not a server-action speedup. Separate
+package outputs were retained. Shared-target replay reuse was detected and the
+changed core/benchmark were rebuilt before collecting the reported changed runs;
+the dependency file includes the new server-actions module.
+
+Process sampling: launch each packaged executable with `--demo`, eight-second
+warmup, ten samples at one-second intervals, `Process.PrivateMemorySize64` and
+`TotalProcessorTime`. No compilation ran during these samples. Each retained
+sample was flat in private bytes. The changed process's first sampling attempt
+ended early and was excluded; a repeat survived all ten samples with no stderr.
+The cause of that first exit was not established. CPU represents about 0.0098%
+versus 0.1660% of the 16-logical-processor machine over the nominal ten seconds;
+this short, single-run observation is noisy and not evidence of a regression or
+improvement. wgpu is configured; actual backend, viewport, display scale,
+occlusion, GPU/child memory and rendered state were not verified because the
+native Computer Use pipe was unavailable (Windows error 2). Native dropdown
+interaction timing and p95 frame/startup latency remain unmeasured.
+
+The feature adds no dependency, polling or persistent storage. One pending write,
+one bounded invite result and one dialog are retained. Native screenshots and
+live Discord invite/leave interoperability remain unverified. Workspace tests,
+strict all-target/all-feature Clippy and policy checks passed. The full check
+stops at existing formatting differences, reproduced on the baseline. CI also
+rejects existing MPL license coverage for symphonia-common, symphonia-format-ogg
+and symphonia-codec-vorbis; this task changes no dependency or license policy.
+
 ## Embed image gallery — September 11, 2026
 
 These measurements predate `b2cbb5d`, which made voice standard and removed license

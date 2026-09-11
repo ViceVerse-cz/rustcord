@@ -33,6 +33,7 @@ mod reactions;
 mod reading;
 pub mod screen;
 mod search;
+mod server_menu;
 mod settings;
 mod switcher;
 mod timeline;
@@ -69,6 +70,7 @@ enum MemberRow {
 
 #[derive(Default)]
 pub struct MessagingUi {
+	server_menu: server_menu::ServerMenu,
 	folder_ui: guild_folders::FolderUi,
 	member_cache_key: Option<(u64, u64, Option<Id>, bool)>,
 	member_cache: Vec<MemberRow>,
@@ -786,6 +788,10 @@ impl MessagingUi {
 			.show(ui, |ui| {
 				let rect = ui.max_rect();
 				ui.horizontal_centered(|ui| {
+					if let Some(guild) = self.guild {
+						self.server_menu.header(ui, state, guild, title);
+						return;
+					}
 					ui.add(
 						egui::Label::new(
 							design::semibold(ui, title, 15.0).color(colors.text_strong),
@@ -1415,17 +1421,19 @@ impl MessagingUi {
 					);
 				}
 				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-					cancel_edit = icons::button(ui, icons::Icon::Close, 22.0, "Cancel edit").clicked();
+					cancel_edit =
+						icons::button(ui, icons::Icon::Close, 22.0, "Cancel edit").clicked();
 					if unavailable
 						&& ui
 							.add(
 								egui::Button::new(
-									RichText::new("Copy edit text").size(12.0).color(colors.muted),
+									RichText::new("Copy edit text")
+										.size(12.0)
+										.color(colors.muted),
 								)
 								.frame(false),
 							)
-							.clicked()
-						&& let Some((_, _, text)) = &self.editing
+							.clicked() && let Some((_, _, text)) = &self.editing
 					{
 						ui.ctx().copy_text(text.clone());
 					}
@@ -1451,7 +1459,9 @@ impl MessagingUi {
 						.add_enabled(
 							state.can_open_reply_target(reply),
 							egui::Button::new(
-								RichText::new("View original").size(12.0).color(colors.muted),
+								RichText::new("View original")
+									.size(12.0)
+									.color(colors.muted),
 							)
 							.frame(false),
 						)
@@ -2155,6 +2165,8 @@ impl MessagingUi {
 				self.sidebar(ui, state, &title, &mut commands);
 			});
 		self.record_reading_sidebar(navigation.response.rect.width() - rail);
+		self.server_menu
+			.show(&ctx, state, self.guild, &mut commands);
 		let selected_voice = state
 			.channels
 			.iter()
