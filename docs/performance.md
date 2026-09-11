@@ -1,5 +1,33 @@
 # Initial performance evidence
 
+## Server menu layout revision - September 11, 2026
+
+Baseline `3002847` versus implementation `1417dad`, Windows 11 Home, AMD Ryzen
+7 7800X3D (16 logical processors), 31.1 GiB visible RAM, Rust 1.98.1. Both built
+with `cargo build --release --locked -p serein --features demo` (voice included),
+with separate copies of the resulting executables retained for sampling.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Release demo executable, bytes | 61,899,776 | 61,935,104 | +35,328 (+0.0571%) |
+| Demo peak/last private bytes | 395,509,760 | 395,636,736 | +126,976 (+0.0321%) |
+| Process CPU seconds over ten samples | 0 | 0 | Below counter resolution |
+
+Each executable was launched with `--demo`, with an eight-second warmup followed
+by ten one-second samples of `Process.PrivateMemorySize64` and
+`TotalProcessorTime`. Actual sampling durations were 10.0945s and 10.0783s;
+private bytes stayed flat within each run. No compilation ran during sampling.
+The configured renderer is WGPU and initial viewport is 1120x760; actual display
+scale and renderer adapter were not inspected. This is a single default-demo
+idle comparison, not a menu interaction, frame latency, or startup benchmark.
+The small memory difference is not evidence of a meaningful regression.
+
+Standard package/ZIP sizes are unavailable: baseline `cargo xtask package` fails
+at `apps/desktop/src/main.rs:468`, where `demo_members` is referenced without the
+`demo` feature that defines it. Demo executable size is not shipping package
+size. Native menu interaction/capture is blocked by the unavailable Computer Use
+native pipe (Windows error 2); no native visual or live Discord claim is made.
+
 ## Server dropdown - September 11, 2026
 
 Baseline `88d0c11` versus runtime commit `768d357`, Windows 11 Home, AMD Ryzen
