@@ -529,6 +529,10 @@ impl Desktop {
 			messaging.preview_attachment("synthetic-holiday.png", 2_437_120, Some(image));
 			state.status = "Offline fixture · synthetic attachment staged in the composer";
 		}
+		if demo && std::env::args().any(|arg| arg == "--demo-sending") {
+			messaging.preview_sending(&cc.egui_ctx, &mut state);
+			state.status = "Offline fixture · synthetic pending message; no upload or send";
+		}
 		// `--demo-gifs`, `--demo-gifs=favorites`, `--demo-gifs=trending` or `--demo-gifs=<query>`.
 		if demo
 			&& let Some(section) = std::env::args().find_map(|arg| {
@@ -1532,8 +1536,10 @@ impl Desktop {
 					self.cache_error = true;
 					self.cache_status = error;
 				}
-				self.messaging.accept_avatar(ctx, result.key.clone(), result.image);
-				self.messaging.accept_gif_animation(result.key, result.frames);
+				self.messaging
+					.accept_avatar(ctx, result.key.clone(), result.image);
+				self.messaging
+					.accept_gif_animation(result.key, result.frames);
 			}
 		}
 	}
@@ -2112,6 +2118,10 @@ impl eframe::App for Desktop {
 		}
 		self.messaging.upload_busy = self.uploads.busy() || self.clipboard.is_some();
 		self.messaging.upload_status = self.uploads.status();
+		if !self.state.demo {
+			let (progress, sending) = self.uploads.transfer_progress();
+			self.messaging.update_upload_progress(progress, sending);
+		}
 		if self.state.user.is_none() {
 			self.downloads.cancel();
 		}
