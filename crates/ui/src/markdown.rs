@@ -648,7 +648,7 @@ impl Formatted {
 	) -> egui::Response {
 		let mut response: Option<egui::Response> = None;
 		let mut pending = Vec::new();
-		let size = egui::TextStyle::Body.resolve(ui.style()).size * 1.25;
+		let size = crate::emoji::inline_size(ui);
 		let flush = |pending: &mut Vec<(String, Style)>, ui: &mut egui::Ui| {
 			let job = Self::layout(pending, ui);
 			pending.clear();
@@ -681,7 +681,10 @@ impl Formatted {
 				} else {
 					None
 				};
-				if image.is_none() && custom.is_none() {
+				if image.is_none()
+					&& custom.is_none()
+					&& (style.code || crate::emoji::lookup(cluster).is_none())
+				{
 					offset += len;
 					continue;
 				}
@@ -1506,6 +1509,44 @@ mod tests {
 			);
 		}
 	}
+	#[test]
+	fn loading_emoji_reserve_the_same_message_space_without_font_fallback() {
+		let ctx = egui::Context::default();
+		let parsed = Formatted::parse("😀👩🏽‍💻❤️🇨🇿");
+		let mut cold_size = None;
+		for ready in [false, true] {
+			if ready {
+				crate::emoji::install(&ctx).unwrap();
+			}
+			let output = ctx.run_ui(Default::default(), |ui| {
+				ui.set_max_width(65.0);
+				parsed.show(ui, &mut None);
+				if let Some(size) = cold_size {
+					assert_eq!(ui.min_size(), size);
+				} else {
+					cold_size = Some(ui.min_size());
+				}
+			});
+			let mut images = 0;
+			for shape in &output.shapes {
+				match &shape.shape {
+					egui::Shape::Text(text) if text.galley.job.text != "?" => {
+						assert!(
+							text.galley
+								.rows
+								.iter()
+								.all(|row| row.visuals.mesh.is_empty())
+						);
+					}
+					egui::Shape::Rect(rect) if rect.brush.is_some() => images += 1,
+					_ => {}
+				}
+			}
+			assert_eq!(images, if ready { 4 } else { 0 });
+			output.drop_without_applying_deltas();
+		}
+	}
+
 	#[test]
 	fn emoji_render_as_whole_images_but_code_and_source_stay_literal() {
 		let ctx = egui::Context::default();
