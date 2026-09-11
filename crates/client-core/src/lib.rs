@@ -21,6 +21,7 @@ pub use replies::ReplyDeletions;
 pub mod resident;
 pub mod screen;
 pub mod search;
+pub mod server_actions;
 mod threads;
 pub mod typing;
 pub mod user_actions;
@@ -42,6 +43,10 @@ pub const COMMAND_SLOTS: usize = 16; // each admitted command <= 16 KiB
 pub enum Command {
 	/// None loads the current settings; Some saves the complete folder layout.
 	GuildFolders(Option<model::guild_folders::Settings>),
+	ServerAction {
+		action: server_actions::Action,
+		request: u64,
+	},
 	UserAction {
 		action: user_actions::Action,
 		request: u64,
@@ -147,6 +152,7 @@ pub enum Event {
 	GuildJoined(Guild),
 	GuildFolders(Result<model::guild_folders::Settings, auth::Failure>),
 	UserAction(user_actions::Event),
+	ServerAction(server_actions::Event),
 	Invite {
 		code: String,
 		result: Result<Box<model::InvitePreview>, auth::Failure>,
@@ -303,6 +309,7 @@ pub struct State {
 	pub folders_pending: bool,
 	pub folders_error: Option<&'static str>,
 	pub user_actions: user_actions::Actions,
+	pub server_actions: server_actions::Actions,
 	pub typing: typing::Typing,
 	pub permissions: permissions::Permissions,
 	pub archives: Option<archives::View>,
@@ -368,6 +375,7 @@ impl Default for State {
 			folders_pending: false,
 			folders_error: None,
 			user_actions: user_actions::Actions::default(),
+			server_actions: server_actions::Actions::default(),
 			typing: typing::Typing::default(),
 			permissions: permissions::Permissions::default(),
 			archives: None,
@@ -798,6 +806,16 @@ impl State {
 			)));
 			return;
 		}
+		if let Command::ServerAction { action, request } = command {
+			let _ = self.apply_server_action(server_actions::Event::Written {
+				action,
+				request,
+				result: Err(auth::Failure::ProtocolAt(
+					"Server action was not queued; try again",
+				)),
+			});
+			return;
+		}
 		if let Command::UserAction { action, request } = command {
 			let _ = self.apply_user_action(user_actions::Event::Written {
 				action,
@@ -1189,6 +1207,7 @@ impl State {
 			Event::ReadState(event) => self.apply_read_state(event),
 			Event::NotificationPreferences(event) => self.apply_notification_preferences(event),
 			Event::UserAction(event) => self.apply_user_action(event),
+			Event::ServerAction(event) => self.apply_server_action(event),
 			Event::ThreadsSync {
 				guild,
 				parents,
@@ -1201,6 +1220,7 @@ impl State {
 				Ok(())
 			}
 			Event::GuildJoined(guild) => {
+				self.observe_server_joined(guild.id);
 				if !self.guilds.iter().any(|g| g.id == guild.id) {
 					let bytes = self.navigation_bytes() + guild.bytes();
 					if guild.id.0 == 0
@@ -1539,8 +1559,10 @@ impl State {
 				self.read_state.reset();
 				self.notification_preferences = notifications::Preferences::default();
 				self.cancel_user_action();
+				self.cancel_server_action();
 				self.cancel_invite_join();
 				self.user_actions.reset();
+				self.server_actions.reset();
 				self.clear_own_profile();
 				self.user = Some(user);
 				self.guilds = guilds;
@@ -1860,6 +1882,7 @@ impl State {
 			Event::Disconnected => {
 				self.cancel_message_actions();
 				self.cancel_user_action();
+				self.cancel_server_action();
 				self.cancel_invite_join();
 				self.read_state.cancel();
 				self.clear_profile();
@@ -1886,6 +1909,7 @@ impl State {
 			Event::Resync | Event::PermissionsChanged => {
 				self.cancel_message_actions();
 				self.cancel_user_action();
+				self.cancel_server_action();
 				self.cancel_invite_join();
 				self.direct_presences.clear();
 				self.direct_presence_bytes = None;
@@ -2030,6 +2054,7 @@ impl State {
 				self.folders_error = Some(failure.label());
 			}
 			self.cancel_user_action();
+			self.cancel_server_action();
 			self.cancel_invite_join();
 			self.direct_presences.clear();
 			self.direct_presence_bytes = None;
@@ -2069,7 +2094,11 @@ impl Event {
 					action: user_actions::Action::CloseDm(_),
 					result: Ok(()),
 					..
-				}) | Event::Permissions(_)
+				}) | Event::ServerAction(server_actions::Event::Written {
+				action: server_actions::Action::Leave(_),
+				result: Ok(None),
+				..
+			}) | Event::Permissions(_)
 				| Event::Resync
 				| Event::PermissionsChanged
 				| Event::Unavailable(_)
@@ -2092,6 +2121,10 @@ impl Event {
 				Self::GuildFolders(result) => result
 					.as_ref()
 					.map_or(0, model::guild_folders::Settings::heap_bytes),
+				Self::ServerAction(server_actions::Event::Written {
+					result: Ok(Some(code)),
+					..
+				}) => code.capacity(),
 				Self::UserAction(user_actions::Event::Relationships(entries)) => entries
 					.as_ref()
 					.map_or(0, |e| e.capacity() * size_of::<(Id, bool)>()),

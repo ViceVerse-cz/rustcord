@@ -188,6 +188,11 @@ fn access_candidates(state: &State, event: &Event) -> Vec<model::Id> {
 			result: Ok(()),
 			..
 		}) => (None, Some(*channel)),
+		Event::ServerAction(client_core::server_actions::Event::Written {
+			action: client_core::server_actions::Action::Leave(guild),
+			result: Ok(None),
+			..
+		}) => (Some(vec![*guild]), None),
 		Event::ThreadsSync { guild, .. } => (Some(vec![*guild]), None),
 		_ => return Vec::new(),
 	};
@@ -1293,6 +1298,18 @@ impl Desktop {
 			let event = match command {
 				Command::GuildFolders(settings) => {
 					Event::GuildFolders(Ok(settings.unwrap_or_default()))
+				}
+				Command::ServerAction { action, request } => {
+					Event::ServerAction(client_core::server_actions::Event::Written {
+						action,
+						request,
+						result: Ok(match action {
+							client_core::server_actions::Action::CreateInvite { .. } => {
+								Some("synthetic-example".into())
+							}
+							client_core::server_actions::Action::Leave(_) => None,
+						}),
+					})
 				}
 				Command::UserAction { action, request } => {
 					Event::UserAction(client_core::user_actions::Event::Written {

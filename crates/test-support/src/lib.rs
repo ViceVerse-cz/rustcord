@@ -696,6 +696,7 @@ pub fn audio_demo_state() -> State {
 pub fn permission_snapshot(state: &State) -> model::permissions::Snapshot {
 	use model::permissions as p;
 	let bits = p::VIEW_CHANNEL
+		| 1 // CREATE_INSTANT_INVITE, synthetic demo only.
 		| p::READ_MESSAGE_HISTORY
 		| p::SEND_MESSAGES
 		| p::SEND_MESSAGES_IN_THREADS

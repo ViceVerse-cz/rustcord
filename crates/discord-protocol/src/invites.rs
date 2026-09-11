@@ -54,3 +54,39 @@ pub fn decode(bytes: &[u8]) -> Result<model::InvitePreview, crate::DecodeError> 
 		},
 	})
 }
+
+/// A write response must confirm its scope before the invite is exposed to the user.
+pub fn created_code(
+	bytes: &[u8],
+	guild: model::Id,
+	channel: model::Id,
+) -> Result<String, crate::DecodeError> {
+	#[derive(Deserialize)]
+	struct Scope {
+		id: model::Id,
+	}
+	#[derive(Deserialize)]
+	struct Created {
+		code: String,
+		guild: Scope,
+		channel: Scope,
+	}
+	if bytes.len() > 64 * 1024 {
+		return Err(crate::DecodeError);
+	}
+	let created: Created = serde_json::from_slice(bytes).map_err(|_| crate::DecodeError)?;
+	if created.guild.id != guild
+		|| created.channel.id != channel
+		|| guild.0 == 0
+		|| channel.0 == 0
+		|| created.code.is_empty()
+		|| created.code.len() > 100
+		|| !created
+			.code
+			.bytes()
+			.all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+	{
+		return Err(crate::DecodeError);
+	}
+	Ok(created.code)
+}

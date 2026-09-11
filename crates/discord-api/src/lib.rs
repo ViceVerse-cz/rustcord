@@ -4,6 +4,7 @@ mod archives;
 mod guild_folders;
 mod profile_edit;
 pub mod rpc;
+mod server_actions;
 pub mod upload;
 mod user_actions;
 use client_core::{
@@ -319,6 +320,13 @@ impl DiscordApi {
 				Some(settings) => self.save_guild_folders(settings).await,
 				None => self.guild_folders().await,
 			}),
+			Command::ServerAction { action, request } => {
+				Event::ServerAction(client_core::server_actions::Event::Written {
+					action,
+					request,
+					result: self.server_action(action).await,
+				})
+			}
 			Command::UserAction { action, request } => {
 				Event::UserAction(client_core::user_actions::Event::Written {
 					action,

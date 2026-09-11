@@ -650,3 +650,24 @@ and [discord.py-self session handling](https://github.com/dolfies/discord.py-sel
 The normal-user protobuf/session behavior remains unofficial and live-unverified.
 Local mock HTTP/WebSocket tests verify bounds, preservation, write confirmation,
 listed/hidden/missing observations and reconnect resets. No live account was used.
+
+
+### Server dropdown actions (September 11, 2026)
+
+Create Invite uses documented [Create Channel Invite](https://docs.discord.com/developers/resources/channel#create-channel-invite)
+(`POST /channels/{channel.id}/invites`) with a one-day expiry, unlimited uses,
+non-temporary membership and a new invite so an older code cannot expire early. It requires known effective
+Create Instant Invite and View Channel permissions for the selected guild channel.
+The bounded response must confirm guild/channel IDs and a safe code before the UI
+constructs a `https://discord.gg/` link. It never posts or shares the link automatically.
+Leave Server uses documented [Leave Guild](https://docs.discord.com/developers/resources/user#leave-guild)
+(`DELETE /users/@me/guilds/{guild.id}`). Known owners cannot leave here; pending
+messages or an active guild call prevent the request. Confirmed success removes
+navigation and access through existing channel cleanup while preserving drafts.
+One pending action and one bounded result are retained only in the session. Requests
+never automatically retry; ambiguous results remain visibly uncertain, and stale
+responses cannot change a new session or a subsequently rejoined guild. Malformed
+successful invite responses are treated as uncertain writes.
+These routes are documented developer API protocol evidence, not approval or proof
+of normal-user compatibility. Synthetic state/HTTP checks cover this adapter; live
+normal-user creation/leaving, service challenges and restricted guilds remain unverified.
