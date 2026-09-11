@@ -260,6 +260,7 @@ mod tests {
 				kind,
 				recipients: vec![user(42, "Zoe")],
 				member_list_id: None,
+				message_count: None,
 			});
 			if let Some(guild) = guild {
 				state.channels.push(channel(42, Some(guild), 0, "Zoe"));
@@ -369,6 +370,7 @@ mod tests {
 			position: 0,
 			recipients: vec![],
 			member_list_id: None,
+			message_count: None,
 		}
 	}
 	#[test]

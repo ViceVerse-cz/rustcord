@@ -296,6 +296,7 @@ mod tests {
 				kind: 0,
 				recipients: vec![],
 				member_list_id: Some("everyone".into()),
+				message_count: None,
 				last_message: None,
 			}],
 			members: Some(MemberList {

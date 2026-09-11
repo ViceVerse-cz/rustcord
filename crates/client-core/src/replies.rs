@@ -170,6 +170,7 @@ mod tests {
 					recipients: vec![],
 					last_message: None,
 					member_list_id: None,
+					message_count: None,
 				})
 				.collect(),
 			..State::default()

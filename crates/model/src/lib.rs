@@ -136,6 +136,8 @@ pub struct Channel {
 	pub recipients: Vec<User>,
 	/// Unofficial service member-list identity; absent when permission metadata is missing.
 	pub member_list_id: Option<String>,
+	/// Thread reply count reported by the service; None for non-threads or unknown.
+	pub message_count: Option<u32>,
 }
 impl Channel {
 	pub fn bytes(&self) -> usize {
@@ -157,6 +159,7 @@ pub struct ChannelPatch {
 	pub parent_id: Patch<Id>,
 	pub position: Patch<i32>,
 	pub kind: Patch<u8>,
+	pub message_count: Patch<u32>,
 }
 #[derive(Clone, PartialEq, Eq)]
 pub struct Message {

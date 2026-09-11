@@ -95,6 +95,8 @@ pub struct ChannelDto {
 	pub recipients: Vec<UserDto>,
 	#[serde(default)]
 	pub permission_overwrites: Option<Vec<Overwrite>>,
+	#[serde(default)]
+	pub message_count: Option<u32>,
 }
 impl ChannelDto {
 	pub fn is_obfuscated(&self) -> bool {
@@ -124,6 +126,7 @@ impl ChannelDto {
 			kind: self.kind,
 			recipients,
 			member_list_id: None,
+			message_count: self.message_count,
 		}
 	}
 }
@@ -144,6 +147,8 @@ pub struct ChannelPatchDto {
 	pub permission_overwrites: Patch<Vec<Overwrite>>,
 	#[serde(default)]
 	pub flags: Patch<u64>,
+	#[serde(default)]
+	pub message_count: Patch<u32>,
 }
 impl ChannelPatchDto {
 	pub fn is_obfuscated(&self) -> bool {
@@ -158,6 +163,7 @@ impl ChannelPatchDto {
 			parent_id: self.parent_id,
 			position: self.position,
 			kind: self.kind,
+			message_count: self.message_count,
 		}
 	}
 }

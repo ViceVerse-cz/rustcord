@@ -204,6 +204,7 @@ mod tests {
 			recipients: vec![],
 			last_message: None,
 			member_list_id: None,
+			message_count: None,
 		}
 	}
 	fn state() -> State {
@@ -433,6 +434,7 @@ mod tests {
 							parent_id: model::Patch::Absent,
 							position: model::Patch::Absent,
 							kind: model::Patch::Absent,
+							message_count: model::Patch::Absent,
 						},
 					}
 				} else {

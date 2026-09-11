@@ -408,6 +408,7 @@ mod navigation_tests {
 				recipients: vec![],
 				last_message: Some(Id(500)),
 				member_list_id: None,
+				message_count: None,
 			}],
 			..Default::default()
 		};

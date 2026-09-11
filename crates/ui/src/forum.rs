@@ -1,0 +1,633 @@
+//! Forum containers: a searchable post list with Discord-style cards and one-post creation.
+use crate::{design, icons};
+use client_core::{Command, MAX_CONTENT, State, forum::MAX_TITLE};
+use egui::RichText;
+use model::{Channel, Id, archives::Kind};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum Sort {
+	#[default]
+	Activity,
+	Created,
+}
+impl Sort {
+	fn label(self) -> &'static str {
+		match self {
+			Sort::Activity => "Recent activity",
+			Sort::Created => "Creation date",
+		}
+	}
+}
+
+#[derive(Default)]
+struct Draft {
+	title: String,
+	body: String,
+	focus: bool,
+	submitted: bool,
+}
+
+#[derive(Default)]
+pub struct ForumUi {
+	forum: Option<Id>,
+	query: String,
+	sort: Sort,
+	draft: Option<Draft>,
+}
+
+/// Post open target: an active thread, or an archived row admitted through the archive view.
+enum Open {
+	Active(Id),
+	Archived(Id),
+}
+
+impl ForumUi {
+	pub fn show(
+		&mut self,
+		ui: &mut egui::Ui,
+		state: &mut State,
+		forum: Id,
+		commands: &mut Vec<Command>,
+	) {
+		if self.forum != Some(forum) {
+			self.forum = Some(forum);
+			self.query.clear();
+			self.draft = None;
+		}
+		if let Some(draft) = &self.draft
+			&& draft.submitted
+			&& state.posting.pending.is_none()
+			&& state.posting.error.is_none()
+		{
+			self.draft = None;
+		}
+		if self.draft.is_some()
+			&& ui
+				.ctx()
+				.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+		{
+			self.draft = None;
+		}
+		let colors = design::palette(ui);
+		let mut open = None;
+		let mut archive_request = None;
+		egui::ScrollArea::vertical()
+			.id_salt(("forum", forum))
+			.auto_shrink([false, false])
+			.show(ui, |ui| {
+				egui::Frame::new()
+					.inner_margin(egui::Margin::symmetric(16, 12))
+					.show(ui, |ui| {
+						ui.set_width(ui.available_width());
+						ui.spacing_mut().item_spacing.y = 12.0;
+						self.toolbar(ui, state, forum);
+						if self.draft.is_some() {
+							self.composer(ui, state, forum, commands);
+						}
+						self.sort_menu(ui);
+						let query = self.query.trim().to_lowercase();
+						let matches = |post: &Channel| {
+							query.is_empty() || post.name.to_lowercase().contains(&query)
+						};
+						let mut posts: Vec<&Channel> = state.forum_posts(forum);
+						if self.sort == Sort::Created {
+							posts.sort_by_key(|post| std::cmp::Reverse(post.id));
+						}
+						let active: Vec<_> =
+							posts.into_iter().filter(|post| matches(post)).collect();
+						let archive = state
+							.archives
+							.as_ref()
+							.filter(|view| view.parent == forum && view.kind == Kind::Public);
+						let archived: Vec<&Channel> = archive
+							.and_then(|view| view.page.as_ref())
+							.map(|page| page.threads.iter().filter(|post| matches(post)).collect())
+							.unwrap_or_default();
+						let now = time::OffsetDateTime::now_utc();
+						if active.is_empty() && archived.is_empty() {
+							ui.add_space(24.0);
+							ui.vertical_centered(|ui| {
+								ui.label(
+									design::semibold(
+										ui,
+										if query.is_empty() {
+											"No posts loaded"
+										} else {
+											"No posts match"
+										},
+										16.0,
+									)
+									.color(colors.text_strong),
+								);
+								ui.label(
+									RichText::new(if query.is_empty() {
+										"Active posts arrive with the guild; archived posts load on request."
+									} else {
+										"Press Enter to start a post with this title."
+									})
+									.color(colors.muted),
+								);
+							});
+						}
+						for post in active {
+							if card(ui, post, false, now).clicked() {
+								open = Some(Open::Active(post.id));
+							}
+						}
+						for post in archived {
+							if card(ui, post, true, now).clicked() {
+								open = Some(Open::Archived(post.id));
+							}
+						}
+						ui.add_space(4.0);
+						archive_request = archive_footer(ui, state, forum, archive);
+					});
+			});
+		if let Some(open) = open {
+			match open {
+				Open::Active(id) => {
+					if let Some(command) = state.select(id) {
+						commands.push(command);
+					}
+				}
+				Open::Archived(id) => {
+					if let Some(command) = state.open_archived_thread(id) {
+						commands.push(command);
+					}
+				}
+			}
+		} else if let Some(before) = archive_request
+			&& let Some(command) = state.request_archives(forum, Kind::Public, before)
+		{
+			commands.push(command);
+		}
+	}
+
+	fn toolbar(&mut self, ui: &mut egui::Ui, state: &State, forum: Id) {
+		let colors = design::palette(ui);
+		egui::Frame::new()
+			.fill(colors.raised)
+			.stroke(egui::Stroke::new(1.0, colors.border))
+			.corner_radius(8)
+			.inner_margin(egui::Margin::symmetric(12, 8))
+			.show(ui, |ui| {
+				ui.set_width(ui.available_width());
+				ui.horizontal(|ui| {
+					ui.spacing_mut().item_spacing.x = 8.0;
+					let allowed = state.can_create_post(forum);
+					ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+						let button = ui.add_enabled(
+							allowed && self.draft.is_none(),
+							egui::Button::new(
+								design::medium(ui, "New Post", 14.0).color(colors.accent_text),
+							)
+							.fill(colors.accent)
+							.stroke(egui::Stroke::NONE)
+							.corner_radius(8)
+							.min_size(egui::vec2(0.0, 32.0)),
+						);
+						if button.clicked() {
+							self.start_draft(String::new());
+						}
+						if !allowed && state.is_forum(forum) {
+							button.on_disabled_hover_text(
+								"Posting requires a connected session with permission to send here.",
+							);
+						}
+						ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+							icons::inline(ui, icons::Icon::Search, 20.0, colors.muted);
+							let input = ui.add(
+								egui::TextEdit::singleline(&mut self.query)
+									.char_limit(MAX_TITLE)
+									.frame(egui::Frame::NONE)
+									.hint_text("Search or create a post...")
+									.font(egui::TextStyle::Body)
+									.desired_width(ui.available_width().max(60.0)),
+							);
+							input.widget_info(|| {
+								egui::WidgetInfo::labeled(
+									egui::WidgetType::TextEdit,
+									true,
+									"Search loaded posts or start a new one",
+								)
+							});
+							if input.lost_focus()
+								&& ui.input(|i| i.key_pressed(egui::Key::Enter))
+								&& !self.query.trim().is_empty()
+								&& allowed
+							{
+								let title = std::mem::take(&mut self.query);
+								self.start_draft(title);
+							}
+						});
+					});
+				});
+			});
+	}
+
+	fn start_draft(&mut self, title: String) {
+		self.draft = Some(Draft {
+			title: title.trim().chars().take(MAX_TITLE).collect(),
+			body: String::new(),
+			focus: true,
+			submitted: false,
+		});
+	}
+
+	fn sort_menu(&mut self, ui: &mut egui::Ui) {
+		let colors = design::palette(ui);
+		let button = ui.add(
+			egui::Button::new(
+				design::medium(ui, format!("Sort & view · {}", self.sort.label()), 13.0)
+					.color(colors.text),
+			)
+			.fill(colors.raised)
+			.stroke(egui::Stroke::new(1.0, colors.border))
+			.corner_radius(8)
+			.min_size(egui::vec2(0.0, 30.0)),
+		);
+		egui::Popup::menu(&button).show(|ui| {
+			ui.set_min_width(180.0);
+			ui.label(design::eyebrow(ui, "Sort by", colors.muted));
+			for sort in [Sort::Activity, Sort::Created] {
+				if ui.radio(self.sort == sort, sort.label()).clicked() {
+					self.sort = sort;
+				}
+			}
+			ui.separator();
+			ui.label(design::eyebrow(ui, "View", colors.muted));
+			ui.add_enabled(false, egui::Button::selectable(true, "List view"));
+		});
+	}
+
+	fn composer(
+		&mut self,
+		ui: &mut egui::Ui,
+		state: &mut State,
+		forum: Id,
+		commands: &mut Vec<Command>,
+	) {
+		let colors = design::palette(ui);
+		let Some(draft) = self.draft.as_mut() else {
+			return;
+		};
+		let mut submit = false;
+		let mut cancel = false;
+		egui::Frame::new()
+			.fill(colors.raised)
+			.stroke(egui::Stroke::new(1.0, colors.border))
+			.corner_radius(8)
+			.inner_margin(egui::Margin::same(16))
+			.show(ui, |ui| {
+				ui.set_width(ui.available_width());
+				ui.spacing_mut().item_spacing.y = 8.0;
+				ui.label(design::semibold(ui, "New Post", 18.0).color(colors.text_strong));
+				let title = ui.add(
+					egui::TextEdit::singleline(&mut draft.title)
+						.char_limit(MAX_TITLE)
+						.hint_text("Post title")
+						.desired_width(f32::INFINITY),
+				);
+				if draft.focus {
+					title.request_focus();
+					draft.focus = false;
+				}
+				ui.add(
+					egui::TextEdit::multiline(&mut draft.body)
+						.char_limit(MAX_CONTENT)
+						.hint_text("Write your first message…")
+						.desired_rows(4)
+						.desired_width(f32::INFINITY),
+				);
+				ui.horizontal(|ui| {
+					let ready = state.can_create_post(forum)
+						&& !draft.title.trim().is_empty()
+						&& !draft.body.trim().is_empty();
+					let post = ui.add_enabled(
+						ready && !draft.submitted,
+						egui::Button::new(
+							design::medium(ui, "Post", 14.0).color(colors.accent_text),
+						)
+						.fill(colors.accent)
+						.stroke(egui::Stroke::NONE)
+						.corner_radius(8)
+						.min_size(egui::vec2(72.0, 32.0)),
+					);
+					submit = post.clicked();
+					cancel = ui.button("Cancel").clicked();
+					if state.posting.pending.is_some() {
+						ui.label(RichText::new("Posting…").color(colors.muted));
+					} else if let Some(error) = state.posting.error {
+						ui.label(RichText::new(error).color(colors.danger));
+					}
+					ui.label(
+						RichText::new(format!(
+							"{}/{MAX_TITLE} · {}/{MAX_CONTENT}",
+							draft.title.chars().count(),
+							draft.body.chars().count()
+						))
+						.size(11.0)
+						.color(colors.muted),
+					);
+				});
+			});
+		if cancel {
+			self.draft = None;
+			state.posting.error = None;
+		} else if submit && let Some(command) = state.create_post(forum, &draft.title, &draft.body)
+		{
+			draft.submitted = true;
+			commands.push(command);
+		}
+	}
+}
+
+fn card(
+	ui: &mut egui::Ui,
+	post: &Channel,
+	archived: bool,
+	now: time::OffsetDateTime,
+) -> egui::Response {
+	let colors = design::palette(ui);
+	let response = ui
+		.scope_builder(
+			egui::UiBuilder::new()
+				.id_salt(("post", post.id, archived))
+				.sense(egui::Sense::click()),
+			|ui| {
+				let response = ui.response();
+				let hovered = response.hovered() || response.has_focus();
+				egui::Frame::new()
+					.fill(if hovered { colors.hover } else { colors.raised })
+					.stroke(egui::Stroke::new(
+						1.0,
+						if hovered {
+							colors.accent
+						} else {
+							colors.border
+						},
+					))
+					.corner_radius(8)
+					.inner_margin(egui::Margin::symmetric(16, 14))
+					.show(ui, |ui| {
+						ui.set_width(ui.available_width());
+						ui.spacing_mut().item_spacing.y = 6.0;
+						ui.add(
+							egui::Label::new(
+								design::semibold(ui, &post.name, 16.0).color(colors.text_strong),
+							)
+							.truncate()
+							.selectable(false),
+						);
+						ui.horizontal(|ui| {
+							ui.spacing_mut().item_spacing.x = 6.0;
+							if let Some(count) = post.message_count {
+								icons::inline(ui, icons::Icon::Forum, 16.0, colors.muted);
+								ui.label(
+									design::medium(ui, count.to_string(), 13.0).color(colors.text),
+								);
+								ui.label(RichText::new("·").color(colors.muted));
+							}
+							ui.label(
+								RichText::new(ago(post.last_message.unwrap_or(post.id), now))
+									.size(13.0)
+									.color(colors.muted),
+							);
+							if archived {
+								ui.label(RichText::new("·").color(colors.muted));
+								ui.label(RichText::new("Archived").size(13.0).color(colors.muted));
+							}
+						});
+					});
+			},
+		)
+		.response;
+	response.widget_info(|| {
+		egui::WidgetInfo::labeled(
+			egui::WidgetType::Button,
+			true,
+			format!(
+				"{}{}; {} replies",
+				post.name,
+				if archived { ", archived" } else { "" },
+				post.message_count
+					.map_or("unknown".to_owned(), |n| n.to_string())
+			),
+		)
+	});
+	response
+}
+
+/// Archive controls under the list; returns a page cursor request when the user asks for one.
+fn archive_footer(
+	ui: &mut egui::Ui,
+	state: &State,
+	forum: Id,
+	view: Option<&client_core::archives::View>,
+) -> Option<Option<model::archives::Cursor>> {
+	let colors = design::palette(ui);
+	let allowed = state.can_archive(forum, Kind::Public);
+	let mut request = None;
+	ui.horizontal_wrapped(|ui| match view {
+		None => {
+			let button = ui.add_enabled(
+				allowed,
+				egui::Button::new(
+					RichText::new("Load archived posts")
+						.size(13.0)
+						.color(colors.link),
+				)
+				.frame(false),
+			);
+			if button.clicked() {
+				request = Some(None);
+			}
+			if !allowed {
+				ui.label(
+					RichText::new("Archived posts need a connected session with history access.")
+						.size(12.0)
+						.color(colors.muted),
+				);
+			}
+		}
+		Some(view) if view.loading => {
+			ui.label(
+				RichText::new("Loading archived posts…")
+					.size(13.0)
+					.color(colors.muted),
+			);
+		}
+		Some(view) => {
+			if let Some(error) = view.error {
+				ui.label(RichText::new(error).size(13.0).color(colors.danger));
+				if ui
+					.add_enabled(
+						allowed,
+						egui::Button::new(RichText::new("Retry").size(13.0)),
+					)
+					.clicked()
+				{
+					request = Some(view.before);
+				}
+			} else if let Some(page) = &view.page {
+				if let Some(next) = page.next {
+					if ui
+						.add_enabled(
+							allowed,
+							egui::Button::new(
+								RichText::new("Older archived posts")
+									.size(13.0)
+									.color(colors.link),
+							)
+							.frame(false),
+						)
+						.clicked()
+					{
+						request = Some(Some(next));
+					}
+				} else {
+					ui.label(
+						RichText::new("No older archived posts reported.")
+							.size(12.0)
+							.color(colors.muted),
+					);
+				}
+			}
+		}
+	});
+	request
+}
+
+// Discord snowflakes carry milliseconds since 2015-01-01; all u64 IDs fit time's range.
+fn ago(id: Id, now: time::OffsetDateTime) -> String {
+	let created =
+		time::OffsetDateTime::from_unix_timestamp(((id.0 >> 22) / 1000) as i64 + 1_420_070_400)
+			.expect("snowflake timestamp is in range");
+	let seconds = (now - created).whole_seconds().max(0);
+	match seconds {
+		0..60 => "just now".to_owned(),
+		60..3_600 => format!("{}m ago", seconds / 60),
+		3_600..86_400 => format!("{}h ago", seconds / 3_600),
+		86_400..2_592_000 => format!("{}d ago", seconds / 86_400),
+		2_592_000..31_536_000 => format!("{}mo ago", seconds / 2_592_000),
+		_ => format!("{}y ago", seconds / 31_536_000),
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn frame(ctx: &egui::Context, draw: impl FnMut(&mut egui::Ui)) {
+		let output = ctx.run_ui(
+			egui::RawInput {
+				screen_rect: Some(egui::Rect::from_min_size(
+					egui::Pos2::ZERO,
+					egui::vec2(720.0, 640.0),
+				)),
+				..Default::default()
+			},
+			draw,
+		);
+		output.drop_without_applying_deltas();
+	}
+
+	#[test]
+	fn relative_times_round_down() {
+		let now = time::OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap();
+		let at = |seconds_ago: i64| {
+			Id((((1_800_000_000 - seconds_ago - 1_420_070_400) as u64) * 1000) << 22)
+		};
+		assert_eq!(ago(at(5), now), "just now");
+		assert_eq!(ago(at(125), now), "2m ago");
+		assert_eq!(ago(at(7_200), now), "2h ago");
+		assert_eq!(ago(at(15 * 86_400), now), "15d ago");
+		assert_eq!(ago(at(70 * 86_400), now), "2mo ago");
+		assert_eq!(ago(at(800 * 86_400), now), "2y ago");
+	}
+
+	#[test]
+	fn forum_pane_lists_posts_and_creates_then_opens_one() {
+		for dark in [false, true] {
+			let ctx = egui::Context::default();
+			ctx.set_visuals(if dark {
+				egui::Visuals::dark()
+			} else {
+				egui::Visuals::light()
+			});
+			let mut state = test_support::demo_state();
+			state.gateway_connected = true;
+			state.auth = client_core::auth::AuthState::Authenticated;
+			assert!(state.select(Id(26)).is_none());
+			assert!(state.is_forum(Id(26)));
+			let posts = state.forum_posts(Id(26));
+			assert!(posts.len() >= 3, "fixture ships several posts");
+			assert!(posts.iter().all(|post| post.parent_id == Some(Id(26))));
+			let mut forum = ForumUi::default();
+			let mut commands = Vec::new();
+			frame(&ctx, |ui| forum.show(ui, &mut state, Id(26), &mut commands));
+			assert!(
+				commands.is_empty(),
+				"Rendering never requests history or archives"
+			);
+			forum.query = "synthetic".into();
+			frame(&ctx, |ui| forum.show(ui, &mut state, Id(26), &mut commands));
+			assert!(commands.is_empty());
+			forum.start_draft("Roadmap ideas".into());
+			forum.draft.as_mut().unwrap().body = "First message".into();
+			frame(&ctx, |ui| forum.show(ui, &mut state, Id(26), &mut commands));
+			let draft = forum.draft.as_mut().unwrap();
+			let command = state
+				.create_post(Id(26), &draft.title, &draft.body)
+				.expect("fixture permissions allow posting");
+			draft.submitted = true;
+			let Command::CreatePost {
+				parent,
+				request,
+				title,
+				..
+			} = &command
+			else {
+				panic!("post creation command expected");
+			};
+			assert_eq!((*parent, title.as_str()), (Id(26), "Roadmap ideas"));
+			state.apply_post(
+				Id(26),
+				*request,
+				Ok(Channel {
+					id: Id(1_548_000_000_000_000_000),
+					guild: Some(Id(10)),
+					parent_id: Some(Id(26)),
+					position: 0,
+					name: title.clone(),
+					kind: 11,
+					recipients: vec![],
+					last_message: None,
+					member_list_id: None,
+					message_count: Some(0),
+				}),
+			);
+			assert_eq!(state.posting.created, Some(Id(1_548_000_000_000_000_000)));
+			frame(&ctx, |ui| forum.show(ui, &mut state, Id(26), &mut commands));
+			assert!(
+				forum.draft.is_none(),
+				"A confirmed post closes the composer"
+			);
+			assert!(
+				commands.is_empty(),
+				"Opening the created post is the layout's job"
+			);
+			assert_eq!(
+				state.forum_posts(Id(26))[0].id,
+				Id(1_548_000_000_000_000_000)
+			);
+			assert!(matches!(
+				state.select(Id(1_548_000_000_000_000_000)),
+				Some(Command::History {
+					channel: Id(1_548_000_000_000_000_000),
+					..
+				})
+			));
+		}
+	}
+}

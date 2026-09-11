@@ -715,6 +715,7 @@ mod tests {
 				kind: 0,
 				recipients: vec![],
 				member_list_id: None,
+				message_count: None,
 				last_message: None,
 			}],
 			..State::default()

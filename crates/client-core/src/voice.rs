@@ -588,6 +588,7 @@ mod tests {
 					position: 0,
 					recipients: vec![],
 					member_list_id: None,
+					message_count: None,
 				})
 				.collect(),
 			..ClientState::default()
@@ -813,6 +814,7 @@ mod tests {
 					position: 0,
 					recipients: vec![],
 					member_list_id: None,
+					message_count: None,
 				})
 				.collect(),
 			..ClientState::default()
@@ -952,6 +954,7 @@ mod tests {
 					discriminator: 0,
 				}],
 				member_list_id: None,
+				message_count: None,
 			}],
 			..ClientState::default()
 		};

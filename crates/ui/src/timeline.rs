@@ -2044,6 +2044,7 @@ mod tests {
 					kind: 1,
 					recipients: vec![],
 					member_list_id: None,
+					message_count: None,
 					last_message: Some(Id(20)),
 				}],
 				..Default::default()
@@ -2154,6 +2155,7 @@ mod tests {
 					kind: 1,
 					recipients: vec![],
 					member_list_id: None,
+					message_count: None,
 					last_message: Some(Id(20)),
 				}],
 				..Default::default()
@@ -2246,6 +2248,7 @@ mod tests {
 				kind: 1,
 				recipients: vec![],
 				member_list_id: None,
+				message_count: None,
 				last_message: Some(Id(1)),
 			}],
 			..Default::default()
@@ -2906,6 +2909,7 @@ mod tests {
 			position: 0,
 			recipients: vec![],
 			member_list_id: None,
+			message_count: None,
 			last_message: None,
 		});
 		state.timeline.insert(message, false, false).unwrap();
@@ -2953,6 +2957,7 @@ mod tests {
 				parent_id: model::Patch::Absent,
 				position: model::Patch::Absent,
 				kind: model::Patch::Absent,
+				message_count: model::Patch::Absent,
 			}),
 		});
 		assert_eq!(layout_key(state.timeline.get(Id(1)).unwrap()), message_key);

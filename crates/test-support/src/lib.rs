@@ -186,6 +186,7 @@ pub fn demo_state() -> State {
 					kind: 0,
 					recipients: vec![],
 					member_list_id: Some("everyone".into()),
+					message_count: None,
 				},
 				Channel {
 					last_message: None,
@@ -197,6 +198,7 @@ pub fn demo_state() -> State {
 					kind: 0,
 					recipients: vec![],
 					member_list_id: Some("everyone".into()),
+					message_count: None,
 				},
 				Channel {
 					last_message: None,
@@ -208,6 +210,7 @@ pub fn demo_state() -> State {
 					kind: 1,
 					recipients: vec![message(1, Id(22)).author],
 					member_list_id: None,
+					message_count: None,
 				},
 				Channel {
 					last_message: None,
@@ -219,6 +222,7 @@ pub fn demo_state() -> State {
 					kind: 4,
 					recipients: vec![],
 					member_list_id: None,
+					message_count: None,
 				},
 				Channel {
 					last_message: None,
@@ -230,6 +234,7 @@ pub fn demo_state() -> State {
 					kind: 4,
 					recipients: vec![],
 					member_list_id: None,
+					message_count: None,
 				},
 				Channel {
 					last_message: None,
@@ -241,6 +246,7 @@ pub fn demo_state() -> State {
 					kind: 2,
 					recipients: vec![],
 					member_list_id: None,
+					message_count: None,
 				},
 				Channel {
 					id: Id(26),
@@ -252,6 +258,7 @@ pub fn demo_state() -> State {
 					recipients: vec![],
 					last_message: None,
 					member_list_id: None,
+					message_count: None,
 				},
 				Channel {
 					id: Id(27),
@@ -261,8 +268,33 @@ pub fn demo_state() -> State {
 					name: "A synthetic forum post".into(),
 					kind: 11,
 					recipients: vec![],
-					last_message: None,
+					last_message: Some(Id(1_542_322_755_993_600_000)),
 					member_list_id: None,
+					message_count: Some(10),
+				},
+				Channel {
+					id: Id(41),
+					guild: Some(Id(10)),
+					parent_id: Some(Id(26)),
+					position: 0,
+					name: "Automatic model retraining on app data".into(),
+					kind: 11,
+					recipients: vec![],
+					last_message: Some(Id(1_546_671_410_380_800_000)),
+					member_list_id: None,
+					message_count: Some(0),
+				},
+				Channel {
+					id: Id(42),
+					guild: Some(Id(10)),
+					parent_id: Some(Id(26)),
+					position: 0,
+					name: "Different model weights for differently powerful phones".into(),
+					kind: 11,
+					recipients: vec![],
+					last_message: Some(Id(1_547_722_335_191_040_000)),
+					member_list_id: None,
+					message_count: Some(6),
 				},
 				Channel {
 					id: Id(28),
@@ -274,6 +306,7 @@ pub fn demo_state() -> State {
 					recipients: vec![],
 					last_message: None,
 					member_list_id: None,
+					message_count: None,
 				},
 			],
 		},
@@ -341,6 +374,7 @@ pub fn voice_demo_state() -> State {
 		kind: 2,
 		recipients: vec![],
 		member_list_id: None,
+		message_count: None,
 		last_message: None,
 	});
 	state.voice.roster = [

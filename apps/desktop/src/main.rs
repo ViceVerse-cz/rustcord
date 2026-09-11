@@ -845,6 +845,31 @@ impl Desktop {
 					})
 				}
 				Command::Voice(_) | Command::CancelProfile | Command::CancelSearch => return,
+				Command::CreatePost {
+					parent,
+					guild,
+					title,
+					request,
+					..
+				} => {
+					self.synthetic_id += 1;
+					Event::PostCreated {
+						parent,
+						request,
+						result: Ok(model::Channel {
+							id: model::Id(self.synthetic_id),
+							guild: Some(guild),
+							parent_id: Some(parent),
+							position: 0,
+							name: title,
+							kind: 11,
+							recipients: vec![],
+							last_message: None,
+							member_list_id: None,
+							message_count: Some(0),
+						}),
+					}
+				}
 				Command::Archives {
 					parent,
 					guild,
@@ -890,6 +915,7 @@ impl Desktop {
 							recipients: vec![],
 							last_message: None,
 							member_list_id: None,
+							message_count: None,
 						})
 						.collect();
 					Event::Archives {

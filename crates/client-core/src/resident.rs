@@ -227,6 +227,7 @@ mod tests {
 					recipients: vec![],
 					last_message: None,
 					member_list_id: None,
+					message_count: None,
 				})
 				.collect(),
 			..State::default()
@@ -436,6 +437,7 @@ mod tests {
 				parent_id: Patch::Value(Id(99)),
 				name: Patch::Absent,
 				kind: Patch::Absent,
+				message_count: Patch::Absent,
 				position: Patch::Absent,
 				last_message: Patch::Absent,
 			}),

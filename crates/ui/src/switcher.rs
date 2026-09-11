@@ -301,6 +301,7 @@ mod tests {
 					discriminator: 0,
 				}],
 				member_list_id: None,
+				message_count: None,
 				last_message: None,
 			})
 			.collect();

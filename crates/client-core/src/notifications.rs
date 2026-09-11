@@ -443,6 +443,7 @@ mod tests {
 					position: 0,
 					recipients: vec![],
 					member_list_id: None,
+					message_count: None,
 				})
 				.collect(),
 			..State::default()

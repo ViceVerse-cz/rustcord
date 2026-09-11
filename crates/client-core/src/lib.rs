@@ -1,6 +1,7 @@
 //! Single UI-thread state owner. Adapters deliver generation-tagged typed events.
 pub mod archives;
 pub mod auth;
+pub mod forum;
 pub mod permissions;
 #[cfg(test)]
 mod permissions_tests;
@@ -30,6 +31,13 @@ pub const EVENT_SLOTS: usize = 8; // UI drain batch; reliable events share a 32 
 pub const COMMAND_SLOTS: usize = 16; // each admitted command <= 16 KiB
 
 pub enum Command {
+	CreatePost {
+		parent: Id,
+		guild: Id,
+		title: String,
+		content: String,
+		request: u64,
+	},
 	Archives {
 		parent: Id,
 		guild: Id,
@@ -98,6 +106,11 @@ pub enum Command {
 }
 pub enum Event {
 	Typing(typing::Signal),
+	PostCreated {
+		parent: Id,
+		request: u64,
+		result: Result<Channel, auth::Failure>,
+	},
 	Archives {
 		parent: Id,
 		request: u64,
@@ -218,6 +231,7 @@ pub struct State {
 	pub typing: typing::Typing,
 	pub permissions: permissions::Permissions,
 	pub archives: Option<archives::View>,
+	pub posting: forum::Posting,
 	pub archived_thread: Option<Id>,
 	pub search: Option<search::SearchView>,
 	pub search_request: u64,
@@ -268,6 +282,7 @@ impl Default for State {
 			typing: typing::Typing::default(),
 			permissions: permissions::Permissions::default(),
 			archives: None,
+			posting: forum::Posting::default(),
 			archived_thread: None,
 			search: None,
 			search_request: 0,
@@ -312,6 +327,12 @@ impl Default for State {
 		}
 	}
 }
+/// Channels the conversation pane can present: text, voice, and forum containers.
+fn navigable(channel: &Channel) -> bool {
+	channel.supports_text()
+		|| channel.kind == 2
+		|| (channel.guild.is_some() && matches!(channel.kind, 15 | 16))
+}
 impl State {
 	pub fn logout(&mut self) {
 		let generation = self.generation.wrapping_add(1);
@@ -344,7 +365,7 @@ impl State {
 		if !self
 			.channels
 			.iter()
-			.any(|c| c.id == channel && (c.supports_text() || c.kind == 2))
+			.any(|c| c.id == channel && navigable(c))
 		{
 			self.status = "This channel kind is unsupported";
 			return None;
@@ -365,7 +386,11 @@ impl State {
 		self.older_exhausted = false;
 		self.reply = None;
 		self.revision += 1;
-		if self.channels.iter().any(|c| c.id == channel && c.kind == 2) {
+		if self
+			.channels
+			.iter()
+			.any(|c| c.id == channel && !c.supports_text())
+		{
 			self.cancel_history();
 			self.freshness = Freshness::Fresh;
 			return None;
@@ -575,6 +600,13 @@ impl State {
 		})
 	}
 	pub fn command_rejected(&mut self, command: Command) {
+		if let Command::CreatePost {
+			parent, request, ..
+		} = command
+		{
+			self.apply_post(parent, request, Err(auth::Failure::Capacity));
+			return;
+		}
 		if let Command::Archives {
 			parent, request, ..
 		} = command
@@ -867,6 +899,14 @@ impl State {
 				self.apply_archives(parent, request, result);
 				Ok(())
 			}
+			Event::PostCreated {
+				parent,
+				request,
+				result,
+			} => {
+				self.apply_post(parent, request, result);
+				Ok(())
+			}
 			Event::Search {
 				channel,
 				request,
@@ -1019,10 +1059,10 @@ impl State {
 					if let Patch::Value(kind) = patch.kind {
 						channel.kind = kind;
 					}
-					if self.selected == Some(channel.id)
-						&& !channel.supports_text()
-						&& channel.kind != 2
-					{
+					if let Patch::Value(count) = patch.message_count {
+						channel.message_count = Some(count);
+					}
+					if self.selected == Some(channel.id) && !navigable(channel) {
 						self.selected = None;
 						self.invalidate_members();
 						self.timeline.clear();
@@ -1158,17 +1198,15 @@ impl State {
 					.iter()
 					.filter(|old| {
 						current.get(&old.id).is_none_or(|channel| {
-							(old.supports_text() && !channel.supports_text())
-								|| (old.kind == 2 && channel.kind != 2)
+							(navigable(old) && !navigable(channel))
+								|| (old.supports_text() != channel.supports_text())
 						})
 					})
 					.map(|channel| channel.id)
 					.collect();
-				let unavailable = self.selected.is_some_and(|id| {
-					current
-						.get(&id)
-						.is_none_or(|channel| !channel.supports_text() && channel.kind != 2)
-				});
+				let unavailable = self
+					.selected
+					.is_some_and(|id| current.get(&id).is_none_or(|channel| !navigable(channel)));
 				if unavailable && let Some(selected) = self.selected {
 					removed.insert(selected);
 				}
@@ -1294,6 +1332,13 @@ impl State {
 			}
 			Event::Message(mut m) => {
 				self.typing_message(&m);
+				if let Some(post) = self
+					.channels
+					.iter_mut()
+					.find(|c| c.id == m.channel && matches!(c.kind, 10..=12))
+				{
+					post.message_count = post.message_count.map(|n| n.saturating_add(1));
+				}
 				let deletion = if m.reply_deleted && self.accepts_reply_source(&m) {
 					self.record_reply_deletion(&m);
 					if self.selected == Some(m.channel) {
@@ -1709,6 +1754,7 @@ impl Event {
 				Self::Archives { result, .. } => {
 					result.as_ref().map_or(0, model::archives::Page::bytes)
 				}
+				Self::PostCreated { result, .. } => result.as_ref().map_or(0, Channel::bytes),
 				Self::Search {
 					result: Ok(search::Outcome::Page(page) | search::Outcome::Pins(page)),
 					..
@@ -1861,6 +1907,7 @@ mod tests {
 				recipients: vec![],
 				last_message: None,
 				member_list_id: None,
+				message_count: None,
 			}],
 			selected: Some(Id(1)),
 			auth: auth::AuthState::Authenticated,
@@ -1912,6 +1959,7 @@ mod tests {
 				recipients: vec![],
 				last_message: None,
 				member_list_id: None,
+				message_count: None,
 			}],
 			selected: Some(Id(1)),
 			auth: auth::AuthState::Authenticated,
@@ -2008,6 +2056,7 @@ mod tests {
 				recipients: vec![],
 				last_message: None,
 				member_list_id: None,
+				message_count: None,
 			}],
 			gateway_connected: true,
 			auth: auth::AuthState::Authenticated,
@@ -2423,6 +2472,7 @@ mod tests {
 			kind: 0,
 			recipients: vec![],
 			member_list_id: None,
+			message_count: None,
 		};
 		apply(&mut state, Event::ChannelCreated(channel.clone()));
 		apply(&mut state, Event::ChannelCreated(channel));
@@ -2436,6 +2486,7 @@ mod tests {
 				parent_id: Patch::Null,
 				position: Patch::Value(0),
 				kind: Patch::Absent,
+				message_count: Patch::Absent,
 			}),
 		);
 		assert_eq!(state.channels[0].parent_id, None);
@@ -2453,6 +2504,7 @@ mod tests {
 				parent_id: Patch::Absent,
 				position: Patch::Absent,
 				kind: Patch::Value(4),
+				message_count: Patch::Absent,
 			}),
 		);
 		assert!(state.selected.is_none());
@@ -2473,6 +2525,7 @@ mod tests {
 					kind: 4,
 					recipients: vec![],
 					member_list_id: None,
+					message_count: None,
 				}),
 			);
 		}
@@ -2533,6 +2586,7 @@ mod tests {
 				recipients: vec![],
 				last_message: None,
 				member_list_id: None,
+				message_count: None,
 			}],
 			..State::default()
 		};
@@ -2666,6 +2720,7 @@ mod tests {
 				kind: 1,
 				recipients: vec![user.clone()],
 				member_list_id: None,
+				message_count: None,
 			}],
 			..State::default()
 		};
@@ -2721,6 +2776,7 @@ mod tests {
 			recipients: vec![],
 			last_message: Some(Id(80)),
 			member_list_id: Some("known-list".into()),
+			message_count: None,
 		};
 		let mut state = State {
 			user: Some(message(1).author),
@@ -2743,6 +2799,7 @@ mod tests {
 			position: 0,
 			last_message: None,
 			member_list_id: None,
+			message_count: None,
 			..channel.clone()
 		};
 		apply(&mut state, Event::ChannelRestored(candidate.clone()));
@@ -2759,6 +2816,7 @@ mod tests {
 				parent_id: Patch::Absent,
 				position: Patch::Absent,
 				kind: Patch::Absent,
+				message_count: Patch::Absent,
 			}),
 		);
 		assert_eq!(state.channels[0].name, "Renamed");
@@ -2854,6 +2912,7 @@ mod tests {
 			recipients: vec![],
 			last_message: None,
 			member_list_id: None,
+			message_count: None,
 		};
 		let guild = Guild {
 			id: Id(10),
@@ -2936,6 +2995,7 @@ mod tests {
 			recipients: vec![],
 			last_message: None,
 			member_list_id: None,
+			message_count: None,
 		};
 		let user = || User {
 			id: Id(2),
@@ -3083,6 +3143,7 @@ mod tests {
 					kind: 1,
 					recipients: vec![],
 					member_list_id: None,
+					message_count: None,
 				}],
 			},
 		);

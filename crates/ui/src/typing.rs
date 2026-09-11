@@ -142,6 +142,7 @@ mod tests {
 				name: "Synthetic typing conversation".into(),
 				last_message: None,
 				member_list_id: None,
+				message_count: None,
 				recipients: vec![
 					User {
 						id: Id(1),

@@ -239,6 +239,20 @@ impl DiscordApi {
 	}
 	pub async fn execute(&self, command: Command) -> Event {
 		match command {
+			Command::CreatePost {
+				parent,
+				guild,
+				title,
+				content,
+				request,
+			} => {
+				let result = self.create_post(parent, guild, &title, &content).await;
+				Event::PostCreated {
+					parent,
+					request,
+					result,
+				}
+			}
 			Command::Archives {
 				parent,
 				guild,
@@ -627,6 +641,46 @@ impl DiscordApi {
 				return Err(Failure::Ambiguous);
 			}
 			Ok(message.into_model())
+		})
+	}
+}
+impl DiscordApi {
+	/// Documented forum post creation: one thread with its starter message. Never auto-retried.
+	async fn create_post(
+		&self,
+		parent: model::Id,
+		guild: model::Id,
+		title: &str,
+		content: &str,
+	) -> Result<model::Channel, Failure> {
+		let title = title.trim();
+		if title.is_empty()
+			|| title.chars().count() > client_core::forum::MAX_TITLE
+			|| content.trim().is_empty()
+			|| content.chars().count() > client_core::MAX_CONTENT
+		{
+			return Err(Failure::Capacity);
+		}
+		let body = serde_json::json!({
+			"name": title,
+			"auto_archive_duration": 4320,
+			"message": {"content": content, "allowed_mentions": allowed_mentions(content)},
+		});
+		self.request(
+			Method::POST,
+			&format!("/channels/{parent}/threads"),
+			Some(body),
+		)
+		.await
+		.and_then(|bytes| {
+			let post = decode::<ChannelDto>(&bytes).map_err(|_| Failure::Ambiguous)?;
+			if post.parent_id != Some(parent) || post.guild_id.is_some_and(|id| id != guild) {
+				return Err(Failure::Ambiguous);
+			}
+			let mut post = post.into_model();
+			post.guild = Some(guild);
+			post.name = post.name.chars().take(128).collect();
+			Ok(post)
 		})
 	}
 }

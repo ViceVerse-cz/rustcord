@@ -12,6 +12,7 @@ mod embeds;
 pub mod emoji;
 mod emoji_picker;
 pub mod fonts;
+mod forum;
 pub mod icons;
 mod markdown;
 mod mentions;
@@ -55,6 +56,7 @@ pub struct MessagingUi {
 	switcher_frame: bool,
 	archives: archives::ArchivesUi,
 	archive_parent: Option<Id>,
+	forum: forum::ForumUi,
 	timeline: timeline::TimelineView,
 	edit_modified: Option<(Id, Id, bool)>,
 	edit_undo_cleared: bool,
@@ -1798,6 +1800,12 @@ impl MessagingUi {
 			.channels
 			.iter()
 			.any(|c| Some(c.id) == state.selected && c.kind == 2);
+		let selected_forum = state.selected.is_some_and(|id| state.is_forum(id));
+		if let Some(id) = state.posting.created.take()
+			&& let Some(command) = state.select(id)
+		{
+			commands.push(command);
+		}
 		let wide_members = ui.available_width() >= 720.0;
 		self.search.sync(&ctx, state, &mut commands);
 		let search_open = self.search.open
@@ -1903,6 +1911,10 @@ impl MessagingUi {
 				};
 				if selected_voice {
 					self.voice_channel(ui, state, channel, &mut commands);
+					return;
+				}
+				if selected_forum {
+					self.forum.show(ui, state, channel, &mut commands);
 					return;
 				}
 				egui::Panel::bottom("composer")
@@ -2051,7 +2063,15 @@ impl MessagingUi {
 				self.pins_anchor = None;
 			}
 		}
-		self.archives.show(&ctx, state, &mut commands);
+		// A forum pane lists its own archived posts inline instead of the floating window.
+		if !(selected_forum
+			&& state
+				.archives
+				.as_ref()
+				.is_some_and(|view| Some(view.parent) == state.selected))
+		{
+			self.archives.show(&ctx, state, &mut commands);
+		}
 		if let Some(id) = self.timeline.channel_reference.take()
 			&& let Some(target) = state
 				.channels
@@ -2241,6 +2261,7 @@ mod composer_tests {
 				recipients: vec![],
 				last_message: None,
 				member_list_id: None,
+				message_count: None,
 			}],
 			user: Some(user.clone()),
 			demo: true,
@@ -3467,6 +3488,7 @@ mod composer_tests {
 				position: 0,
 				recipients: vec![],
 				member_list_id: None,
+				message_count: None,
 			});
 			edit_frame(&ctx, &mut view, &mut state, vec![]);
 			view.deleting = Some((Id(10), Id(20)));
@@ -3537,6 +3559,7 @@ mod composer_tests {
 				kind: 0,
 				recipients: Vec::new(),
 				member_list_id: Some("everyone".into()),
+				message_count: None,
 			}],
 			members: Some(model::MemberList {
 				channel: Id(1),
@@ -3947,6 +3970,7 @@ mod composer_tests {
 					kind: if guild.is_some() { 0 } else { 1 },
 					recipients: vec![user.clone()],
 					member_list_id: None,
+					message_count: None,
 				}],
 				..Default::default()
 			};
@@ -4104,6 +4128,7 @@ mod composer_tests {
 				kind: 1,
 				recipients: Vec::new(),
 				member_list_id: None,
+				message_count: None,
 			}],
 			..Default::default()
 		};

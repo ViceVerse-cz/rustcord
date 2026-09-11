@@ -247,7 +247,7 @@ impl MessagingUi {
 							} else {
 								state.unread_count(channel.id)
 							};
-							// Forum containers open their post archive; Discord lists them as browsable rows.
+							// Forum containers open their post list; Discord lists them as browsable rows.
 							let forum = channel.guild.is_some() && matches!(channel.kind, 15 | 16);
 							let enabled = visible && (channel.supports_text() || forum);
 							// Kinds Serein cannot render keep Discord's own destination.
@@ -449,11 +449,7 @@ impl MessagingUi {
 								)
 							});
 							if enabled && response.clicked() {
-								if forum {
-									self.archive_parent = Some(channel.id);
-								} else {
-									selected = Some(channel.id);
-								}
+								selected = Some(channel.id);
 							}
 						}
 					}
@@ -477,6 +473,7 @@ mod tests {
 			kind,
 			recipients: vec![],
 			member_list_id: None,
+			message_count: None,
 		}
 	}
 	#[test]
@@ -787,7 +784,7 @@ mod tests {
 		assert!(state.select(Id(7)).is_none());
 		let ctx = egui::Context::default();
 		let mut picked = None;
-		// The forum row itself opens its archive; the second Tab reaches the loaded post.
+		// The forum row itself is a destination; the second Tab reaches the loaded post.
 		for key in [egui::Key::Tab, egui::Key::Tab, egui::Key::Enter] {
 			ctx.run_ui(
 				egui::RawInput {

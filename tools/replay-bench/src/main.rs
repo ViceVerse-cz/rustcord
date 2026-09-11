@@ -48,6 +48,7 @@ fn navigation() {
 			recipients: vec![],
 			last_message: None,
 			member_list_id: None,
+			message_count: None,
 		})
 		.collect();
 	state.selected = None;
