@@ -181,11 +181,12 @@ impl MessagingUi {
 		let dm_list = self.guild.is_none();
 		let row_height = if dm_list { 44.0 } else { 34.0 };
 		let row_count = self.channel_cache.rows.len();
+		let previous_spacing = ui.spacing().item_spacing.y;
+		ui.spacing_mut().item_spacing.y = 0.0;
 		egui::ScrollArea::vertical()
 			.id_salt(("channel-list", self.guild))
 			.auto_shrink([false, false])
 			.show_rows(ui, row_height, row_count, |ui, range| {
-				ui.spacing_mut().item_spacing.y = 0.0;
 				for index in range {
 					match self.channel_cache.rows[index] {
 						CachedRow::Participant(entry) => {
@@ -375,8 +376,10 @@ impl MessagingUi {
 											&mut self.user_action,
 										);
 									}
-									if avatar.clicked() {
-										self.profile = Some(user.clone());
+									// The avatar is part of the row: clicking it opens the conversation,
+									// the profile stays behind the context menu and the header avatar.
+									if enabled && avatar.clicked() {
+										selected = Some(channel.id);
 									}
 								} else {
 									design::avatar(&mut inner, &channel.name, 32.0);
@@ -519,6 +522,7 @@ impl MessagingUi {
 					}
 				}
 			});
+		ui.spacing_mut().item_spacing.y = previous_spacing;
 		selected
 	}
 }
@@ -538,6 +542,87 @@ mod tests {
 			recipients: vec![],
 			member_list_id: None,
 			message_count: None,
+		}
+	}
+	#[test]
+	fn channel_rows_scroll_continuously_past_voice_participants() {
+		let mut state = test_support::demo_state();
+		state.guilds = vec![model::Guild {
+			id: Id(100),
+			name: "Synthetic".into(),
+			icon: None,
+			emojis: None,
+		}];
+		state.channels = (0..20)
+			.map(|index| {
+				channel(
+					200 + index,
+					if index == 1 { 2 } else { 0 },
+					index as i32,
+					None,
+				)
+			})
+			.collect();
+		state
+			.permissions
+			.replace(test_support::permission_snapshot(&state))
+			.unwrap();
+		state.voice.roster = vec![client_core::voice::RosterEntry {
+			guild: Id(100),
+			channel: Id(201),
+			member: None,
+			participant: client_core::voice::Participant {
+				user: Id(999),
+				muted: true,
+				deafened: true,
+				server_muted: false,
+				server_deafened: false,
+			},
+		}];
+		let mut view = MessagingUi {
+			guild: Some(Id(100)),
+			..Default::default()
+		};
+		let ctx = egui::Context::default();
+		design::apply(&ctx);
+		let mut original_y = None;
+		for offset in [0.0, 33.0, 34.0, 41.0, 42.0, 67.0, 68.0, 101.0, 102.0] {
+			let output = ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(240.0, 200.0),
+					)),
+					..Default::default()
+				},
+				|ui| {
+					let id = ui.make_persistent_id(egui::IdSalt::new(("channel-list", view.guild)));
+					let mut scroll = egui::scroll_area::State::load(&ctx, id).unwrap_or_default();
+					scroll.offset.y = offset;
+					scroll.store(&ctx, id);
+					view.channel_list(ui, &state);
+					assert_eq!(ui.spacing().item_spacing.y, 8.0);
+				},
+			);
+			let y = output.shapes.iter().find_map(|shape| match &shape.shape {
+				egui::Shape::Text(text) if text.galley.job.text == "Synthetic 204" => {
+					Some(text.pos.y)
+				}
+				_ => None,
+			});
+			output.drop_without_applying_deltas();
+			assert!(
+				view.channel_cache
+					.rows
+					.iter()
+					.any(|row| matches!(row, CachedRow::Participant(_)))
+			);
+			let y = y.expect("The same synthetic channel remains visible");
+			let original = *original_y.get_or_insert(y);
+			assert!(
+				(y + offset - original).abs() < 0.1,
+				"Channel jumped at scroll offset {offset}: {y} versus {original}"
+			);
 		}
 	}
 	#[test]
@@ -820,6 +905,9 @@ mod tests {
 		assert!(state.selected.is_none());
 		// A category is a keyboard-operable button, never a history-selection command.
 		state.channels = vec![channel(4, 4, 0, None), channel(8, 0, 0, Some(Id(4)))];
+		// Direct fixture replacement must invalidate derived views, as State::apply does.
+		state.revision += 1;
+		state.invalidate_navigation();
 		let ctx = egui::Context::default();
 		for key in [egui::Key::Tab, egui::Key::Enter] {
 			let input = egui::RawInput {
@@ -841,6 +929,8 @@ mod tests {
 		assert!(state.selected.is_none());
 		// Forum containers never request history; their loaded posts remain keyboard-selectable.
 		state.channels = vec![channel(7, 15, 0, None), channel(8, 11, 0, Some(Id(7)))];
+		state.revision += 1;
+		state.invalidate_navigation();
 		state
 			.permissions
 			.replace(test_support::permission_snapshot(&state))

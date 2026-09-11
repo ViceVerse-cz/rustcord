@@ -16,8 +16,7 @@ pub fn show(
 	state: &State,
 	avatars: &mut crate::avatars::Avatars,
 	upload: Option<&Upload>,
-	restore: &mut Option<String>,
-	cancel: &mut bool,
+	(restore, cancel): (&mut Option<String>, &mut bool),
 ) {
 	let colors = crate::design::palette(ui);
 	let upload = upload.filter(|upload| upload.nonce == pending.nonce);
@@ -148,8 +147,7 @@ mod tests {
 							&state,
 							&mut crate::avatars::Avatars::default(),
 							Some(&upload),
-							&mut None,
-							&mut false,
+							(&mut None, &mut false),
 						);
 					},
 				);

@@ -481,6 +481,10 @@ impl State {
 				.sum::<usize>()
 	}
 	pub fn select(&mut self, channel: Id) -> Option<Command> {
+		// Keep the current conversation intact, but allow a restored channel to load again.
+		if self.selected == Some(channel) && self.freshness != Freshness::Unavailable {
+			return None;
+		}
 		if !self
 			.channels
 			.iter()

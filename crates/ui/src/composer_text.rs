@@ -73,6 +73,9 @@ impl Layout {
 		let size = emoji::inline_size(ui);
 		let mut job = LayoutJob::default();
 		job.wrap.max_width = width;
+		if text.is_empty() {
+			job.append("", 0.0, format.clone());
+		}
 		let mut byte = 0;
 		let mut source = 0;
 		let mut projected = 0;

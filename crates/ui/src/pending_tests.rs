@@ -53,8 +53,7 @@ fn render(
 					state,
 					&mut None,
 					&mut None,
-					&mut avatars,
-					&mut None,
+					(&mut avatars, &mut None),
 					None,
 				)
 			},

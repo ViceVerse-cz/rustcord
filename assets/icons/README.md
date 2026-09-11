@@ -6,18 +6,30 @@
 fetched through the jsDelivr npm mirror on September 10, 2026. The unmodified license is
 `LICENSE` and is staged in both packages as `licenses/Phosphor-Icons-MIT.txt`.
 
-Seventy-six unmodified `assets/fill/*.svg` and `assets/bold/*.svg` files are scaled to 56×56
-pixels, filled white, and rasterized by `resvg` 0.45.1 into one transparent PNG atlas with
-64×64 cells (8 columns, 10 rows). `headphones-slash` is derived from `headphones-fill.svg` by
-masking a diagonal knockout and adding a 16-unit round-capped stroke, matching the style of
+Seventy-six unmodified Phosphor `assets/fill/*.svg` and `assets/bold/*.svg` files are scaled
+to 56×56 pixels, filled white, and rasterized by `resvg` 0.45.1 into one transparent PNG atlas
+with 64×64 cells (8 columns, 11 rows). `headphones-slash` is derived from `headphones-fill.svg`
+by masking a diagonal knockout and adding a 16-unit round-capped stroke, matching the style of
 Phosphor's own `*-slash` icons. The application tints glyphs at draw time; no icon font,
 JavaScript or per-icon file is bundled.
 
-- `atlas.png`: 512×640 RGBA, 84,996 bytes; decoded 1,310,720 bytes.
-  SHA-256 `a7b509057e75a9290bced0a0b4e24de8e8c5b42083817a508c75bc7732fc75d1`.
+Ten brand marks Phosphor does not ship (PlayStation, Battle.net, Epic Games, League of Legends,
+Riot Games, Bungie, Roblox, Crunchyroll, eBay, Bluesky) come from
+[Simple Icons](https://simpleicons.org) npm package `simple-icons` version 16.30.0
+(repository https://github.com/simple-icons/simple-icons), released under
+[CC0 1.0](LICENSE-SIMPLE-ICONS) and fetched through the same mirror on September 11, 2026.
+Their 24-unit glyphs fill the whole view box, so they are drawn at 80 % of the cell glyph size
+to match Phosphor's visual weight. Brand marks remain trademarks of their owners; Simple Icons'
+legal disclaimer applies. The license file is staged in both packages as
+`licenses/Simple-Icons-CC0.txt`.
+
+- `atlas.png`: 512×704 RGBA, 97,634 bytes; decoded 1,441,792 bytes.
+  SHA-256 `b4063527034e4861dfa7cbb8a294a3f54fb56934970cdefb520594eae688ed93`.
 - `index.tsv`: icon name, tab, zero-based cell; SHA-256
-  `77955c8b4dba7fa480c809fb7c37c4f0e83e685bed728995a5c009637fd3c2f8`.
+  `3c99ce20309338cd7843ac66b4ed08c244293ac7c0b59510c743de02023bdf67`.
 - `LICENSE`: SHA-256 `ddbe6082ec3cf979db47e5af549d2849c5d6182b3e005ef91ce1dbb9eb122f11`.
+- `LICENSE-SIMPLE-ICONS`: SHA-256
+  `9046848b63a5c92bff14e4accca80bd987e0623b74adf9226ce5198d312b79d5`.
 
 Every upstream SVG's SHA-256 is pinned in `tools/generate-icons.py`, which refuses to build
 from mismatching files. Regenerate from the repository root:

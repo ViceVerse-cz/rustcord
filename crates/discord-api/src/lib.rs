@@ -716,7 +716,7 @@ impl DiscordApi {
 		content: &str,
 		nonce: &str,
 		reply: Option<model::Id>,
-		attachment: Option<serde_json::Value>,
+		attachment: Option<Vec<serde_json::Value>>,
 	) -> Result<model::Message, Failure> {
 		if (content.trim().is_empty() && attachment.is_none())
 			|| content.chars().count() > client_core::MAX_CONTENT
@@ -729,7 +729,7 @@ impl DiscordApi {
 				serde_json::json!({"message_id":reply,"channel_id":channel});
 		}
 		if let Some(attachment) = attachment {
-			body["attachments"] = serde_json::json!([attachment]);
+			body["attachments"] = serde_json::json!(attachment);
 		}
 		// No enforce_nonce claim until normal-user semantics are live verified. Never auto-retry writes.
 		self.request(
