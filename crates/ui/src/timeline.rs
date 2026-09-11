@@ -1329,7 +1329,12 @@ impl TimelineView {
 						pending,
 						compact,
 						state,
-						(avatars, &mut self.opening, profile, &mut self.channel_reference),
+						(
+							avatars,
+							&mut self.opening,
+							profile,
+							&mut self.channel_reference,
+						),
 						upload,
 						(&mut self.restore_pending, &mut self.cancel_upload),
 					);
@@ -2814,6 +2819,7 @@ mod tests {
 						unit: egui::MouseWheelUnit::Point,
 						delta: egui::vec2(0.0, -600.0),
 						modifiers: egui::Modifiers::NONE,
+						phase: egui::TouchPhase::Move,
 					},
 				],
 			);

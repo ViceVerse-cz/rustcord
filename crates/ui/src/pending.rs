@@ -161,7 +161,12 @@ mod tests {
 							&pending,
 							true,
 							&state,
-							(&mut crate::avatars::Avatars::default(), &mut None, &mut None, &mut None),
+							(
+								&mut crate::avatars::Avatars::default(),
+								&mut None,
+								&mut None,
+								&mut None,
+							),
 							Some(&upload),
 							(&mut None, &mut false),
 						);

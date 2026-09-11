@@ -553,6 +553,7 @@ mod tests {
 			deafened: false,
 			participants: vec![],
 			error: None,
+			camera: false,
 		});
 		let mut screen = Screen {
 			pending: Some(Pending {

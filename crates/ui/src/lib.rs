@@ -4013,6 +4013,7 @@ mod composer_tests {
 		}
 		let mut state = test_support::demo_state();
 		state.demo = false; // Exercise normal command admission using synthetic loaded data.
+		state.guild_folders = Some(Default::default()); // Folder fetch is outside this presence-only scenario.
 		let channel = state.selected.unwrap();
 		let guild = state
 			.channels
@@ -4070,16 +4071,17 @@ mod composer_tests {
 				},
 				|ui| commands = messaging.show(ui, state),
 			);
-			assert!(
-				commands.is_empty(),
-				"Presence rendering must not fetch a profile or emit other commands"
-			);
-			assert!(output.platform_output.commands.is_empty());
+			let platform_commands_empty = output.platform_output.commands.is_empty();
 			let mut labels = vec![];
 			for shape in &output.shapes {
 				collect(&shape.shape, &mut labels);
 			}
 			output.drop_without_applying_deltas();
+			assert!(
+				commands.is_empty(),
+				"Presence rendering must not fetch a profile or emit other commands"
+			);
+			assert!(platform_commands_empty);
 			labels
 		};
 		for _ in 0..3 {

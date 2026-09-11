@@ -99,10 +99,8 @@ fn decode_folder(bytes: &[u8]) -> Result<Folder, DecodeError> {
 				if packed.len() % 8 != 0 || folder.guild_ids.len() + packed.len() / 8 > MAX_GUILDS {
 					return Err(DecodeError);
 				}
-				for id in packed.chunks_exact(8) {
-					folder.guild_ids.push(Id(u64::from_le_bytes(
-						id.try_into().map_err(|_| DecodeError)?,
-					)));
+				for id in packed.as_chunks::<8>().0 {
+					folder.guild_ids.push(Id(u64::from_le_bytes(*id)));
 				}
 			}
 			2 => folder.id = Some(wrapper_integer(field.message()?)?),
