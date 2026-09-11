@@ -43,7 +43,8 @@ fn name(state: &State, channel: Id, user: Id) -> Option<&str> {
 		})
 }
 
-fn label(state: &State, channel: Id, now: Instant) -> Option<String> {
+/// Text runs for the indicator; `true` marks a typist name rendered in the strong weight.
+fn segments(state: &State, channel: Id, now: Instant) -> Option<Vec<(String, bool)>> {
 	if state.selected != Some(channel) {
 		return None;
 	}
@@ -67,49 +68,123 @@ fn label(state: &State, channel: Id, now: Instant) -> Option<String> {
 	if count == 0 {
 		return None;
 	}
+	let verb = if count == 1 { " is typing…" } else { " are typing…" };
 	if names.is_empty() {
-		return Some(if count == 1 {
-			"Someone is typing".into()
-		} else {
-			format!("{count} people are typing")
-		});
+		return Some(vec![(
+			if count == 1 {
+				"Someone is typing…".into()
+			} else {
+				format!("{count} people are typing…")
+			},
+			false,
+		)]);
 	}
 	let others = count - names.len();
+	let mut out: Vec<(String, bool)> = Vec::with_capacity(names.len() * 2 + 2);
+	let last_index = names.len() - 1 + usize::from(others > 0);
+	for (index, name) in names.into_iter().enumerate() {
+		if index > 0 {
+			out.push((
+				if index == last_index { " and " } else { ", " }.into(),
+				false,
+			));
+		}
+		out.push((name, true));
+	}
 	if others > 0 {
-		names.push(format!(
-			"{others} other{}",
-			if others == 1 { "" } else { "s" }
+		out.push((
+			format!(
+				" and {others} other{}",
+				if others == 1 { "" } else { "s" }
+			),
+			false,
 		));
 	}
-	let last = names.pop().unwrap();
-	let subjects = if names.is_empty() {
-		last
-	} else {
-		format!("{} and {last}", names.join(", "))
-	};
-	Some(format!(
-		"{subjects} {} typing",
-		if count == 1 { "is" } else { "are" }
-	))
+	out.push((verb.into(), false));
+	Some(out)
 }
 
+#[cfg(test)]
+fn label(state: &State, channel: Id, now: Instant) -> Option<String> {
+	segments(state, channel, now).map(|parts| parts.into_iter().map(|(text, _)| text).collect())
+}
+
+/// Reserved height under the composer. Idle frames keep it, so typing never moves messages.
+const ROW_HEIGHT: f32 = 18.0;
+const TEXT_SIZE: f32 = 12.5;
+const DOT_RADIUS: f32 = 2.5;
+const DOT_STEP: f32 = 7.0;
+const DOT_PERIOD: f64 = 1.2;
+
 pub(super) fn show(ui: &mut egui::Ui, state: &State, channel: Id, now: Instant) {
-	// Keep one text row even when idle so typing never resizes the conversation.
-	let label = label(state, channel, now).unwrap_or_else(|| " ".into());
-	let response = ui.add(
-		egui::Label::new(
-			egui::RichText::new(label)
-				.small()
-				.color(crate::design::palette(ui).muted),
-		)
-		.truncate(),
+	let colors = crate::design::palette(ui);
+	let (rect, response) = ui.allocate_exact_size(
+		egui::vec2(ui.available_width(), ROW_HEIGHT),
+		egui::Sense::hover(),
 	);
-	if ui.is_rect_visible(response.rect)
-		&& let Some(deadline) = state.typing_deadline(now)
-	{
-		// One deadline, no dots animation and no periodic idle repaint.
+	let Some(segments) = segments(state, channel, now) else {
+		return;
+	};
+	if !ui.is_rect_visible(rect) {
+		return;
+	}
+	let painter = ui.painter_at(rect);
+	// Three pulsing dots, Discord style; the animation runs only while someone is typing.
+	let time = ui.input(|input| input.time);
+	let dots_left = rect.left() + DOT_RADIUS + 2.0;
+	for index in 0..3 {
+		let phase = (time / DOT_PERIOD - f64::from(index) * 0.18).fract();
+		let pulse = (0.5 - 0.5 * (phase * std::f64::consts::TAU).cos()) as f32;
+		let center = egui::pos2(dots_left + index as f32 * DOT_STEP, rect.center().y);
+		painter.circle_filled(
+			center,
+			DOT_RADIUS - 0.5 + pulse * 0.6,
+			colors.muted.gamma_multiply(0.35 + 0.65 * pulse),
+		);
+	}
+	let text_left = dots_left + 2.0 * DOT_STEP + DOT_RADIUS + 8.0;
+	let mut job = egui::text::LayoutJob::default();
+	job.wrap.max_width = (rect.right() - text_left).max(0.0);
+	job.wrap.max_rows = 1;
+	job.wrap.break_anywhere = true;
+	let strong = crate::design::semibold_family(ui.ctx());
+	for (text, is_name) in &segments {
+		job.append(
+			text,
+			0.0,
+			egui::TextFormat {
+				font_id: egui::FontId::new(
+					TEXT_SIZE,
+					if *is_name {
+						strong.clone()
+					} else {
+						egui::FontFamily::Proportional
+					},
+				),
+				color: if *is_name {
+					colors.text_strong
+				} else {
+					colors.muted
+				},
+				..Default::default()
+			},
+		);
+	}
+	let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+	let text_pos = egui::pos2(
+		text_left,
+		rect.center().y - galley.size().y / 2.0,
+	);
+	painter.galley(text_pos, galley, colors.muted);
+	response.widget_info(|| {
+		let text: String = segments.iter().map(|(text, _)| text.as_str()).collect();
+		egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text)
+	});
+	if let Some(deadline) = state.typing_deadline(now) {
+		// Keep the dots moving until the earliest deadline, then go idle without repaints.
+		let frame = std::time::Duration::from_millis(80);
 		ui.ctx()
-			.request_repaint_after(deadline.saturating_duration_since(now));
+			.request_repaint_after(deadline.saturating_duration_since(now).min(frame));
 	}
 }
 
@@ -185,7 +260,7 @@ mod tests {
 		}
 		let text = label(&state, Id(10), now).unwrap();
 		assert!(text.starts_with("Alex, Robin, Long name"));
-		assert!(text.ends_with("and 5 others are typing"));
+		assert!(text.ends_with("and 5 others are typing…"));
 		assert!(!text.contains('\n'));
 		assert!(text.chars().count() < 160);
 		assert!(label(&state, Id(11), now).is_none());
@@ -264,7 +339,7 @@ mod tests {
 		);
 		assert_eq!(
 			label(&state, Id(10), now).as_deref(),
-			Some("Someone is typing")
+			Some("Someone is typing…")
 		);
 		state.drafts.insert(Id(10), "My unsent draft".into());
 		let mut messaging = crate::MessagingUi::default();
@@ -286,7 +361,7 @@ mod tests {
 			assert!(output.platform_output.commands.is_empty());
 			if pass > 0 {
 				assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
-                    egui::Shape::Text(text) if text.galley.job.text == "Someone is typing")));
+                    egui::Shape::Text(text) if text.galley.job.text == "Someone is typing…")));
 			}
 			assert_eq!(state.drafts[&Id(10)], "My unsent draft");
 			assert!(messaging.draft_changes.is_empty());

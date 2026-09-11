@@ -180,6 +180,33 @@ pub struct MessagingUi {
 	pub theme_variant_changed: Option<design::Variant>,
 }
 
+/// Context strip (reply/edit) drawn as the rounded top of the composer block.
+fn composer_cap(
+	ui: &mut egui::Ui,
+	colors: &design::Palette,
+	add_contents: impl FnOnce(&mut egui::Ui),
+) -> egui::Rect {
+	egui::Frame::new()
+		.fill(design::mix(colors.raised, colors.base, 0.45))
+		.corner_radius(egui::CornerRadius {
+			nw: 8,
+			ne: 8,
+			sw: 0,
+			se: 0,
+		})
+		.inner_margin(egui::Margin {
+			left: 16,
+			right: 8,
+			top: 5,
+			bottom: 5,
+		})
+		.show(ui, |ui| {
+			ui.set_min_width((ui.available_width()).max(0.0));
+			ui.horizontal(|ui| add_contents(ui));
+		})
+		.response
+		.rect
+}
 impl MessagingUi {
 	pub fn timeline_reflows(&self) -> (u64, u64) {
 		(
@@ -1357,57 +1384,80 @@ impl MessagingUi {
 				});
 			ui.add_space(8.0);
 		}
+		// Reply/edit context sits flush on top of the input as one rounded block, like Discord.
+		let mut cap_top: Option<f32> = None;
 		if editing_here {
 			let unavailable = editing_key.is_some_and(|(_, id)| state.timeline.get(id).is_none());
-			ui.horizontal(|ui| {
+			let cap = composer_cap(ui, &colors, |ui| {
 				ui.label(
 					RichText::new(if unavailable {
 						"Message unavailable · unsent edit"
 					} else {
 						"Editing message"
 					})
-					.small()
-					.color(colors.accent),
+					.size(13.0)
+					.color(colors.muted),
 				);
-				cancel_edit = ui.small_button("Cancel edit").clicked();
-				if unavailable
-					&& ui.small_button("Copy edit text").clicked()
-					&& let Some((_, _, text)) = &self.editing
-				{
-					ui.ctx().copy_text(text.clone());
-				}
 				if self.edit_sent {
-					ui.small("Save requested · check connection status before retrying");
+					ui.label(
+						RichText::new("· Save requested, check the connection before retrying")
+							.size(12.0)
+							.color(colors.muted),
+					);
 				}
+				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+					cancel_edit = icons::button(ui, icons::Icon::Close, 22.0, "Cancel edit").clicked();
+					if unavailable
+						&& ui
+							.add(
+								egui::Button::new(
+									RichText::new("Copy edit text").size(12.0).color(colors.muted),
+								)
+								.frame(false),
+							)
+							.clicked()
+						&& let Some((_, _, text)) = &self.editing
+					{
+						ui.ctx().copy_text(text.clone());
+					}
+				});
 			});
-			ui.add_space(6.0);
+			cap_top = Some(cap.top());
 		} else if let Some(reply) = state.reply {
 			let author = state
 				.timeline
 				.get(reply)
-				.map_or("an earlier message", |message| message.author.name.as_str());
-			let label = format!("Replying to {author}");
-			ui.horizontal(|ui| {
-				ui.label(RichText::new(label).small().color(colors.accent));
-				if ui
-					.add_enabled(
-						state.can_open_reply_target(reply),
-						egui::Button::new("View original").small(),
-					)
-					.on_disabled_hover_text(if state.timeline.is_deleted(reply) {
-						"The original message was deleted"
-					} else {
-						"Wait for readable, current message history"
-					})
-					.clicked()
-				{
-					self.timeline.reply_target = Some(reply);
-				}
-				if ui.small_button("Cancel reply").clicked() {
-					state.reply = None;
-				}
+				.map_or("an earlier message", |message| message.author.name.as_str())
+				.to_owned();
+			let cap = composer_cap(ui, &colors, |ui| {
+				ui.spacing_mut().item_spacing.x = 0.0;
+				ui.label(RichText::new("Replying to ").size(13.0).color(colors.muted));
+				ui.label(design::semibold(ui, author.as_str(), 13.0).color(colors.text_strong));
+				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+					ui.spacing_mut().item_spacing.x = 6.0;
+					if icons::button(ui, icons::Icon::Close, 22.0, "Cancel reply").clicked() {
+						state.reply = None;
+					}
+					if ui
+						.add_enabled(
+							state.can_open_reply_target(reply),
+							egui::Button::new(
+								RichText::new("View original").size(12.0).color(colors.muted),
+							)
+							.frame(false),
+						)
+						.on_disabled_hover_text(if state.timeline.is_deleted(reply) {
+							"The original message was deleted"
+						} else {
+							"Wait for readable, current message history"
+						})
+						.clicked()
+					{
+						self.timeline.reply_target = Some(reply);
+					}
+				});
 			});
-			ui.add_space(6.0);
+			cap_top = Some(cap.top());
 		}
 		let upload_in_timeline = self.pending_upload.as_ref().is_some_and(|upload| {
 			state.pending.iter().any(|p| {
@@ -1646,14 +1696,23 @@ impl MessagingUi {
 				&& !(state.demo && self.attachment.is_some())
 				&& (count_before > 0 || self.attachment.is_some())
 		};
+		if cap_top.is_some() {
+			// The cap and the input form one block: undo the automatic vertical item gap.
+			ui.add_space(-ui.spacing().item_spacing.y);
+		}
 		egui::Frame::new()
             .fill(colors.raised)
-            .corner_radius(8)
+            .corner_radius(if cap_top.is_some() {
+                egui::CornerRadius { nw: 0, ne: 0, sw: 8, se: 8 }
+            } else {
+                egui::CornerRadius::same(8)
+            })
             .inner_margin(egui::Margin::symmetric(10, 6))
             .show(ui, |ui| {
-                // Outer frame bounds for the autocomplete popout: undo the inner margin.
+                // Outer frame bounds for the autocomplete popout: undo the inner margin and
+                // include the reply/edit cap so the popout never covers it.
                 let composer_anchor = egui::Rect::from_min_max(
-                    egui::pos2(ui.max_rect().left() - 10.0, ui.max_rect().top() - 6.0),
+                    egui::pos2(ui.max_rect().left() - 10.0, cap_top.unwrap_or(ui.max_rect().top() - 6.0)),
                     egui::pos2(ui.max_rect().right() + 10.0, ui.max_rect().top()),
                 );
                 if !editing_here && self.attachment.is_some() {
@@ -2219,12 +2278,14 @@ impl MessagingUi {
 							.inner_margin(egui::Margin {
 								left: 16,
 								right: 16,
-								top: 4,
-								bottom: 20,
+								top: 2,
+								bottom: 4,
 							}),
 					)
 					.show(ui, |ui| {
 						self.composer(ui, state, channel, &ctx, &mut commands);
+						// The typing row doubles as the bottom margin, as in Discord.
+						ui.add_space(-2.0);
 						typing::show(ui, state, channel, std::time::Instant::now());
 					});
 				if commands
