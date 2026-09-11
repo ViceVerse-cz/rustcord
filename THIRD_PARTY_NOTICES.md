@@ -1,17 +1,14 @@
 # Third-party notices
 
-`cargo xtask package` and `package-voice` now assemble `licenses/dependencies/inventory.json`
-from Cargo compiler artifacts for that host and feature set. This conservatively includes
-build dependencies and procedural macros; it is not a linker-level inventory. Matching
-license/notice files and reviewed exact-version supplements accompany each entry. Missing
-unreviewed texts stop packaging. The collector runs offline after the locked build.
+Packaging copies the repository's bundled notices, license texts and corresponding component
+source without scanning dependencies or checking license coverage. Declared-license checks run
+separately in the dedicated license CI job (`cargo xtask licenses`); its failure does not block
+package jobs. No per-artifact dependency inventory is generated during packaging.
 
 `assets/licenses/dependencies/PROVENANCE.md` records supplement sources and hashes;
-`overrides.json` pins their package version and source identity. Corresponding MPL sources
-are retained with their original terms. Known upstream omissions remain explicit in each
-entry and set `complete: false`: supplied reference texts, declarations and original source
-archives do not invent missing copyright grants or establish redistribution clearance.
-This collection supplements the existing font, audio, login, notification and voice notices.
+`overrides.json` preserves the reviewed package versions, source identities and known evidence
+gaps. Corresponding MPL sources retain their original terms. Supplied reference texts,
+declarations and source archives do not resolve missing upstream grants.
 
 
 REST gzip decoding adds **async-compression 0.4.42**, **compression-codecs 0.4.38**
@@ -68,7 +65,7 @@ Core components include egui/eframe/wgpu (MIT OR Apache-2.0), Tokio (MIT), serde
 
 System frameworks and runtimes (Metal, WebKit/WKWebView, WebView2, GTK/WebKitGTK, OS credential stores) are supplied under their vendors’ terms and are not relicensed here. Text-mode packages contain no libdave, Opus, camera, or microphone implementation. No Discord logos, proprietary fonts, official client binaries/source, or emoji collection are redistributed. Abaddon and Discord Userdoccers were consulted as protocol evidence; no implementation source was copied.
 
-The optional voice build additionally uses **Davey 0.1.4** (MIT, Snazzah; [upstream commit a1e2e741](https://github.com/Snazzah/davey/tree/a1e2e741bea06bc3b7167a5c3792844b8975993c)), **OpenMLS 0.8.1** (MIT, OpenMLS Authors; [upstream commit 47dbedec](https://github.com/openmls/openmls/tree/47dbedecad0c1fd8eb5368d582250ebfcc1e1ce6)), **CPAL 0.18.2** (Apache-2.0), **opus2 0.4.0** (MIT OR Apache-2.0), **rtrb 0.4.0** (MIT OR Apache-2.0), and **chacha20poly1305 0.10.1** (Apache-2.0 OR MIT). Davey implements DAVE with OpenMLS; this build does not link Discord's C++ libdave. The local `vendor/davey` manifest patch removes OpenMLS browser-only timer features from this native build; all Davey Rust sources are unchanged. Exact provenance and the MIT license are retained there. Its DAVE and transport cryptography dependencies retain their own licenses and are not covered merely by naming these direct components.
+The standard build additionally uses **Davey 0.1.4** (MIT, Snazzah; [upstream commit a1e2e741](https://github.com/Snazzah/davey/tree/a1e2e741bea06bc3b7167a5c3792844b8975993c)), **OpenMLS 0.8.1** (MIT, OpenMLS Authors; [upstream commit 47dbedec](https://github.com/openmls/openmls/tree/47dbedecad0c1fd8eb5368d582250ebfcc1e1ce6)), **CPAL 0.18.2** (Apache-2.0), **opus2 0.4.0** (MIT OR Apache-2.0), **rtrb 0.4.0** (MIT OR Apache-2.0), and **chacha20poly1305 0.10.1** (Apache-2.0 OR MIT). Davey implements DAVE with OpenMLS; this build does not link Discord's C++ libdave. The local `vendor/davey` manifest patch removes OpenMLS browser-only timer features from this native build; all Davey Rust sources are unchanged. Exact provenance and the MIT license are retained there. Its DAVE and transport cryptography dependencies retain their own licenses and are not covered merely by naming these direct components.
 
 The voice build statically links the bundled Opus source from **libopus_sys 0.3.3**. Binding notices include its current MIT license and preserved earlier ISC license. The codec's unmodified `COPYING` and `LICENSE_PLEASE_READ.txt` retain its contributor copyrights, BSD-style redistribution conditions and references to IETF patent statements. These notices are distinct from the binding license; no independent patent or licensing conclusion is claimed.
 
@@ -121,7 +118,7 @@ assets/licenses/voice/PROVENANCE.md and staged by the existing voice packager.
 
 Optional screen sharing adds **screencapturekit 10.0.3** (MIT OR Apache-2.0) on macOS, **windows-capture 2.0.1** (MIT) on Windows and **openh264 / openh264-sys2 0.9.8** (BSD-2-Clause) for source-built Cisco OpenH264 encoding. It reuses **image 0.25.10** (MIT OR Apache-2.0) for bounded scaling. Native frameworks are supplied by the OS. These dependencies stay behind the existing voice feature. Unmodified available license texts and source provenance are retained in `assets/licenses/voice/PROVENANCE.md`; the noted missing binding license text and existing full per-artifact redistribution review remain outstanding.
 
-Camera sending in the optional macOS voice build uses **openh264 0.9.8** and
+Camera sending in the macOS build uses **openh264 0.9.8** and
 **openh264-sys2 0.9.8** (BSD-2-Clause, Ralf Biedert), built locally with the
 `source` feature. The sys crate bundles **Cisco OpenH264 2.6.0**, as identified
 by `upstream/codec/api/wels/codec_ver.h`; its BSD-2-Clause notice is reproduced
@@ -138,7 +135,7 @@ New support dependencies are **wide 1.7.0** and **safe_arch 1.2.0**
 0.3.2** and **objc2-core-video 0.3.2** (Zlib OR Apache-2.0 OR MIT), alongside
 existing objc2/objc2-foundation/objc2-av-foundation, block2 and dispatch2
 bindings. CoreMedia, CoreVideo and AVFoundation remain macOS system frameworks.
-These camera and codec additions are absent from the text-only build. Their
+Camera and codec dependencies ship on supported platforms in the standard build. Their
 exact per-artifact license collection remains subject to the existing packaging
 gate described above; no camera package was produced by this local change.
 

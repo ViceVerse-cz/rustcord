@@ -7,10 +7,9 @@ license.workspace = true
 [features]
 default = []
 developer-session = []
-voice = ["dep:discord-voice"]
 
 [dependencies]
-discord-voice = { workspace = true, optional = true }
+discord-voice.workspace = true
 eframe.workspace = true
 ui.workspace = true
 model.workspace = true

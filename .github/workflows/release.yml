@@ -88,14 +88,12 @@ jobs:
       fail-fast: false
       matrix:
         os: [macos-latest, windows-latest, ubuntu-latest]
-        variant: [text, voice]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
       VERSION: ${{ needs.prepare.outputs.version }}
-      VARIANT: ${{ matrix.variant }}
-      PACKAGE_ROOT: ${{ matrix.variant == 'voice' && 'dist/voice' || 'dist' }}
+      PACKAGE_ROOT: dist
     defaults:
       run:
         shell: bash
@@ -115,7 +113,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
-          key: release-${{ matrix.variant }}
+          key: release
           cache-on-failure: true
       - name: Offline checks
         run: cargo xtask check
@@ -123,15 +121,11 @@ jobs:
         with:
           node-version: 22
       - run: node tests/login-handoff.cjs
-      - name: Package selected variant
+      - name: Package app
         run: |
-          if [ "$VARIANT" = voice ]; then
-            cargo xtask package-voice
-          else
-            cargo xtask package
-          fi
+          cargo xtask package
           mkdir release-assets
-          echo "ASSET=serein-$TAG-$RUNNER_OS-$RUNNER_ARCH-$VARIANT" >> "$GITHUB_ENV"
+          echo "ASSET=serein-$TAG-$RUNNER_OS-$RUNNER_ARCH" >> "$GITHUB_ENV"
       - name: Sign, notarize and verify Mac app
         if: runner.os == 'macOS'
         env:

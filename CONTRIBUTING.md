@@ -11,7 +11,7 @@ For dependency changes, install `cargo-deny` with
 also run `cargo fetch --locked --manifest-path fuzz/Cargo.toml`,
 then run `cargo xtask licenses` and `node tests/license-policy.cjs`. CI runs these separately
 from native builds. The offline check covers all features and platforms in the locked graph,
-including development and vendored dependencies. Unapproved licenses fail; version-specific
+including development and vendored dependencies. License findings fail the dedicated license CI job, independently of packaging; version-specific
 exceptions in `deny.toml` require source/notice review when upgraded. This checks declared license
 policy, not complete per-artifact license-text assembly or external system-library obligations.
 

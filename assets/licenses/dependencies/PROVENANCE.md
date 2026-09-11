@@ -4,7 +4,7 @@ Collected September 11, 2026 against the locked dependency graph at `11d0416`.
 Files below are unmodified copies from cached registry archives, the pinned egui checkout,
 or exact upstream commits identified by each released crate's `.cargo_vcs_info.json`.
 Registry archive SHA-256 values were matched to `Cargo.lock` before copying source archives.
-The collector selects these files only for their corresponding dependency; this directory
+These supplements are bundled without dependency selection or coverage checks; this directory
 is not an assertion that every listed package belongs in every binary.
 
 The `.crate` files are unmodified corresponding MPL component sources. They can be extracted

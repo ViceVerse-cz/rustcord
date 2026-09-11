@@ -8,11 +8,9 @@ mod credentials;
 mod downloads;
 mod game_activity;
 mod reading_settings;
-#[cfg(feature = "voice")]
 mod screen;
 mod toggle_setting;
 mod uploads;
-#[cfg(feature = "voice")]
 mod voice;
 use client_core::{
 	Command, Envelope, Event, State,
@@ -128,7 +126,6 @@ struct Desktop {
 	avatar_start_failed: bool,
 	avatar_clear_account: Option<model::Id>,
 	avatar_cleanup: Option<std::sync::mpsc::Receiver<Result<(), &'static str>>>,
-	#[cfg(feature = "voice")]
 	voice: voice::Voice,
 	runtime: tokio::runtime::Runtime,
 	store: Option<credentials::Store>,
@@ -679,7 +676,6 @@ impl Desktop {
 			avatar_cleanup: None,
 			avatar_start_failed: false,
 			avatar_clear_account: None,
-			#[cfg(feature = "voice")]
 			voice: voice::Voice::default(),
 			runtime,
 			store,
@@ -724,7 +720,6 @@ impl Desktop {
 		} else {
 			"Connecting with the supplied session; saved login unchanged"
 		};
-		#[cfg(feature = "voice")]
 		self.voice.stop();
 		self.state.disconnect_voice();
 		self.uploads.cancel();
@@ -757,7 +752,6 @@ impl Desktop {
 		}
 		self.downloads.cancel();
 		self.audio.stop();
-		#[cfg(feature = "voice")]
 		self.voice.stop();
 		let was_demo = self.state.demo;
 		self.clear_avatars(ctx);
@@ -1213,13 +1207,7 @@ impl Desktop {
 				ring,
 			} = control
 			{
-				#[cfg(feature = "voice")]
 				let result = self.voice.begin(&self.state, *ring);
-				#[cfg(not(feature = "voice"))]
-				let _ = ring;
-				#[cfg(not(feature = "voice"))]
-				let result: Result<(), &'static str> =
-					Err("This is the text-only build; use the voice build to call");
 				if let Err(message) = result {
 					self.state.apply_voice(client_core::voice::Event::Failed {
 						channel: *channel,
@@ -1229,7 +1217,6 @@ impl Desktop {
 					return;
 				}
 			}
-			#[cfg(feature = "voice")]
 			if matches!(
 				control,
 				client_core::voice::Command::SetCamera { enabled: false, .. }
@@ -1237,7 +1224,6 @@ impl Desktop {
 				self.voice.stop_camera();
 				self.messaging.voice_camera_preview = None;
 			}
-			#[cfg(feature = "voice")]
 			if matches!(control, client_core::voice::Command::Leave { .. }) {
 				self.voice.stop();
 			}
@@ -1960,7 +1946,6 @@ impl Desktop {
 			}
 		}
 	}
-	#[cfg(feature = "voice")]
 	fn poll_voice(&mut self, ctx: &egui::Context) {
 		if let Some(command) =
 			self.voice
@@ -2200,10 +2185,7 @@ impl Desktop {
 				}
 				_ => {}
 			}
-			#[cfg(feature = "voice")]
 			let voice_failure = self.voice.observe(&self.state, &mut event.event);
-			#[cfg(not(feature = "voice"))]
-			let _ = &mut event;
 			let ready = matches!(event.event, Event::Ready { .. });
 			let resumed = matches!(event.event, Event::Resumed);
 			let confirmed_channel = confirmed_recovery_channel(&self.state, &event.event);
@@ -2262,7 +2244,6 @@ impl Desktop {
 				self.delete_cached_ids(channel, ids);
 			}
 			removed_channels.retain(|id| !self.state.can_read_history(*id));
-			#[cfg(feature = "voice")]
 			if let Some(error) = voice_failure
 				&& let Some(command) = self.voice.fail(&mut self.state, error)
 			{
@@ -2450,8 +2431,6 @@ impl eframe::App for Desktop {
 				input.key_down(egui::Key::V),
 			)
 		});
-		#[cfg(not(feature = "voice"))]
-		let _ = ptt_down;
 		if self.state.user.is_none()
 			|| (!self.state.demo && self.state.auth != AuthState::Authenticated)
 			|| hidden_or_closing
@@ -2483,11 +2462,7 @@ impl eframe::App for Desktop {
 				self.notifications.notify();
 			}
 		}
-		#[cfg(feature = "voice")]
-		{
-			self.messaging.voice_ptt_active =
-				focused && ptt_down && !ctx.egui_wants_keyboard_input();
-		}
+		self.messaging.voice_ptt_active = focused && ptt_down && !ctx.egui_wants_keyboard_input();
 	}
 	fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
 		let ctx = ui.ctx().clone();
@@ -2613,7 +2588,7 @@ impl eframe::App for Desktop {
 			ctx.send_viewport_cmd(egui::ViewportCommand::Close);
 		}
 		self.poll_avatars(&ctx);
-		self.messaging.voice_available = cfg!(feature = "voice");
+		self.messaging.voice_available = true;
 		if close_requested
 			&& !self.close_approved
 			&& ((self.state.demo && self.state.has_unsent())
@@ -2854,7 +2829,6 @@ impl eframe::App for Desktop {
 			for command in commands {
 				self.command(command);
 			}
-			#[cfg(feature = "voice")]
 			self.poll_voice(&ctx);
 			if self.messaging.logout_requested {
 				self.messaging.logout_requested = false;

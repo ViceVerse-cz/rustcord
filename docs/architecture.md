@@ -20,7 +20,7 @@ The composer schedules one visible expiry deadline and performs no animation or 
 - `ui`: egui panels, viewport virtualization and multiline composition; typed commands only. No network requests or tokens.
 - `apps/desktop`: wiring, cancellation, bounded queues, native login lifecycle, cache hydration and eframe options. `test-support` is explicitly synthetic; `xtask` and `replay-bench` are development tools.
 
-No generic plugin system, bot SDK or external database is introduced. The optional `discord-voice` crate provides native DM media; the default desktop dependency graph remains text-only.
+No generic plugin system, bot SDK or external database is introduced. The `discord-voice` crate provides native DM and guild media in every desktop build.
 
 Loaded threads reuse channel models, selection and history. READY and thread dispatches supply validated guild/parent metadata; the core reconciles scoped active snapshots atomically before removing missing active threads. Removed selected conversations cancel pending history/search and invalidate visible/cache state while preserving drafts. The sidebar builds a bounded two-level parent/thread index with root fallback for malformed parents. Explicit archive browsing shares search/pins' single replaceable read worker and admits at most one transient navigation entry on Open. Active snapshot omission preserves that archived entry; matching Gateway metadata can adopt it. No background directory task or subscription expansion is introduced; [scope and limits](categories.md) remain explicit.
 

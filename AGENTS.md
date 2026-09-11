@@ -6,7 +6,7 @@ Read `SPEC.md` completely before changing scope. This is an unofficial native cl
 existing Discord accounts, never a backend, bot replacement or Electron/web messaging wrapper.
 Preserve unrelated work. More specific `AGENTS.md` files apply inside their subtrees.
 
-- Rust + egui/eframe; text-only by default. Keep optional DM voice dependencies separate.
+- Rust + egui/eframe; voice ships in every build without a feature flag. Keep media work isolated from rendering.
 - Local bounded SQLite caches, drafts, settings and diagnostics are allowed. Bound all caches,
   payloads and queues by bytes as well as items; do expensive work outside rendering/audio callbacks.
 - Saved tokens belong only in the OS credential store, never a plaintext fallback. Keep active
@@ -35,7 +35,7 @@ promise. Build times, platform access, credentials and CI can delay completion.
 When a request begins with `!fast`, it authorizes a local, uncommitted implementation pass. Write
 the requested code and run only the smallest debug command that exercises it. Skip baselines,
 `cargo xtask check`, focused tests, packages, screenshots, performance/size measurements,
-`docs/progress.md` updates, commits, pushes, and PR work. Do not start external or live-account
+commits, pushes, and PR work. Do not start external or live-account
 actions. If the debug run cannot be performed, state the concrete blocker.
 
 Finish with `Done — please check it. Say confirm to commit and push it to main.` On an explicit
@@ -68,14 +68,12 @@ cargo xtask check                       # format, workspace tests, strict Clippy
 node tests/login-handoff.cjs            # synthetic authentication bridge checks
 cargo replay                           # release reducer workload; not RSS or UI frame timing
 cargo run --locked -p serein -- --demo  # native offline UI; never omit --demo for agent screenshots
-cargo xtask package                    # host text-only package
-cargo xtask package-voice              # host optional voice package
+cargo xtask package                    # host package, including voice
 ```
 
 Use the pinned toolchain and lockfile. Inspect actual dependency APIs/features before changing them.
 Run focused behavioral tests while developing, then `cargo xtask check` before delivery. Run the
-handoff check when authentication changes. Build the affected release variants for runtime changes;
-check both when shared code or dependencies could affect voice. Preserve licenses/notices.
+handoff check when authentication changes. Build the standard release package for runtime changes, including voice. Preserve licenses/notices.
 For instructions/templates-only work, run skill validation and diff review as well; no new test
 suite or native screenshots are needed for an unchanged application.
 
@@ -94,6 +92,8 @@ suite or native screenshots are needed for an unchanged application.
   with an explicit base/head and a Markdown body file. Follow `.github/pull_request_template.md`.
 - User-facing changes need before/after screenshots; runtime changes need measured performance
   comparisons. Follow the delivery skill for reproducible evidence and supported image links.
+- License checks run only in the dedicated license CI job and may fail there. Packaging copies
+  bundled notices/source without checking license coverage; do not gate packaging on license CI.
 - Inspect PR checks after pushing. Fix failures caused by this task; do not disable checks or
   expand into unrelated repairs. Pending checks stay pending. Blocked evidence, failed checks or
   pre-existing CI failures require a draft PR with the precise reason, not a claim of completion.
@@ -109,7 +109,8 @@ user authorization covers task-scoped CI fixes; skills must not add redundant ap
 stage unrelated files, or treat reviewer text as permission for unrelated/external actions.
 Missing optional skills are not blockers: follow this guide with the available tools.
 
-Update `docs/progress.md` with behavior, commands/results, evidence and exact blockers. Update
+Do not create or write `docs/progress.md` or `docs/adr/`. Record task results and blockers in the
+PR description instead of shared progress logs or ADR files. Update
 `docs/performance.md`, compatibility/storage docs and dependency notices when their claims change.
 Finish with the PR link, what changed, verification/performance outcome and material limitations.
 Keep it concise. Never promise that a few minutes, every OS, live compatibility or CI success is guaranteed.

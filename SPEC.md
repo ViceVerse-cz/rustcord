@@ -145,9 +145,7 @@ native-discord/
 │   ├── performance.md
 │   ├── threat-model.md
 │   ├── platform-support.md
-│   ├── dependency-versions.md
-│   ├── progress.md
-│   └── adr/
+│   └── dependency-versions.md
 └── .github/workflows/
 ```
 
@@ -155,7 +153,7 @@ There is no `apps/server`, server deployment, database container, object store s
 
 `model` must not depend on GUI, networking, audio, or filesystem crates. `discord-protocol` owns service wire shapes; do not make raw JSON objects the application state. `client-core` owns application behavior and ports. Adapters report typed outcomes. The UI receives bounded state/views and emits typed commands; it does not send HTTP requests, own tokens, implement gateway reconnects, or decide server authorization.
 
-`session-cache` owns the RAM working set; `local-store` owns explicit local persistence with bounded account-isolated data. Keep egui texture handles in the rendering side rather than generic domain entities. Keep voice transport and native media dependencies out of a text-only build. `apps/desktop` composes the parts and remains thin. Do not introduce a plugin system or generic enterprise framework.
+`session-cache` owns the RAM working set; `local-store` owns explicit local persistence with bounded account-isolated data. Keep egui texture handles in the rendering side rather than generic domain entities. Voice transport and native media dependencies ship in every desktop build, without a voice feature flag. `apps/desktop` composes the parts and remains thin. Do not introduce a plugin system or generic enterprise framework.
 
 ## 5. Technology policy
 
@@ -319,11 +317,11 @@ Saving requires an explicit destination. Validate filenames and prevent path tra
 
 ## 11. Voice must interoperate with Discord
 
-**Owner scope revision (September 10, 2026): implement voice calling in existing one-to-one DMs and guild voice channels.** Starting/answering DMs, joining/leaving server voice channels, participant rosters, microphone capture, mixed speaker playback, mute/deafen and required DAVE group encryption are in scope. Group DMs, Stage channels and camera video remain excluded; the September 11 revision below adds outgoing screen sharing. Keep an explicitly selectable text-only build and measure the additional voice package cost. The live two-way audio gate remains mandatory for claims of interoperability.
+**Owner scope revision (September 10, 2026): implement voice calling in existing one-to-one DMs and guild voice channels.** Starting/answering DMs, joining/leaving server voice channels, participant rosters, microphone capture, mixed speaker playback, mute/deafen and required DAVE group encryption are in scope. Group DMs, Stage channels and camera video remain excluded; the September 11 revision below adds outgoing screen sharing. Owner revision (September 11, 2026): voice is standard in every build, without a feature flag or separate text-only package. Measure the full package cost. The live two-way audio gate remains mandatory for claims of interoperability.
 
 Voice is a later, separately verified release milestone, not a reason to create another service. Do not use a self-hosted LiveKit room, custom SFU, custom signaling backend, or an unrelated WebRTC demo as evidence of Discord voice support. The client must communicate with users already in actual Discord calls.
 
-First validate a minimal voice integration in parallel with UI work so an authentication/protocol blocker is found early. Keep the default development build text-only until the media integration is ready, and report voice-enabled binary/RAM costs separately. No microphone access or media-runtime initialization before an explicit call/device-test action.
+First validate a minimal voice integration in parallel with UI work so an authentication/protocol blocker is found early. Include voice in the standard development build and report idle and active-call RAM separately. No microphone access or media-runtime initialization before an explicit call/device-test action.
 
 Discord's voice documentation states that its listed DM, group-DM, voice-channel, and Go Live conversations require end-to-end-encrypted calls starting March 1, 2026. Implement current DAVE compatibility; a legacy transport-only voice implementation is not sufficient for that requirement. [S8]
 
@@ -337,7 +335,7 @@ Keep audio callbacks real-time-safe: preallocated bounded buffers, no HTTP/files
 
 Focused-window push-to-talk is the initial guarantee. Global push-to-talk and Linux desktop integration need separate platform capability testing and an explicit fallback. Do not promise identical global-hotkey behavior on every desktop environment.
 
-**Owner scope revision (September 11, 2026): add outgoing screen sharing on macOS and Windows.** Clicking Share opens settings for a screen/window, 720p or 1080p, 15/30/60 fps and cursor visibility before explicit capture. All quality choices are exposed without a local Nitro gate; service acceptance is not an entitlement bypass or a verified compatibility claim. Use native OS capture and Discord-compatible stream transport/DAVE encryption. Camera video and receiving streams remain later capabilities. Do not bundle large video dependencies into the text-only build preemptively. No recording or audio/video file cache by default.
+**Owner scope revision (September 11, 2026): add outgoing screen sharing on macOS and Windows.** Clicking Share opens settings for a screen/window, 720p or 1080p, 15/30/60 fps and cursor visibility before explicit capture. All quality choices are exposed without a local Nitro gate; service acceptance is not an entitlement bypass or a verified compatibility claim. Use native OS capture and Discord-compatible stream transport/DAVE encryption. Camera video and receiving streams remain later capabilities. Keep video dependencies limited to implemented capabilities and supported platforms. No recording or audio/video file cache by default.
 
 ## 12. Security, privacy, and source integrity
 
@@ -360,21 +358,21 @@ These are **starting engineering targets**, not measured results or promises. Es
 | Measurement | Initial target |
 |---|---|
 | Native window interactive, before authentication | p95 under 1 second on the documented reference device |
-| Logged-in, settled text-only idle | At most 80 MiB under the defined per-platform process-memory metric |
+| Logged-in, settled idle without a call | At most 80 MiB under the defined per-platform process-memory metric |
 | Active text channel with bounded thumbnails | At most 150 MiB under that same metric |
 | Switching to a channel already resident in this session | p95 under 100 ms |
 | 60 Hz scrolling workload | UI/frame work within approximately 16.7 ms at p95, with missed frames reported |
 | Idle CPU | Near zero apart from protocol/lifecycle work; no continuous animation loop |
 | Local persistence | Documented bounded caches/drafts/settings; tokens only in OS credential store; no secret leakage |
-| Initial text-only compressed distribution | Aim for at most 30 MiB; report required assets/native dependencies |
-| Text-only installed footprint | Aim for at most 75 MiB; report the full package |
+| Compressed distribution including voice | Aim for at most 30 MiB; report required assets/native dependencies |
+| Installed footprint including voice | Aim for at most 75 MiB; report the full package |
 | Long-running repeated workload | Retained memory reaches a stable bounded range, not monotonic growth |
 
 Report CPU memory, GPU allocations, application helper processes, and external system components separately. Do not measure only the Rust executable while excluding required helper processes. Do not count a shared allocation multiple times without saying so. State the memory metric, sampling method, warmup, renderer, display scale, hardware, OS, build profile, feature flags, and test corpus.
 
 Network-backed cold login and history retrieval are different from opening an already-resident channel. Measure cold startup and local-cache startup separately. Measure bytes fetched per navigation/relaunch and local cache hit rate and refetch costs.
 
-Measure voice-enabled installation and call memory separately with a defined participant count and codec configuration. Leaving a call should release the call working set; it need not remove already loaded code pages from the process instantly.
+Measure full installation and active-call memory separately with a defined participant count and codec configuration. Leaving a call should release the call working set; it need not remove already loaded code pages from the process instantly.
 
 Experiment with compiler profiles and dependency features using release builds. Preserve useful separate debug symbols for development/release diagnosis without bundling them unnecessarily. Record actual packaged sizes. Rust, native rendering, and lack of Electron are architectural choices, not substitutes for measurements.
 
@@ -418,7 +416,7 @@ Use small normal interaction volumes. All rate/load/failure stress tests run loc
 
 ### 14.5 CI and packaging
 
-Automate formatting, linting, unit/integration tests, feature-combination builds, dependency/license/security checks, and per-platform packaging smoke tests. Cache build dependencies in CI, not user runtime data. Do not package synthetic credentials, fixtures with secrets, debug logs, or developer-only credential tools by accident.
+Automate formatting, linting, unit/integration tests, feature-combination builds, dependency/security checks, separate license CI, and per-platform packaging smoke tests. Cache build dependencies in CI, not user runtime data. Do not package synthetic credentials, fixtures with secrets, debug logs, or developer-only credential tools by accident.
 
 Provide straightforward source-build instructions and an `xtask` entry point for recurring development commands. Produce normal platform packages; minimize installed dependencies without hiding required runtimes. Signing/notarization is optional until signing identities exist; do not claim artifacts are signed without verification.
 
@@ -472,15 +470,10 @@ Start by reading this entire specification and the repository. Create a short im
 
 Choose reasonable minor defaults and record consequential decisions in concise architecture notes. Do not repeatedly ask for file names, spacing values, or dependency preferences. Do not resolve an API limitation by changing the requested product into a new service. Do not take external account actions without the owner-controlled live-testing boundary.
 
-At each session/milestone boundary update `docs/progress.md` with:
-
-- The latest completed gate and exact implemented behavior.
-- Commands actually run and their real results.
-- Measurements, environment, and whether they used synthetic or live data.
-- Compatibility assumptions and important sources/date checked.
-- Known defects, blocked capabilities, untested platforms, and the next concrete step.
-
-Never include credentials, message content, private account IDs, or real signed URLs in progress reports. Application diagnostics, if added, must be redacted, bounded, and locally controlled.
+Record behavior, verification results, evidence and blockers in the task PR description.
+Do not create or update `docs/progress.md` or `docs/adr/`; shared append-only logs cause merge conflicts.
+Never include credentials, message content, private account IDs, or real signed URLs in reports.
+Application diagnostics, if added, must be redacted, bounded, and locally controlled.
 
 The final implementation deliverables are the source workspace, runnable native client, platform build/package instructions, offline tests, an explicit live-validation procedure, compatibility matrix, storage audit, performance report, dependency notices, and precise limitations. A prompt, plan, scaffold, or fixture-only UI does not satisfy the completed-client target.
 

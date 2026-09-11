@@ -1,8 +1,7 @@
 # Debian / Ubuntu packages
 
-On a Debian/Ubuntu Linux build host, `cargo xtask package` produces the text-only
-`dist/serein_<version>-1_<architecture>.deb`; `cargo xtask package-voice` produces
-`dist/voice/serein_<version>-1_<architecture>.deb`. Native `amd64` and `arm64`
+On a Debian/Ubuntu Linux build host, `cargo xtask package` produces the standard
+`dist/serein_<version>-1_<architecture>.deb` including voice. Native `amd64` and `arm64`
 ELF headers are accepted; a build does not prove desktop or audio support on that
 architecture. These are unsigned host-distribution packages, not portable Linux
 archives or a promise of compatibility with older distributions.
@@ -20,18 +19,14 @@ The archive installs `/usr/bin/serein`, a launcher in
 `/usr/share/applications/serein.desktop`, and documentation, notices, licenses and
 applicable modified component source under `/usr/share/doc/serein`. No maintainer
 scripts, background updater, automatic launch or user-profile writes are added.
-Both variants have the **same package identity and version** and replace each other.
-For a deliberate manual installation or variant switch, use the chosen local file:
+For a deliberate manual installation, use the local file:
 
 ```sh
 sudo apt install --reinstall ./dist/serein_0.1.0-1_amd64.deb
-# Or the optional voice build:
-sudo apt install --reinstall ./dist/voice/serein_0.1.0-1_amd64.deb
 ```
 
 These are user installation instructions; the build and smoke checks do not run
-them. `--reinstall` ensures that switching variants at the same version is not
-skipped. Remove the application with `sudo apt remove serein`; normal package
+them. Remove the application with `sudo apt remove serein`; normal package
 removal does not delete account data. Use in-app logout/cache controls as described
 in the storage policy.
 
@@ -43,7 +38,7 @@ ELF inspection cannot discover. A working graphical session, graphics driver,
 portal backend and unlocked Secret Service provider are still necessary for the
 corresponding features. The package recommends a GTK or KDE portal backend and
 GNOME Keyring; an existing compatible provider can be used instead. GTK/WebKit
-and optional voice library requirements come from the built executable. The
+and voice library requirements come from the built executable. The
 resulting version constraints target the build distribution; inspect `Depends`
 with `dpkg-deb --field <package.deb> Depends` before distributing elsewhere.
 
@@ -59,7 +54,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 packaging/linux/test_package.py
 ```
 
 It packages `/bin/true` with synthetic documentation and repository license files,
-checks text/voice separation and rejection of stale nested payloads, then checks
+checks bundled voice notices/source and rejection of stale nested payloads, then checks
 mismatched payload and invalid ELF detection. The fixture is not a Serein build.
 
 Tool contracts: [dpkg-shlibdeps](https://manpages.debian.org/trixie/dpkg-dev/dpkg-shlibdeps.1.en.html)

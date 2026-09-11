@@ -1,14 +1,12 @@
 """Build and inspect an unsigned Debian package from xtask's staged release files.
 
 No installation or application launch. Uses only Python's standard library and
-Debian packaging/desktop tools; run through cargo xtask package[-voice].
+Debian packaging/desktop tools; run through cargo xtask package.
 """
 
 import filecmp
-import json
 from pathlib import Path
 import shutil
-import stat
 import struct
 import subprocess
 import sys
@@ -35,56 +33,6 @@ def copy(source, destination, manifest=None):
     else:
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, destination)
-
-
-def copy_dependency_notices(source, destination):
-    # Bound parsing/copying even if an old or modified staging tree is supplied.
-    def regular_file(path, limit):
-        if any(part.is_symlink() for part in [path, *path.parents]):
-            raise ValueError(f"Symlink in dependency notice path: {path}")
-        metadata = path.stat()
-        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > limit:
-            raise ValueError(f"Invalid or oversized dependency notice: {path}")
-        return metadata.st_size
-
-    manifest = source / "inventory.json"
-    regular_file(manifest, 1024 * 1024)
-    with manifest.open("rb") as stream:
-        content = stream.read(1024 * 1024 + 1)
-    if len(content) > 1024 * 1024:
-        raise ValueError("Dependency inventory exceeds 1 MiB")
-    inventory = json.loads(content)
-    if (not isinstance(inventory, dict) or type(inventory.get("schema_version")) is not int
-            or inventory["schema_version"] != 1
-            or not isinstance(inventory.get("files"), list)
-            or not 1 <= len(inventory["files"]) <= 8192):
-        raise ValueError("Invalid dependency inventory schema or file count")
-    names = set()
-    total = len(content)
-    for name in inventory["files"]:
-        if (not isinstance(name, str) or not name or len(name.encode("utf-8")) > 1024
-                or any(char in name for char in "\\:\x00")
-                or any(ord(char) < 32 or ord(char) == 127 for char in name)
-                or any(part in ("", ".", "..") for part in name.split("/"))
-                or name == "inventory.json" or name in names):
-            raise ValueError("Invalid dependency inventory path")
-        names.add(name)
-        total += regular_file(source / name, 8 * 1024 * 1024)
-        if total > 128 * 1024 * 1024:
-            raise ValueError("Dependency notices exceed 128 MiB")
-    total = len(content)
-    for name in sorted(names):
-        regular_file(source / name, 8 * 1024 * 1024)
-        with (source / name).open("rb") as stream:
-            data = stream.read(8 * 1024 * 1024 + 1)
-        total += len(data)
-        if len(data) > 8 * 1024 * 1024 or total > 128 * 1024 * 1024:
-            raise ValueError("Dependency notices changed beyond byte limits")
-        target = destination / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data)
-    destination.mkdir(parents=True, exist_ok=True)
-    (destination / "inventory.json").write_bytes(content)
 
 
 def payload_files(root):
@@ -132,7 +80,7 @@ def smoke(package, stage, temporary, version, architecture, depends):
           "metadata, ownership, content and host shared-library closure verified.")
 
 
-def package(root, application_version, variant):
+def package(root, application_version):
     if sys.platform != "linux":
         raise ValueError("Debian packaging must run natively on Debian/Ubuntu Linux")
     architecture = output("dpkg", "--print-architecture")
@@ -147,8 +95,8 @@ def package(root, application_version, variant):
         raise ValueError("Expected a native little-endian 64-bit ELF executable")
     version = application_version.replace("-", "~", 1) + "-1"
     checked("dpkg", "--validate-version", version)
-    # A fresh owned directory prevents stale voice files, logs or credentials in dist
-    # from entering a text package. TemporaryDirectory removes only this invocation.
+    # A fresh owned directory prevents stale files, logs or credentials in dist
+    # from entering a package. TemporaryDirectory removes only this invocation.
     with tempfile.TemporaryDirectory(prefix="serein-debian-package-") as directory:
         temporary = Path(directory).resolve()
         stage = temporary / "debian/serein"
@@ -165,11 +113,9 @@ def package(root, application_version, variant):
                      "Twemoji-CC-BY-4.0.txt", "Unicode-LICENSE.txt", "Phosphor-Icons-MIT.txt", "Simple-Icons-CC0.txt",
                      ]:
             copy(root / "licenses" / name, doc / "licenses" / name)
-        for name in ["files", "notifications", "login", "audio", *(["voice"] if variant == "voice" else [])]:
+        for name in ["files", "notifications", "login", "audio", "voice", "dependencies"]:
             copy(root / "licenses" / name, doc / "licenses" / name, Path("assets/licenses") / name)
-        copy_dependency_notices(root / "licenses/dependencies", doc / "licenses/dependencies")
-        if variant == "voice":
-            copy(root / "source/hpke-rs", doc / "source/hpke-rs", Path("vendor/hpke-rs"))
+        copy(root / "source/hpke-rs", doc / "source/hpke-rs", Path("vendor/hpke-rs"))
         debian = temporary / "debian"
         debian.mkdir(exist_ok=True)
         (debian / "control").write_text(
@@ -195,7 +141,7 @@ def package(root, application_version, variant):
             "Homepage: https://github.com/ViceVerse-cz/rustcord\n"
             f"Installed-Size: {installed_kib}\nDepends: {depends}\n"
             "Recommends: gnome-keyring, xdg-desktop-portal-gtk | xdg-desktop-portal-kde\n"
-            f"Description: Unofficial native Discord client ({variant} build)\n"
+            "Description: Unofficial native Discord client\n"
             " Native Rust desktop client for existing Discord accounts.\n"
             " Unofficial, experimental, and not endorsed by Discord.\n",
             encoding="utf-8")
@@ -207,12 +153,12 @@ def package(root, application_version, variant):
         checked("dpkg-deb", "--root-owner-group", "-Zxz", "--build", str(stage), str(candidate))
         smoke(candidate, stage, temporary, version, architecture, depends)
         shutil.copyfile(candidate, artifact)
-        print(f"Unsigned {variant} Debian package: {artifact} ({artifact.stat().st_size} bytes; "
-              f"Installed-Size {installed_kib} KiB). Same package identity replaces the other variant.")
+        print(f"Unsigned Debian package: {artifact} ({artifact.stat().st_size} bytes; "
+              f"Installed-Size {installed_kib} KiB).")
         print(f"Runtime dependencies: {depends}; recommends a Secret Service provider (gnome-keyring).")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 4 or sys.argv[3] not in ("text", "voice"):
-        sys.exit("Usage: package.py STAGED_DIRECTORY APPLICATION_VERSION text|voice")
-    package(Path(sys.argv[1]).resolve(), sys.argv[2], sys.argv[3])
+    if len(sys.argv) != 3:
+        sys.exit("Usage: package.py STAGED_DIRECTORY APPLICATION_VERSION")
+    package(Path(sys.argv[1]).resolve(), sys.argv[2])

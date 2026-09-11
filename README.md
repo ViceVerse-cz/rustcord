@@ -32,16 +32,16 @@
 - **Secure OS Credential Storage:** Session tokens are stored exclusively in your operating system's secure vault (macOS Keychain, Windows Credential Manager, or Linux Secret Service). Never saved in plaintext.
 - **Ephemeral Authentication Webview:** Sign-in uses Discord's official hosted login page inside a temporary native webview (WKWebView, WebView2, or WebKitGTK) supporting email/password, QR login, and MFA. An origin-checked handoff secures the session credential and immediately terminates the webview.
 - **Bounded Local Persistence:** Recent chat history, drafts, and media preview indices are stored in an account-isolated, bounded local SQLite database. All local data is strictly cleared upon explicit logout.
-- **Optional Low-Latency Voice:** Standalone opt-in voice engine (`--features voice`) supporting Opus audio, Discord Voice WebSocket/UDP, DAVE v1 protocol, 1-to-1 DM calls, server voice channels, push-to-talk, and native audio device selection.
+- **Native Voice:** Built-in voice engine supporting Opus audio, Discord Voice WebSocket/UDP, DAVE v1 protocol, 1-to-1 DM calls, server voice channels, push-to-talk, and native audio device selection.
 
 ---
 
 ## Quick Start
 
 ### Prerequisites
-Rust **1.98.1** is pinned. Ensure you have the standard C/C++ toolchain installed for your platform:
+Rust **1.98.1** is pinned. Ensure you have the standard C/C++ toolchain and CMake installed for your platform:
 - **macOS:** Xcode command-line tools (`xcode-select --install`)
-- **Linux:** GCC/Clang, `pkg-config`, GTK 4, WebKitGTK 6.0, fontconfig, and Vulkan drivers (see [Platform Support](docs/platform-support.md))
+- **Linux:** GCC/Clang, ALSA development headers, `pkg-config`, GTK 4, WebKitGTK 6.0, fontconfig, and Vulkan drivers (see [Platform Support](docs/platform-support.md))
 - **Windows:** Visual Studio C++ build tools and WebView2 Runtime
 
 ### Running Locally
@@ -50,11 +50,8 @@ Rust **1.98.1** is pinned. Ensure you have the standard C/C++ toolchain installe
 # 1. Launch offline synthetic demo (no network, no storage)
 cargo run --locked -- --demo
 
-# 2. Launch standard text client (uses saved login or official webview)
+# 2. Launch standard client with voice (uses saved login or official webview)
 cargo run --locked
-
-# 3. Launch with optional voice engine (DM calls and guild voice channels)
-cargo run --locked --features voice
 ```
 
 ### Workspace Commands
@@ -69,11 +66,8 @@ cargo replay
 # Run authentication bridge JS test harness
 node tests/login-handoff.cjs
 
-# Package text-only release (macOS .app bundle, Linux .deb)
+# Package release including voice (macOS .app bundle, Linux .deb)
 cargo xtask package
-
-# Package voice-enabled release under dist/voice
-cargo xtask package-voice
 ```
 
 ---
@@ -91,7 +85,7 @@ cargo xtask package-voice
 | **Profile Cards** | Implemented | On-demand service profiles with banners, bios, and account/guild details |
 | **Typing Indicators** | Partial | Displays incoming typing with short expiry; Serein **never** emits outgoing typing signals |
 | **Persistence & Drafts** | Implemented | Bounded SQLite cache for history and drafts; OS credential store for auth token |
-| **Voice Engine** | Optional (`voice`) | DM calls & server channels, Opus codec, DAVE v1, push-to-talk (`V`), device selector |
+| **Voice Engine** | Built in | DM calls & server channels, Opus codec, DAVE v1, push-to-talk (`V`), device selector |
 | **File Uploads** | In Progress | Synthetic pipeline validated; direct client uploads in active development |
 | **Screen Sharing** | Experimental sender | macOS 14+ / Windows; source and quality picker up to 1080p60; live Discord viewing unverified |
 | **Camera Video / Stream Viewing** | Unimplemented | Planned for future milestones |

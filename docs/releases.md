@@ -19,12 +19,12 @@ The selected commit is checked, packaged and released; normal push/PR CI remains
   Planning creates no tags/commits. Every builder receives the exact planned version
   files, and publishing rechecks the plan. If main advances during a build, rerun
   from the new head rather than publishing mismatched artifacts.
-- Both build separate text and voice packages on the existing hosted macOS,
-  Windows and Ubuntu runners. Asset names include the actual runner OS/architecture.
+- Both build one package including voice on each of the existing hosted macOS,
+  Windows and Ubuntu runners. Asset names include the actual runner OS/architecture, without a text/voice suffix.
   Mac ZIPs contain a signed/notarized app; Windows ZIPs and Linux DEBs are unsigned.
   Linux packages target the build runner's distribution, not every Linux system.
   These are host-architecture builds, not universal Mac binaries.
-- Every build must pass before publishing. Uploads go to a draft first, then the
+- Every package build must pass before publishing; license checks run in separate CI and do not gate packaging. Uploads go to a draft first, then the
   workflow publishes it. An upload/publish failure may leave a draft for inspection.
   Assets include `SHA256SUMS.txt`; reruns never replace a production release.
   A failed publication after tag creation may require repairing that draft manually.

@@ -1,5 +1,8 @@
 name: native-client
 on: [push, pull_request]
+concurrency:
+  group: native-client-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
@@ -32,7 +35,6 @@ jobs:
         if: runner.os == 'Linux'
         run: PYTHONDONTWRITEBYTECODE=1 python3 packaging/linux/test_package.py
       - run: cargo xtask package
-      - run: cargo xtask package-voice
       - uses: actions/upload-artifact@v4
         with:
           name: serein-${{ runner.os }}-unsigned

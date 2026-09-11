@@ -28,7 +28,7 @@ Serein uses Discord’s official login page in a temporary platform webview, not
 6. Quit after local saves finish. Relaunch and verify credential-store restoration and saved draft recovery without opening the webview. Inspect recovered drafts before sending: an interrupted send can have succeeded remotely.
 7. Log out and verify saved-login deletion and local account cache/draft cleanup. The UI must show credential-store or SQLite deletion failures. Local logout does not claim remote session revocation.
 
-Record only date, OS/build, methods tested, pass/fail and redacted failure category in docs/progress.md. Never record credentials, account/channel IDs, signed URLs, message contents or QR data. **No real owner-controlled session was supplied or exercised during implementation; the live milestone remains blocked.**
+Record only date, OS/build, methods tested, pass/fail and redacted failure category in the task PR description. Never record credentials, account/channel IDs, signed URLs, message contents or QR data. **No real owner-controlled session was supplied or exercised during implementation; the live milestone remains blocked.**
 
 A separate `--features developer-session` build exposes an explicitly labeled, RAM-only owner-provided token field for adapter diagnosis. It is not the normal login, is disabled in release packaging, and never permits extraction from other software.
 
