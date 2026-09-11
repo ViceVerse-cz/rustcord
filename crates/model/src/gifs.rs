@@ -1,4 +1,4 @@
-//! Tenor GIF results relayed by the service: bounded strings, fixed hosts, static previews.
+//! Provider GIF results relayed by the service: bounded strings, fixed hosts, static previews.
 
 pub const GIF_PAGE_SIZE: usize = 50;
 pub const GIF_CATEGORIES: usize = 32;
@@ -10,9 +10,9 @@ const MAX_URL: usize = 512;
 pub struct Gif {
 	pub id: String,
 	pub title: String,
-	/// Tenor page address; this is the text sent when the GIF is chosen.
+	/// Provider page address; this is the text sent when the GIF is chosen.
 	pub url: String,
-	/// Static PNG preview on Tenor's media host; nothing animates automatically.
+	/// Preview on an allowed media host; only its first frame is displayed.
 	pub preview: String,
 	pub width: u32,
 	pub height: u32,
@@ -54,14 +54,31 @@ fn plain_https_path(url: &str, hosts: &[&str]) -> bool {
 		})
 }
 
-/// Only Tenor page or media addresses may be sent as a chosen GIF.
+/// KLIPY results and previously saved Tenor favorites may be shared.
 pub fn valid_gif_url(url: &str) -> bool {
-	plain_https_path(url, &["tenor.com", "media.tenor.com"])
+	plain_https_path(
+		url,
+		&[
+			"klipy.com",
+			"static.klipy.com",
+			"static1.klipy.com",
+			"static2.klipy.com",
+			"tenor.com",
+			"media.tenor.com",
+		],
+	)
 }
 
-/// Previews are static PNG files on Tenor's media host.
+/// Allow only provider media hosts and supported image formats.
 pub fn valid_gif_preview(url: &str) -> bool {
-	plain_https_path(url, &["media.tenor.com", "c.tenor.com"]) && url.ends_with(".png")
+	(plain_https_path(url, &["media.tenor.com", "c.tenor.com"])
+		&& (url.ends_with(".png") || url.ends_with(".gif")))
+		|| (plain_https_path(
+			url,
+			&["static.klipy.com", "static1.klipy.com", "static2.klipy.com"],
+		) && [".png", ".gif", ".jpg", ".jpeg", ".webp"]
+			.iter()
+			.any(|extension| url.ends_with(extension)))
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -117,6 +134,19 @@ mod tests {
 	#[test]
 	fn gif_hosts_and_pages_are_bounded() {
 		assert!(gif("a1").valid());
+		let mut klipy = gif("klipy-1");
+		klipy.url = "https://klipy.com/gifs/synthetic-wave".into();
+		for host in ["static.klipy.com", "static1.klipy.com", "static2.klipy.com"] {
+			for extension in ["png", "gif", "jpg", "jpeg", "webp"] {
+				klipy.preview = format!("https://{host}/synthetic/wave.{extension}");
+				assert!(klipy.valid());
+			}
+		}
+		assert!(!valid_gif_preview(
+			"https://static.klipy.com.evil.test/x.gif"
+		));
+		assert!(!valid_gif_preview("https://static.klipy.com/x.mp4"));
+		assert!(!valid_gif_url("https://klipy.com.evil.test/gifs/x"));
 		assert!(valid_gif_url("https://media.tenor.com/x/tenor.gif"));
 		for url in [
 			"http://tenor.com/view/x",
@@ -131,7 +161,7 @@ mod tests {
 		] {
 			assert!(!valid_gif_url(url), "{url}");
 		}
-		assert!(!valid_gif_preview("https://media.tenor.com/x/tenor.gif"));
+		assert!(valid_gif_preview("https://media.tenor.com/x/tenor.gif"));
 		assert!(!valid_gif_preview("https://tenor.com/view/x.png"));
 		let mut wrong = gif("a1");
 		wrong.width = 0;

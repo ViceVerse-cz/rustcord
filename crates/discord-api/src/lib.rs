@@ -660,10 +660,10 @@ impl DiscordApi {
 			.map(client_core::search::Outcome::Page)
 			.map_err(|_| Failure::Protocol)
 	}
-	/// Unofficial normal-client relay of Tenor search/trending. Only the query text is encoded
+	/// Unofficial normal-client relay of KLIPY search/trending. Only the query text is encoded
 	/// into a fixed route; previews stay static and are loaded by the credential-free worker.
 	async fn gifs(&self, query: Option<&str>) -> Result<model::GifPage, Failure> {
-		const OPTIONS: &str = "media_format=tinygif&provider=tenor&locale=en-US";
+		const OPTIONS: &str = "media_format=tinygif&provider=klipy&locale=en-US";
 		match query {
 			Some(query) => {
 				if !model::valid_search_query(query) {

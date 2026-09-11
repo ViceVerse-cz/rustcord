@@ -57,7 +57,7 @@ impl Page {
 		let keywords = match self {
 			Self::Account => "my account profile logout",
 			Self::Appearance => {
-				"appearance theme dark light system zoom reading layout sidebar people reset colour color preset"
+				"appearance theme dark light system zoom reading layout sidebar people reset colour color preset animate animated gifs autoplay hide image links"
 			}
 			Self::Notifications => "notifications desktop system alerts",
 			Self::Voice => {

@@ -8,6 +8,7 @@ impl MessagingUi {
 			return;
 		}
 		self.reading_preferences = value;
+		self.avatars.set_animation(value.animate_gifs);
 		self.reading_sidebar_applied = None;
 		let zoom = f32::from(value.zoom_percent) / 100.0;
 		if (ctx.zoom_factor() - zoom).abs() > 0.001 {
@@ -20,6 +21,8 @@ impl MessagingUi {
 
 	/// Called once per desktop frame, before loading preferences, including on sign-in.
 	pub fn sync_reading_zoom(&mut self, ctx: &egui::Context) {
+		self.avatars
+			.set_animation(self.reading_preferences.animate_gifs);
 		if std::mem::take(&mut self.reading_zoom_pending) {
 			return;
 		}
@@ -67,6 +70,20 @@ impl MessagingUi {
 				"Show People in wide windows",
 				Some("Keep the member list open whenever the window is wide enough."),
 				&mut value.show_members,
+			);
+			ui.separator();
+			design::switch(
+				ui,
+				"Animate GIFs",
+				Some("Visible chat GIFs play automatically."),
+				&mut value.animate_gifs,
+			);
+			ui.separator();
+			design::switch(
+				ui,
+				"Hide image and GIF links",
+				Some("Hide standalone links when their image or GIF preview is shown."),
+				&mut value.hide_media_links,
 			);
 		});
 		ui.horizontal_wrapped(|ui| {
@@ -161,7 +178,7 @@ mod tests {
 				egui::RawInput {
 					screen_rect: Some(egui::Rect::from_min_size(
 						egui::Pos2::ZERO,
-						egui::vec2(480.0, 360.0),
+						egui::vec2(480.0, 480.0),
 					)),
 					events,
 					..Default::default()
@@ -180,6 +197,8 @@ mod tests {
 			zoom_percent: 125,
 			sidebar_width: 300,
 			show_members: false,
+			animate_gifs: false,
+			hide_media_links: true,
 		};
 		view.apply_reading_preferences(&ctx, custom);
 		for _ in 0..3 {

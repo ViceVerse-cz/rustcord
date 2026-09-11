@@ -5,6 +5,7 @@ pub use audio::{AudioCommand, AudioState, AudioUi};
 mod attachments;
 pub use attachments::DownloadUi;
 mod avatars;
+pub use avatars::GifFrames;
 mod categories;
 mod composer_text;
 pub mod design;
@@ -189,6 +190,9 @@ impl MessagingUi {
 	}
 	pub fn take_avatar_requests(&mut self) -> Vec<String> {
 		self.avatars.take_requests()
+	}
+	pub fn accept_gif_animation(&mut self, key: String, frames: GifFrames) {
+		self.avatars.accept_animation(key, frames);
 	}
 	pub fn accept_avatar(
 		&mut self,
@@ -2026,6 +2030,7 @@ impl MessagingUi {
 						bottom: 0,
 					})
 					.show(ui, |ui| {
+						self.timeline.hide_media_links = self.reading_preferences.hide_media_links;
 						self.timeline.show(
 							ui,
 							state,
@@ -2034,6 +2039,9 @@ impl MessagingUi {
 							&mut self.avatars,
 							&mut self.profile,
 						);
+						if let Some(gif) = self.timeline.gif_favorite.take() {
+							state.toggle_gif_favorite(&gif);
+						}
 						for code in std::mem::take(&mut self.timeline.invite_requests) {
 							if let Some(command) = state.request_invite(code) {
 								commands.push(command);

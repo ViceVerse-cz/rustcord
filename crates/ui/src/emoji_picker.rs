@@ -451,8 +451,8 @@ impl Picker {
 											let (text, hint, label) = if gifs_tab {
 												(
 													&mut self.gif_query,
-													"Search Tenor",
-													"Search GIFs on Tenor",
+													"Search KLIPY",
+													"Search GIFs on KLIPY",
 												)
 											} else {
 												(
@@ -911,7 +911,7 @@ impl Picker {
 						}
 					}
 					GifMode::Waiting => {
-						status_row(ui, colors, true, "Searching Tenor…");
+						status_row(ui, colors, true, "Searching KLIPY…");
 					}
 					GifMode::Remote(query) => {
 						let view = state.gifs.view.as_ref().filter(|view| view.query == *query);
@@ -1052,7 +1052,7 @@ fn tile(
 				);
 			}
 			None => {
-				// Flat, muted tones stand in for Tenor's category artwork.
+				// Flat, muted tones stand in for the provider's category artwork.
 				let hue = ((tone * 5) % 8) as f32 / 8.0 + 0.55;
 				let mut base = egui::ecolor::Hsva::new(hue % 1.0, 0.38, 0.46, 1.0);
 				if lifted {

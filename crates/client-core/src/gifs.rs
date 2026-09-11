@@ -255,7 +255,7 @@ mod tests {
 		);
 		assert!(state.is_gif_favorite(&gif("f10")));
 		let mut invalid = gif("nope");
-		invalid.preview = "https://media.tenor.com/x/tenor.gif".into();
+		invalid.preview = "https://media.tenor.com/x/tenor.mp4".into();
 		assert!(!state.toggle_gif_favorite(&invalid));
 		state.restore_gif_favorites(vec![gif("late")]);
 		assert!(!state.is_gif_favorite(&gif("late")));
