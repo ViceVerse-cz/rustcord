@@ -178,7 +178,6 @@ fn layout_key(message: &Message) -> u64 {
 	message.embeds_suppressed.hash(&mut key);
 	key.finish()
 }
-const DELETED_ROW_KEY: u64 = u64::MAX;
 // Discord snowflakes carry milliseconds since 2015-01-01. All u64 IDs fit time's range.
 fn timestamp(id: Id) -> time::OffsetDateTime {
 	time::OffsetDateTime::from_unix_timestamp(((id.0 >> 22) / 1000) as i64 + 1_420_070_400)
@@ -578,7 +577,7 @@ impl TimelineView {
 			self.width = width;
 			self.text_size = text_size;
 			self.scale = scale;
-			let row_ids: Vec<_> = state.timeline.row_ids().collect();
+			let row_ids: Vec<_> = state.timeline.iter().map(|message| message.id).collect();
 			self.heights
 				.retain(|id, _| row_ids.binary_search(id).is_ok());
 			self.formatted.retain(|id| state.timeline.get(id).is_some());
@@ -588,18 +587,10 @@ impl TimelineView {
 			self.revealed
 				.retain(|id, content| state.timeline.get(*id).is_some_and(|m| content.matches(m)));
 			let mut previous = None;
-			self.rows = row_ids
-				.into_iter()
-				.map(|id| {
-					let Some(m) = state.timeline.get(id) else {
-						previous = None;
-						let height = self
-							.heights
-							.get(&id)
-							.filter(|(key, _)| *key == DELETED_ROW_KEY)
-							.map_or(text_size + 16.0, |(_, height)| *height);
-						return (id, height);
-					};
+			self.rows = state
+				.timeline
+				.iter()
+				.map(|m| {
 					let key = row_key(m, previous, self.unread_boundary);
 					previous = Some(m);
 					let estimate = (if m.embeds_suppressed {
@@ -642,7 +633,7 @@ impl TimelineView {
 			ui.weak("Message history is unavailable with current permission information.");
 		}
 		if history_available && state.freshness == model::Freshness::Loading {
-			let empty = state.timeline.row_count() == 0
+			let empty = state.timeline.is_empty()
 				&& !state
 					.pending
 					.iter()
@@ -651,7 +642,7 @@ impl TimelineView {
 			if empty {
 				return;
 			}
-		} else if state.timeline.row_count() == 0
+		} else if state.timeline.is_empty()
 			&& history_available
 			&& !state
 				.pending
@@ -776,21 +767,6 @@ impl TimelineView {
 				let (id, _) = &self.rows[index];
 				let can_mark_read = state.can_mark_read(*id);
 				let Some(message) = state.timeline.get(*id) else {
-					let row = ui.scope_builder(egui::UiBuilder::new().id(row_id), |ui| {
-						egui::Frame::NONE
-							.inner_margin(egui::Margin::symmetric(8, 8))
-							.show(ui, |ui| {
-								ui.set_width(ui.available_width());
-								ui.add(
-									egui::Label::new(
-										RichText::new("Message deleted")
-											.color(crate::design::palette(ui).muted),
-									)
-									.truncate(),
-								);
-							});
-					});
-					measurements.push((*id, DELETED_ROW_KEY, row.response.rect.height()));
 					continue;
 				};
 				let previous = index
@@ -1418,9 +1394,8 @@ impl TimelineView {
 				let compact = index > 0
 					|| state
 						.timeline
-						.row_ids()
+						.iter()
 						.last()
-						.and_then(|id| state.timeline.get(id))
 						.is_some_and(|previous| {
 							let now = time::OffsetDateTime::now_utc();
 							state
@@ -3839,7 +3814,7 @@ mod tests {
 				assert!(!labels.iter().any(|text| text.contains("Resident beta")));
 				assert_eq!(
 					view.rows.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
-					expected
+					if deleted_only { vec![] } else { expected }
 				);
 				assert!(
 					view.rows
@@ -3856,7 +3831,7 @@ mod tests {
 				);
 				if deleted_only {
 					assert!(state.timeline.is_empty());
-					assert!(labels.iter().any(|text| text == "Message deleted"));
+					assert!(!labels.iter().any(|text| text == "Message deleted"));
 					assert!(!labels.iter().any(|text| text.contains("Resident alpha")
 						|| text == "Loading messages?"
 						|| text.contains("No messages yet")));
@@ -3962,24 +3937,15 @@ mod tests {
 			let labels = render(&mut view, &mut state);
 			assert!(state.timeline.is_empty());
 			assert_eq!(state.timeline.row_count(), 1);
-			assert_eq!(
-				view.rows.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
-				vec![message.id]
-			);
-			assert_eq!(
-				labels
-					.iter()
-					.filter(|text| text.as_str() == "Message deleted")
-					.count(),
-				1
-			);
+			assert!(view.rows.is_empty());
+			assert!(!labels.iter().any(|text| text.contains(" · UTC")));
 			for text in [
 				"Deleted synthetic author",
 				"Deleted synthetic body",
 				"Reveal spoiler",
 				"Reply",
 				"Open in Discord",
-				"No messages yet. Start the conversation below.",
+				"Message deleted",
 			] {
 				assert!(
 					!labels.iter().any(|label| label.contains(text)),
