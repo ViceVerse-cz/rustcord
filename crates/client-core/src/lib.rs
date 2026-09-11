@@ -97,6 +97,12 @@ pub enum Command {
 		request: u64,
 	},
 	CancelProfile,
+	/// None loads the account's global profile; Some writes only explicitly changed fields.
+	EditProfile {
+		user: Id,
+		request: u64,
+		changes: Option<model::ProfileEdit>,
+	},
 	Voice(voice::Command),
 	Members {
 		guild: Option<Id>,
@@ -171,6 +177,11 @@ pub enum Event {
 	Profile {
 		user: Id,
 		guild: Option<Id>,
+		request: u64,
+		result: Result<Box<UserProfile>, auth::Failure>,
+	},
+	ProfileEdited {
+		user: Id,
 		request: u64,
 		result: Result<Box<UserProfile>, auth::Failure>,
 	},
@@ -313,6 +324,7 @@ pub struct State {
 	pub profile: Option<profile::ProfileView>,
 	pub profile_request: u64,
 	pub profile_cache: profile::ProfileCache,
+	pub own_profile: profile::OwnProfile,
 	pub invites: invites::Cache,
 	pub invite_join: invites::Join,
 	pub voice: voice::State,
@@ -375,6 +387,7 @@ impl Default for State {
 			profile: None,
 			profile_request: 0,
 			profile_cache: Default::default(),
+			own_profile: Default::default(),
 			invites: Default::default(),
 			invite_join: Default::default(),
 			voice: voice::State::default(),
@@ -775,6 +788,10 @@ impl State {
 		})
 	}
 	pub fn command_rejected(&mut self, command: Command) {
+		if let Command::EditProfile { user, request, .. } = command {
+			self.reject_own_profile(user, request);
+			return;
+		}
 		if matches!(command, Command::GuildFolders(_)) {
 			self.apply_guild_folders(Err(auth::Failure::ProtocolAt(
 				"Server organization was not queued; try again",
@@ -980,6 +997,7 @@ impl State {
 			Event::Ready { .. } | Event::Disconnected | Event::Resync
 		) {
 			self.local_game_activity = Default::default();
+			self.interrupt_own_profile();
 		}
 		if let Event::Typing(signal) = &envelope.event {
 			self.observe_typing_at(
@@ -1200,6 +1218,14 @@ impl State {
 			}
 			Event::Invite { code, result } => {
 				self.apply_invite(code, result.map(|embed| *embed));
+				Ok(())
+			}
+			Event::ProfileEdited {
+				user,
+				request,
+				result,
+			} => {
+				self.apply_own_profile(user, request, result);
 				Ok(())
 			}
 			Event::Profile {
@@ -1515,6 +1541,7 @@ impl State {
 				self.cancel_user_action();
 				self.cancel_invite_join();
 				self.user_actions.reset();
+				self.clear_own_profile();
 				self.user = Some(user);
 				self.guilds = guilds;
 				self.channels = channels;
@@ -1995,6 +2022,7 @@ impl State {
 			_ => {}
 		}
 		if failure.ends_session() {
+			self.interrupt_own_profile();
 			self.local_game_activity = Default::default();
 			self.cancel_message_actions();
 			if self.folders_pending {
@@ -2092,7 +2120,9 @@ impl Event {
 				Self::Invite { code, result } => {
 					code.capacity() + result.as_ref().map_or(0, |embed| embed.bytes())
 				}
-				Self::Profile { result, .. } => result.as_ref().map_or(0, |p| p.bytes()),
+				Self::Profile { result, .. } | Self::ProfileEdited { result, .. } => {
+					result.as_ref().map_or(0, |p| p.bytes())
+				}
 				Self::Voice(event) => event.bytes(),
 				Self::Permissions(event) => event.bytes(),
 				Self::GuildEmojis { emojis, .. } => custom_emoji_bytes(emojis),
@@ -2879,7 +2909,7 @@ mod tests {
 			event,
 		});
 	}
-	fn message(id: u64) -> Message {
+	pub(super) fn message(id: u64) -> Message {
 		Message {
 			reactions: Some(vec![]),
 			id: Id(id),

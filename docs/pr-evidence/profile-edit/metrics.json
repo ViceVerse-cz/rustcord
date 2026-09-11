@@ -1,0 +1,130 @@
+{
+  "baseline": "22e228364669a9fbdc721df1d5beeaca4e05d993",
+  "after": "feat/profile-edit final runtime sources",
+  "environment": {
+    "os": "Windows 11 Home",
+    "cpu": "Ryzen 7 7800X3D",
+    "logical_cpus": 16,
+    "ram_bytes": 33410678784,
+    "rust": "1.98.1",
+    "renderer": "wgpu; adapter and backend unmeasured",
+    "display_scale": 1.25,
+    "viewport": [
+      1120,
+      760
+    ],
+    "features": "text-only idle; text and voice release builds"
+  },
+  "method": {
+    "package": "sorted relative files, Python ZIP DEFLATE level 6; sibling voice and archives excluded; docs snapshot before final measurement addendum",
+    "idle": "fresh --demo --demo-settings=account baseline / profile after; 10-second warmup, five 1-second samples; settled median final 3, peak sampled only; no scripted edits",
+    "replay": "separate release targets, one warmup then five runs; 100000 events, 500 retained records, 236992..237477 estimated retained bytes"
+  },
+  "limitations": [
+    "Voice executable builds; complete voice installed/archive sizes unavailable because baseline and changed packaging both lack OpenH264 0.9.8 license texts.",
+    "Uncontrolled desktop activity and short samples; no performance improvement claim.",
+    "UI frame/startup latency, GPU memory, native input/accessibility and live Discord interoperability unmeasured."
+  ],
+  "before": {
+    "executable_bytes": 55044608,
+    "installed_bytes": 59967663,
+    "zip_bytes": 36017303,
+    "file_count": 670,
+    "voice_executable_bytes": 61060608,
+    "idle_samples": [
+      {
+        "WorkingSet": 166354944,
+        "PrivateBytes": 394178560,
+        "CpuSeconds": 0.578125,
+        "Time": "2026-09-11T18:06:08.4067559Z"
+      },
+      {
+        "WorkingSet": 166354944,
+        "PrivateBytes": 394178560,
+        "CpuSeconds": 0.578125,
+        "Time": "2026-09-11T18:06:09.4227839Z"
+      },
+      {
+        "WorkingSet": 166354944,
+        "PrivateBytes": 394178560,
+        "CpuSeconds": 0.578125,
+        "Time": "2026-09-11T18:06:10.4257920Z"
+      },
+      {
+        "WorkingSet": 166354944,
+        "PrivateBytes": 394178560,
+        "CpuSeconds": 0.578125,
+        "Time": "2026-09-11T18:06:11.4329004Z"
+      },
+      {
+        "WorkingSet": 166354944,
+        "PrivateBytes": 394178560,
+        "CpuSeconds": 0.578125,
+        "Time": "2026-09-11T18:06:12.4500921Z"
+      }
+    ],
+    "replay_ms": [
+      41.2564,
+      40.787,
+      40.9315,
+      41.1326,
+      40.9294
+    ],
+    "working_set_peak_bytes": 166354944,
+    "working_set_settled_bytes": 166354944,
+    "private_settled_bytes": 394178560,
+    "idle_cpu_percent_one_core": 0.0,
+    "replay_median_ms": 40.9315
+  },
+  "after_metrics": {
+    "executable_bytes": 55143936,
+    "installed_bytes": 60074259,
+    "zip_bytes": 36059832,
+    "file_count": 670,
+    "voice_executable_bytes": 61163520,
+    "idle_samples": [
+      {
+        "WorkingSet": 167079936,
+        "PrivateBytes": 397459456,
+        "CpuSeconds": 0.390625,
+        "Time": "2026-09-11T18:30:58.2003521Z"
+      },
+      {
+        "WorkingSet": 167079936,
+        "PrivateBytes": 397459456,
+        "CpuSeconds": 0.390625,
+        "Time": "2026-09-11T18:30:59.2133546Z"
+      },
+      {
+        "WorkingSet": 167079936,
+        "PrivateBytes": 397459456,
+        "CpuSeconds": 0.390625,
+        "Time": "2026-09-11T18:31:00.2282761Z"
+      },
+      {
+        "WorkingSet": 167079936,
+        "PrivateBytes": 397459456,
+        "CpuSeconds": 0.390625,
+        "Time": "2026-09-11T18:31:01.2413355Z"
+      },
+      {
+        "WorkingSet": 167079936,
+        "PrivateBytes": 397459456,
+        "CpuSeconds": 0.390625,
+        "Time": "2026-09-11T18:31:02.2452877Z"
+      }
+    ],
+    "replay_ms": [
+      39.2849,
+      39.1055,
+      42.2245,
+      40.6558,
+      40.2442
+    ],
+    "working_set_peak_bytes": 167079936,
+    "working_set_settled_bytes": 167079936,
+    "private_settled_bytes": 397459456,
+    "idle_cpu_percent_one_core": 0.0,
+    "replay_median_ms": 40.2442
+  }
+}

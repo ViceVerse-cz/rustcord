@@ -1,5 +1,52 @@
 # Implementation progress — 2026-09-10
 
+## Own profile editing — September 11, 2026
+
+Added Settings → Profile, My Account → Edit profile, and Edit profile on your own
+card. The editor loads the global profile before accepting display name, pronouns,
+About Me and accent color changes. It has a bounded session-only draft, preview,
+character counts, Save/Cancel, loading/errors and confirmed-save feedback. Avatar,
+banner and security settings remain managed in Discord. The offline command path
+is available with `--demo --demo-settings=profile`.
+
+One bounded current-user PATCH sends only changed fields, followed by a confirming
+profile read. Account/request/session gates reject stale results and duplicate saves.
+Unconfirmed writes preserve the draft and require reload, without automatic retries.
+Reload adopts refreshed untouched fields while preserving edits. Confirmed identity
+changes update retained users and invalidate stale profile views. No new dependencies,
+schema changes, credentials or live account actions.
+
+Focused model/core/API/profile tests and both new editor tests pass. Headless egui
+checks exercise keyboard text entry and mouse Save/Cancel at 320/720 points in dark
+and light themes. `cargo xtask check` passed formatting and strict all-feature Clippy,
+then failed in unchanged `pending_full_body_turns_into_one_confirmed_row_in_either_arrival_order`
+(`crates/ui/src/pending_tests.rs:113`, confirmed text retains pending gray). The same
+failure was reproduced on clean baseline `22e2283`. The full parallel UI test process
+also aborted with Windows `0xc0000409`; the isolated test reports its assertion.
+This is not a full-check success.
+
+Work is isolated in `feat/profile-edit`, based on fetched `origin/main` `22e2283`,
+Rust 1.98.1/Windows 11. Original-checkout timeline edits were preserved. Baseline
+packages were rebuilt in a detached worktree after those edits appeared. A stale
+shared-target model artifact was invalidated before checking; reducer comparisons
+use separate targets. Package/performance results are in `docs/performance.md`.
+
+The final editor follows the existing Discord-style settings: two columns at wide
+sizes, filled inputs, the shared pill switch, an overlapping-avatar preview and a
+compact save bar. Narrow windows put Save/Cancel before the scrollable preview.
+After the design revision, all-target/all-feature strict Clippy, focused profile
+tests and the policy check were rerun. Native dark/light/narrow PNGs were captured
+and inspected using the offline `profile_preview` example's real wgpu framebuffer
+callback. `before.png` shows the baseline's read-only My Account page; `after.png`
+shows the new Profile page at the same viewport and native scale. The example
+renders the real UI with synthetic state and no adapters; it is not a live-session
+or main-binary interaction test. The desktop automation pipe remains unavailable,
+so keyboard/mouse behavior is covered by headless egui tests, not native automation.
+Screen readers and other OSes remain unverified. Normal-user writes are unofficial
+and live-unverified; see `docs/profiles.md`. Voice packaging encounters baseline missing
+`openh264-sys2 0.9.8` / `openh264 0.9.8` license text overrides. Delivery stays draft
+with these exact limitations.
+
 ## September 11, 2026 — temporarily pause native CI
 
 At the owner's explicit request, commented out the complete `native` matrix job
@@ -2978,3 +3025,56 @@ Reducer replay median 42.7112 -> 43.4964 ms (five runs each), identical retained
 Short uncontrolled process samples are documented without a performance-improvement claim.
 The new voice --demo --demo-existing-call process started with a responsive native window;
 actual pixels remain unverified because native capture is unavailable.
+
+## CI caches, Bun and current check failures — September 11, 2026
+
+Baseline: `1ff190b1eafb6ff701231f56b4eff296c7d6c578` on `origin/main`;
+implementation branch `perf/ci-dependency-cache`.
+The latest baseline run (34632696298) passed security and licenses. Native jobs
+and fuzz stopped at the camera formatting change from the preceding fast fix.
+The formatter correction is included here. Running the full local check then
+exposed stale UI fixtures for link confirmation, edit retry, and typing placement;
+the fixtures now exercise the current UI paths without changing runtime behavior.
+
+Rust dependency caches already existed for native, license, fuzz and release jobs.
+They now save after failed checks too. Security now caches its pinned cargo-audit
+binary and registry downloads; Cargo-tool versions are included in tool-job keys.
+The pinned fuzz nightly is installed before computing its cache key. Release
+installation now uses Bun 1.4.2, a frozen `bun.lock`, disabled install scripts and
+a cache of Bun's package downloads. Bun 1.4.2 also runs the release smoke,
+semantic-release planning and publishing scripts; Node remains only for the
+separate native-build login handoff check.
+No app caches, account data, signed artifacts, signing keys or advisory databases
+are added to these caches.
+
+Verification so far:
+
+- actionlint 1.7.12 passed both workflows (optional shellcheck/pyflakes disabled).
+- Bun 1.4.2 migrated the npm lockfile; all 298 checksummed dependency version and
+  integrity pairs were preserved. A clean temporary frozen install passed the
+  existing offline release smoke with Python 3.14. A Bun-run semantic-release
+  dry-run plan also completed and selected the expected first nightly version.
+  No release publish command was executed.
+- Authentication handoff, xtask workspace and license-policy script checks passed.
+- Fuzz workspace formatting and diff whitespace checks passed.
+
+Performance: the baseline GitHub cargo-audit install took 133 seconds, cargo-deny
+117 seconds. Cache configuration now permits reuse; no warm-run speedup or total
+pipeline-time reduction is claimed before the new workflow has run. No runtime,
+package-size or screenshot comparison applies to workflow/test/formatting changes.
+
+Release blocker found during review: `openh264` and `openh264-sys2` 0.9.8 lack
+complete wrapper license texts in their published crates and exact upstream tree.
+The upstream BSD-2-Clause declaration and Cisco codec license are distinct; no
+unresolved override or license-check bypass was added. Signing and live Discord
+compatibility are not validated by these changes.
+
+Integration update: origin/main feedd94 advanced during delivery. Merged its committed
+profile/CI changes, preserving both documentation sections where append-only edits
+conflicted. Its existing formatting/typing-test repairs resolve the earlier baseline
+gates: the combined `cargo xtask check` now passes formatting, strict all-feature
+Clippy, full workspace tests, text-only check and policy. The earlier failures above
+are historical baseline/first-attempt results, not the final integrated check status.
+Performance comparisons remain explicitly pinned to pre-integration feature fe74390.
+Native call screenshots/live interoperability and voice package license evidence remain
+blocked; no PR merge or release was performed.

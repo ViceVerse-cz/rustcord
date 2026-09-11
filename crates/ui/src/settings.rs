@@ -9,11 +9,13 @@ pub(super) struct Settings {
 	pub open: bool,
 	page: Page,
 	query: String,
+	editor: crate::profile_edit::Editor,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 enum Page {
 	Account,
+	Profile,
 	#[default]
 	Appearance,
 	Notifications,
@@ -22,15 +24,16 @@ enum Page {
 	Storage,
 }
 impl Page {
-	const ALL: [Self; 6] = [
+	const ALL: [Self; 7] = [
 		Self::Account,
+		Self::Profile,
 		Self::Appearance,
 		Self::Notifications,
 		Self::Activity,
 		Self::Voice,
 		Self::Storage,
 	];
-	const USER: [Self; 1] = [Self::Account];
+	const USER: [Self; 2] = [Self::Account, Self::Profile];
 	const APP: [Self; 5] = [
 		Self::Appearance,
 		Self::Notifications,
@@ -41,6 +44,7 @@ impl Page {
 	fn label(self) -> &'static str {
 		match self {
 			Self::Account => "My Account",
+			Self::Profile => "Profile",
 			Self::Appearance => "Appearance",
 			Self::Notifications => "Notifications",
 			Self::Activity => "Game Activity",
@@ -51,6 +55,7 @@ impl Page {
 	fn description(self) -> &'static str {
 		match self {
 			Self::Account => "The Discord account signed in on this device.",
+			Self::Profile => "Choose how you appear across Discord.",
 			Self::Appearance => "Theme, colour preset, zoom and layout.",
 			Self::Notifications => "Desktop alerts for this session.",
 			Self::Activity => "Show others what you are playing.",
@@ -61,6 +66,7 @@ impl Page {
 	fn matches(self, query: &str) -> bool {
 		let keywords = match self {
 			Self::Account => "my account profile logout",
+			Self::Profile => "profile edit display name about me bio pronouns color colour",
 			Self::Appearance => {
 				"appearance window tray minimize theme dark light system zoom reading layout sidebar people reset colour color preset animate animated gifs autoplay hide image links confirm confirmation external browser"
 			}
@@ -92,7 +98,12 @@ impl MessagingUi {
 			self.settings.page = page;
 		}
 	}
-	pub(super) fn show_settings(&mut self, ctx: &egui::Context, state: &State) {
+	pub(super) fn show_settings(
+		&mut self,
+		ctx: &egui::Context,
+		state: &mut State,
+		commands: &mut Vec<client_core::Command>,
+	) {
 		let colors = design::palette_for(ctx);
 		let size = ctx.content_rect().size() - egui::vec2(32.0, 40.0);
 		let width = size.x.clamp(280.0, 1100.0);
@@ -181,7 +192,12 @@ impl MessagingUi {
 							.id_salt(("settings-content", self.settings.page as u8))
 							.auto_shrink([false, false])
 							.show(ui, |ui| {
-								ui.set_width(ui.available_width().min(720.0));
+								let scroll_padding = if self.settings.page == Page::Profile {
+									8.0
+								} else {
+									0.0
+								};
+								ui.set_width((ui.available_width() - scroll_padding).min(720.0));
 								ui.spacing_mut().item_spacing.y = 12.0;
 								let query = self.settings.query.to_lowercase();
 								if !Page::ALL.into_iter().any(|p| p.matches(&query)) {
@@ -194,6 +210,12 @@ impl MessagingUi {
 								}
 								match self.settings.page {
 									Page::Account => self.account_page(ui, state),
+									Page::Profile => self.settings.editor.show(
+										ui,
+										state,
+										&mut self.avatars,
+										commands,
+									),
 									Page::Appearance => {
 										self.appearance_settings(ui);
 										ui.add_space(8.0);
@@ -400,10 +422,13 @@ impl MessagingUi {
 								ui.separator();
 								account_row(
 									ui,
-									"Profile, email, password and security",
+									"Email, password and security",
 									"Managed in Discord",
 								);
 							});
+						if ui.button("Edit profile").clicked() {
+							self.settings.page = Page::Profile;
+						}
 					});
 				// Avatar overlapping the banner edge, ringed by the card surface.
 				let avatar = egui::Rect::from_min_size(

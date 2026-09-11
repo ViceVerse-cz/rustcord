@@ -35,16 +35,21 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version: 24.19.0
-      - run: npm ci --prefix .github/release --ignore-scripts --no-audit --no-fund
-      - run: node .github/release/check.mjs
+          bun-version: 1.4.2
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ runner.arch }}-1.4.2-${{ hashFiles('.github/release/bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-${{ runner.arch }}-1.4.2-
+      - run: bun install --cwd .github/release --frozen-lockfile --ignore-scripts
+      - run: bun .github/release/check.mjs
       - name: Calculate semantic version and notes
         id: version
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: node .github/release/release.mjs plan
+        run: bun .github/release/release.mjs plan
       - name: Require Mac signing credentials before building
         if: steps.version.outputs.release == 'true'
         env:
@@ -111,6 +116,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.variant }}
+          cache-on-failure: true
       - name: Offline checks
         run: cargo xtask check
       - uses: actions/setup-node@v4
@@ -167,10 +173,15 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version: 24.19.0
-      - run: npm ci --prefix .github/release --ignore-scripts --no-audit --no-fund
+          bun-version: 1.4.2
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ runner.arch }}-1.4.2-${{ hashFiles('.github/release/bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-${{ runner.arch }}-1.4.2-
+      - run: bun install --cwd .github/release --frozen-lockfile --ignore-scripts
       - uses: actions/download-artifact@v4
         with:
           name: release-manifests
@@ -186,4 +197,4 @@ jobs:
       - name: Commit versions and publish semantic release with notes and assets
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: node .github/release/release.mjs publish
+        run: bun .github/release/release.mjs publish
