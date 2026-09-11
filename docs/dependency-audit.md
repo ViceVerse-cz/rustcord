@@ -1,5 +1,7 @@
 # Dependency audit — September 10, 2026
 
+Voice is now part of every desktop build. Historical optional-voice selection reports below must not be used as the current default dependency graph. License checks remain enforced in their dedicated CI job, independently of packaging.
+
 The Linux GTK4/WebKit6 migration passes the unchanged `cargo audit --deny warnings` gate:
 **zero vulnerability-class findings and zero warnings**, exit 0, with 726 locked packages.
 The check used cargo-audit 0.22.2 and 1,243 advisories at
@@ -104,7 +106,7 @@ Published package metadata was checked on September 10, 2026 through the [crates
 
 HPKE 0.7.0 selects SHA3 0.0.10, but requires a coordinated provider upgrade: `openmls_rust_crypto 0.6.0` uses HPKE 0.7, OpenMLS traits/storage 0.6, and TLS codec 0.5. Those versions do not satisfy Davey 0.1.4's existing OpenMLS 0.8.1/provider 0.5 requirements. Adding a newer direct dependency would leave the old chain in place.
 
-The applied repair is the [documented HPKE 0.6.1 backport](../vendor/hpke-rs/SEREIN-PATCH.md): replace its only two `libcrux_sha3::shake256` calls with the maintained [RustCrypto SHAKE-256 implementation](https://docs.rs/sha3/0.10.8/sha3/) using `Update`, `ExtendableOutput`, and `XofReader`. Preserve the exact 32-/64-byte output sizes, HPKE interfaces, upstream package identity, and MPL-2.0 licensing/provenance. This replaces the actual selected primitive rather than renaming vulnerable code or suppressing advisories. The package includes a known-answer SHAKE check for three inputs at both output sizes; integration validation is recorded in [progress.md](progress.md). The vendored MPL-2.0 source and canonical license are included with packaged distribution notices.
+The applied repair is the [documented HPKE 0.6.1 backport](../vendor/hpke-rs/SEREIN-PATCH.md): replace its only two `libcrux_sha3::shake256` calls with the maintained [RustCrypto SHAKE-256 implementation](https://docs.rs/sha3/0.10.8/sha3/) using `Update`, `ExtendableOutput`, and `XofReader`. Preserve the exact 32-/64-byte output sizes, HPKE interfaces, upstream package identity, and MPL-2.0 licensing/provenance. This replaces the actual selected primitive rather than renaming vulnerable code or suppressing advisories. The package includes a known-answer SHAKE check for three inputs at both output sizes. The vendored MPL-2.0 source and canonical license are included with packaged distribution notices.
 
 A narrower SHA3 dependency bump was investigated first. The fixed SHA3 0.0.10 source preserves the required function signature and selects traits 0.0.8/secrets 0.0.6, but Cargo resolution conflicts with the old optional libcrux backend's pinned SHA3/Hax generation. Updating the whole old backend is a larger compatibility change. Switching the two one-shot calls to the existing RustCrypto family removes the active libcrux chain while retaining the old backend as an explicitly unused optional dependency. Its locked advisories remain visible in the strict audit.
 

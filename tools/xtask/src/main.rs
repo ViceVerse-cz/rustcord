@@ -2,7 +2,6 @@ use std::{
 	path::PathBuf,
 	process::{Command, ExitCode},
 };
-mod notices;
 fn run(args: &[&str]) -> Result<(), String> {
 	run_tool("cargo", args)
 }
@@ -48,14 +47,6 @@ fn policy() -> Result<(), String> {
 	}
 	let metadata: serde_json::Value =
 		serde_json::from_slice(&output.stdout).map_err(|e| e.to_string())?;
-	for package in metadata["packages"]
-		.as_array()
-		.ok_or("Missing package metadata")?
-	{
-		if !package["source"].is_null() && package["license"].as_str().is_none() {
-			return Err("Dependency license metadata missing; manual review required".into());
-		}
-	}
 	for node in metadata["resolve"]["nodes"]
 		.as_array()
 		.ok_or("No dependency graph")?
@@ -201,8 +192,8 @@ fn copy_directory(source: &std::path::Path, destination: &std::path::Path) -> Re
 	}
 	Ok(())
 }
-fn package(voice: bool) -> Result<(), String> {
-	let mut arguments = vec![
+fn package() -> Result<(), String> {
+	let arguments = [
 		"build",
 		"--release",
 		"--locked",
@@ -210,11 +201,8 @@ fn package(voice: bool) -> Result<(), String> {
 		"serein",
 		"--no-default-features",
 	];
-	if voice {
-		arguments.extend(["--features", "voice"]);
-	}
-	let artifacts = notices::build(&arguments)?;
-	let root = PathBuf::from(if voice { "dist/voice" } else { "dist" });
+	run(&arguments)?;
+	let root = PathBuf::from("dist");
 	std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
 	let exe = if cfg!(windows) {
 		"serein.exe"
@@ -313,26 +301,22 @@ fn package(voice: bool) -> Result<(), String> {
 		std::path::Path::new("assets/licenses/login"),
 		&resources.join("licenses/login"),
 	)?;
-	if voice {
-		copy_directory(
-			std::path::Path::new("assets/licenses/voice"),
-			&resources.join("licenses/voice"),
-		)?;
-		// Ship the corresponding modified MPL component source with every binary.
-		copy_directory(
-			std::path::Path::new("vendor/hpke-rs"),
-			&resources.join("source/hpke-rs"),
-		)?;
-	}
+	copy_directory(
+		std::path::Path::new("assets/licenses/voice"),
+		&resources.join("licenses/voice"),
+	)?;
+	// Ship the corresponding modified MPL component source with every binary.
+	copy_directory(
+		std::path::Path::new("vendor/hpke-rs"),
+		&resources.join("source/hpke-rs"),
+	)?;
 	copy_directory(
 		std::path::Path::new("assets/licenses/audio"),
 		&resources.join("licenses/audio"),
 	)?;
-	notices::collect(
-		&std::env::current_dir().map_err(|e| e.to_string())?,
+	copy_directory(
+		std::path::Path::new("assets/licenses/dependencies"),
 		&resources.join("licenses/dependencies"),
-		&artifacts,
-		voice,
 	)?;
 	for file in [
 		"README.md",
@@ -364,7 +348,6 @@ fn package(voice: bool) -> Result<(), String> {
 				"packaging/linux/package.py",
 				root.to_str().ok_or("Invalid package path")?,
 				env!("CARGO_PKG_VERSION"),
-				if voice { "voice" } else { "text" },
 			],
 		)?;
 	}
@@ -421,9 +404,8 @@ fn main() -> ExitCode {
 			"policy" => policy(),
 			"licenses" => licenses(),
 			"fuzz" => fuzz(),
-			"package" => package(false),
-			"package-voice" => package(true),
-			_ => Err("Use cargo xtask [check|policy|licenses|fuzz|package|package-voice]".into()),
+			"package" => package(),
+			_ => Err("Use cargo xtask [check|policy|licenses|fuzz|package]".into()),
 		}
 	});
 	match result {

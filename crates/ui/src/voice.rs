@@ -516,9 +516,7 @@ impl MessagingUi {
 		if state.demo {
 			Some("Calls are unavailable in the offline preview. No microphone is accessed.")
 		} else if !self.voice_available {
-			Some(
-				"This is the text-only build. Install a voice-enabled build to join voice channels and make calls.",
-			)
+			Some("Voice is unavailable in this session.")
 		} else if state.auth != AuthState::Authenticated || !state.gateway_connected {
 			Some("Reconnect to Discord before calling.")
 		} else if state.voice.active.is_some() {
@@ -1908,7 +1906,7 @@ mod tests {
 					} else {
 						assert!(
 							sent.is_empty(),
-							"Demo, offline, text-only and busy states cannot join"
+							"Demo, offline, voice-unavailable and busy states cannot join"
 						);
 					}
 					state.apply_voice(client_core::voice::Event::Deleted { channel: Id(22) });
@@ -2191,7 +2189,7 @@ mod tests {
 			messaging
 				.call_unavailable(&state, Id(25))
 				.unwrap()
-				.contains("text-only")
+				.contains("Voice is unavailable")
 		);
 	}
 
@@ -2324,7 +2322,7 @@ mod tests {
 			messaging
 				.call_unavailable(&state, Id(1))
 				.unwrap()
-				.contains("text-only")
+				.contains("Voice is unavailable")
 		);
 		messaging.voice_available = true;
 		assert!(messaging.call_unavailable(&state, Id(1)).is_none());

@@ -1,5 +1,7 @@
 # Resolved dependencies
 
+Voice is now included in every desktop build without a feature flag. Dated dependency-selection notes below describe their original snapshots.
+
 September 10 egui main experiment: `egui` and `eframe` are pinned to upstream
 `65e7db3c06d779c60ac56647bdd3011ed8ba1cbd`, the `main` tip returned by
 `git ls-remote https://github.com/emilk/egui.git refs/heads/main` during this task.

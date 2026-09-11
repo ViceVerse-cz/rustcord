@@ -3,7 +3,7 @@
 set -euo pipefail
 set +x
 
-: "${RUNNER_TEMP:?}" "${VERSION:?}" "${VARIANT:?}"
+: "${RUNNER_TEMP:?}" "${VERSION:?}"
 : "${GITHUB_RUN_NUMBER:?}" "${GITHUB_RUN_ATTEMPT:?}"
 : "${MACOS_CERTIFICATE_BASE64:?}" "${MACOS_CERTIFICATE_PASSWORD:?}"
 : "${MACOS_SIGNING_IDENTITY:?}" "${APPLE_ID:?}" "${APPLE_TEAM_ID:?}"
@@ -38,9 +38,7 @@ rm "$temporary/certificate.p12"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION%%-*}" "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT" "$app/Contents/Info.plist"
 sign_options=(--force --timestamp --options runtime --keychain "$keychain" --sign "$MACOS_SIGNING_IDENTITY")
-if [ "$VARIANT" = voice ]; then
-  sign_options+=(--entitlements packaging/macos/voice.entitlements)
-fi
+sign_options+=(--entitlements packaging/macos/voice.entitlements)
 codesign "${sign_options[@]}" "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
 

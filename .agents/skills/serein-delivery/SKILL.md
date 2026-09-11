@@ -13,7 +13,7 @@ it does not grant new account, deployment, microphone or credential permissions.
 If the request begins with `!fast`, follow the root fast-local policy instead of the rest of this
 skill: implement locally, run one smallest useful debug command, and leave the result uncommitted.
 Do not collect baselines, tests, packages, screenshots, or performance/size evidence, and do not
-update progress docs, open a PR, or push. End by asking the owner to check it and explicitly
+create progress logs or ADRs, open a PR, or push. End by asking the owner to check it and explicitly
 confirm before committing and pushing to `main`.
 
 ## Establish the baseline
@@ -71,7 +71,7 @@ no runtime/build dependency change`. Do not spend time rebuilding an unchanged a
 measurement. For runtime changes, compare relevant release builds against the recorded baseline:
 
 - Always record affected executable size, full installed package and compressed distribution size;
-  keep text and voice numbers separate. Reuse the package outputs built for verification.
+  measure the standard package including voice. Reuse the package outputs built for verification.
 - Reducer/cache/protocol changes: use `cargo replay` on both revisions. Build once, then run the
   produced `replay-bench` directly: one warmup and five measured runs, report median elapsed time
   and the retained timeline range. This measures a synthetic reducer, never process RSS or UI latency.
@@ -92,8 +92,8 @@ Update `docs/performance.md` with new reproducible measurements, not copied hist
 
 Run `cargo xtask check` and applicable focused/native checks. Review the complete task diff for
 correctness, secret exposure, scope and resource limits; use an independent reviewer for complex
-changes when useful. Fix task regressions and rerun only the invalidated checks. Update progress
-and affected docs. Ensure screenshot links and measurements describe the final implementation.
+changes when useful. Fix task regressions and rerun only the invalidated checks. Record results in the PR description and update affected documentation. Never create or write
+`docs/progress.md` or `docs/adr/`. Ensure screenshot links and measurements describe the final implementation.
 
 Stage explicit task paths/hunks, inspect `git diff --cached`, then commit and push the task branch
 to the existing origin. Compose the PR body from `.github/pull_request_template.md` in an ignored

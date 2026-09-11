@@ -1,6 +1,6 @@
 # Discord voice adapter
 
-Optional native media for an explicitly joined one-to-one Discord DM or server voice channel (up to 64 participants including yourself). The desktop owns call intent, main Gateway/REST signaling and the audio-device lifetime. This crate owns the separate voice WebSocket, UDP transport, codec and ephemeral DAVE group. It never records audio, persists voice keys or contacts a project relay.
+Native media for an explicitly joined one-to-one Discord DM or server voice channel (up to 64 participants including yourself). The desktop owns call intent, main Gateway/REST signaling and the audio-device lifetime. This crate owns the separate voice WebSocket, UDP transport, codec and ephemeral DAVE group. It never records audio, persists voice keys or contacts a project relay.
 
 Protocol evidence checked September 10, 2026:
 
