@@ -14,6 +14,7 @@ pub mod emoji;
 mod emoji_picker;
 pub mod fonts;
 mod forum;
+mod guild_folders;
 pub mod icons;
 mod invites;
 mod markdown;
@@ -60,6 +61,7 @@ enum MemberRow {
 
 #[derive(Default)]
 pub struct MessagingUi {
+	folder_ui: guild_folders::FolderUi,
 	member_cache_key: Option<(u64, u64, Option<Id>, bool)>,
 	member_cache: Vec<MemberRow>,
 	member_count: usize,
@@ -2022,14 +2024,16 @@ impl MessagingUi {
 				egui::Panel::right("people-pane")
 					.resizable(false)
 					.exact_size(240.0)
-					.frame(egui::Frame::new().fill(colors.sidebar).inner_margin(
-						egui::Margin {
-							left: 8,
-							right: 8,
-							top: 8,
-							bottom: 8,
-						},
-					))
+					.frame(
+						egui::Frame::new()
+							.fill(colors.sidebar)
+							.inner_margin(egui::Margin {
+								left: 8,
+								right: 8,
+								top: 8,
+								bottom: 8,
+							}),
+					)
 					.show(ui, |ui| {
 						self.member_rows(ui, state);
 					});
@@ -2123,47 +2127,19 @@ impl MessagingUi {
 					state.read_state.status.map(str::to_owned),
 					(state.archived_thread.is_some() && state.archived_thread == state.selected)
 						.then(|| "Opened from archive".to_owned()),
-					(state.history_targeted
-						|| state.history_before.is_some()
-						|| state.history_after.is_some())
-					.then(|| {
-						"Browsing message history \u{b7} Jump to present to return".to_owned()
-					}),
 				]
 				.into_iter()
 				.flatten()
 				.collect();
-				if !notices.is_empty() || state.can_load_older() {
+				if !notices.is_empty() {
 					egui::Frame::new()
 						.inner_margin(egui::Margin::symmetric(16, 4))
 						.show(ui, |ui| {
-							ui.horizontal_wrapped(|ui| {
-								ui.label(
-									RichText::new(notices.join(" · "))
-										.size(11.0)
-										.color(colors.muted),
-								);
-								ui.with_layout(
-									egui::Layout::right_to_left(egui::Align::Center),
-									|ui| {
-										if state.can_load_older()
-											&& ui
-												.add(
-													egui::Button::new(
-														RichText::new("Load earlier messages")
-															.size(11.0)
-															.color(colors.link),
-													)
-													.small()
-													.frame(false),
-												)
-												.clicked() && let Some(command) = state.older_history()
-										{
-											commands.push(command);
-										}
-									},
-								);
-							});
+							ui.label(
+								RichText::new(notices.join(" · "))
+									.size(11.0)
+									.color(colors.muted),
+							);
 						});
 				}
 				egui::Frame::new()

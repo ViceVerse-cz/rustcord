@@ -511,3 +511,20 @@ Windows and Linux have bounded exact-executable detectors; macOS reports unsuppo
 This slice sends the game name only, without a local Discord RPC server, game-supplied
 rich presence details, artwork, elapsed game time, or a remote game catalogue. Linux/macOS
 native execution has not been verified in this Windows run.
+
+### Server folders (September 11, 2026)
+
+Server ordering, grouping, folder names and RGB colors use the normal-user
+`GET/PATCH /users/@me/settings-proto/1` endpoint. This is unofficial and live-unverified.
+The bounded adapter patches only the guild-folder subtree, retains unknown fields
+and guild positions, checks the freshly read data version, and requires a confirming
+response before changing the displayed layout. Conflicts and uncertain saves expose
+a refresh/retry action. Other-client changes require the rail context menu's explicit
+refresh; Gateway settings updates are not consumed in this slice.
+
+Primary implementation evidence checked: [settings schema](https://github.com/discord-userdoccers/discord-protos)
+and [discord.py-self HTTP adapter](https://github.com/dolfies/discord.py-self/blob/master/discord/http.py).
+Limits: 200 servers, 200 folder entries, 100 characters/400 bytes per name, 16 KiB
+retained layout, 1 MiB settings response. Oversized settings disable organization
+without hiding normal server navigation. Demo edits stay in memory; live edits persist
+through Discord. No live account actions were performed in fast local validation.

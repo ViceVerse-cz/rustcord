@@ -1,5 +1,6 @@
 // Direct, origin-fixed REST adapter. No cookies, redirects, logging, persistence or bot SDK.
 mod archives;
+mod guild_folders;
 pub mod upload;
 mod user_actions;
 use client_core::{
@@ -284,6 +285,10 @@ impl DiscordApi {
 	}
 	pub async fn execute(&self, command: Command) -> Event {
 		match command {
+			Command::GuildFolders(settings) => Event::GuildFolders(match settings {
+				Some(settings) => self.save_guild_folders(settings).await,
+				None => self.guild_folders().await,
+			}),
 			Command::UserAction { action, request } => {
 				Event::UserAction(client_core::user_actions::Event::Written {
 					action,

@@ -6,7 +6,7 @@
 fetched through the jsDelivr npm mirror on September 10, 2026. The unmodified license is
 `LICENSE` and is staged in both packages as `licenses/Phosphor-Icons-MIT.txt`.
 
-Seventy-six unmodified Phosphor `assets/fill/*.svg` and `assets/bold/*.svg` files are scaled
+Seventy-eight unmodified Phosphor `assets/fill/*.svg` and `assets/bold/*.svg` files are scaled
 to 56×56 pixels, filled white, and rasterized by `resvg` 0.45.1 into one transparent PNG atlas
 with 64×64 cells (8 columns, 11 rows). `headphones-slash` is derived from `headphones-fill.svg`
 by masking a diagonal knockout and adding a 16-unit round-capped stroke, matching the style of
@@ -23,10 +23,10 @@ to match Phosphor's visual weight. Brand marks remain trademarks of their owners
 legal disclaimer applies. The license file is staged in both packages as
 `licenses/Simple-Icons-CC0.txt`.
 
-- `atlas.png`: 512×704 RGBA, 97,634 bytes; decoded 1,441,792 bytes.
-  SHA-256 `b4063527034e4861dfa7cbb8a294a3f54fb56934970cdefb520594eae688ed93`.
+- `atlas.png`: 512×704 RGBA, 98,932 bytes; decoded 1,441,792 bytes.
+  SHA-256 `acaf719286f4252acbbbe6cb9e591f43373c56b275be606c017718a975c84801`.
 - `index.tsv`: icon name, tab, zero-based cell; SHA-256
-  `3c99ce20309338cd7843ac66b4ed08c244293ac7c0b59510c743de02023bdf67`.
+  `0b73b42d2a2068c2d50aad411d6bb4e1ec87d76fd478f960126730ff6cccb4a7`.
 - `LICENSE`: SHA-256 `ddbe6082ec3cf979db47e5af549d2849c5d6182b3e005ef91ce1dbb9eb122f11`.
 - `LICENSE-SIMPLE-ICONS`: SHA-256
   `9046848b63a5c92bff14e4accca80bd987e0623b74adf9226ce5198d312b79d5`.
@@ -42,3 +42,6 @@ python3 tools/generate-icons.py --resvg /tmp/resvg-tool/bin/resvg
 PNG compression bytes can vary with the resvg/png versions; decoded pixels and cell indices
 are deterministic. `cargo test -p ui icons` checks that every `Icon` variant maps to a
 distinct, non-blank cell and that the atlas stays below 256 KiB.
+
+The folder and open-folder glyphs are unmodified Phosphor `folder-fill.svg` and
+`folder-open-fill.svg`, fetched from the same pinned 2.1.1 package on September 11, 2026.

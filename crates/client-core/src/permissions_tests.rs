@@ -826,3 +826,19 @@ fn member_role_display_tracks_live_role_metadata_and_membership() {
 	permission(&mut state, event);
 	assert!(state.permissions.bytes() >= before + 512);
 }
+
+#[test]
+fn history_loading_does_not_disable_authorized_sending() {
+	let mut state = state();
+	let _ = state.history(Some(Id(100)));
+	assert_eq!(state.freshness, Freshness::Loading);
+	assert!(state.can_send(Id(20)) && state.can_attach(Id(20)));
+	state.gateway_connected = false;
+	assert!(!state.can_send(Id(20)));
+	state.gateway_connected = true;
+	state.freshness = Freshness::Stale;
+	assert!(!state.can_send(Id(20)));
+	state.freshness = Freshness::Loading;
+	state.permissions.guilds.clear();
+	assert!(!state.can_send(Id(20)) && !state.can_attach(Id(20)));
+}

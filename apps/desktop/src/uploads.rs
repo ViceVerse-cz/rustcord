@@ -367,13 +367,13 @@ impl Uploads {
 		if self.uploading.as_ref().is_some_and(|job| job.cancelling) {
 			return Some("Cancelling upload; a message already sending may still arrive".into());
 		}
-		self.last.as_ref().map(|status| match status {
+		Some(match self.last.as_ref()? {
 			Status::Preparing => "Preparing attachment...".into(),
 			Status::Uploading { sent, total } => {
 				format!("Uploading attachment: {sent} / {total} bytes")
 			}
 			Status::Sending => "Sending attachment message...".into(),
-			Status::Finished => "Attachment message sent".into(),
+			Status::Finished => return None,
 			Status::Cancelled => "Attachment upload cancelled".into(),
 			Status::Failed(error) => (*error).into(),
 		})
@@ -590,6 +590,6 @@ mod tests {
 		drop(progress);
 		uploads.poll(2, Some(Id(2)), true, &context);
 		assert!(!uploads.busy());
-		assert_eq!(uploads.status().as_deref(), Some("Attachment message sent"));
+		assert_eq!(uploads.status(), None);
 	}
 }

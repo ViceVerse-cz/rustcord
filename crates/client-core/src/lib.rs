@@ -4,6 +4,7 @@ pub mod auth;
 pub mod fingerprint;
 pub mod forum;
 pub mod gifs;
+pub mod guild_folders;
 pub mod permissions;
 #[cfg(test)]
 mod permissions_tests;
@@ -35,6 +36,8 @@ pub const EVENT_SLOTS: usize = 8; // UI drain batch; reliable events share a 32 
 pub const COMMAND_SLOTS: usize = 16; // each admitted command <= 16 KiB
 
 pub enum Command {
+	/// None loads the current settings; Some saves the complete folder layout.
+	GuildFolders(Option<model::guild_folders::Settings>),
 	UserAction {
 		action: user_actions::Action,
 		request: u64,
@@ -121,6 +124,7 @@ pub enum Command {
 	},
 }
 pub enum Event {
+	GuildFolders(Result<model::guild_folders::Settings, auth::Failure>),
 	UserAction(user_actions::Event),
 	Invite {
 		code: String,
@@ -261,6 +265,9 @@ pub struct NavigationIndex {
 }
 
 pub struct State {
+	pub guild_folders: Option<model::guild_folders::Settings>,
+	pub folders_pending: bool,
+	pub folders_error: Option<&'static str>,
 	pub user_actions: user_actions::Actions,
 	pub typing: typing::Typing,
 	pub permissions: permissions::Permissions,
@@ -319,6 +326,9 @@ pub struct State {
 impl Default for State {
 	fn default() -> Self {
 		Self {
+			guild_folders: None,
+			folders_pending: false,
+			folders_error: None,
 			user_actions: user_actions::Actions::default(),
 			typing: typing::Typing::default(),
 			permissions: permissions::Permissions::default(),
@@ -724,6 +734,12 @@ impl State {
 		})
 	}
 	pub fn command_rejected(&mut self, command: Command) {
+		if matches!(command, Command::GuildFolders(_)) {
+			self.apply_guild_folders(Err(auth::Failure::ProtocolAt(
+				"Server organization was not queued; try again",
+			)));
+			return;
+		}
 		if let Command::UserAction { action, request } = command {
 			let _ = self.apply_user_action(user_actions::Event::Written {
 				action,
@@ -992,6 +1008,10 @@ impl State {
 			self.clear_search();
 		}
 		let result = match envelope.event {
+			Event::GuildFolders(result) => {
+				self.apply_guild_folders(result);
+				Ok(())
+			}
 			Event::Typing(_) => unreachable!("typing is handled before timeline invalidation"),
 			Event::Permissions(mut event) => {
 				let known = |id: Id| self.guild(id).is_some();
@@ -1876,6 +1896,10 @@ impl State {
 			_ => {}
 		}
 		if failure.ends_session() {
+			if self.folders_pending {
+				self.folders_pending = false;
+				self.folders_error = Some(failure.label());
+			}
 			self.cancel_user_action();
 			self.direct_presences.clear();
 			self.direct_presence_bytes = None;
@@ -1934,6 +1958,9 @@ impl Event {
 	pub fn bytes(&self) -> usize {
 		size_of::<Self>()
 			+ match self {
+				Self::GuildFolders(result) => result
+					.as_ref()
+					.map_or(0, model::guild_folders::Settings::heap_bytes),
 				Self::UserAction(user_actions::Event::Relationships(entries)) => entries
 					.as_ref()
 					.map_or(0, |e| e.capacity() * size_of::<(Id, bool)>()),

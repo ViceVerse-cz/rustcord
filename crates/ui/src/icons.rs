@@ -102,10 +102,12 @@ pub enum Icon {
 	Roblox,
 	Crunchyroll,
 	Ebay,
+	Folder,
+	FolderOpen,
 }
 
 impl Icon {
-	pub const ALL: [Icon; 86] = [
+	pub const ALL: [Icon; 88] = [
 		Icon::ChevronDown,
 		Icon::ChevronRight,
 		Icon::Gear,
@@ -192,10 +194,14 @@ impl Icon {
 		Icon::Roblox,
 		Icon::Crunchyroll,
 		Icon::Ebay,
+		Icon::Folder,
+		Icon::FolderOpen,
 	];
 	/// Upstream icon name recorded in `index.tsv`.
 	fn asset(self) -> &'static str {
 		match self {
+			Icon::Folder => "folder",
+			Icon::FolderOpen => "folder-open",
 			Icon::ChevronDown => "caret-down",
 			Icon::ChevronRight => "caret-right",
 			Icon::Gear => "gear",

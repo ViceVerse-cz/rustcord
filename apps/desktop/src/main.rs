@@ -1039,6 +1039,9 @@ impl Desktop {
 		}
 		if self.state.demo {
 			let event = match command {
+				Command::GuildFolders(settings) => {
+					Event::GuildFolders(Ok(settings.unwrap_or_default()))
+				}
 				Command::UserAction { action, request } => {
 					Event::UserAction(client_core::user_actions::Event::Written {
 						action,

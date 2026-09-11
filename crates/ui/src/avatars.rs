@@ -442,7 +442,7 @@ impl Avatars {
 			.collect();
 		let colors = crate::design::palette(ui);
 		let (rect, response) =
-			ui.allocate_exact_size(egui::Vec2::splat(48.0), egui::Sense::click());
+			ui.allocate_exact_size(egui::Vec2::splat(48.0), egui::Sense::click_and_drag());
 		let rounded = selected || response.hovered() || response.has_focus();
 		let radius: u8 = if rounded { 16 } else { 24 };
 		let mut painted = false;

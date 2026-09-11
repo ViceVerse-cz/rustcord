@@ -558,6 +558,7 @@ impl TimelineView {
 			.auto_shrink([false, false])
 			.stick_to_bottom(self.following);
 		let total: f32 = self.rows.iter().map(|(_, height)| height).sum();
+		let end_padding = 16.0;
 		self.pending_heights.retain(|nonce, _| {
 			state
 				.pending
@@ -592,7 +593,7 @@ impl TimelineView {
 			.collect();
 		if std::mem::take(&mut self.jump) {
 			offset = Some(
-				(total + pending_rows.iter().map(|(_, height)| height).sum::<f32>()
+				(total + end_padding + pending_rows.iter().map(|(_, height)| height).sum::<f32>()
 					- ui.available_height())
 				.max(0.0),
 			);
@@ -1223,6 +1224,8 @@ impl TimelineView {
 				}
 				self.pending_heights.insert(pending.nonce.clone(), measured);
 			}
+			// Only the end of the conversation has extra space; it scrolls with the messages.
+			ui.add_space(end_padding);
 			// Visible rows occupy their measured height immediately; leading overscan
 			// still occupies its old height until the next anchored pass.
 			for (index, (_, _, height)) in (first..end).zip(&measurements) {
@@ -1315,6 +1318,20 @@ impl TimelineView {
 		// are painted after the scroll area so they sit above the messages and win the hit-test.
 		let colors = crate::design::palette(ui);
 		let area = output.inner_rect;
+		let fade_rect = egui::Rect::from_min_max(
+			egui::pos2(area.left(), (area.bottom() - 12.0).max(area.top())),
+			area.right_bottom(),
+		);
+		let mut fade = egui::Mesh::default();
+		fade.colored_vertex(fade_rect.left_top(), egui::Color32::TRANSPARENT);
+		fade.colored_vertex(fade_rect.right_top(), egui::Color32::TRANSPARENT);
+		fade.colored_vertex(fade_rect.right_bottom(), colors.chat.gamma_multiply(0.85));
+		fade.colored_vertex(fade_rect.left_bottom(), colors.chat.gamma_multiply(0.85));
+		fade.add_triangle(0, 1, 2);
+		fade.add_triangle(0, 2, 3);
+		ui.painter()
+			.with_clip_rect(area)
+			.add(egui::Shape::mesh(fade));
 		if can_jump_unread || can_load_newer {
 			let mut jump_unread = false;
 			let mut load_newer = false;
