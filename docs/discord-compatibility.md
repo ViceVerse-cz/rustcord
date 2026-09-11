@@ -553,6 +553,15 @@ guarantee whole-frame delivery universally; this SDK also has a 16,384-byte read
 including the header. Normal READY/activity acknowledgements fit comfortably within it;
 a maximum-sized 16 KiB PONG payload remains outside that SDK's single-read capacity.
 
+Own activity display (September 11, 2026): the accepted local game report now carries
+name, details, state and a registered artwork reference into one bounded session value.
+The existing profile/member selectors use it for the current account without depending
+on a Gateway self-presence echo. This is local presentation, not confirmation of remote
+publication. Stopping sharing, clearing/disconnecting the game or ending the session
+removes the local value; existing remote presence remains available as a fallback.
+Other users and remote presence caches are unchanged. Synthetic rendered tests cover
+both surfaces, same-game detail changes, clearing, dark/light and narrow/wide layouts.
+
 ### Server folders (September 11, 2026)
 
 Server ordering, grouping, folder names and RGB colors use the normal-user

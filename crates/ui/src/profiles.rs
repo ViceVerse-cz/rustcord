@@ -45,7 +45,7 @@ pub(crate) fn presence(
 	user: Id,
 	guild: Option<Id>,
 ) -> (Option<&str>, Option<&str>, &[model::RichActivity]) {
-	if let Some(member) = state
+	let remote = if let Some(member) = state
 		.members
 		.as_ref()
 		.filter(|list| {
@@ -59,21 +59,23 @@ pub(crate) fn presence(
 		})
 		.filter(|_| state.demo || state.gateway_connected)
 	{
-		return (
+		(
 			member.status.as_deref(),
 			member.custom_status.as_deref(),
-			&member.activities,
-		);
-	}
-	state
-		.presence_for(user)
-		.map_or((None, None, &[]), |presence| {
-			(
-				presence.status.as_deref(),
-				presence.custom_status.as_deref(),
-				presence.activities.as_slice(),
-			)
-		})
+			member.activities.as_slice(),
+		)
+	} else {
+		state
+			.presence_for(user)
+			.map_or((None, None, &[][..]), |presence| {
+				(
+					presence.status.as_deref(),
+					presence.custom_status.as_deref(),
+					presence.activities.as_slice(),
+				)
+			})
+	};
+	with_local_activity(state, user, remote)
 }
 
 pub(crate) fn member_presence<'a>(
@@ -81,28 +83,42 @@ pub(crate) fn member_presence<'a>(
 	member: &'a model::Member,
 	guild: Option<Id>,
 ) -> (Option<&'a str>, Option<&'a str>, &'a [model::RichActivity]) {
-	if guild.is_some()
-		&& state
-			.members
-			.as_ref()
-			.is_some_and(|list| list.guild == guild && list.freshness == model::Freshness::Fresh)
-		&& (state.demo || state.gateway_connected)
+	let remote =
+		if guild.is_some()
+			&& state.members.as_ref().is_some_and(|list| {
+				list.guild == guild && list.freshness == model::Freshness::Fresh
+			}) && (state.demo || state.gateway_connected)
+		{
+			(
+				member.status.as_deref(),
+				member.custom_status.as_deref(),
+				member.activities.as_slice(),
+			)
+		} else {
+			state
+				.presence_for(member.user.id)
+				.map_or((None, None, &[][..]), |p| {
+					(
+						p.status.as_deref(),
+						p.custom_status.as_deref(),
+						p.activities.as_slice(),
+					)
+				})
+		};
+	with_local_activity(state, member.user.id, remote)
+}
+
+fn with_local_activity<'a>(
+	state: &'a State,
+	user: Id,
+	remote: (Option<&'a str>, Option<&'a str>, &'a [model::RichActivity]),
+) -> (Option<&'a str>, Option<&'a str>, &'a [model::RichActivity]) {
+	if state.user.as_ref().is_some_and(|own| own.id == user)
+		&& let Some(activity) = state.local_game_activity()
 	{
-		(
-			member.status.as_deref(),
-			member.custom_status.as_deref(),
-			&member.activities,
-		)
+		(remote.0, remote.1, std::slice::from_ref(activity))
 	} else {
-		state
-			.presence_for(member.user.id)
-			.map_or((None, None, &[]), |p| {
-				(
-					p.status.as_deref(),
-					p.custom_status.as_deref(),
-					p.activities.as_slice(),
-				)
-			})
+		remote
 	}
 }
 

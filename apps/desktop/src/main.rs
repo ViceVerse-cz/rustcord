@@ -515,7 +515,12 @@ impl Desktop {
 			if let Some(list) = &state.members {
 				state.members = Some(demo_members(list.guild, list.channel, list.request));
 			}
-			messaging.preview_profile(test_support::message(1, model::Id(20)).author);
+			let user = if messaging.share_game_activity {
+				state.user.clone().expect("demo has a current user")
+			} else {
+				test_support::message(1, model::Id(20)).author
+			};
+			messaging.preview_profile(user);
 			state.status = "Offline fixture · synthetic profile card opened at startup";
 		}
 		if demo && std::env::args().any(|arg| arg == "--demo-pins") {
@@ -826,17 +831,20 @@ impl Desktop {
 			self.messaging.game_activity_status,
 		);
 		if self.state.demo {
-			self.messaging.own_game = self
+			let activity = self
 				.messaging
 				.share_game_activity
-				.then(|| "Playing osu!".to_owned());
+				.then(game_activity::demo_activity);
+			self.messaging.own_game = activity.as_ref().map(model::RichActivity::summary);
+			let changed = self.state.set_local_game_activity(activity);
 			self.messaging.game_activity_status =
 				"Offline preview: synthetic activity, never shared or saved.";
-			if previous
-				!= (
-					self.messaging.own_game.clone(),
-					self.messaging.game_activity_status,
-				) {
+			if changed
+				|| previous
+					!= (
+						self.messaging.own_game.clone(),
+						self.messaging.game_activity_status,
+					) {
 				ctx.request_repaint();
 			}
 			return;
@@ -860,6 +868,7 @@ impl Desktop {
 			self.cache_pending += usize::from(accepted);
 		}
 		self.messaging.own_game = None;
+		let mut own_activity = None;
 		self.messaging.game_activity_status = self.game_activity.status();
 		if let Some(connection) = &self.connection {
 			connection.share_activity.send_if_modified(|enabled| {
@@ -871,16 +880,21 @@ impl Desktop {
 			});
 			if self.game_activity.enabled && self.state.gateway_connected {
 				match &*connection.game_activity.borrow() {
-					Ok(game) => self.messaging.own_game = game.clone(),
+					Ok(game) => {
+						self.messaging.own_game = game.as_ref().map(model::RichActivity::summary);
+						own_activity = game.clone();
+					}
 					Err(error) => self.messaging.game_activity_status = error,
 				}
 			}
 		}
-		if previous
-			!= (
-				self.messaging.own_game.clone(),
-				self.messaging.game_activity_status,
-			) {
+		let changed = self.state.set_local_game_activity(own_activity);
+		if changed
+			|| previous
+				!= (
+					self.messaging.own_game.clone(),
+					self.messaging.game_activity_status,
+				) {
 			ctx.request_repaint();
 		}
 	}

@@ -9,7 +9,7 @@ use tokio::{
 	time::{Instant, timeout},
 };
 
-pub type Detection = Result<Option<String>, &'static str>;
+pub type Detection = Result<Option<model::RichActivity>, &'static str>;
 const MAX_CLIENTS: usize = 8;
 type Update = (usize, Option<Activity>);
 
@@ -130,18 +130,7 @@ fn publish(
 		.flatten()
 		.max_by_key(|(at, _)| *at)
 		.map(|(_, value)| value.clone());
-	let summary = latest.as_ref().map(|value| {
-		format!(
-			"{} {}",
-			match value.kind {
-				2 => "Listening to",
-				3 => "Watching",
-				5 => "Competing in",
-				_ => "Playing",
-			},
-			value.name
-		)
-	});
+	let display = latest.as_ref().map(display_activity);
 	activity.send_if_modified(|current| {
 		if *current == latest {
 			return false;
@@ -150,13 +139,53 @@ fn publish(
 		true
 	});
 	if report.send_if_modified(|current| {
-		if *current == Ok(summary.clone()) {
+		if *current == Ok(display.clone()) {
 			return false;
 		}
-		*current = Ok(summary);
+		*current = Ok(display);
 		true
 	}) {
 		ctx.request_repaint();
+	}
+}
+
+fn display_activity(activity: &Activity) -> model::RichActivity {
+	let text = |value: &Option<String>| {
+		value
+			.as_deref()
+			.map(str::trim)
+			.filter(|text| !text.is_empty())
+			.map(str::to_owned)
+	};
+	let image = activity
+		.assets
+		.as_ref()
+		.and_then(|assets| {
+			[&assets.large_image, &assets.small_image]
+				.into_iter()
+				.flatten()
+				.find_map(|id| id.parse().ok())
+		})
+		.map(|asset| model::ActivityImage::Asset {
+			application: activity.application_id,
+			asset,
+		});
+	model::RichActivity {
+		kind: activity.kind,
+		name: activity.name.trim().to_owned(),
+		details: text(&activity.details),
+		state: text(&activity.state),
+		image: Some(image.unwrap_or(model::ActivityImage::Application(activity.application_id))),
+	}
+}
+
+pub fn demo_activity() -> model::RichActivity {
+	model::RichActivity {
+		kind: 0,
+		name: "osu!".into(),
+		details: Some("Playing a synthetic beatmap".into()),
+		state: Some("Solo".into()),
+		image: None,
 	}
 }
 
@@ -526,9 +555,30 @@ mod tests {
 		values[1] = None;
 		publish(&values, &activity, &report, &egui::Context::default());
 		assert_eq!(*activity.borrow(), Some(first));
+		let first = values[0].as_mut().unwrap();
+		first.1.details = Some("  Next beatmap  ".into());
+		first.1.state = Some(" ".into());
+		first.1.assets = Some(rpc::Assets {
+			large_image: Some("99".into()),
+			..Default::default()
+		});
+		publish(&values, &activity, &report, &egui::Context::default());
+		let display = report.borrow().as_ref().unwrap().clone().unwrap();
+		assert!(display.valid());
+		assert_eq!(display.summary(), "Playing First game");
+		assert_eq!(display.details.as_deref(), Some("Next beatmap"));
+		assert!(display.state.is_none());
+		assert_eq!(
+			display.image,
+			Some(model::ActivityImage::Asset {
+				application: model::Id(7),
+				asset: model::Id(99),
+			})
+		);
 		values[0] = None;
 		publish(&values, &activity, &report, &egui::Context::default());
 		assert!(activity.borrow().is_none());
+		assert_eq!(*report.borrow(), Ok(None));
 	}
 	#[tokio::test]
 	async fn disable_and_sender_close_cancel_the_session_and_clear_latest() {

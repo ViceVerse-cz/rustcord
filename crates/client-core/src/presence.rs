@@ -4,6 +4,8 @@ use model::{MemberPresence, Patch, RichActivity};
 pub const MAX_DIRECT_PRESENCES: usize = 256;
 pub const MAX_DIRECT_PRESENCE_BYTES: usize = 512 * 1024;
 
+pub const MAX_LOCAL_GAME_ACTIVITY_BYTES: usize = 4 * 1024;
+
 #[derive(Clone)]
 pub struct Update {
 	pub user: Id,
@@ -111,6 +113,34 @@ pub fn projected_row_bytes(row: &model::Member, update: &MemberPresence) -> usiz
 }
 
 impl State {
+	pub fn local_game_activity(&self) -> Option<&RichActivity> {
+		(self.user.is_some()
+			&& (self.demo
+				|| (self.gateway_connected && self.auth == crate::auth::AuthState::Authenticated)))
+			.then_some(self.local_game_activity.as_ref())
+			.flatten()
+	}
+
+	/// Updates only local presentation, never the remote presence caches or timeline revision.
+	pub fn set_local_game_activity(&mut self, activity: Option<RichActivity>) -> bool {
+		if activity.as_ref().is_some_and(|activity| {
+			!activity.valid() || activity.heap_bytes() > MAX_LOCAL_GAME_ACTIVITY_BYTES
+		}) {
+			return false;
+		}
+		let next = activity.filter(|_| {
+			self.user.is_some()
+				&& (self.demo
+					|| (self.gateway_connected
+						&& self.auth == crate::auth::AuthState::Authenticated))
+		});
+		if self.local_game_activity == next {
+			return false;
+		}
+		self.local_game_activity = next;
+		true
+	}
+
 	fn known_direct_recipient(&self, user: Id) -> bool {
 		self.channels.iter().any(|c| {
 			c.guild.is_none()
@@ -362,6 +392,78 @@ mod tests {
 
 	fn row(state: &State) -> &Member {
 		state.members.as_ref().unwrap().rows[0].as_ref().unwrap()
+	}
+
+	#[test]
+	fn local_game_activity_is_bounded_coalesced_and_cleared_at_session_boundaries() {
+		let game = RichActivity {
+			kind: 0,
+			name: "osu!".into(),
+			details: Some("Playing a map".into()),
+			state: None,
+			image: None,
+		};
+		let mut state = state();
+		let revision = state.revision;
+		assert!(state.set_local_game_activity(Some(game.clone())));
+		let allocation = state.local_game_activity().unwrap().name.as_ptr();
+		assert!(!state.set_local_game_activity(Some(game.clone())));
+		assert_eq!(
+			state.local_game_activity().unwrap().name.as_ptr(),
+			allocation
+		);
+		let mut invalid = game.clone();
+		invalid.name = "x".repeat(129);
+		assert!(!state.set_local_game_activity(Some(invalid)));
+		let mut oversized = game.clone();
+		oversized.name = String::with_capacity(MAX_LOCAL_GAME_ACTIVITY_BYTES + 1);
+		oversized.name.push_str("osu!");
+		assert!(!state.set_local_game_activity(Some(oversized)));
+		assert_eq!(state.local_game_activity(), Some(&game));
+		assert_eq!(state.revision, revision);
+		for event in [
+			Event::Disconnected,
+			Event::Resync,
+			Event::Failure(crate::auth::Failure::Expired),
+		] {
+			state.auth = AuthState::Authenticated;
+			state.gateway_connected = true;
+			state.set_local_game_activity(Some(game.clone()));
+			apply(&mut state, event);
+			assert!(state.local_game_activity.is_none());
+		}
+		state.auth = AuthState::Authenticated;
+		state.gateway_connected = false;
+		assert!(!state.set_local_game_activity(Some(game.clone())));
+		state.gateway_connected = true;
+		state.auth = AuthState::Authenticating;
+		assert!(!state.set_local_game_activity(Some(game.clone())));
+		state.demo = true;
+		assert!(state.set_local_game_activity(Some(game.clone())));
+		state.user = None;
+		assert!(state.local_game_activity().is_none());
+		assert!(state.set_local_game_activity(None));
+		state = self::state();
+		state.set_local_game_activity(Some(game.clone()));
+		apply(
+			&mut state,
+			Event::Ready {
+				permissions: model::permissions::Snapshot::default(),
+				user: User {
+					id: Id(999),
+					name: "Different account".into(),
+					avatar: None,
+					discriminator: 0,
+				},
+				guilds: vec![],
+				channels: vec![],
+			},
+		);
+		assert!(state.local_game_activity.is_none());
+		state = self::state();
+		state.set_local_game_activity(Some(game));
+		state.logout();
+		assert!(state.local_game_activity.is_none());
 	}
 
 	#[test]
