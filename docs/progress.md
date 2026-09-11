@@ -2637,3 +2637,41 @@ not applicable. Linux/macOS and live game-to-Gateway publication remain unverifi
 Owner reproduction: fully quit competing Discord clients, launch the corrected Serein
 build, enable sharing and restart osu!. This does not enable simultaneous publication
 to two local clients. The original main checkout and running owner session were preserved.
+
+
+### Own profile/member game activity - September 11, 2026
+
+Baseline clean main `5c42350`, isolated branch `fix/own-game-presence`; original checkout
+and owner session preserved. The activity report previously retained only footer/settings
+text while profiles and member rows read remote presence. It now carries bounded details,
+state and registered artwork to one local display value. Both shared selectors prefer it
+for the current account, preserving status/custom fields, remote caches and other users.
+Same-game changes repaint; stopping/clearing/disconnecting removes the local value.
+Ready/resync/session failure/logout clear it too; remote other-session activity remains
+the fallback. This local display is not confirmation of remote Discord publication.
+
+Verification:
+
+- `cargo test --locked -p client-core local_game_activity`: 1 passed, covering byte bounds,
+  coalescing, disconnected/auth gates and account/session cleanup.
+- `cargo test --locked -p serein --features voice game_activity::tests`: 7 passed, including
+  report detail/artwork conversion, replacement/fallback and clear.
+- `cargo test --locked -p ui --test own_activity`: 2 passed. New rendered coverage checks
+  both own profile/member labels without footer help, first/second beatmap changes, clear,
+  remote fallback and peer isolation in dark/light at 760/1120 logical-pixel widths.
+- `cargo xtask check`: inherited `crates/ui/src/timeline.rs:1107` format failure; later
+  stages did not run. An attempted UI lib test additionally found pre-existing E0061
+  errors at `avatars.rs:1003,1018` (missing show_media cover argument). No unrelated fixes.
+- `cargo xtask policy`, targeted rustfmt and `git diff --check`: pass.
+- `cargo xtask package` and `cargo xtask package-voice`: pass. Existing realfft 3.5.0
+  upstream license-evidence warning remains. Executables +8,192 text / +7,680 voice bytes;
+  complete package, native process and replay measurements are in docs/performance.md.
+
+Native before/after screenshots in `docs/pr-evidence/own-game-presence` show synthetic
+own profile and server member rows. Captured only the demo HWND with Windows PrintWindow
+and inspected both images; Orca CLI is unavailable. Both use the same theme/viewport/scale;
+the old card was selected manually, the changed demo flag combination opens it directly.
+The activity section increases card height and uses its existing scroll area. Dark/light
+and narrow/wide render behavior is covered by the integration test. No live account,
+message, call or microphone action; Linux/macOS and remote publication remain unverified.
+Draft PR for inherited full-check failures. No changes to settings explanatory text.

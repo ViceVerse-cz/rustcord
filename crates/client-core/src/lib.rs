@@ -317,6 +317,7 @@ pub struct State {
 	pub user: Option<User>,
 	pub members: Option<MemberList>,
 	pub direct_presences: Vec<MemberPresence>,
+	pub local_game_activity: Option<model::RichActivity>,
 	#[doc(hidden)]
 	pub direct_presence_bytes: Option<(usize, usize)>,
 	pub member_request: u64,
@@ -378,6 +379,7 @@ impl Default for State {
 			user: None,
 			members: None,
 			direct_presences: vec![],
+			local_game_activity: Default::default(),
 			direct_presence_bytes: None,
 			member_request: 0,
 			guilds: vec![],
@@ -942,6 +944,12 @@ impl State {
 		self.reply_deletions.0.clear();
 		if envelope.generation != self.generation {
 			return;
+		}
+		if matches!(
+			envelope.event,
+			Event::Ready { .. } | Event::Disconnected | Event::Resync
+		) {
+			self.local_game_activity = Default::default();
 		}
 		if let Event::Typing(signal) = &envelope.event {
 			self.observe_typing_at(
@@ -1954,6 +1962,7 @@ impl State {
 			_ => {}
 		}
 		if failure.ends_session() {
+			self.local_game_activity = Default::default();
 			self.cancel_message_actions();
 			if self.folders_pending {
 				self.folders_pending = false;

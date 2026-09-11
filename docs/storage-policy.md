@@ -352,6 +352,13 @@ A 16-item update queue carries activities bounded to 1,152 string bytes plus fix
 eight latest per-client activities and the Gateway current/last values have the same bound.
 The latest updated connected game wins; clearing/disconnecting it restores another active game.
 
+The UI report retains that game's name/details/state (at most 384 UTF-8 bytes) and one
+fixed-size registered artwork/application reference. The state owner keeps one validated
+local display activity capped at 4 KiB of retained heap. Profile cards and member rows
+borrow it for the current account, without copying it into remote presence caches.
+It is not persisted and is cleared on sharing/game/session teardown. Equal reports do
+not invalidate the timeline; changed details/artwork repaint even when the name is unchanged.
+
 Each connection lazily requests public application metadata and registered assets once, using
 credential-free HTTPS with redirects/proxies disabled and ten-second request deadlines.
 A shared lookup mutex serializes requests and preserves Retry-After cooldowns across clients.

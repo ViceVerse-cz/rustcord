@@ -2461,3 +2461,48 @@ endpoint or account was used. The shared writer now assembles one temporary buff
 bounded at 16,392 bytes per writing client (131,136 bytes across the eight-client limit).
 Normal READY/ACK frames are smaller. Input limits and five-second write timeout remain.
 No native UI changed; screenshots and UI-process sampling are not applicable.
+
+
+## Own profile/member game activity - September 11, 2026
+
+Baseline `5c42350`, branch `fix/own-game-presence`. Reused the verified prior task's
+text/voice binaries built at `1a4a063`: both commits have identical source tree
+`4bb824e85b18f1ca6db1125db7e7b0c4260b72d1`. Binary SHA-256 values and raw samples
+are in `docs/pr-evidence/own-game-presence/measurements.json`. Baseline package docs
+reflect the prior build's evidence snapshot; executable source equivalence was checked.
+Both changed variants were rebuilt with locked Rust 1.98.1 release settings.
+
+Windows 11 Home 10.0.26200, Ryzen 7 7800X3D / 16 logical processors, 33,410,678,784
+bytes visible RAM. Native text-only demo, wgpu (adapter unmeasured), 1400x950 pixels,
+125% scale, dark theme; own profile and People open with synthetic activity.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| text exe (bytes) | 54,848,000 | 54,856,192 | +8,192 (+0.01%) |
+| text installed (bytes) | 59,723,935 | 59,737,666 | +13,731 (+0.02%) |
+| text zip (bytes) | 35,281,371 | 35,284,568 | +3,197 (+0.01%) |
+| voice exe (bytes) | 59,944,448 | 59,952,128 | +7,680 (+0.01%) |
+| voice installed (bytes) | 66,141,182 | 66,153,326 | +12,144 (+0.02%) |
+| voice zip (bytes) | 37,896,986 | 37,904,623 | +7,637 (+0.02%) |
+| working_set_median (bytes) | 168,202,240 | 167,755,776 | -446,464 (-0.27%) |
+| private_bytes_median (bytes) | 398,155,776 | 395,669,504 | -2,486,272 (-0.62%) |
+| Idle CPU, one logical core (percent) | 0.1723 | 0 | -0.1723 (-100.00%) |
+| Reducer replay median (ms) | 45.6102 | 40.1286 | -5.4816 (-12.02%) |
+
+Installed sums include 670 text / 912 voice files; text excludes nested voice files.
+Archives use sorted paths and Python zipfile DEFLATE level 9. Package docs were copied
+before this task's final evidence appends. One package per variant/revision.
+
+Native process samples: at least ten seconds settling, then ten samples about one second
+apart. Baseline settled longer while the own card was selected; after opens it directly
+with `--demo --demo-profile --demo-game-activity`. This timing/interaction difference,
+normal allocator noise, and concurrent local builds limit comparison; no CPU/memory gain
+is claimed. Only the demo process was sampled; child/helper memory, frame/startup p95,
+GPU allocations and live-account load remain unmeasured.
+
+Reducer replay: one warmup plus five measured runs per revision, 100,000 events each.
+Both retain 500 records and 236,992..237,477 estimated timeline bytes. The baseline uses
+the verified identical-tree replay executable from the prior build; after was rebuilt.
+This workload does not exercise local game publication or UI; its noisy delta is not a
+performance improvement claim. The local view adds one activity capped at 4 KiB retained
+heap; selectors borrow it and equal activity reports do not invalidate the timeline.
