@@ -322,7 +322,7 @@ stream/buffers on cancellation. Pausing retains the current bounded decoded clip
 
 Sharing is off by default. The application-wide `game_activity` SQLite singleton stores
 one constrained boolean; disabling deletes the override. The independent additive table
-is created even for existing schema-10 databases, requires no message migration, and survives
+is created even for existing schema-10/12 databases, requires no message migration, and survives
 account logout like appearance. A failed load stays off; failed writes are visible in settings.
 Preview controls never load or save this preference.
 

@@ -2235,3 +2235,16 @@ Final `cargo xtask package` and `cargo xtask package-voice` both passed (1m16s/1
 Text executable: 53,962,240 bytes (+84,992); voice: 59,069,952 bytes (+88,064).
 Matched default-off idle sampling observed 0.015625 CPU seconds over ten seconds on each
 revision; process memory changes are small/noisy. Full figures and limitations are in performance.md.
+
+#### Main synchronization (September 11, 2026)
+
+Merged `origin/main` at `ea68e0e` into the activity branch at the owner's request.
+Resolved the single local-store conflict by keeping the independent game_activity table
+and main's schema-12 GIF animation/media-link preference migration in the same transaction.
+Preserved main's GIF and composer changes and formatted its merged avatar handoff.
+
+Validation: all 17 local-store tests passed, the own_activity UI integration test passed,
+and all three desktop game_activity tests passed with all features. `cargo xtask check`
+was retried and still stops at the existing permissions.rs:439 Clippy question_mark warning.
+Earlier release packages/performance figures describe `ed28dbb`, not this integrated merge;
+no new release/package, native screenshot or live Discord claim is made for the merge.

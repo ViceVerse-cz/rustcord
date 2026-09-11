@@ -398,6 +398,8 @@ mod tests {
 			zoom_percent: 125,
 			sidebar_width: 300,
 			show_members: false,
+			animate_gifs: false,
+			hide_media_links: true,
 		};
 		store
 			.as_mut()

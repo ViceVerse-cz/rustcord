@@ -17,6 +17,14 @@ use std::{
 use tokio::sync::{mpsc as async_mpsc, watch};
 
 const MAX_ENCODED: usize = 2 * 1024 * 1024;
+const MAX_ANIMATED_ENCODED: usize = 8 * 1024 * 1024;
+fn encoded_limit(key: &str) -> usize {
+	if key.starts_with("anim:") {
+		MAX_ANIMATED_ENCODED
+	} else {
+		MAX_ENCODED
+	}
+}
 const MAX_AVATAR_ENCODED: usize = 512 * 1024;
 const MAX_APPLICATION_METADATA: usize = 64 * 1024;
 const MAX_DISK: u64 = 1024 * 1024 * 1024;
@@ -28,6 +36,7 @@ pub type Cleanup = mpsc::Receiver<Result<(), &'static str>>;
 pub struct AvatarResult {
 	pub key: String,
 	pub image: Option<egui::ColorImage>,
+	pub frames: ui::GifFrames,
 	pub error: Option<&'static str>,
 }
 
@@ -162,10 +171,26 @@ fn cdn_url(key: &str) -> Option<String> {
 			});
 		}
 	}
+	if let Some(source) = key.strip_prefix("anim:") {
+		if model::valid_gif_url(source) && source.ends_with(".gif") {
+			return Some(source.to_owned());
+		}
+		let mut url = url::Url::parse(&embed_url(source)?).ok()?;
+		let query: Vec<_> = url
+			.query_pairs()
+			.filter(|(key, _)| key != "format")
+			.map(|(k, v)| (k.into_owned(), v.into_owned()))
+			.collect();
+		url.set_query(None);
+		url.query_pairs_mut()
+			.extend_pairs(query)
+			.append_pair("format", "gif");
+		return Some(url.into());
+	}
 	if let Some(source) = key.strip_prefix("embed:") {
 		return embed_url(source);
 	}
-	// Tenor previews arrive only inside a service GIF result; the address is used verbatim.
+	// Provider previews arrive only inside a service GIF result; the address is used verbatim.
 	if let Some(source) = key.strip_prefix("gif:") {
 		return model::valid_gif_preview(source).then(|| source.to_owned());
 	}
@@ -285,7 +310,7 @@ fn application_icon_url(key: &str, bytes: &[u8]) -> Option<String> {
 
 fn disk_key(key: &str) -> Option<String> {
 	cdn_url(key)?;
-	if key.starts_with("embed:") || key.starts_with("gif:") {
+	if key.starts_with("anim:") || key.starts_with("embed:") || key.starts_with("gif:") {
 		Some(format!("embed-{:x}", Sha256::digest(key.as_bytes())))
 	} else {
 		Some(key.to_owned())
@@ -330,7 +355,7 @@ async fn run(
 					Ok(bytes) => bytes,
 					Err(_) => { error = Some(CACHE_ERROR); None }
 				});
-				let embed = key.starts_with("embed:") || key.starts_with("gif:")
+				let embed = key.starts_with("anim:") || key.starts_with("embed:") || key.starts_with("gif:")
 					|| key.starts_with("banner-") || key.starts_with("member-banner-");
 				let image = cached.as_deref().and_then(|bytes| decode(bytes, embed));
 				if image.is_none() && Instant::now() >= cooldown && let Some(client) = &client {
@@ -342,7 +367,7 @@ async fn run(
 								let metadata = download(&client, &url, &mut until, MAX_APPLICATION_METADATA).await?;
 								application_icon_url(&key, &metadata)?
 							} else { url };
-							download(&client, &url, &mut until, MAX_ENCODED).await
+							download(&client, &url, &mut until, encoded_limit(&key)).await
 						}.await;
 						(key, bytes, until)
 					});
@@ -354,12 +379,24 @@ async fn run(
 		if *cancelled.borrow() {
 			break;
 		}
-		let embed = key.starts_with("embed:")
+		let embed = key.starts_with("anim:")
+			|| key.starts_with("embed:")
 			|| key.starts_with("gif:")
 			|| key.starts_with("banner-")
 			|| key.starts_with("member-banner-");
-		let image =
+		let mut image =
 			cached_image.or_else(|| bytes.as_deref().and_then(|bytes| decode(bytes, embed)));
+		let frames = if key.starts_with("anim:") {
+			bytes
+				.as_deref()
+				.and_then(decode_animation)
+				.unwrap_or_default()
+		} else {
+			Vec::new()
+		};
+		if image.is_none() {
+			image = frames.first().map(|(_, image)| image.as_ref().clone());
+		}
 		if fetched
 			&& image.is_some()
 			&& let (Some(disk), Some(bytes)) = (&mut disk, &bytes)
@@ -373,7 +410,7 @@ async fn run(
 		tokio::select! {
 			biased;
 			_ = cancelled.changed() => break,
-			result = results.send(AvatarResult { key, image, error }) => if result.is_err() { break },
+			result = results.send(AvatarResult { key, image, frames, error }) => if result.is_err() { break },
 		}
 		ctx.request_repaint();
 	}
@@ -425,13 +462,16 @@ async fn download(
 fn decode(bytes: &[u8], embed: bool) -> Option<egui::ColorImage> {
 	if bytes.len()
 		> if embed {
-			MAX_ENCODED
+			MAX_ANIMATED_ENCODED
 		} else {
 			MAX_AVATAR_ENCODED
 		} {
 		return None;
 	}
-	let mut reader = image::ImageReader::with_format(Cursor::new(bytes), image::ImageFormat::Png);
+	// Provider previews can be GIF/JPEG/WebP; decode only the first frame, within limits.
+	let mut reader = image::ImageReader::new(Cursor::new(bytes))
+		.with_guessed_format()
+		.ok()?;
 	let mut limits = image::Limits::default();
 	limits.max_image_width = Some(if embed { 1024 } else { 256 });
 	limits.max_image_height = Some(if embed { 1024 } else { 256 });
@@ -443,6 +483,74 @@ fn decode(bytes: &[u8], embed: bool) -> Option<egui::ColorImage> {
 		[image.width() as usize, image.height() as usize],
 		image.as_raw(),
 	))
+}
+
+fn decode_animation(bytes: &[u8]) -> Option<ui::GifFrames> {
+	use image::{AnimationDecoder, ImageDecoder};
+	if bytes.len() > MAX_ANIMATED_ENCODED {
+		return None;
+	}
+	let mut limits = image::Limits::default();
+	limits.max_image_width = Some(1024);
+	limits.max_image_height = Some(1024);
+	limits.max_alloc = Some(8 * 1024 * 1024);
+	let decoded = match image::guess_format(bytes).ok()? {
+		image::ImageFormat::Gif => {
+			let mut decoder = image::codecs::gif::GifDecoder::new(Cursor::new(bytes)).ok()?;
+			decoder.set_limits(limits).ok()?;
+			decoder.into_frames()
+		}
+		image::ImageFormat::WebP => {
+			let mut decoder = image::codecs::webp::WebPDecoder::new(Cursor::new(bytes)).ok()?;
+			decoder.set_limits(limits).ok()?;
+			decoder.into_frames()
+		}
+		_ => return None,
+	};
+	let mut frames: ui::GifFrames = Vec::new();
+	let mut stride = 1;
+	let started = Instant::now();
+	for (index, frame) in decoded.take(601).enumerate() {
+		if index == 600 || started.elapsed() > Duration::from_secs(3) {
+			return None;
+		}
+		let frame = frame.ok()?;
+		let (numerator, denominator) = frame.delay().numer_denom_ms();
+		let delay = Duration::from_millis(
+			(u64::from(numerator) / u64::from(denominator.max(1))).clamp(20, 10_000),
+		);
+		if index % stride != 0 {
+			frames.last_mut()?.0 += delay;
+			continue;
+		}
+		// Keep the whole loop: reduce temporal detail instead of rejecting ordinary long GIFs.
+		// ponytail: at most 80 160px frames (8 MiB); streaming decoding if full fidelity is needed.
+		if frames.len() == 80 {
+			frames = frames
+				.chunks(2)
+				.map(|pair| {
+					(
+						pair.iter().map(|(delay, _)| *delay).sum(),
+						pair[0].1.clone(),
+					)
+				})
+				.collect();
+			stride *= 2;
+		}
+		let buffer = frame.into_buffer();
+		let (width, height) = (buffer.width().min(160), buffer.height().min(160));
+		let image = image::DynamicImage::ImageRgba8(buffer)
+			.thumbnail(width, height)
+			.into_rgba8();
+		frames.push((
+			delay,
+			Arc::new(egui::ColorImage::from_rgba_unmultiplied(
+				[image.width() as usize, image.height() as usize],
+				image.as_raw(),
+			)),
+		));
+	}
+	Some(frames)
 }
 
 struct Disk {
@@ -477,7 +585,7 @@ impl Disk {
 			Err(error) => return Err(error),
 		};
 		let metadata = file.metadata()?;
-		if metadata.len() > MAX_ENCODED as u64
+		if metadata.len() > encoded_limit(key) as u64
 			|| SystemTime::now()
 				.duration_since(metadata.modified()?)
 				.unwrap_or_default()
@@ -487,16 +595,16 @@ impl Disk {
 		}
 		let mut bytes = Vec::with_capacity(metadata.len() as usize);
 		(&file)
-			.take(MAX_ENCODED as u64 + 1)
+			.take(encoded_limit(key) as u64 + 1)
 			.read_to_end(&mut bytes)?;
-		if bytes.len() > MAX_ENCODED {
+		if bytes.len() > encoded_limit(key) {
 			return Ok(None);
 		}
 		file.set_modified(SystemTime::now())?;
 		Ok(Some(bytes))
 	}
 	fn write(&mut self, key: &str, bytes: &[u8]) -> io::Result<()> {
-		if cdn_url(key).is_none() || bytes.len() > MAX_ENCODED {
+		if cdn_url(key).is_none() || bytes.len() > encoded_limit(key) {
 			return Err(io::ErrorKind::InvalidInput.into());
 		}
 		let name = disk_key(key).ok_or(io::ErrorKind::InvalidInput)?;
@@ -591,6 +699,67 @@ impl Disk {
 
 #[cfg(test)]
 mod tests {
+	#[test]
+	fn gif_animation_preserves_long_loop_with_bounded_frames() {
+		let mut bytes = Vec::new();
+		{
+			let mut encoder = image::codecs::gif::GifEncoder::new(&mut bytes);
+			for index in 0..100 {
+				encoder
+					.encode_frame(image::Frame::from_parts(
+						image::RgbaImage::from_pixel(320, 320, image::Rgba([index, 0, 255, 255])),
+						0,
+						0,
+						image::Delay::from_numer_denom_ms(100, 1),
+					))
+					.unwrap();
+			}
+		}
+		let frames = super::decode_animation(&bytes).unwrap();
+		assert!(frames.len() > 1 && frames.len() <= 80);
+		assert_eq!(
+			frames
+				.iter()
+				.map(|(delay, _)| *delay)
+				.sum::<std::time::Duration>(),
+			std::time::Duration::from_secs(10)
+		);
+		assert!(
+			frames
+				.iter()
+				.map(|(_, image)| image.pixels.len() * 4)
+				.sum::<usize>()
+				<= 8 * 1024 * 1024
+		);
+		assert!(super::cdn_url("anim:https://media.tenor.com/x/tenor.gif").is_some());
+		assert!(super::cdn_url("anim:https://static.klipy.com/x.gif").is_some());
+		assert!(super::cdn_url("anim:https://evil.example/x.gif").is_none());
+	}
+
+	#[test]
+	fn gif_frames_decode_with_timing_and_reject_invalid_data() {
+		let mut bytes = Vec::new();
+		{
+			let mut encoder = image::codecs::gif::GifEncoder::new(&mut bytes);
+			for color in [[255, 0, 0, 255], [0, 255, 0, 255]] {
+				encoder
+					.encode_frame(image::Frame::from_parts(
+						image::RgbaImage::from_pixel(32, 16, image::Rgba(color)),
+						0,
+						0,
+						image::Delay::from_numer_denom_ms(100, 1),
+					))
+					.unwrap();
+			}
+		}
+		let frames = super::decode_animation(&bytes).unwrap();
+		assert_eq!(frames.len(), 2);
+		assert_eq!(frames[0].0, std::time::Duration::from_millis(100));
+		assert_eq!(frames[0].1.size, [32, 16]);
+		assert_ne!(frames[0].1.pixels[0], frames[1].1.pixels[0]);
+		assert!(super::decode_animation(b"not a GIF").is_none());
+		assert!(super::decode_animation(&vec![0; super::MAX_ENCODED + 1]).is_none());
+	}
 	#[test]
 	fn activity_artwork_urls_and_application_metadata_are_scoped() {
 		assert_eq!(
