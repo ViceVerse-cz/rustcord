@@ -4,6 +4,8 @@ pub struct ReadingPreferences {
 	pub zoom_percent: u16,
 	pub sidebar_width: u16,
 	pub show_members: bool,
+	pub animate_gifs: bool,
+	pub hide_media_links: bool,
 }
 impl Default for ReadingPreferences {
 	fn default() -> Self {
@@ -11,6 +13,8 @@ impl Default for ReadingPreferences {
 			zoom_percent: 100,
 			sidebar_width: 236,
 			show_members: true,
+			animate_gifs: false,
+			hide_media_links: true,
 		}
 	}
 }
@@ -37,6 +41,8 @@ mod tests {
 						zoom_percent,
 						sidebar_width,
 						show_members,
+						animate_gifs: false,
+						hide_media_links: true,
 					};
 					assert_eq!(
 						preferences.is_valid(),

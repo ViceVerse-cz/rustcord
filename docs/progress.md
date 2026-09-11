@@ -2242,3 +2242,13 @@ with Git's cr-at-eol whitespace interpretation for exact upstream CRLF notice by
 GitHub native/security/license/fuzz checks are pending at this commit; no cross-platform or
 live-client completion is claimed. Full redistribution and the existing project gates remain
 incomplete.
+
+
+Main advanced to `ea68e0e` during CI (GIF animation/media preferences and composer
+autocomplete). Integrated those commits; the avatar conflict preserves incoming production
+animation code and our semantic-key/unloaded-to-loaded test assertions. Incoming desktop
+formatting was normalized. The combined `cargo xtask check` passes 395 tests plus Clippy,
+text-only and policy checks. Both combined Windows release packages pass (1m37s / 1m42s).
+Their absolute sizes are recorded separately in performance.md; the original notice-only
+comparison is tied to `584163e` and is not attributed to the newer main UI work. Earlier-head
+native CI has reached packaging on all three OSes, but final integrated CI remains pending.

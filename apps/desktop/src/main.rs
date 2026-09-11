@@ -1532,7 +1532,10 @@ impl Desktop {
 					self.cache_error = true;
 					self.cache_status = error;
 				}
-				self.messaging.accept_avatar(ctx, result.key, result.image);
+				self.messaging
+					.accept_avatar(ctx, result.key.clone(), result.image);
+				self.messaging
+					.accept_gif_animation(result.key, result.frames);
 			}
 		}
 	}

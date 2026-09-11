@@ -15,6 +15,8 @@ pub struct GifDto {
 	title: String,
 	url: String,
 	#[serde(default)]
+	gif_src: Option<String>,
+	#[serde(default)]
 	preview: Option<String>,
 	#[serde(default)]
 	width: u32,
@@ -63,11 +65,18 @@ fn truncated<'de, D: Deserializer<'de>, T: Deserialize<'de>, const N: usize>(
 fn into_gifs(gifs: Vec<GifDto>) -> Vec<Gif> {
 	let mut out: Vec<Gif> = Vec::with_capacity(gifs.len());
 	for gif in gifs {
+		if !model::valid_gif_url(&gif.url) {
+			continue;
+		}
 		let Some(preview) = gif.preview else { continue };
 		let gif = Gif {
 			id: gif.id,
 			title: gif.title.trim().chars().take(256).collect(),
-			url: gif.url,
+			// Sharing the actual GIF lets the timeline play it without a provider video player.
+			url: gif
+				.gif_src
+				.filter(|url| model::valid_gif_url(url) && url.ends_with(".gif"))
+				.unwrap_or(gif.url),
 			preview,
 			width: gif.width,
 			height: gif.height,

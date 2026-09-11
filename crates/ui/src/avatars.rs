@@ -6,6 +6,15 @@ use std::{
 	time::{Duration, Instant},
 };
 
+pub type GifFrames = Vec<(Duration, std::sync::Arc<ColorImage>)>;
+const ANIMATION_BYTES: usize = 16 * 1024 * 1024;
+struct Animation {
+	frames: GifFrames,
+	started: Instant,
+	frame: usize,
+	bytes: usize,
+}
+
 const TEXTURES: usize = 64;
 const TEXTURE_BYTES: usize = 16 * 1024 * 1024;
 const REQUESTS: usize = 128;
@@ -21,6 +30,8 @@ struct AvatarKey {
 
 #[derive(Default)]
 pub(crate) struct Avatars {
+	pub animate_gifs: bool,
+	animations: HashMap<String, Animation>,
 	textures: HashMap<String, (u64, TextureHandle)>,
 	avatar_keys: HashMap<model::Id, AvatarKey>,
 	clock: u64,
@@ -33,6 +44,64 @@ impl Avatars {
 	#[cfg(test)]
 	pub(crate) fn texture_id(&self, key: &str) -> Option<egui::TextureId> {
 		self.textures.get(key).map(|(_, texture)| texture.id())
+	}
+	pub fn set_animation(&mut self, enabled: bool) {
+		if self.animate_gifs == enabled {
+			return;
+		}
+		self.animate_gifs = enabled;
+		if !enabled {
+			self.animations.clear();
+			self.textures.retain(|key, (_, texture)| {
+				if key.starts_with("anim:") {
+					self.bytes -= texture.byte_size();
+					false
+				} else {
+					true
+				}
+			});
+			self.attempts.retain(|key, _| !key.starts_with("anim:"));
+			self.requests.retain(|key| !key.starts_with("anim:"));
+		}
+	}
+	pub fn accept_animation(&mut self, key: String, frames: GifFrames) {
+		if !self.animate_gifs
+			|| !self.textures.contains_key(&key)
+			|| frames.len() < 2
+			|| frames.len() > 200
+		{
+			return;
+		}
+		let bytes: usize = frames.iter().map(|(_, image)| image.pixels.len() * 4).sum();
+		if bytes > ANIMATION_BYTES
+			|| frames.iter().any(|(delay, image)| {
+				*delay < Duration::from_millis(20) || image.size[0] > 512 || image.size[1] > 512
+			}) {
+			return;
+		}
+		while self.animations.len() >= 4
+			|| self.animations.values().map(|a| a.bytes).sum::<usize>() + bytes > ANIMATION_BYTES
+		{
+			let Some(oldest) = self
+				.animations
+				.keys()
+				.min_by_key(|key| self.textures.get(*key).map(|v| v.0))
+				.cloned()
+			else {
+				break;
+			};
+			self.animations.remove(&oldest);
+			// ponytail: four clips/16 MiB; excess visible GIFs stay static until texture eviction.
+		}
+		self.animations.insert(
+			key,
+			Animation {
+				frames,
+				started: Instant::now(),
+				frame: usize::MAX,
+				bytes,
+			},
+		);
 	}
 	pub fn take_requests(&mut self) -> Vec<String> {
 		std::mem::take(&mut self.requests)
@@ -54,7 +123,8 @@ impl Avatars {
 		if !self.attempts.contains_key(&key) {
 			return;
 		}
-		let limit = if key.starts_with("embed:")
+		let limit = if key.starts_with("anim:")
+			|| key.starts_with("embed:")
 			|| key.starts_with("gif:")
 			|| key.starts_with("banner-")
 			|| key.starts_with("member-banner-")
@@ -87,6 +157,7 @@ impl Avatars {
 				.min_by_key(|(_, (age, _))| *age)
 				.map(|(key, _)| key.clone())
 				.expect("texture cache over budget");
+			self.animations.remove(&oldest);
 			self.bytes -= self
 				.textures
 				.remove(&oldest)
@@ -143,7 +214,13 @@ impl Avatars {
 		gif: &model::Gif,
 		demo: bool,
 	) -> Option<(egui::TextureId, [usize; 2])> {
-		let key = format!("gif:{}", gif.preview);
+		let animated = self.animate_gifs && gif.url.ends_with(".gif");
+		let key = if animated {
+			format!("anim:{}", gif.url)
+		} else {
+			format!("gif:{}", gif.preview)
+		};
+		self.advance_animation(ctx, &key);
 		if demo && gif.preview.contains("/synthetic/") && !self.textures.contains_key(&key) {
 			self.attempts.insert(key.clone(), (Instant::now(), false));
 			self.accept(ctx, key.clone(), Some(synthetic_gif(gif)));
@@ -307,7 +384,35 @@ impl Avatars {
 		});
 		response
 	}
+	fn advance_animation(&mut self, ctx: &egui::Context, key: &str) {
+		let Some(entry) = self.textures.get_mut(key) else {
+			return;
+		};
+		if self.animate_gifs
+			&& ctx.input(|input| input.focused)
+			&& let Some(animation) = self.animations.get_mut(key)
+		{
+			let total: Duration = animation.frames.iter().map(|(delay, _)| *delay).sum();
+			let mut elapsed = Duration::from_nanos(
+				(animation.started.elapsed().as_nanos() % total.as_nanos()) as u64,
+			);
+			for (index, (delay, image)) in animation.frames.iter().enumerate() {
+				if elapsed < *delay {
+					if animation.frame != index {
+						self.bytes -= entry.1.byte_size();
+						entry.1.set(image.clone(), egui::TextureOptions::LINEAR);
+						self.bytes += entry.1.byte_size();
+						animation.frame = index;
+					}
+					ctx.request_repaint_after(*delay - elapsed);
+					break;
+				}
+				elapsed -= *delay;
+			}
+		}
+	}
 	fn paint(&mut self, ui: &mut egui::Ui, key: &str, rect: egui::Rect, radius: u8) -> bool {
+		self.advance_animation(ui.ctx(), key);
 		let Some(entry) = self.textures.get_mut(key) else {
 			return false;
 		};
@@ -393,6 +498,35 @@ impl Avatars {
 		});
 		response.on_hover_text(&guild.name)
 	}
+	pub fn show_gif_embed(
+		&mut self,
+		ui: &mut egui::Ui,
+		embed: &model::Embed,
+		gif: Option<&model::Gif>,
+		size: egui::Vec2,
+		demo: bool,
+	) -> egui::Response {
+		let original = gif
+			.filter(|gif| self.animate_gifs && gif.url.ends_with(".gif"))
+			.map(|gif| model::EmbedMedia {
+				url: Some(gif.url.clone()),
+				proxy_url: None,
+				width: gif.width,
+				height: gif.height,
+			});
+		let media = original
+			.as_ref()
+			.or(embed.image.as_ref())
+			.or(embed.thumbnail.as_ref());
+		self.show_media(
+			ui,
+			media.unwrap_or(&model::EmbedMedia::default()),
+			size,
+			demo,
+			false,
+		)
+	}
+
 	pub fn show_embed(
 		&mut self,
 		ui: &mut egui::Ui,
@@ -441,10 +575,21 @@ impl Avatars {
 		let size = (original * scale).max(egui::vec2(1.0, 1.0));
 		let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
 		if ui.is_rect_visible(rect) {
-			let source = media.proxy_url.as_deref().or(media.url.as_deref());
-			let key = source
-				.filter(|source| source.len() <= 2048)
-				.map(|source| format!("embed:{source}"));
+			let original_gif = media.url.as_deref().filter(|url| {
+				self.animate_gifs && model::valid_gif_url(url) && url.ends_with(".gif")
+			});
+			let source = original_gif
+				.or(media.proxy_url.as_deref())
+				.or(media.url.as_deref());
+			let key = source.filter(|source| source.len() <= 2048).map(|source| {
+				let animated = self.animate_gifs
+					&& source.split('?').next().is_some_and(|path| {
+						[".gif", ".webp"]
+							.iter()
+							.any(|ext| path.to_ascii_lowercase().ends_with(ext))
+					});
+				format!("{}:{source}", if animated { "anim" } else { "embed" })
+			});
 			if demo
 				&& let Some(key) = &key
 				&& !self.textures.contains_key(key)
@@ -655,6 +800,66 @@ fn synthetic_gif(gif: &model::Gif) -> ColorImage {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[test]
+	fn gif_picker_requests_animation_advances_frames_and_respects_setting() {
+		let ctx = egui::Context::default();
+		let mut images = Avatars::default();
+		images.set_animation(true);
+		let gif = model::Gif {
+			id: "test".into(),
+			title: "Synthetic".into(),
+			url: "https://static.klipy.com/synthetic/test.gif".into(),
+			preview: "https://static.klipy.com/synthetic/test.png".into(),
+			width: 2,
+			height: 2,
+		};
+		let embed = model::Embed {
+			kind: "gifv".into(),
+			thumbnail: Some(model::EmbedMedia {
+				url: Some(gif.preview.clone()),
+				width: 2,
+				height: 2,
+				..Default::default()
+			}),
+			..Default::default()
+		};
+		let mut output = ctx.run_ui(Default::default(), |ui| {
+			images.show_gif_embed(ui, &embed, Some(&gif), egui::vec2(320.0, 320.0), false);
+		});
+		output.textures_delta.clear();
+		assert!(images.gif_texture(&ctx, &gif, false).is_none());
+		let key = images.take_requests().pop().unwrap();
+		assert_eq!(key, format!("anim:{}", gif.url));
+		let first = ColorImage::filled([2, 2], egui::Color32::RED);
+		images.accept(&ctx, key.clone(), Some(first.clone()));
+		images.accept_animation(
+			key.clone(),
+			vec![
+				(Duration::from_secs(1), std::sync::Arc::new(first)),
+				(
+					Duration::from_secs(1),
+					std::sync::Arc::new(ColorImage::filled([2, 2], egui::Color32::BLUE)),
+				),
+			],
+		);
+		images.animations.get_mut(&key).unwrap().started =
+			Instant::now() - Duration::from_millis(1500);
+		let mut output = ctx.run_ui(
+			egui::RawInput {
+				focused: true,
+				..Default::default()
+			},
+			|_ui| {
+				assert!(images.gif_texture(&ctx, &gif, false).is_some());
+			},
+		);
+		output.textures_delta.clear();
+		assert_eq!(images.animations[&key].frame, 1);
+		images.set_animation(false);
+		assert!(images.animations.is_empty());
+		assert!(images.gif_texture(&ctx, &gif, false).is_none());
+		assert_eq!(images.take_requests(), vec![format!("gif:{}", gif.preview)]);
+	}
 	#[test]
 	fn avatar_artwork_matches_fallback_in_justified_layout() {
 		let ctx = egui::Context::default();

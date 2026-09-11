@@ -2122,3 +2122,20 @@ or isolated collector timing. No app/runtime dependencies changed. The mechanica
 lint repair preserves outcomes; avatar changes only repair tests for the existing map cache.
 Reducer, native UI, process memory and live audio were not remeasured for packaging tooling.
 Linux synthetic Debian assembly passed in WSL; actual Linux/macOS packages remain CI evidence.
+
+
+The notice-only after column above is revision `584163e`, before integrating later main.
+Final integration includes `ea68e0e` (GIF/media/autocomplete UI work). Both Windows packages
+passed again with the same toolchain/flags/size method; the following are absolute combined
+measurements before this evidence append, not a notice-only growth comparison.
+
+| Combined metric | Text | Voice |
+| --- | ---: | ---: |
+| Executable bytes | 53,986,304 | 59,091,968 |
+| Installed bytes | 58,793,234 | 65,218,622 |
+| DEFLATE9 ZIP bytes | 34,939,566 | 37,558,925 |
+| Files | 668 | 910 |
+
+Cargo reported 1m37s text / 1m42s voice. The final conflict resolution only repairs test
+assumptions relative to incoming animation code; it does not change that production renderer.
+No native visual or full-client performance claim is added for the separately authored main UI.

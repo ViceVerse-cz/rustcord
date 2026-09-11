@@ -9,6 +9,9 @@ use std::{
 
 #[derive(Default)]
 pub struct TimelineView {
+	pub(super) hide_media_links: bool,
+	applied_hide_media_links: bool,
+	pub(super) gif_favorite: Option<model::Gif>,
 	pub(super) invite_requests: Vec<String>,
 	pub(super) edit_started: bool,
 	pub(super) channel_reference: Option<Id>,
@@ -367,6 +370,7 @@ impl TimelineView {
 		let channel_changed = self.channel != state.selected;
 		if channel_changed {
 			*self = Self {
+				hide_media_links: self.hide_media_links,
 				channel: state.selected,
 				following: true,
 				download: std::mem::take(&mut self.download),
@@ -437,7 +441,9 @@ impl TimelineView {
 		let dimensions_changed = (self.width - width).abs() > 1.0
 			|| self.text_size != text_size
 			|| self.scale != scale
-			|| labels_changed;
+			|| labels_changed
+			|| self.hide_media_links != self.applied_hide_media_links;
+		self.applied_hide_media_links = self.hide_media_links;
 		let changed = self.revision != state.revision || dimensions_changed;
 		let mut offset = None;
 		if changed {
@@ -821,14 +827,18 @@ impl TimelineView {
 										.map_or((0, false), |reveal| (reveal.text, reveal.media));
 									let mut text = if formatted.spoilers { before.0 } else { 0 };
 									let mut media = before.1;
-									formatted.show_references(
-										ui,
-										&mut self.opening,
-										&message.mentions,
-										profile,
-										(&state.channels, &mut self.channel_reference),
-										(avatars, state.demo, &mut text),
-									);
+									if !(self.hide_media_links
+										&& crate::embeds::standalone_media_links(message))
+									{
+										formatted.show_references(
+											ui,
+											&mut self.opening,
+											&message.mentions,
+											profile,
+											(&state.channels, &mut self.channel_reference),
+											(avatars, state.demo, &mut text),
+										);
+									}
 									if formatted.limited {
 										ui.label(
 											RichText::new(
@@ -852,15 +862,17 @@ impl TimelineView {
 											&mut self.invite_requests,
 											state.demo,
 										);
-										crate::embeds::show(
+										if let Some(gif) = crate::embeds::show(
 											ui,
 											message,
 											&mut self.formatted,
 											avatars,
 											&mut self.opening,
 											profile,
-											state.demo,
-										);
+											state,
+										) {
+											self.gif_favorite = Some(gif);
+										}
 										crate::attachments::show(
 											ui,
 											message,
@@ -3304,14 +3316,17 @@ mod tests {
 				..Default::default()
 			},
 			|ui| {
-				super::super::embeds::show(
+				let _ = super::super::embeds::show(
 					ui,
 					&message,
 					&mut FormatCache::default(),
 					&mut crate::avatars::Avatars::default(),
 					&mut None,
 					&mut None,
-					true,
+					&State {
+						demo: true,
+						..Default::default()
+					},
 				);
 				assert!(
 					ui.min_rect().height() > 120.0,

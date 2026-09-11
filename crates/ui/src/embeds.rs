@@ -4,7 +4,8 @@ use crate::{
 	markdown::{FormatCache, external_url},
 };
 use egui::RichText;
-use model::{Embed, Message};
+use model::{Embed, Gif, Message};
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 pub fn has_spoilers(message: &Message) -> bool {
 	has_media_spoilers(message) || message.content.contains("||")
@@ -73,6 +74,79 @@ fn text(
 		ui.small("Text display limited");
 	}
 }
+pub fn standalone_media_links(message: &Message) -> bool {
+	!message.embeds_suppressed
+		&& !has_spoilers(message)
+		&& !message.content.trim().is_empty()
+		&& message.content.split_whitespace().all(|link| {
+			message.embeds.iter().any(|embed| {
+				inline_image(embed).is_some()
+					&& (embed.url.as_deref() == Some(link)
+						|| [&embed.image, &embed.thumbnail]
+							.into_iter()
+							.flatten()
+							.any(|media| media.url.as_deref() == Some(link)))
+			})
+		})
+}
+
+fn inline_image(embed: &Embed) -> Option<&model::EmbedMedia> {
+	matches!(embed.kind.as_str(), "image" | "gifv")
+		.then(|| embed.image.as_ref().or(embed.thumbnail.as_ref()))
+		.flatten()
+}
+
+fn gif_for_embed(embed: &Embed, gifs: &client_core::gifs::Gifs) -> Option<Gif> {
+	let media = [
+		embed.image.as_ref(),
+		embed.thumbnail.as_ref(),
+		embed.video.as_ref(),
+	];
+	let matches = |gif: &&Gif| {
+		embed.url.as_deref() == Some(gif.url.as_str())
+			|| media.iter().flatten().any(|image| {
+				image
+					.url
+					.as_deref()
+					.is_some_and(|url| url == gif.url || url == gif.preview)
+			})
+	};
+	if let Some(gif) = gifs
+		.favorites
+		.iter()
+		.find(matches)
+		.or_else(|| gifs.view.as_ref()?.page.as_ref()?.gifs.iter().find(matches))
+	{
+		return Some(gif.clone());
+	}
+	let preview = media.iter().flatten().find(|image| {
+		image.url.as_deref().is_some_and(|url| {
+			model::valid_gif_preview(url) && (embed.kind == "gifv" || url.ends_with(".gif"))
+		})
+	})?;
+	let url = embed
+		.url
+		.as_deref()
+		.filter(|url| model::valid_gif_url(url))
+		.or_else(|| {
+			preview
+				.url
+				.as_deref()
+				.filter(|url| model::valid_gif_url(url))
+		})?;
+	let mut hash = DefaultHasher::new();
+	url.hash(&mut hash);
+	let gif = Gif {
+		id: format!("chat-{:016x}", hash.finish()),
+		title: embed.title.clone().unwrap_or_default(),
+		url: url.to_owned(),
+		preview: preview.url.clone()?,
+		width: preview.width,
+		height: preview.height,
+	};
+	gif.valid().then_some(gif)
+}
+
 pub fn show(
 	ui: &mut egui::Ui,
 	message: &Message,
@@ -80,13 +154,83 @@ pub fn show(
 	images: &mut Avatars,
 	opening: &mut Option<String>,
 	profile: &mut Option<model::User>,
-	demo: bool,
-) {
+	state: &client_core::State,
+) -> Option<Gif> {
 	if message.embeds_suppressed {
-		return;
+		return None;
 	}
+	let demo = state.demo;
+	let mut favorite_action = None;
 	for (index, embed) in message.embeds.iter().enumerate() {
 		ui.push_id(("embed", index), |ui| {
+			if let Some(image) = inline_image(embed) {
+				let gif = gif_for_embed(embed, &state.gifs);
+				let response = images
+					.show_gif_embed(ui, embed, gif.as_ref(), egui::vec2(480.0, 320.0), demo)
+					.interact(egui::Sense::click());
+				let star = gif.map(|gif| {
+					let favorite = state.is_gif_favorite(&gif);
+					let star_rect = egui::Rect::from_min_size(
+						response.rect.right_top() + egui::vec2(-34.0, 4.0),
+						egui::Vec2::splat(30.0),
+					);
+					let star =
+						ui.interact(star_rect, ui.id().with("favorite"), egui::Sense::click());
+					ui.painter()
+						.rect_filled(star_rect, 6, egui::Color32::from_black_alpha(190));
+					crate::icons::paint(
+						ui.painter(),
+						if favorite {
+							crate::icons::Icon::StarFill
+						} else {
+							crate::icons::Icon::Star
+						},
+						star_rect.shrink(5.0),
+						if favorite {
+							crate::design::palette(ui).warning
+						} else {
+							egui::Color32::WHITE
+						},
+					);
+					if star.has_focus() {
+						ui.painter().rect_stroke(
+							star_rect,
+							6,
+							ui.visuals().selection.stroke,
+							egui::StrokeKind::Inside,
+						);
+					}
+					star.widget_info(|| {
+						egui::WidgetInfo::selected(
+							egui::WidgetType::Checkbox,
+							ui.is_enabled(),
+							favorite,
+							"Favorite GIF",
+						)
+					});
+					if star.clicked() {
+						favorite_action = Some(gif);
+					}
+					star.on_hover_text(if favorite {
+						"Remove from GIF favorites"
+					} else {
+						"Save to GIF favorites"
+					})
+				});
+				if !star
+					.as_ref()
+					.is_some_and(|star| star.hovered() || star.clicked())
+					&& response.on_hover_text("Open image…").clicked()
+				{
+					*opening = embed
+						.url
+						.as_deref()
+						.or(image.url.as_deref())
+						.and_then(external_url);
+				}
+				ui.add_space(6.0);
+				return;
+			}
 			let colors = crate::design::palette(ui);
 			let color = embed.color.map_or(colors.accent, |c| {
 				egui::Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, c as u8)
@@ -272,11 +416,18 @@ pub fn show(
 			ui.add_space(6.0);
 		});
 	}
+	favorite_action
 }
 pub fn estimated_height(embeds: &[Embed]) -> f32 {
 	embeds
 		.iter()
-		.map(|e| 100.0 + e.fields.len() as f32 * 44.0 + if e.image.is_some() { 200.0 } else { 0.0 })
+		.map(|e| {
+			if inline_image(e).is_some() {
+				206.0
+			} else {
+				100.0 + e.fields.len() as f32 * 44.0 + if e.image.is_some() { 200.0 } else { 0.0 }
+			}
+		})
 		.map(|h| h.min(664.0))
 		.sum()
 }
@@ -284,6 +435,72 @@ pub fn estimated_height(embeds: &[Embed]) -> f32 {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn hide_media_links_requires_matching_visible_media_without_caption_or_spoiler() {
+		let mut message = test_support::message(1, model::Id(1));
+		message.content = "https://klipy.com/gifs/waving-lizard".into();
+		message.embeds = vec![Embed {
+			kind: "gifv".into(),
+			url: Some(message.content.clone()),
+			thumbnail: Some(model::EmbedMedia::default()),
+			..Default::default()
+		}];
+		assert!(standalone_media_links(&message));
+		message.embeds_suppressed = true;
+		assert!(!standalone_media_links(&message));
+		message.embeds_suppressed = false;
+		message.content.insert_str(0, "Hello! ");
+		assert!(!standalone_media_links(&message));
+		message.content = "https://example.com/other.gif".into();
+		assert!(!standalone_media_links(&message));
+		message.content = message.embeds[0].url.clone().unwrap();
+		message.embeds[0].kind = "rich".into();
+		assert!(!standalone_media_links(&message));
+	}
+
+	#[test]
+	fn chat_gifs_reuse_favorites_and_reject_unapproved_media() {
+		let mut embed = Embed {
+			kind: "gifv".into(),
+			url: Some("https://klipy.com/gifs/synthetic-wave".into()),
+			thumbnail: Some(model::EmbedMedia {
+				url: Some("https://static.klipy.com/synthetic/wave.gif".into()),
+				width: 320,
+				height: 180,
+				..Default::default()
+			}),
+			..Default::default()
+		};
+		let mut gifs = client_core::gifs::Gifs::default();
+		let mut gif = gif_for_embed(&embed, &gifs).unwrap();
+		assert!(gif.valid());
+		gif.id = "provider-id".into();
+		gifs.favorites.push(gif.clone());
+		assert_eq!(gif_for_embed(&embed, &gifs), Some(gif));
+		gifs.favorites.clear();
+		embed.thumbnail.as_mut().unwrap().url = Some("https://example.com/wave.gif".into());
+		assert!(gif_for_embed(&embed, &gifs).is_none());
+	}
+
+	#[test]
+	fn direct_images_and_gifs_use_media_instead_of_cards() {
+		let mut embed = Embed {
+			kind: "image".into(),
+			thumbnail: Some(model::EmbedMedia::default()),
+			..Default::default()
+		};
+		assert!(inline_image(&embed).is_some());
+		embed.kind = "gifv".into();
+		assert!(inline_image(&embed).is_some());
+		embed.kind = "rich".into();
+		assert!(inline_image(&embed).is_none());
+		embed.kind = "image".into();
+		embed.thumbnail = None;
+		assert!(inline_image(&embed).is_none());
+		embed.image = Some(model::EmbedMedia::default());
+		assert!(inline_image(&embed).is_some());
+	}
 
 	#[test]
 	fn text_spoilers_do_not_hide_ordinary_media_but_keep_reply_previews_conservative() {
