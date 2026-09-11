@@ -275,7 +275,7 @@ mod tests {
 				state.pending.push(Pending {
 					channel: Id(if invalid == 1 { 2 } else { 1 }),
 					content: "Pending".into(),
-					attachment: None,
+					attachments: vec![],
 					nonce: "synthetic".into(),
 					delivery: Delivery::Ambiguous,
 					confirmed: None,
@@ -300,7 +300,7 @@ mod tests {
 		state.pending.push(Pending {
 			channel: Id(1),
 			content: "Pending".into(),
-			attachment: None,
+			attachments: vec![],
 			nonce: "synthetic".into(),
 			delivery: Delivery::Ambiguous,
 			confirmed: None,
@@ -327,7 +327,7 @@ mod tests {
 		state.pending.push(Pending {
 			channel: Id(2),
 			content: "Pending".into(),
-			attachment: None,
+			attachments: vec![],
 			nonce: "other".into(),
 			delivery: Delivery::Ambiguous,
 			confirmed: None,
@@ -377,7 +377,7 @@ mod tests {
 		state.pending.push(Pending {
 			channel: Id(1),
 			content: "Pending".into(),
-			attachment: None,
+			attachments: vec![],
 			nonce: "synthetic".into(),
 			delivery: Delivery::Ambiguous,
 			confirmed: None,

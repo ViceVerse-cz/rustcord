@@ -556,34 +556,54 @@ impl Desktop {
 			// Non-image variant: exercises the file-kind glyph and extension badge.
 			messaging.preview_attachment("quarterly-report.pdf", 1_482_311, None);
 			state.status = "Offline fixture · synthetic file attachment staged in the composer";
-		} else if demo && std::env::args().any(|arg| arg == "--demo-attachment") {
-			// Synthetic gradient stands in for a decoded photo; no file is read or uploaded.
-			let (width, height) = (320usize, 200usize);
-			let pixels = (0..width * height)
-				.map(|index| {
-					let (x, y) = (
-						(index % width) as f32 / width as f32,
-						(index / width) as f32 / height as f32,
-					);
-					let ring = ((x - 0.65).powi(2) + (y - 0.4).powi(2)).sqrt();
-					if ring < 0.12 {
-						egui::Color32::from_rgb(255, 214, 102)
-					} else {
-						egui::Color32::from_rgb(
-							(40.0 + 120.0 * y) as u8,
-							(110.0 + 90.0 * x) as u8,
-							(190.0 - 60.0 * y) as u8,
-						)
-					}
-				})
-				.collect();
-			let image = egui::ColorImage {
-				size: [width, height],
-				source_size: egui::vec2(width as f32, height as f32),
-				pixels,
+		} else if demo
+			&& std::env::args()
+				.any(|arg| arg == "--demo-attachment" || arg == "--demo-attachment=multi")
+		{
+			// Synthetic gradients stand in for decoded photos; no file is read or uploaded.
+			let gradient = |width: usize, height: usize, hue: f32| {
+				let pixels = (0..width * height)
+					.map(|index| {
+						let (x, y) = (
+							(index % width) as f32 / width as f32,
+							(index / width) as f32 / height as f32,
+						);
+						let ring = ((x - 0.65).powi(2) + (y - 0.4).powi(2)).sqrt();
+						if ring < 0.12 {
+							egui::Color32::from_rgb(255, 214, 102)
+						} else {
+							egui::Color32::from_rgb(
+								(40.0 + 120.0 * y * hue) as u8,
+								(110.0 + 90.0 * x) as u8,
+								(190.0 - 60.0 * y / hue) as u8,
+							)
+						}
+					})
+					.collect();
+				egui::ColorImage {
+					size: [width, height],
+					source_size: egui::vec2(width as f32, height as f32),
+					pixels,
+				}
 			};
-			messaging.preview_attachment("synthetic-holiday.png", 2_437_120, Some(image));
-			state.status = "Offline fixture · synthetic attachment staged in the composer";
+			messaging.preview_attachment(
+				"synthetic-holiday.png",
+				2_437_120,
+				Some(gradient(320, 200, 1.0)),
+			);
+			if std::env::args().any(|arg| arg == "--demo-attachment=multi") {
+				// Batch variant: a portrait photo plus a document, like dropping three files.
+				messaging.preview_attachment(
+					"synthetic-portrait.png",
+					1_106_944,
+					Some(gradient(180, 320, 1.6)),
+				);
+				messaging.preview_attachment("synthetic-agenda.pdf", 482_311, None);
+				state.status =
+					"Offline fixture · three synthetic attachments staged in the composer";
+			} else {
+				state.status = "Offline fixture · synthetic attachment staged in the composer";
+			}
 		}
 		if demo && std::env::args().any(|arg| arg == "--demo-sending") {
 			messaging.preview_sending(&cc.egui_ctx, &mut state);
@@ -1112,7 +1132,7 @@ impl Desktop {
 				.state
 				.pending
 				.iter()
-				.any(|p| p.nonce == *nonce && p.attachment.is_some())
+				.any(|p| p.nonce == *nonce && !p.attachments.is_empty())
 		{
 			let (channel, nonce) = (*channel, nonce.clone());
 			let available = !self.state.demo
@@ -2535,7 +2555,7 @@ impl eframe::App for Desktop {
 				.uploads
 				.selection()
 				.map(|(name, size)| (name.to_owned(), size));
-			self.messaging.attachment_preview = self.uploads.preview();
+			self.messaging.attachment_previews = self.uploads.previews();
 			self.messaging.attachment_files = self.uploads.files();
 		}
 		self.messaging.upload_busy = self.uploads.busy() || self.clipboard.is_some();
@@ -2723,13 +2743,15 @@ impl eframe::App for Desktop {
 				self.uploads.remove_at(index);
 				if self.state.demo {
 					self.messaging.attachment = None;
-					self.messaging.attachment_preview = None;
+					self.messaging.attachment_files.clear();
+					self.messaging.attachment_previews.clear();
 				}
 			}
 			if std::mem::take(&mut self.messaging.remove_attachment_requested) {
 				self.uploads.remove();
 				self.messaging.attachment = None;
-				self.messaging.attachment_preview = None;
+				self.messaging.attachment_files.clear();
+				self.messaging.attachment_previews.clear();
 			}
 			if std::mem::take(&mut self.messaging.cancel_upload_requested) {
 				self.uploads.cancel();

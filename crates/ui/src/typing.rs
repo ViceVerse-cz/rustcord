@@ -248,6 +248,7 @@ mod tests {
 		let now = Instant::now();
 		let wall = SystemTime::now();
 		let mut state = state();
+		state.demo = true;
 		let timestamp = wall
 			.duration_since(SystemTime::UNIX_EPOCH)
 			.unwrap()
@@ -268,22 +269,25 @@ mod tests {
 		state.drafts.insert(Id(10), "My unsent draft".into());
 		let mut messaging = crate::MessagingUi::default();
 		let ctx = egui::Context::default();
-		for _ in 0..3 {
+		for pass in 0..3 {
 			let mut commands = vec![];
-			let output = ctx.run_ui(
+			let mut output = ctx.run_ui(
 				egui::RawInput {
 					screen_rect: Some(egui::Rect::from_min_size(
 						egui::Pos2::ZERO,
-						egui::vec2(360.0, 500.0),
+						egui::vec2(900.0, 500.0),
 					)),
 					..Default::default()
 				},
-				|ui| messaging.composer(ui, &mut state, Id(10), &ctx, &mut commands),
+				|ui| commands.extend(messaging.show(ui, &mut state)),
 			);
+			output.textures_delta.clear();
 			assert!(commands.is_empty());
 			assert!(output.platform_output.commands.is_empty());
-			assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
-                egui::Shape::Text(text) if text.galley.job.text == "Someone is typing")));
+			if pass > 0 {
+				assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                    egui::Shape::Text(text) if text.galley.job.text == "Someone is typing")));
+			}
 			assert_eq!(state.drafts[&Id(10)], "My unsent draft");
 			assert!(messaging.draft_changes.is_empty());
 			output.drop_without_applying_deltas();

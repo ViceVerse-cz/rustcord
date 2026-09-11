@@ -1,0 +1,121 @@
+{
+  "baseline_commit": "690ce911ec7a4aaa147e85b1aa4b01527f05def2",
+  "rust": "1.98.1",
+  "os": "macOS 27.0 (26A428)",
+  "cpu": "Apple M1 Pro",
+  "ram_bytes": 17179869184,
+  "renderer": "wgpu; adapter and display scale unmeasured",
+  "scenario": "Text-only --demo, default synthetic getting-started channel; no successful scripted scroll",
+  "sampling": "Separate fresh launches, 10 seconds warmup, 10 ps RSS/%CPU samples about one second apart. Native viewport equality unverified; exploratory samples, not a controlled latency benchmark.",
+  "text_packages": {
+    "before": {
+      "executable": 51620640,
+      "installed": 58850069,
+      "archive": 36630393,
+      "files": 686
+    },
+    "after": {
+      "executable": 51620704,
+      "installed": 58850133,
+      "archive": 36631068,
+      "files": 686
+    }
+  },
+  "text_executable_sha256": {
+    "before": "346b8db2ec8ad79f20c4985e45729085eec231cf8bc3d7bdbcb9c57fdcc2ddb4",
+    "after": "9a0052f4ad66e95e14f1ec9b00e6e00f9357c0314ebf3297677e5f163e92650f"
+  },
+  "timeline_source_sha256": "f720667be6f1bfccf7227354e2156022e8879d60a7556485245cc41c6d2b8193",
+  "process_samples": {
+    "before": [
+      {
+        "rss_kib": 164816,
+        "cpu_percent": 0.0
+      },
+      {
+        "rss_kib": 161376,
+        "cpu_percent": 0.0
+      },
+      {
+        "rss_kib": 161328,
+        "cpu_percent": 0.0
+      },
+      {
+        "rss_kib": 161328,
+        "cpu_percent": 0.0
+      },
+      {
+        "rss_kib": 161328,
+        "cpu_percent": 0.0
+      },
+      {
+        "rss_kib": 161328,
+        "cpu_percent": 0.0
+      },
+      {
+        "rss_kib": 161328,
+        "cpu_percent": 0.0
+      },
+      {
+        "rss_kib": 161328,
+        "cpu_percent": 0.0
+      },
+      {
+        "rss_kib": 161328,
+        "cpu_percent": 0.0
+      },
+      {
+        "rss_kib": 161328,
+        "cpu_percent": 2.0
+      }
+    ],
+    "after": [
+      {
+        "rss_kib": 161104,
+        "cpu_percent": 0.0
+      },
+      {
+        "rss_kib": 157600,
+        "cpu_percent": 0.0
+      },
+      {
+        "rss_kib": 157600,
+        "cpu_percent": 0.0
+      },
+      {
+        "rss_kib": 157600,
+        "cpu_percent": 0.0
+      },
+      {
+        "rss_kib": 157600,
+        "cpu_percent": 0.0
+      },
+      {
+        "rss_kib": 157600,
+        "cpu_percent": 0.0
+      },
+      {
+        "rss_kib": 157632,
+        "cpu_percent": 0.0
+      },
+      {
+        "rss_kib": 157632,
+        "cpu_percent": 0.0
+      },
+      {
+        "rss_kib": 157632,
+        "cpu_percent": 0.0
+      },
+      {
+        "rss_kib": 157632,
+        "cpu_percent": 0.0
+      }
+    ]
+  },
+  "voice": {
+    "before": null,
+    "after_executable_bytes": 57249216,
+    "package": null,
+    "blocker": "Baseline build terminated with signal 15. Final voice release builds; packaging fails for missing exact-version license texts: objc2-core-media 0.3.2, objc2-core-video 0.3.2, openh264-sys2 0.9.8, openh264 0.9.8."
+  }
+}

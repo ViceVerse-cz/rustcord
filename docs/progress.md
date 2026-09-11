@@ -47,6 +47,55 @@ and live-unverified; see `docs/profiles.md`. Voice packaging encounters baseline
 `openh264-sys2 0.9.8` / `openh264 0.9.8` license text overrides. Delivery stays draft
 with these exact limitations.
 
+## September 11, 2026 — temporarily pause native CI
+
+At the owner's explicit request, commented out the complete `native` matrix job
+in `.github/workflows/ci.yml`, preserving it for easy restoration. This pauses
+the macOS/Windows/Linux checks and packaging on future runs of this branch.
+Security, licenses, and fuzz jobs remain enabled. Existing runs are not canceled.
+Validated that removing comment lines produces exactly the previous workflow
+with only the native job removed; `git diff --check` passed. No application code
+changed in this follow-up, so no new runtime tests, screenshots, or measurements
+were needed. The previously recorded UI-test and native-evidence blockers remain.
+
+## September 11, 2026 — message right-click menu
+
+Implemented on `fix/message-context-menu` from clean `22e2283` (the fetched
+`origin/main` baseline). Right-clicking message text or row whitespace opens the
+existing three-dot action menu at the pointer. Both entry points render the same
+actions and permission gates; the pointer anchor remains fixed while choosing an
+action. Shift+right-click also opens the menu instead of the quick-delete control.
+Existing keyboard actions and row layout remain unchanged.
+
+Verification: `cargo test --locked -p ui timeline::tests` passed all 22 tests;
+the extended hover/menu regression also passed after its final modifier-event
+update. It exercises both entry points, text/whitespace, Shift, correct Reply
+targeting, menu dismissal after selection, stable heights, and dark 900px/light
+360px layouts. `cargo clippy --locked -p ui --all-targets -- -D warnings`,
+`cargo xtask policy`, formatting, and diff checks passed.
+
+`cargo xtask check` passed strict workspace Clippy, then failed during UI tests.
+Serial execution and isolated tests identified two failures, reproduced in a
+detached worktree of the untouched baseline: `pending_tests.rs:113` expects the
+confirmed text to change color, and `typing.rs:285` expects a `Someone is typing`
+shape. The latter also panics while dropping unapplied texture deltas and aborts
+with Windows `0xc0000409`. These unrelated tests were not changed or disabled.
+
+Text release packaging succeeded before/after. Both voice release builds compiled;
+voice packaging fails on both revisions because exact license texts for
+`openh264-sys2 0.9.8` and `openh264 0.9.8` are missing (the existing realfft license
+evidence warning also remains). No license policy was bypassed. See `docs/performance.md` for
+package sizes and limited synthetic idle samples. Native screenshots and pointer
+verification are blocked: `orca` is not installed, and bundled Computer Use
+`sky.list_apps()` returns "Computer Use native pipe is unavailable: failed to
+connect native pipe: The system cannot find the file specified. (os error 2)".
+No native before/after images, interactive performance, or live Discord behavior
+are claimed. Keep the PR draft while these evidence/check blockers remain.
+
+Manual reproduction: launch `cargo run --locked -p serein -- --demo`, right-click
+a message's body or empty row space, compare its menu with the three-dot menu,
+and select Reply. Repeat with Shift held, another author, and `--demo-light`.
+
 ## September 11, 2026 — outgoing screen sharing
 
 Implemented on `feat/screen-sharing` from clean `609f8bf` (origin/main at task start). The connected-call screen button now opens source, 720p/1080p, 15/30/60 fps and cursor settings. Every quality option is exposed without a local Nitro gate. Explicit Share starts a separate DAVE-encrypted Discord stream using native macOS 14+ ScreenCaptureKit or Windows Graphics Capture and source-built OpenH264. The microphone remains on its existing transport and controls. Stop, permission/session loss, source closure and server replacement cancel sharing; cleanup waits for native retirement and Discord deletion before restart. Source lists, frames and queues are bounded and memory-only. Sharing status starts after the first keyframe is sent.
@@ -2736,6 +2785,102 @@ message, call or microphone action; Linux/macOS and remote publication remain un
 Draft PR for inherited full-check failures. No changes to settings explanatory text.
 
 
+## Unread and history banners — September 11, 2026
+
+Baseline `690ce911ec7a4aaa147e85b1aa4b01527f05def2`, clean task branch
+`t3code/fix-unread-message-banner`; fetched `origin`, whose default is `main`
+(`283686a` after fetch). Rust 1.98.1, macOS 27.0, Apple M1 Pro, 16 GiB RAM.
+
+Empty latest pages and complete conversations that fit in the viewport no longer
+show phantom unread/navigation banners, including stale latest-message metadata.
+The provisional unread-gap guard is corrected after measuring the viewport; long
+unread conversations retain their original starting position and unread protection.
+An explicit reply/search jump, including one preceding a late read-state snapshot,
+is never undone by that correction. Service read/latest metadata is unchanged.
+Overlay buttons have persistent IDs so changing nearby widgets cannot lose a click.
+Ordinary scrolling now needs more than three viewport heights before showing the
+older-message bar; protected unread and explicit history navigation retain their
+return-to-present control. Forward pagination alone is labeled “More messages”.
+
+Verification:
+
+- `cargo test --locked -p ui timeline::tests::`: 24 passed.
+- `cargo test --locked -p ui unread_pages_and_return_to_present`: 1 passed;
+  includes light/dark navigation and draft preservation.
+- New regression checks failed on the original empty-banner/early-threshold behavior.
+  Removing only the persistent overlay ID reproduces the lost mouse click.
+  Coverage includes empty/single/stale-latest, tall complete unread content, original
+  initial anchor, late read-state arrival after a reply jump, two/four-screen distances.
+- Fixed the existing timeline wheel test's missing `TouchPhase` field so these checks
+  compile against the pinned egui revision. No dependency changes.
+- `cargo xtask policy` and `git diff --check`: passed.
+- `cargo xtask check`: blocked by existing `crates/ui/src/pending.rs` formatting.
+- Full UI tests abort in the existing presence-rendering command assertion in
+  `crates/ui/src/lib.rs`; timeline-wide tests also fail the existing confirmed/pending
+  color assertion in `pending_tests.rs`. Both failures were reproduced on baseline
+  runtime code, with only the wheel-test compile fix applied.
+- Strict UI Clippy is blocked by existing `message_actions.rs` dependency lints
+  (`question_mark` at line 92 and `collapsible_if` at line 192).
+- Final text release package succeeds. Voice release/package outcome and measurements
+  are recorded in the accompanying performance entry.
+
+Native evidence is blocked: the baseline offline demo rendered, but automated scroll,
+focus and keyboard actions did not move its viewport. An intermediate changed demo rendered too;
+subsequent Computer Use returned `-10005: noWindowsAvailable`. Captures also differed
+in reported dimensions, so no comparable before/after image pair is claimed or committed.
+All fixtures and actions were offline/synthetic; no live account, message, call or
+microphone use. Windows/Linux and live compatibility were not verified. Deliver as a
+draft PR because complete checks, voice packaging and native interaction evidence remain
+blocked; see `docs/performance.md` for measurements and their limits.
+## Voice settings design — September 11, 2026
+
+Task branch `t3code/polish-voice-settings-calls`, clean baseline/origin main
+`283686ae4dc4f9ba1b20a5e4b14ebe9ca570e5d5`; pinned Rust 1.98.1. Voice & Audio
+now uses the settings page width, pairs device selectors/levels in two columns on
+wide pages, stacks them on narrow pages, and groups processing in existing settings
+cards/switches. In-call and header audio popovers share a compact, scrollable form,
+expandable processing/privacy sections, and an All voice settings link. Sliders have
+visible filled tracks and round handles; device names truncate with full-name hover
+text and distinct accessible labels. Device pickers and gain changes keep the parent
+popover open; outside clicks/Escape dismiss it. No new dependencies or media behavior.
+Offline/text-only controls stay disabled; preview now exposes their layout honestly.
+
+Verification and evidence (synthetic only):
+
+- `cargo test --locked -p ui voice::tests`: all 5 pass after the final UI edits;
+  includes device selection through a nested popup, outside dismissal, inert demo
+  refresh/reset, keyboard gain changes/clamping, and existing voice permission gates.
+- `cargo xtask check`: formatting passes; strict Clippy stops at pre-existing
+  `client-core/src/message_actions.rs:92,192` question-mark/collapsible-if findings.
+- `cargo clippy --locked -p ui --all-targets --no-deps -- -D warnings`: existing
+  `categories.rs:21` type complexity and `guild_folders.rs:220,468,573` collapsible-if
+  findings. No findings in the changed voice/settings code.
+- Broader `cargo test --locked -p ui`: link-confirmation test failure and abort in
+  `incoming_custom_status_updates_people_and_open_profile_without_refetch` at
+  `lib.rs:4059`, followed by an unapplied TexturesDelta destructor panic.
+- UI test compilation required adding the missing `TouchPhase::Move` in an existing
+  timeline wheel fixture; two existing tuple expressions were formatted by rustfmt.
+- Baseline voice release compiles; packaging fails on missing exact-version license
+  texts for objc2-core-media/core-video 0.3.2 and openh264/openh264-sys2 0.9.8.
+  Initial baseline voice attempt received SIGTERM (143); one retry reached this
+  reproducible packaging blocker. Existing upstream license-evidence warnings remain.
+
+Native before/after captures and final package/performance results are recorded in
+`docs/pr-evidence/voice-settings-polish` and `docs/performance.md`. The baseline preview
+hid all controls, so screenshots compare that state to newly visible disabled controls,
+not a simulated live call. Required full-check/voice-package blockers keep the PR draft.
+No Discord connection, messages, calls, microphone, camera or screen-share capture was used.
+
+Final evidence: both release variants compile; text packaging and `cargo xtask policy`
+pass. Text executable +40,768 bytes (0.079%); voice executable +24,240 bytes (0.042%).
+Full installed/archive values and noisy process samples are in the performance table.
+The composer assertion/destructor abort was reproduced in the isolated baseline after
+only applying the missing wheel-event test field needed to compile its UI test target.
+The final call popup was checked natively after removing an unreliable previous-frame
+response guard; the five focused voice tests still pass. Settings/call before/after
+images, light appearance, 150% scaling, scroll access and the full-page link were checked.
+All captures use synthetic data; no live account or media-device action was performed.
+
 ## Account activity privacy and minimize to tray - September 11, 2026
 
 Implemented on `fix/presence-and-tray` from clean main `381e178`; original checkout
@@ -2837,3 +2982,46 @@ Final voice release compilation also passed (+1,536 executable bytes), but
 `cargo xtask package-voice` failed on both baseline and after: missing exact license
 texts for openh264-sys2 0.9.8 and openh264 0.9.8, plus the existing realfft evidence
 warning. No notices or policy checks were bypassed; complete voice packages unavailable.
+
+## CI caches, Bun and current check failures — September 11, 2026
+
+Baseline: `1ff190b1eafb6ff701231f56b4eff296c7d6c578` on `origin/main`;
+implementation branch `perf/ci-dependency-cache`.
+The latest baseline run (34632696298) passed security and licenses. Native jobs
+and fuzz stopped at the camera formatting change from the preceding fast fix.
+The formatter correction is included here. Running the full local check then
+exposed stale UI fixtures for link confirmation, edit retry, and typing placement;
+the fixtures now exercise the current UI paths without changing runtime behavior.
+
+Rust dependency caches already existed for native, license, fuzz and release jobs.
+They now save after failed checks too. Security now caches its pinned cargo-audit
+binary and registry downloads; Cargo-tool versions are included in tool-job keys.
+The pinned fuzz nightly is installed before computing its cache key. Release
+installation now uses Bun 1.4.2, a frozen `bun.lock`, disabled install scripts and
+a cache of Bun's package downloads. Bun 1.4.2 also runs the release smoke,
+semantic-release planning and publishing scripts; Node remains only for the
+separate native-build login handoff check.
+No app caches, account data, signed artifacts, signing keys or advisory databases
+are added to these caches.
+
+Verification so far:
+
+- actionlint 1.7.12 passed both workflows (optional shellcheck/pyflakes disabled).
+- Bun 1.4.2 migrated the npm lockfile; all 298 checksummed dependency version and
+  integrity pairs were preserved. A clean temporary frozen install passed the
+  existing offline release smoke with Python 3.14. A Bun-run semantic-release
+  dry-run plan also completed and selected the expected first nightly version.
+  No release publish command was executed.
+- Authentication handoff, xtask workspace and license-policy script checks passed.
+- Fuzz workspace formatting and diff whitespace checks passed.
+
+Performance: the baseline GitHub cargo-audit install took 133 seconds, cargo-deny
+117 seconds. Cache configuration now permits reuse; no warm-run speedup or total
+pipeline-time reduction is claimed before the new workflow has run. No runtime,
+package-size or screenshot comparison applies to workflow/test/formatting changes.
+
+Release blocker found during review: `openh264` and `openh264-sys2` 0.9.8 lack
+complete wrapper license texts in their published crates and exact upstream tree.
+The upstream BSD-2-Clause declaration and Cisco codec license are distinct; no
+unresolved override or license-check bypass was added. Signing and live Discord
+compatibility are not validated by these changes.

@@ -217,7 +217,7 @@ fn restore_processing_preserves_existing_drafts_and_ignores_late_confirmations()
 		let channel = state.selected.unwrap();
 		let nonce = send(&mut state, "Text to recover");
 		state.pending[0].delivery = Delivery::Ambiguous;
-		state.pending[0].attachment = Some("example.txt".into());
+		state.pending[0].attachments = vec!["example.txt".into()];
 		if scenario == 1 {
 			state.drafts.insert(channel, "Newer draft".into());
 		} else if scenario == 2 {

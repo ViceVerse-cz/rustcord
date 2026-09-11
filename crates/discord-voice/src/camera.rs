@@ -166,7 +166,7 @@ mod macos {
 				let mut bgra = vec![0; WIDTH * HEIGHT * 4];
 				for (row, dest) in source
 					.chunks_exact(stride)
-					.zip(bgra.chunks_exact_mut(WIDTH * 4))
+					.zip(bgra.as_chunks_mut::<{ WIDTH * 4 }>().0)
 				{
 					dest.copy_from_slice(&row[..WIDTH * 4]);
 				}
@@ -197,12 +197,11 @@ mod macos {
 				}))
 				.unwrap_or(Err("Camera worker failed"));
 				worker.active.store(false, Ordering::Release);
-				if !worker.stopped.load(Ordering::Acquire) {
-					if let Err(error) = result {
-						if let Ok(mut slot) = worker.error.lock() {
-							*slot = Some(error);
-						}
-					}
+				if !worker.stopped.load(Ordering::Acquire)
+					&& let Err(error) = result
+					&& let Ok(mut slot) = worker.error.lock()
+				{
+					*slot = Some(error);
 				}
 				worker.finished.store(true, Ordering::Release);
 				RUNNING.store(false, Ordering::Release);
@@ -360,7 +359,12 @@ mod macos {
 			};
 			last_frame = Instant::now();
 			let mut rgb = vec![0; WIDTH * HEIGHT * 3];
-			for (bgra, rgb) in bgra.chunks_exact(4).zip(rgb.chunks_exact_mut(3)) {
+			for (bgra, rgb) in bgra
+				.as_chunks::<4>()
+				.0
+				.iter()
+				.zip(rgb.as_chunks_mut::<3>().0)
+			{
 				rgb.copy_from_slice(&[bgra[2], bgra[1], bgra[0]]);
 			}
 			yuv.read_rgb8(RgbSliceU8::new(&rgb, (WIDTH, HEIGHT)));
