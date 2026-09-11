@@ -2311,3 +2311,36 @@ Native evidence is still unavailable. The earlier package measurements describe 
 pre-integration implementation, not the combined #68 tree.
 
 Both integrated release builds pass: text (cargo build --locked --release -p serein --no-default-features, 1m32s) and voice (same command plus --features voice, 1m45s). No live launch was performed. The owner-requested main merge retains the check limitations above.
+
+
+## Chat placeholder and sidebar alignment - September 11, 2026
+
+Branch `fix/chat-control-alignment`, baseline main `36b5c33`. Original checkout's unrelated
+`target-relocation-remainder/` was preserved; implementation used a separate worktree.
+The message editor now reserves the existing horizontal interaction height (32 points),
+so its placeholder and typed text align with the box and icons rather than sitting
+2 points high. Empty rich-text layout retains body-font metrics for a full-height caret.
+Channel and People lists set zero row spacing before virtualized measurement and restore
+caller spacing afterward. Voice participant rows share the channel list's 34-point height.
+
+Validation:
+- `cargo test --locked -p ui composer`: 25 passed, including new bundled-font geometry
+  coverage in light/dark, four scales, narrow/wide and multiline states. New regression
+  failed on the original composer before edits.
+- `cargo test --locked -p ui member_pane_virtualizes_and_preview_never_requests_network` passed.
+- Category tests: 3 passed, existing `service_order_orphans_collapsed_selection_and_category_buttons`
+  index-out-of-bounds failure remains. New `channel_rows_scroll_continuously_past_voice_participants`
+  passes; restoring original spacing or original voice height independently fails it.
+- `cargo xtask check`: formatting passed; blocked by existing Clippy question_mark lint
+  at `client-core/src/permissions.rs:439`. UI-only strict Clippy also reports existing
+  too_many_arguments in `pending.rs:12` and `timeline.rs:364`. No lint suppressions added.
+- `cargo xtask policy` and `git diff --check` passed.
+- Both release packages pass before/after. Text executable +1,024 bytes; voice +1,536 bytes.
+  Full installed/archive measurements are in docs/performance.md.
+
+Native capture/interaction evidence and native CPU/memory/frame timing are blocked:
+Windows Computer Use cannot connect its native pipe (OS error 2); `orca` is unavailable.
+No screenshot is fabricated and the owner's screenshot is not committed. Draft PR for
+these evidence and pre-existing check blockers. Other OSes and live Discord remain untested.
+Offline manual reproduction: run `cargo run --locked -p serein -- --demo --demo-chat`,
+inspect the empty composer/caret and a multiline draft, then scroll channel/People lists.

@@ -2182,3 +2182,37 @@ The later owner-requested integration with main `d8cb031` preserves #68's shared
 pending/upload renderer and removes this branch's duplicate implementation. The table
 above remains historical evidence for the pre-integration revision; no size or native
 performance delta is attributed to the combined implementation.
+
+
+## Chat alignment - September 11, 2026
+
+Baseline `36b5c33180a90353ece9fde18b9c86695c1c9ef4`; branch `fix/chat-control-alignment`.
+Windows 11 Home 10.0.26200, Rust 1.98.1, x86_64-pc-windows-msvc, pinned lockfile.
+Both variants were rebuilt before production edits and kept separate from changed packages.
+One package per variant/revision, same release profile. Main advanced during this task;
+these deltas isolate alignment work against the recorded baseline, not the later main.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text exe, bytes | 54,099,456 | 54,100,480 | +1,024 (+0.002%) |
+| Text installed, bytes | 55,236,270 | 55,237,294 | +1,024 (+0.002%) |
+| Text zip, bytes | 33,292,420 | 33,292,471 | +51 (+0.000%) |
+| Voice exe, bytes | 59,205,632 | 59,207,168 | +1,536 (+0.003%) |
+| Voice installed, bytes | 60,645,753 | 60,647,289 | +1,536 (+0.003%) |
+| Voice zip, bytes | 35,473,550 | 35,473,705 | +155 (+0.000%) |
+
+`cargo xtask package` and `cargo xtask package-voice` pass before and after. Installed
+sums include all 65 text / 128 voice files; text excludes the nested voice directory.
+ZIPs use Python zipfile, sorted relative paths, DEFLATE level 9. Package documentation
+was copied before this evidence append. Tiny size differences are not speed improvements.
+No dependency changes, new caches or background work.
+
+Synthetic egui geometry with bundled Inter fonts reproduces a -2 logical-pixel composer
+text center offset at 100% scale before the fix, and centered text afterward. The new
+check covers light/dark, 100/125/150/200% scale, 320/900-point widths and multiline text.
+The scroll check detects an 8-point jump with original spacing and independently a
+2-point jump with the original voice row height; both corrections pass.
+
+Native screenshots and process CPU/RSS/frame/startup measurements remain unavailable:
+`orca` is not installed; Windows Computer Use reports its native pipe unavailable with
+OS error 2 (file not found). No runtime performance or live Discord compatibility claim.
