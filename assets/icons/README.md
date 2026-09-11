@@ -6,9 +6,9 @@
 fetched through the jsDelivr npm mirror on September 10, 2026. The unmodified license is
 `LICENSE` and is staged in both packages as `licenses/Phosphor-Icons-MIT.txt`.
 
-Seventy-eight unmodified Phosphor `assets/fill/*.svg` and `assets/bold/*.svg` files are scaled
+Eighty unmodified Phosphor `assets/fill/*.svg` and `assets/bold/*.svg` files are scaled
 to 56×56 pixels, filled white, and rasterized by `resvg` 0.45.1 into one transparent PNG atlas
-with 64×64 cells (8 columns, 11 rows). `headphones-slash` is derived from `headphones-fill.svg`
+with 64×64 cells (8 columns, 12 rows). `headphones-slash` is derived from `headphones-fill.svg`
 by masking a diagonal knockout and adding a 16-unit round-capped stroke, matching the style of
 Phosphor's own `*-slash` icons. The application tints glyphs at draw time; no icon font,
 JavaScript or per-icon file is bundled.
@@ -23,10 +23,10 @@ to match Phosphor's visual weight. Brand marks remain trademarks of their owners
 legal disclaimer applies. The license file is staged in both packages as
 `licenses/Simple-Icons-CC0.txt`.
 
-- `atlas.png`: 512×704 RGBA, 98,932 bytes; decoded 1,441,792 bytes.
-  SHA-256 `acaf719286f4252acbbbe6cb9e591f43373c56b275be606c017718a975c84801`.
+- `atlas.png`: 512×768 RGBA, 101,099 bytes; decoded 1,572,864 bytes.
+  SHA-256 `ef32d52dd69a00558a07e37f9e6870ea66e332570209cea97b6ddabc6c198c29`.
 - `index.tsv`: icon name, tab, zero-based cell; SHA-256
-  `0b73b42d2a2068c2d50aad411d6bb4e1ec87d76fd478f960126730ff6cccb4a7`.
+  `c35570a9d04121481bbbe074e0d224c917e92bf79021f459407ba7d5cab2c2a3`.
 - `LICENSE`: SHA-256 `ddbe6082ec3cf979db47e5af549d2849c5d6182b3e005ef91ce1dbb9eb122f11`.
 - `LICENSE-SIMPLE-ICONS`: SHA-256
   `9046848b63a5c92bff14e4accca80bd987e0623b74adf9226ce5198d312b79d5`.
@@ -45,3 +45,6 @@ distinct, non-blank cell and that the atlas stays below 256 KiB.
 
 The folder and open-folder glyphs are unmodified Phosphor `folder-fill.svg` and
 `folder-open-fill.svg`, fetched from the same pinned 2.1.1 package on September 11, 2026.
+
+The media-viewer caret and download glyphs are unmodified Phosphor `caret-left-bold.svg` and
+`download-simple-bold.svg`, fetched from the same pinned 2.1.1 package on September 11, 2026.

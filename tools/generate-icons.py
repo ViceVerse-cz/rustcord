@@ -99,6 +99,8 @@ ICONS = [
     ("arrow-left", "bold/arrow-left-bold.svg", "7588792d7824e7c5337bca7b5de96ad0685ddea0a5732dfb62701d163a076563"),
     ("folder", "fill/folder-fill.svg", "2217bd2f730884d7a8aec3e3358eb7500448b0e3d86f33a63142f40f0622bfe9"),
     ("folder-open", "fill/folder-open-fill.svg", "f9e57c3d40ab536915f8302a4390405f5660ee7b7275a3f80b384d977c59373e"),
+    ("caret-left", "bold/caret-left-bold.svg", "b78b6f532b53b9847340961848cb9e4f5be7e1da07e9dcf11c60cf64aa3986b7"),
+    ("download-simple", "bold/download-simple-bold.svg", "3ca0b8bba15633eb29f9818fe3670d6438bcbc897649c767e491a411e696e2d3"),
 ]
 LICENSE_SHA256 = "ddbe6082ec3cf979db47e5af549d2849c5d6182b3e005ef91ce1dbb9eb122f11"
 
