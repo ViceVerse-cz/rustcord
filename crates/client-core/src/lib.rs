@@ -481,8 +481,8 @@ impl State {
 				.sum::<usize>()
 	}
 	pub fn select(&mut self, channel: Id) -> Option<Command> {
-		// Re-opening the current conversation keeps its history, scroll position and draft.
-		if self.selected == Some(channel) {
+		// Keep the current conversation intact, but allow a restored channel to load again.
+		if self.selected == Some(channel) && self.freshness != Freshness::Unavailable {
 			return None;
 		}
 		if !self
