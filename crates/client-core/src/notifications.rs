@@ -504,6 +504,7 @@ mod tests {
 					last_message: Some(Id(95)),
 					position: 0,
 					recipients: vec![],
+					icon: None,
 					member_list_id: None,
 					message_count: None,
 				})

@@ -337,6 +337,7 @@ mod tests {
 				name: "Synthetic".into(),
 				kind: 0,
 				recipients: vec![],
+				icon: None,
 				member_list_id: Some("everyone".into()),
 				message_count: None,
 				last_message: None,

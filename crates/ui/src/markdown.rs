@@ -848,6 +848,7 @@ mod tests {
 			recipients: vec![],
 			member_list_id: None,
 			message_count: None,
+			icon: None,
 			last_message: None,
 		};
 		assert_eq!(
@@ -1421,6 +1422,7 @@ mod tests {
 			recipients: vec![],
 			member_list_id: None,
 			message_count: None,
+			icon: None,
 		})
 		.collect();
 		for id in [1, 2, 3, 4, 5] {

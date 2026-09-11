@@ -203,6 +203,7 @@ mod tests {
 			position: 0,
 			recipients: vec![],
 			last_message: None,
+			icon: None,
 			member_list_id: None,
 			message_count: None,
 		}
@@ -428,6 +429,7 @@ mod tests {
 					Event::ThreadChanged {
 						guild: Id(guild),
 						patch: model::ChannelPatch {
+							icon: model::Patch::Absent,
 							id: Id(id),
 							name: model::Patch::Value("Updated archive metadata".into()),
 							last_message: model::Patch::Absent,

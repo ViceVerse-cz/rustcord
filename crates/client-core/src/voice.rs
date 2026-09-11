@@ -663,6 +663,7 @@ mod tests {
 					parent_id: None,
 					position: 0,
 					recipients: vec![],
+					icon: None,
 					member_list_id: None,
 					message_count: None,
 				})
@@ -895,6 +896,7 @@ mod tests {
 					parent_id: None,
 					position: 0,
 					recipients: vec![],
+					icon: None,
 					member_list_id: None,
 					message_count: None,
 				})
@@ -1035,6 +1037,7 @@ mod tests {
 					avatar: None,
 					discriminator: 0,
 				}],
+				icon: None,
 				member_list_id: None,
 				message_count: None,
 			}],

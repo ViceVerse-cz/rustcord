@@ -18,6 +18,7 @@ pub mod reactions;
 pub mod read_state;
 mod replies;
 pub use replies::ReplyDeletions;
+pub mod group_actions;
 pub mod resident;
 pub mod screen;
 pub mod search;
@@ -38,11 +39,15 @@ pub const MAX_NAV: usize = 4000;
 pub const MAX_MEMBER_PRESENCE_BYTES: usize = 128 * 1024;
 pub const MAX_EVENT_BYTES: usize = 4 * 1024 * 1024;
 pub const EVENT_SLOTS: usize = 8; // UI drain batch; reliable events share a 32 MiB byte budget.
-pub const COMMAND_SLOTS: usize = 16; // each admitted command <= 16 KiB
+pub const COMMAND_SLOTS: usize = 16; // ordinary commands <=16 KiB; one pending group icon <=350 KiB
 
 pub enum Command {
 	/// None loads the current settings; Some saves the complete folder layout.
 	GuildFolders(Option<model::guild_folders::Settings>),
+	GroupAction {
+		action: group_actions::Action,
+		request: u64,
+	},
 	ServerAction {
 		action: server_actions::Action,
 		request: u64,
@@ -153,6 +158,7 @@ pub enum Event {
 	GuildFolders(Result<model::guild_folders::Settings, auth::Failure>),
 	UserAction(user_actions::Event),
 	ServerAction(server_actions::Event),
+	GroupAction(group_actions::Event),
 	Invite {
 		code: String,
 		result: Result<Box<model::InvitePreview>, auth::Failure>,
@@ -310,6 +316,7 @@ pub struct State {
 	pub folders_error: Option<&'static str>,
 	pub user_actions: user_actions::Actions,
 	pub server_actions: server_actions::Actions,
+	pub group_actions: group_actions::Actions,
 	pub typing: typing::Typing,
 	pub permissions: permissions::Permissions,
 	pub archives: Option<archives::View>,
@@ -376,6 +383,7 @@ impl Default for State {
 			folders_error: None,
 			user_actions: user_actions::Actions::default(),
 			server_actions: server_actions::Actions::default(),
+			group_actions: group_actions::Actions::default(),
 			typing: typing::Typing::default(),
 			permissions: permissions::Permissions::default(),
 			archives: None,
@@ -806,6 +814,16 @@ impl State {
 			)));
 			return;
 		}
+		if let Command::GroupAction { action, request } = command {
+			let _ = self.apply_group_action(group_actions::Event::Written {
+				channel: action.channel(),
+				request,
+				result: Err(auth::Failure::ProtocolAt(
+					"Group action was not queued; try again",
+				)),
+			});
+			return;
+		}
 		if let Command::ServerAction { action, request } = command {
 			let _ = self.apply_server_action(server_actions::Event::Written {
 				action,
@@ -1106,6 +1124,14 @@ impl State {
 		self.invalidate_resident_event(&envelope.event);
 		if let Event::ChannelCreated(channel) = &envelope.event {
 			self.observe_dm_reopened(channel.id);
+			self.observe_group_change(channel.id, true);
+		}
+		if let Event::ChannelChanged(patch) = &envelope.event
+			&& (!matches!(patch.name, Patch::Absent)
+				|| !matches!(patch.icon, Patch::Absent)
+				|| !matches!(patch.kind, Patch::Absent))
+		{
+			self.observe_group_change(patch.id, false);
 		}
 		self.revision += 1;
 		if matches!(
@@ -1208,6 +1234,7 @@ impl State {
 			Event::NotificationPreferences(event) => self.apply_notification_preferences(event),
 			Event::UserAction(event) => self.apply_user_action(event),
 			Event::ServerAction(event) => self.apply_server_action(event),
+			Event::GroupAction(event) => self.apply_group_action(event),
 			Event::ThreadsSync {
 				guild,
 				parents,
@@ -1378,6 +1405,13 @@ impl State {
 					match patch.name {
 						Patch::Value(name) => channel.name = name.chars().take(128).collect(),
 						Patch::Null => channel.name.clear(),
+						Patch::Absent => {}
+					}
+					match patch.icon {
+						Patch::Value(hash) => {
+							channel.icon = model::valid_avatar_hash(&hash).then_some(hash)
+						}
+						Patch::Null => channel.icon = None,
 						Patch::Absent => {}
 					}
 					match patch.parent_id {
@@ -1560,9 +1594,11 @@ impl State {
 				self.notification_preferences = notifications::Preferences::default();
 				self.cancel_user_action();
 				self.cancel_server_action();
+				self.cancel_group_action();
 				self.cancel_invite_join();
 				self.user_actions.reset();
 				self.server_actions.reset();
+				self.group_actions.reset();
 				self.clear_own_profile();
 				self.user = Some(user);
 				self.guilds = guilds;
@@ -1883,6 +1919,7 @@ impl State {
 				self.cancel_message_actions();
 				self.cancel_user_action();
 				self.cancel_server_action();
+				self.cancel_group_action();
 				self.cancel_invite_join();
 				self.read_state.cancel();
 				self.clear_profile();
@@ -1910,6 +1947,7 @@ impl State {
 				self.cancel_message_actions();
 				self.cancel_user_action();
 				self.cancel_server_action();
+				self.cancel_group_action();
 				self.cancel_invite_join();
 				self.direct_presences.clear();
 				self.direct_presence_bytes = None;
@@ -2057,6 +2095,7 @@ impl State {
 			}
 			self.cancel_user_action();
 			self.cancel_server_action();
+			self.cancel_group_action();
 			self.cancel_invite_join();
 			self.direct_presences.clear();
 			self.direct_presence_bytes = None;
@@ -2092,11 +2131,14 @@ impl Event {
 		matches!(
 			self,
 			Event::Ready { .. }
-				| Event::UserAction(user_actions::Event::Written {
-					action: user_actions::Action::CloseDm(_),
-					result: Ok(()),
+				| Event::GroupAction(group_actions::Event::Written {
+					result: Ok(None),
 					..
-				}) | Event::ServerAction(server_actions::Event::Written {
+				}) | Event::UserAction(user_actions::Event::Written {
+				action: user_actions::Action::CloseDm(_),
+				result: Ok(()),
+				..
+			}) | Event::ServerAction(server_actions::Event::Written {
 				action: server_actions::Action::Leave(_),
 				result: Ok(None),
 				..
@@ -2119,6 +2161,16 @@ impl Event {
 	pub fn bytes(&self) -> usize {
 		size_of::<Self>()
 			+ match self {
+				Self::GroupAction(group_actions::Event::Written {
+					result: Ok(Some(patch)),
+					..
+				}) => [&patch.name, &patch.icon]
+					.into_iter()
+					.map(|p| match p {
+						Patch::Value(s) => s.capacity(),
+						_ => 0,
+					})
+					.sum(),
 				Self::Edited { result, .. } => result.as_ref().map_or(0, Message::bytes),
 				Self::GuildFolders(result) => result
 					.as_ref()
@@ -2183,10 +2235,13 @@ impl Event {
 						+ threads.iter().map(Channel::bytes).sum::<usize>()
 				}
 				Self::ChannelChanged(patch) | Self::ThreadChanged { patch, .. } => {
-					match &patch.name {
-						Patch::Value(name) => name.capacity(),
-						_ => 0,
-					}
+					[&patch.name, &patch.icon]
+						.into_iter()
+						.map(|p| match p {
+							Patch::Value(s) => s.capacity(),
+							_ => 0,
+						})
+						.sum()
 				}
 				Self::Ready {
 					user,
@@ -2294,6 +2349,7 @@ mod tests {
 				position: 0,
 				recipients: vec![],
 				last_message: None,
+				icon: None,
 				member_list_id: None,
 				message_count: None,
 			}],
@@ -2346,6 +2402,7 @@ mod tests {
 				position: 0,
 				recipients: vec![],
 				last_message: None,
+				icon: None,
 				member_list_id: None,
 				message_count: None,
 			}],
@@ -2460,6 +2517,7 @@ mod tests {
 				position: 0,
 				recipients: vec![],
 				last_message: None,
+				icon: None,
 				member_list_id: None,
 				message_count: None,
 			}],
@@ -2876,6 +2934,7 @@ mod tests {
 			name: "Synthetic channel".into(),
 			kind: 0,
 			recipients: vec![],
+			icon: None,
 			member_list_id: None,
 			message_count: None,
 		};
@@ -2885,6 +2944,7 @@ mod tests {
 		apply(
 			&mut state,
 			Event::ChannelChanged(ChannelPatch {
+				icon: model::Patch::Absent,
 				last_message: model::Patch::Absent,
 				id: Id(2),
 				name: Patch::Absent,
@@ -2903,6 +2963,7 @@ mod tests {
 		apply(
 			&mut state,
 			Event::ChannelChanged(ChannelPatch {
+				icon: model::Patch::Absent,
 				last_message: model::Patch::Absent,
 				id: Id(2),
 				name: Patch::Absent,
@@ -2929,6 +2990,7 @@ mod tests {
 					name: String::new(),
 					kind: 4,
 					recipients: vec![],
+					icon: None,
 					member_list_id: None,
 					message_count: None,
 				}),
@@ -2990,6 +3052,7 @@ mod tests {
 				name: "Synthetic DM".into(),
 				recipients: vec![],
 				last_message: None,
+				icon: None,
 				member_list_id: None,
 				message_count: None,
 			}],
@@ -3124,6 +3187,7 @@ mod tests {
 				name: "DM".into(),
 				kind: 1,
 				recipients: vec![user.clone()],
+				icon: None,
 				member_list_id: None,
 				message_count: None,
 			}],
@@ -3180,6 +3244,7 @@ mod tests {
 			position: 7,
 			recipients: vec![],
 			last_message: Some(Id(80)),
+			icon: None,
 			member_list_id: Some("known-list".into()),
 			message_count: None,
 		};
@@ -3203,6 +3268,7 @@ mod tests {
 			name: "Restored".into(),
 			position: 0,
 			last_message: None,
+			icon: None,
 			member_list_id: None,
 			message_count: None,
 			..channel.clone()
@@ -3215,6 +3281,7 @@ mod tests {
 		apply(
 			&mut state,
 			Event::ChannelChanged(ChannelPatch {
+				icon: model::Patch::Absent,
 				id: Id(1),
 				name: Patch::Value("Renamed".into()),
 				last_message: Patch::Absent,
@@ -3316,6 +3383,7 @@ mod tests {
 			position: 0,
 			recipients: vec![],
 			last_message: None,
+			icon: None,
 			member_list_id: None,
 			message_count: None,
 		};
@@ -3399,6 +3467,7 @@ mod tests {
 			position: 0,
 			recipients: vec![],
 			last_message: None,
+			icon: None,
 			member_list_id: None,
 			message_count: None,
 		};
@@ -3547,6 +3616,7 @@ mod tests {
 					name: "Synthetic".into(),
 					kind: 1,
 					recipients: vec![],
+					icon: None,
 					member_list_id: None,
 					message_count: None,
 				}],

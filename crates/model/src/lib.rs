@@ -140,6 +140,8 @@ pub struct GuildPatch {
 }
 #[derive(Clone, PartialEq, Eq)]
 pub struct Channel {
+	/// Group DM icon hash; absent for groups using the default icon.
+	pub icon: Option<String>,
 	pub last_message: Option<Id>,
 	pub id: Id,
 	pub guild: Option<Id>,
@@ -157,6 +159,7 @@ impl Channel {
 	pub fn bytes(&self) -> usize {
 		size_of::<Self>()
 			+ self.name.capacity()
+			+ self.icon.as_ref().map_or(0, String::capacity)
 			+ self.member_list_id.as_ref().map_or(0, String::capacity)
 			+ self.recipients.capacity() * size_of::<User>()
 			+ self.recipients.iter().map(User::heap_bytes).sum::<usize>()
@@ -167,6 +170,7 @@ impl Channel {
 }
 #[derive(Clone)]
 pub struct ChannelPatch {
+	pub icon: Patch<String>,
 	pub last_message: Patch<Id>,
 	pub id: Id,
 	pub name: Patch<String>,

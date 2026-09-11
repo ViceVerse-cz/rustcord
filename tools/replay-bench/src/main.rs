@@ -62,6 +62,7 @@ fn navigation() {
 			last_message: None,
 			member_list_id: None,
 			message_count: None,
+			icon: None,
 		})
 		.collect();
 	state.selected = None;

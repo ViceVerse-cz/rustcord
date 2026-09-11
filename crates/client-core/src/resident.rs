@@ -227,6 +227,7 @@ mod tests {
 					name: "Synthetic DM".into(),
 					recipients: vec![],
 					last_message: None,
+					icon: None,
 					member_list_id: None,
 					message_count: None,
 				})
@@ -465,6 +466,7 @@ mod tests {
 	fn identity_access_session_and_explicit_clear_remove_dormant_content() {
 		for event in [
 			Event::ChannelChanged(model::ChannelPatch {
+				icon: model::Patch::Absent,
 				id: Id(1),
 				parent_id: Patch::Value(Id(99)),
 				name: Patch::Absent,

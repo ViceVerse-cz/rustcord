@@ -217,6 +217,7 @@ mod tests {
 				last_message: None,
 				member_list_id: None,
 				message_count: None,
+				icon: None,
 				recipients: vec![
 					User {
 						id: Id(1),

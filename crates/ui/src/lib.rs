@@ -15,6 +15,7 @@ mod emoji_picker;
 pub mod fonts;
 mod formatting;
 mod forum;
+mod group_menu;
 mod guild_folders;
 pub mod icons;
 mod invites;
@@ -70,6 +71,7 @@ enum MemberRow {
 
 #[derive(Default)]
 pub struct MessagingUi {
+	group_menu: group_menu::GroupMenu,
 	server_menu: server_menu::ServerMenu,
 	folder_ui: guild_folders::FolderUi,
 	member_cache_key: Option<(u64, u64, Option<Id>, bool)>,
@@ -211,6 +213,17 @@ fn composer_cap(
 		.rect
 }
 impl MessagingUi {
+	pub fn take_group_icon_request(&mut self) -> Option<(u64, Id, u64)> {
+		self.group_menu.icon_request.take()
+	}
+	pub fn accept_group_icon(
+		&mut self,
+		ctx: &egui::Context,
+		request: (u64, Id, u64),
+		result: Result<Option<(String, egui::ColorImage)>, &'static str>,
+	) {
+		self.group_menu.accept_icon(ctx, request, result);
+	}
 	pub fn timeline_reflows(&self) -> (u64, u64) {
 		(
 			self.timeline.reflow_frames,
@@ -981,6 +994,10 @@ impl MessagingUi {
 				ui.horizontal_centered(|ui| {
 					ui.spacing_mut().item_spacing.x = 8.0;
 					match channel.as_ref() {
+						Some(c) if c.guild.is_none() && c.kind == 3 => {
+							let avatar = self.avatars.show_group(ui, c, 24.0, state.demo);
+							self.group_menu.context(&avatar, state, c);
+						}
 						Some(c) if c.guild.is_none() => {
 							if let Some(user) = c.recipients.first() {
 								let avatar = self.avatars.show(ui, user, 24.0, state.demo);
@@ -1023,6 +1040,12 @@ impl MessagingUi {
 					}
 					ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 						ui.spacing_mut().item_spacing.x = 4.0;
+						if let Some(c) = channel
+							.as_ref()
+							.filter(|c| c.guild.is_none() && c.kind == 3)
+						{
+							self.group_menu.dropdown(ui, state, c);
+						}
 						if state.selected.is_some() && !selected_voice {
 							if self.search.open && !self.search.pins() {
 								ui.allocate_ui_with_layout(
@@ -2493,6 +2516,8 @@ impl MessagingUi {
 				state.refresh_reactions(message);
 			}
 		}
+		self.group_menu
+			.show(&ctx, state, &mut self.avatars, &mut commands);
 		if let Some(action) = self.user_action.take().or(self.timeline.user_action.take())
 			&& let Some(command) = user_menu::prepare(action, state)
 		{
@@ -2755,6 +2780,7 @@ mod composer_tests {
 				last_message: None,
 				member_list_id: None,
 				message_count: None,
+				icon: None,
 			}],
 			user: Some(user.clone()),
 			demo: true,
@@ -3988,6 +4014,7 @@ mod composer_tests {
 				recipients: vec![],
 				member_list_id: None,
 				message_count: None,
+				icon: None,
 			});
 			edit_frame(&ctx, &mut view, &mut state, vec![]);
 			view.deleting = Some((Id(10), Id(20)));
@@ -4059,6 +4086,7 @@ mod composer_tests {
 				recipients: Vec::new(),
 				member_list_id: Some("everyone".into()),
 				message_count: None,
+				icon: None,
 			}],
 			members: Some(model::MemberList {
 				channel: Id(1),
@@ -4494,6 +4522,7 @@ mod composer_tests {
 					recipients: vec![user.clone()],
 					member_list_id: None,
 					message_count: None,
+					icon: None,
 				}],
 				..Default::default()
 			};
@@ -4713,6 +4742,7 @@ mod composer_tests {
 				recipients: Vec::new(),
 				member_list_id: None,
 				message_count: None,
+				icon: None,
 			}],
 			..Default::default()
 		};

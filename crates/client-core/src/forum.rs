@@ -133,6 +133,7 @@ mod tests {
 			position: 0,
 			recipients: vec![],
 			last_message: None,
+			icon: None,
 			member_list_id: None,
 			message_count: Some(3),
 		}

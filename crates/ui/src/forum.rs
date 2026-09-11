@@ -605,6 +605,7 @@ mod tests {
 					last_message: None,
 					member_list_id: None,
 					message_count: Some(0),
+					icon: None,
 				}),
 			);
 			assert_eq!(state.posting.created, Some(Id(1_548_000_000_000_000_000)));

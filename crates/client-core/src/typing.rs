@@ -155,6 +155,7 @@ mod tests {
 					name: "Synthetic DM".into(),
 					kind: 1,
 					recipients: vec![],
+					icon: None,
 					member_list_id: None,
 					message_count: None,
 					last_message: None,

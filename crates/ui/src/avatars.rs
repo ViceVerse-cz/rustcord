@@ -457,6 +457,48 @@ impl Avatars {
 		}
 		true
 	}
+	pub fn show_group(
+		&mut self,
+		ui: &mut egui::Ui,
+		channel: &model::Channel,
+		size: f32,
+		demo: bool,
+	) -> egui::Response {
+		let (rect, response) =
+			ui.allocate_exact_size(egui::Vec2::splat(size), egui::Sense::click());
+		let colors = crate::design::palette(ui);
+		let mut painted = false;
+		if ui.is_rect_visible(rect)
+			&& let Some(hash) = channel
+				.icon
+				.as_deref()
+				.filter(|hash| model::valid_avatar_hash(hash))
+		{
+			let key = format!("group-icon-{}-{hash}", channel.id);
+			painted = self.paint(ui, &key, rect, (size / 2.0) as u8);
+			if !painted && !demo {
+				self.request(key);
+			}
+		}
+		if !painted {
+			ui.painter()
+				.circle_filled(rect.center(), size / 2.0, colors.raised);
+			crate::icons::paint(
+				ui.painter(),
+				crate::icons::Icon::People,
+				rect.shrink(size * 0.22),
+				colors.muted,
+			);
+		}
+		response.widget_info(|| {
+			egui::WidgetInfo::labeled(
+				egui::WidgetType::Button,
+				ui.is_enabled(),
+				format!("Group {}", channel.name),
+			)
+		});
+		response
+	}
 	pub fn show_guild(
 		&mut self,
 		ui: &mut egui::Ui,

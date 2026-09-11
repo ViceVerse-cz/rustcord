@@ -435,6 +435,7 @@ mod navigation_tests {
 				name: "Synthetic DM".into(),
 				recipients: vec![],
 				last_message: Some(Id(500)),
+				icon: None,
 				member_list_id: None,
 				message_count: None,
 			}],

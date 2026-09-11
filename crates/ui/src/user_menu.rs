@@ -12,6 +12,25 @@ pub(super) fn prepare(action: Action, state: &mut State) -> Option<Command> {
 	}
 }
 
+pub(super) fn popup(response: &egui::Response, id: egui::Id) -> egui::Popup<'_> {
+	let keyboard = response.has_focus()
+		&& response
+			.ctx
+			.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::F10));
+	let mut popup = egui::Popup::context_menu(response).id(id);
+	if keyboard {
+		popup = popup
+			.open_memory(Some(egui::SetOpenCommand::Bool(true)))
+			.at_position(response.rect.right_bottom());
+	} else if !response.secondary_clicked()
+		&& egui::Popup::position_of_id(&response.ctx, id).is_none()
+	{
+		// Keyboard-opened menus have no remembered pointer position.
+		popup = popup.at_position(response.rect.right_bottom());
+	}
+	popup
+}
+
 pub(super) fn show(
 	response: &egui::Response,
 	state: &State,
@@ -19,23 +38,7 @@ pub(super) fn show(
 	profile: &mut Option<User>,
 	action: &mut Option<Action>,
 ) {
-	let keyboard = response.has_focus()
-		&& response
-			.ctx
-			.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::F10));
-	let mut popup = egui::Popup::context_menu(response);
-	if keyboard {
-		popup = popup
-			.open_memory(Some(egui::SetOpenCommand::Bool(true)))
-			.at_position(response.rect.right_bottom());
-	} else if !response.secondary_clicked()
-		&& egui::Popup::position_of_id(&response.ctx, egui::Popup::default_response_id(response))
-			.is_none()
-	{
-		// Keyboard-opened menus have no remembered pointer position.
-		popup = popup.at_position(response.rect.right_bottom());
-	}
-	popup.show(|ui| {
+	popup(response, egui::Popup::default_response_id(response)).show(|ui| {
 		let colors = crate::design::palette(ui);
 		ui.set_min_width(200.0);
 		ui.spacing_mut().button_padding = egui::vec2(8.0, 6.0);

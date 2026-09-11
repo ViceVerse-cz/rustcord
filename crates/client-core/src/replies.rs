@@ -169,6 +169,7 @@ mod tests {
 					name: "Synthetic DM".into(),
 					recipients: vec![],
 					last_message: None,
+					icon: None,
 					member_list_id: None,
 					message_count: None,
 				})

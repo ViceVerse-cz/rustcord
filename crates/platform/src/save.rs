@@ -1,6 +1,21 @@
 //! Native destination selection; never interprets an attachment name as a path.
 use std::{path::PathBuf, sync::Arc};
 
+pub fn group_icon_source(
+	parent: Arc<winit::window::Window>,
+) -> impl std::future::Future<Output = Option<PathBuf>> + Send + 'static {
+	let dialog = rfd::AsyncFileDialog::new()
+		.set_parent(parent.as_ref())
+		.set_title("Choose group icon")
+		.add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp"])
+		.pick_file();
+	async move {
+		let file = dialog.await?;
+		drop(parent);
+		Some(file.path().to_owned())
+	}
+}
+
 pub fn attachment_source(
 	parent: Arc<winit::window::Window>,
 ) -> impl std::future::Future<Output = Option<Vec<PathBuf>>> + Send + 'static {

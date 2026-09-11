@@ -624,6 +624,7 @@ mod tests {
 					recipients: vec![],
 					member_list_id: None,
 					message_count: None,
+					icon: None,
 					last_message: None,
 				}],
 				..State::default()
@@ -797,6 +798,7 @@ mod tests {
 				recipients: vec![],
 				member_list_id: None,
 				message_count: None,
+				icon: None,
 				last_message: None,
 			});
 			let ctx = egui::Context::default();

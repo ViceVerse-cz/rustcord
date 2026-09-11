@@ -1,5 +1,20 @@
 # Local storage policy and audit
 
+Group conversation actions (September 11): names and icon hashes are session
+navigation metadata, with icon capacity included in channel/event byte counts.
+The editor retains one name (100 characters), one bounded PNG data URI, and one
+256x256 RGBA preview. A single native picker/worker admits a regular file up to
+8 MiB, decodes outside rendering with 4096x4096 and 64 MiB decoder limits, then
+center-crops and downsizes to at most 256 pixels. Encoded PNG is capped at
+256 KiB (data URI at 349,550 bytes). Selecting a file never uploads it; Save
+queues one bounded group write. Pending core state and completion events do not
+retain the image payload. Closing the editor releases its draft/preview; stale
+picker results are discarded by session, channel and editor revision.
+Source paths and chosen image bytes are not persisted or logged. Confirmed CDN
+icons use the existing bounded avatar cache; no new database or cache schema is
+introduced. Confirmed leave invalidates cached channel history through the
+existing access-removal path and keeps the user's text draft.
+
 User context actions (September 11): close-DM, block and notification-mute preferences are
 written directly to Discord through the existing authenticated transport, never a new local
 settings file. Relationship state keeps at most 4000 fixed ID/bool entries with a 128 KiB

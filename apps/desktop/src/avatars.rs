@@ -131,6 +131,13 @@ fn clear_directory(root: Option<&Path>) -> Result<(), &'static str> {
 
 // Build, rather than accept, URLs. Even malformed service metadata cannot choose a host/path.
 fn cdn_url(key: &str) -> Option<String> {
+	if let Some(value) = key.strip_prefix("group-icon-") {
+		let (channel, hash) = value.split_once('-')?;
+		let channel: Id = channel.parse().ok()?;
+		return model::valid_avatar_hash(hash).then(|| {
+			format!("https://cdn.discordapp.com/channel-icons/{channel}/{hash}.png?size=128")
+		});
+	}
 	if let Some(id) = key.strip_prefix("app-icon-") {
 		let id: Id = id.parse().ok()?;
 		return Some(format!("https://discord.com/api/v10/applications/{id}/rpc"));
@@ -721,6 +728,24 @@ impl Disk {
 
 #[cfg(test)]
 mod tests {
+	#[test]
+	fn group_icon_urls_accept_only_channel_ids_and_hashes() {
+		assert_eq!(
+			super::cdn_url("group-icon-7-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").as_deref(),
+			Some(
+				"https://cdn.discordapp.com/channel-icons/7/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png?size=128"
+			)
+		);
+		for key in [
+			"group-icon-0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"group-icon-7-../private",
+			"group-icon-7-a.png?token=secret",
+			"group-icon-7-https://example.com",
+			"group-icon-7-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		] {
+			assert!(super::cdn_url(key).is_none());
+		}
+	}
 	#[test]
 	fn gif_animation_preserves_long_loop_with_bounded_frames() {
 		let mut bytes = Vec::new();

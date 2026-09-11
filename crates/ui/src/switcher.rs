@@ -302,6 +302,7 @@ mod tests {
 				}],
 				member_list_id: None,
 				message_count: None,
+				icon: None,
 				last_message: None,
 			})
 			.collect();

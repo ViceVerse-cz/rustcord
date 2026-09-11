@@ -549,6 +549,7 @@ mod tests {
 				recipients: vec![user(42, "Zoe")],
 				member_list_id: None,
 				message_count: None,
+				icon: None,
 			});
 			if let Some(guild) = guild {
 				use model::permissions as p;
@@ -693,6 +694,7 @@ mod tests {
 			recipients: vec![],
 			member_list_id: None,
 			message_count: None,
+			icon: None,
 		}
 	}
 	#[test]
