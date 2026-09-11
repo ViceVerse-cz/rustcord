@@ -90,13 +90,7 @@ fn licenses() -> Result<(), String> {
 	{
 		return Err("License checks require cargo-deny 0.20.2; install the pinned version".into());
 	}
-	run(&[
-		"deny",
-		"--locked",
-		"--offline",
-		"check",
-		"licenses",
-	])?;
+	run(&["deny", "--locked", "--offline", "check", "licenses"])?;
 	run(&[
 		"deny",
 		"--locked",

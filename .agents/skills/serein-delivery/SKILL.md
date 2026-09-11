@@ -15,6 +15,9 @@ skill: implement locally, run one smallest useful debug command, and leave the r
 Do not collect baselines, tests, packages, screenshots, or performance/size evidence, and do not
 create progress logs or ADRs, open a PR, or push. End by asking the owner to check it and explicitly
 confirm before committing and pushing to `main`.
+On confirmation, the root policy requires workspace/fuzz formatting checks and strict workspace
+Clippy before committing or pushing. Fix failures and rerun the checks; a blocked or failing
+check prevents the push. The initial local pass still skips the full delivery workflow.
 
 ## Establish the baseline
 

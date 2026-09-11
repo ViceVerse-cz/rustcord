@@ -68,7 +68,11 @@ fn segments(state: &State, channel: Id, now: Instant) -> Option<Vec<(String, boo
 	if count == 0 {
 		return None;
 	}
-	let verb = if count == 1 { " is typing…" } else { " are typing…" };
+	let verb = if count == 1 {
+		" is typing…"
+	} else {
+		" are typing…"
+	};
 	if names.is_empty() {
 		return Some(vec![(
 			if count == 1 {
@@ -93,10 +97,7 @@ fn segments(state: &State, channel: Id, now: Instant) -> Option<Vec<(String, boo
 	}
 	if others > 0 {
 		out.push((
-			format!(
-				" and {others} other{}",
-				if others == 1 { "" } else { "s" }
-			),
+			format!(" and {others} other{}", if others == 1 { "" } else { "s" }),
 			false,
 		));
 	}
@@ -171,10 +172,7 @@ pub(super) fn show(ui: &mut egui::Ui, state: &State, channel: Id, now: Instant) 
 		);
 	}
 	let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
-	let text_pos = egui::pos2(
-		text_left,
-		rect.center().y - galley.size().y / 2.0,
-	);
+	let text_pos = egui::pos2(text_left, rect.center().y - galley.size().y / 2.0);
 	painter.galley(text_pos, galley, colors.muted);
 	response.widget_info(|| {
 		let text: String = segments.iter().map(|(text, _)| text.as_str()).collect();

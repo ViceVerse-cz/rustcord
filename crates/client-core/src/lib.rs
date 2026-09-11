@@ -2204,9 +2204,8 @@ impl Event {
 					..
 				}) => code.capacity(),
 				Self::ServerAction(server_actions::Event::InviteSent {
-					result: Ok((channel, message)),
-					..
-				}) => channel.bytes() + message.bytes(),
+					result: Ok(sent), ..
+				}) => sent.0.bytes() + sent.1.bytes(),
 				Self::UserAction(user_actions::Event::Friends(entries)) => {
 					entries.as_ref().map_or(0, |entries| {
 						entries.capacity() * size_of::<(User, String)>()

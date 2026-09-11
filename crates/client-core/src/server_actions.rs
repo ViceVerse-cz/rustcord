@@ -55,7 +55,7 @@ pub enum Event {
 		guild: Id,
 		user: Id,
 		request: u64,
-		result: Result<(model::Channel, model::Message), Failure>,
+		result: Result<Box<(model::Channel, model::Message)>, Failure>,
 	},
 	Written {
 		action: Action,
@@ -368,7 +368,7 @@ impl State {
 			result,
 		} = event
 		{
-			return self.apply_server_invite_sent(guild, user, request, result);
+			return self.apply_server_invite_sent(guild, user, request, result.map(|sent| *sent));
 		}
 		let Event::Written {
 			action,
@@ -627,18 +627,22 @@ mod tests {
 				guild,
 				user,
 				request: request + 1,
-				result: Ok((channel.clone(), message.clone())),
+				result: Ok(Box::new((channel.clone(), message.clone()))),
 			})
 			.unwrap();
 		assert!(state.server_invite_pending());
-		state
-			.apply_server_action(Event::InviteSent {
-				guild,
-				user,
-				request,
-				result: Ok((channel, message)),
-			})
-			.unwrap();
+		let expected_bytes = size_of::<CoreEvent>() + channel.bytes() + message.bytes();
+		let event = CoreEvent::ServerAction(Event::InviteSent {
+			guild,
+			user,
+			request,
+			result: Ok(Box::new((channel, message))),
+		});
+		assert_eq!(event.bytes(), expected_bytes);
+		state.apply(Envelope {
+			generation: state.generation,
+			event,
+		});
 		assert_eq!(
 			state.server_invite_status(guild, user),
 			Some(InviteStatus::Sent)

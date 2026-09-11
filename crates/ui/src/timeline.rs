@@ -1392,20 +1392,17 @@ impl TimelineView {
 			ui.add_space((total - used).max(0.0));
 			for (index, (pending, height)) in pending_rows.iter().enumerate() {
 				let compact = index > 0
-					|| state
-						.timeline
-						.iter()
-						.last()
-						.is_some_and(|previous| {
-							let now = time::OffsetDateTime::now_utc();
-							state
-								.user
-								.as_ref()
-								.is_some_and(|user| user.id == previous.author.id)
-								&& !previous.unsupported && !previous.extra_content.any()
-								&& timestamp(previous.id).date() == now.date()
-								&& (now - timestamp(previous.id)).whole_seconds() < 300
-						});
+					|| state.timeline.iter().last().is_some_and(|previous| {
+						let now = time::OffsetDateTime::now_utc();
+						state
+							.user
+							.as_ref()
+							.is_some_and(|user| user.id == previous.author.id)
+							&& !previous.unsupported
+							&& !previous.extra_content.any()
+							&& timestamp(previous.id).date() == now.date()
+							&& (now - timestamp(previous.id)).whole_seconds() < 300
+					});
 				let top = ui.cursor().top() - content_top;
 				if top + height < viewport.min.y - 100.0 || top > viewport.max.y + 100.0 {
 					ui.add_space(*height);
