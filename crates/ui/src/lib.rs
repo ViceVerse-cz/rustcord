@@ -692,33 +692,28 @@ impl MessagingUi {
 								} else {
 									colors.muted
 								};
-								ui.vertical(|ui| {
-									ui.spacing_mut().item_spacing.y = 1.0;
-									ui.add(
-										egui::Label::new(
-											design::medium(ui, name, 15.0).color(text_color),
-										)
-										.truncate()
-										.selectable(false),
-									);
-									ui.add(
-										egui::Label::new(
-											RichText::new(subtitle.as_deref().unwrap_or({
-												match status {
-													Some("online") => "Online",
-													Some("idle") => "Away",
-													Some("dnd") => "Do not disturb",
-													Some("offline" | "invisible") => "Offline",
-													_ => "Presence unavailable",
-												}
-											}))
-											.size(12.0)
-											.color(colors.muted),
-										)
-										.truncate()
-										.selectable(false),
-									);
-								});
+								let name = egui::Label::new(
+									design::medium(ui, name, 15.0).color(text_color),
+								)
+								.truncate()
+								.selectable(false);
+								if let Some(subtitle) = subtitle {
+									ui.vertical(|ui| {
+										ui.spacing_mut().item_spacing.y = 1.0;
+										ui.add(name);
+										ui.add(
+											egui::Label::new(
+												RichText::new(subtitle)
+													.size(12.0)
+													.color(colors.muted),
+											)
+											.truncate()
+											.selectable(false),
+										);
+									});
+								} else {
+									ui.add(name);
+								}
 							});
 							user_menu::show(
 								&response,
@@ -4065,15 +4060,21 @@ mod composer_tests {
 				"Missing {heading}"
 			);
 		}
-		for status in ["Online", "Away", "Do not disturb", "Offline"] {
-			assert!(text.iter().any(|label| label == status), "Missing {status}");
+		for id in 1..=6 {
+			assert!(text.iter().any(|label| label == &format!("Synthetic {id}")));
 		}
-		assert!(
-			text.iter()
-				.filter(|label| label.as_str() == "Presence unavailable")
-				.count() >= 2,
-			"Both unknown and absent presence must remain explicit"
-		);
+		for status in [
+			"Online",
+			"Away",
+			"Do not disturb",
+			"Offline",
+			"Presence unavailable",
+		] {
+			assert!(
+				!text.iter().any(|label| label == status),
+				"Members without activity or custom status must have no subtitle: {status}"
+			);
+		}
 		assert!(
 			!output.textures_delta.set.is_empty(),
 			"Preview must exercise actual image uploads"
