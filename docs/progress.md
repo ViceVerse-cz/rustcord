@@ -1,5 +1,42 @@
 # Implementation progress — 2026-09-10
 
+## Emoji size and loading flicker — September 11, 2026
+
+Based on fetched `origin/main` at `bd7d26a`, in isolated branch
+`fix/emoji-size-flicker`. The original checkout and its untracked
+`target-relocation-remainder/` were preserved. Rust 1.98.1; locked text/voice builds.
+
+Composer and message emoji now share a 1.6× body-font size (24 px at the default
+15 px text size, previously 20 / 18.75 px). Recognized Unicode sequences reserve
+their final geometry while the bounded atlas worker loads, using a neutral `?`
+instead of briefly displaying font emoji. Original wire text, selection, code
+presentation, custom-image aspect ratio and editing remain intact. The composer
+also avoids painting newly typed artwork against egui's previous empty hint galley.
+No dependency, network, account or storage changes.
+
+`cargo test --locked -p ui emoji`: 11 passed, including cold-to-ready geometry,
+absence of font artwork, first/subsequent keystrokes and existing emoji checks.
+Independent read-only code review found no must-fix. `cargo xtask check` passes
+formatting but stops before tests at the unchanged baseline Clippy
+`question_mark` error in `crates/client-core/src/permissions.rs:439`.
+
+`cargo test --locked -p ui composer_text`: all 5 passed (including copy, undo,
+deletion, IME and wrapped cursor geometry). `cargo xtask policy` passed. Both
+`cargo xtask package` and `cargo xtask package-voice` passed; executable growth
+is 4,096 bytes each. Package/process measurements are in `docs/performance.md`.
+Separate `cargo test --workspace --all-features --locked` stops in the UI runner:
+`avatar_artwork_matches_fallback_in_justified_layout` and
+`service_order_orphans_collapsed_selection_and_category_buttons` fail, followed
+by Windows `0xc0000409 STATUS_STACK_BUFFER_OVERRUN`. A clean detached `bd7d26a`
+worktree running `cargo test --locked -p ui --lib` reproduces the same two
+failures and abort. The broader suite is not green.
+
+Native before/after capture and interactive light/dark checks are blocked:
+`orca` is not installed; initialized `@oai/sky` cannot connect its native pipe
+(Windows error 2, system cannot find the file specified). No screenshots or
+visual approval are claimed. Keep the PR draft pending that evidence and the
+repository check blockers. All fixtures are synthetic; no live Discord activity.
+
 ## User context menu — September 11, 2026
 
 Integration: `main` advanced to `d8cb031` (pending message uploads) while PR #69

@@ -70,7 +70,7 @@ impl Layout {
 		let font = egui::TextStyle::Body.resolve(ui.style());
 		let colors = crate::design::palette(ui);
 		let format = TextFormat::simple(font.clone(), colors.text);
-		let size = font.size + 5.0;
+		let size = emoji::inline_size(ui);
 		let mut job = LayoutJob::default();
 		job.wrap.max_width = width;
 		if text.is_empty() {
@@ -83,6 +83,7 @@ impl Layout {
 			let tail = &text[byte..];
 			let mut label = None;
 			let mut image = None;
+			let mut artwork = false;
 			let length = if let Some((id, len)) = model::user_mention_prefix(tail)
 				&& let Some(user) = users.iter().find(|u| u.id == id)
 			{
@@ -104,6 +105,8 @@ impl Layout {
 			} else {
 				let grapheme = tail.graphemes(true).next().expect("nonempty tail");
 				image = emoji::image(ui.ctx(), grapheme, size);
+				// Recognition must not depend on the startup worker: never flash font emoji.
+				artwork = image.is_some() || emoji::lookup(grapheme).is_some();
 				grapheme.len()
 			};
 			let label = label.map(|(text, color)| {
@@ -114,7 +117,7 @@ impl Layout {
 			});
 			let raw = &tail[..length];
 			let count = raw.chars().count();
-			if label.is_some() || image.is_some() {
+			if label.is_some() || image.is_some() || artwork {
 				let slot = label.as_ref().map_or(size, |g| g.size().x + 6.0);
 				// One zero-width glyph plus leading space forms an unbroken inline object.
 				// Expand its character slots below, so native selection/copy/undo use wire text.
@@ -182,6 +185,14 @@ impl Layout {
 	}
 
 	pub fn paint(&self, ui: &mut egui::Ui, output: &egui::text_edit::TextEditOutput) {
+		// TextEdit keeps the empty hint galley on the first keystroke.
+		if self
+			.cache
+			.as_ref()
+			.is_none_or(|(_, galley)| galley.job.text != output.galley.job.text)
+		{
+			return;
+		}
 		let painter = ui.painter().with_clip_rect(output.text_clip_rect);
 		for inline in &self.inlines {
 			let mut cursor = CCursor::new(inline.source.start);
@@ -217,6 +228,14 @@ impl Layout {
 						rect.center(),
 						image.calc_size(egui::Vec2::splat(inline.width), image.size()),
 					),
+				);
+			} else {
+				painter.text(
+					rect.center(),
+					egui::Align2::CENTER_CENTER,
+					"?",
+					egui::FontId::proportional(inline.width),
+					ui.visuals().weak_text_color(),
 				);
 			}
 		}
@@ -303,6 +322,93 @@ mod tests {
 			avatar: None,
 			discriminator: 0,
 		}]
+	}
+
+	#[test]
+	fn emoji_slots_stay_large_and_never_use_font_artwork_while_loading() {
+		let ctx = egui::Context::default();
+		let mut avatars = Avatars::default();
+		let mut layout = Layout::default();
+		let text = "😀👩🏽‍💻❤️🇨🇿";
+		let mut cold_size = None;
+		for ready in [false, true] {
+			if ready {
+				emoji::install(&ctx).unwrap();
+			}
+			let output = ctx.run_ui(Default::default(), |ui| {
+				let galley = layout.galley(ui, text, 65.0, &[], &mut avatars, true);
+				assert_eq!(galley.job.text, text);
+				assert_eq!(layout.inlines.len(), 4);
+				for inline in &layout.inlines {
+					assert_eq!(inline.width, emoji::inline_size(ui));
+					assert!(inline.width > egui::TextStyle::Body.resolve(ui.style()).size + 5.0);
+					assert_eq!(inline.image.is_some(), ready);
+				}
+				assert!(galley.rows.iter().all(|row| {
+					row.visuals
+						.mesh
+						.vertices
+						.iter()
+						.all(|v| v.color == Color32::TRANSPARENT)
+				}));
+				if let Some(size) = cold_size {
+					assert_eq!(galley.size(), size);
+				} else {
+					cold_size = Some(galley.size());
+				}
+			});
+			output.drop_without_applying_deltas();
+		}
+	}
+
+	#[test]
+	fn first_emoji_input_waits_for_its_own_galley_then_keeps_artwork() {
+		let ctx = egui::Context::default();
+		emoji::install(&ctx).unwrap();
+		let mut avatars = Avatars::default();
+		let mut layout = Layout::default();
+		let mut text = String::new();
+		let id = egui::Id::unique("emoji-first-input");
+		ctx.memory_mut(|m| m.request_focus(id));
+		for (frame, events) in [
+			vec![egui::Event::Text("😀".into())],
+			vec![],
+			vec![egui::Event::Text("❤️".into())],
+		]
+		.into_iter()
+		.enumerate()
+		{
+			let output = ctx.run_ui(
+				egui::RawInput {
+					events,
+					..Default::default()
+				},
+				|ui| {
+					let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, width| {
+						layout.galley(ui, buffer.as_str(), width, &[], &mut avatars, true)
+					};
+					let edit = egui::TextEdit::multiline(&mut text)
+						.id(id)
+						.hint_text("Message")
+						.layouter(&mut layouter)
+						.show(ui);
+					layout.paint(ui, &edit);
+				},
+			);
+			let images = output
+				.shapes
+				.iter()
+				.filter(
+					|shape| matches!(&shape.shape, egui::Shape::Rect(rect) if rect.brush.is_some()),
+				)
+				.count();
+			assert_eq!(
+				images, frame,
+				"first input must not paint against the empty hint galley"
+			);
+			output.drop_without_applying_deltas();
+		}
+		assert_eq!(text, "😀❤️");
 	}
 
 	#[test]

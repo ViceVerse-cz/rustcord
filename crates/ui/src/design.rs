@@ -440,7 +440,7 @@ pub fn window_controls(ui: &mut egui::Ui) {
 	let maximized = ui.input(|i| i.viewport().maximized.unwrap_or(false));
 	let height = ui.available_height().clamp(28.0, 36.0);
 	ui.spacing_mut().item_spacing.x = 0.0;
-	let mut caption =
+	let caption =
 		|ui: &mut egui::Ui, label: &str, danger: bool| -> (egui::Response, egui::Rect, Color32) {
 			let (rect, response) =
 				ui.allocate_exact_size(egui::vec2(46.0, height), egui::Sense::click());

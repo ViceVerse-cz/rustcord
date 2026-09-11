@@ -1,5 +1,46 @@
 # Initial performance evidence
 
+## Emoji size and loading flicker - September 11, 2026
+
+Baseline `bd7d26ae0a4332a78617e2a6a6d8402b0a81cfd2`, compared with
+`fix/emoji-size-flicker`. Both locked text-only and optional-voice release packages
+built successfully with Rust 1.98.1, thin LTO, one codegen unit, wgpu, on Windows
+11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical CPUs), 33,410,678,784 bytes RAM.
+Separate before/after package copies prevent baseline overwrite. Installed/ZIP
+figures include bundled docs/licenses at measurement time, before these final
+evidence updates; text packages exclude `dist/voice`. ZIPs use PowerShell
+`Compress-Archive` default Optimal compression. No dependency/assets were added.
+
+| Metric | Baseline | After | Delta |
+| --- | --- | --- | --- |
+| Text executable, bytes | 54,099,456 | 54,103,552 | +4,096 (+0.0076%) |
+| Text installed package, bytes | 55,242,006 | 55,247,680 | +5,674 (+0.0103%) |
+| Text ZIP, bytes | 33,403,603 | 33,406,136 | +2,533 (+0.0076%) |
+| Voice executable, bytes | 59,205,632 | 59,209,728 | +4,096 (+0.0069%) |
+| Voice installed package, bytes | 60,651,489 | 60,657,163 | +5,674 (+0.0094%) |
+| Voice ZIP, bytes | 35,594,103 | 35,596,216 | +2,113 (+0.0059%) |
+| Text working set, sampled peak/final, bytes | 161,533,952 | 166,764,544 | +5,230,592 (+3.24%) |
+| Text private bytes, sampled peak/final | 393,166,848 | 396,890,112 | +3,723,264 (+0.95%) |
+| Text CPU seconds during 10 s observation | 0 | 0.15625 | +0.15625 s |
+
+Process method: launch each copied text executable with `--demo --demo-chat`
+and `Start-Process -WindowStyle Hidden`; warm up 8 seconds, then sample
+`Get-Process` WorkingSet64/PrivateMemorySize64/CPU ten times at one-second intervals.
+One process run per revision; no scripted input. CPU after corresponds to 1.56%
+of one core over that short interval (not a whole-machine percentage). The
+sampled peak excludes startup. These are noisy, short synthetic idle observations,
+not evidence of an emoji-rendering performance improvement. No extra emoji cache
+or worker was added; its existing limits remain unchanged.
+
+Native automation was unavailable (`orca` absent; `@oai/sky` native pipe missing,
+Windows error 2). Thus rendered viewport/display scale, light/dark/narrow visual
+checks, interactive typing/scrolling samples and helper-process verification
+remain unverified. The configured initial viewport is 1120×760 logical pixels.
+Frame/startup p95, GPU memory and voice-call usage were not measured. Focused
+offline egui checks verify cold/ready geometry and editing; no screenshots or
+live Discord compatibility are claimed. See `docs/progress.md` for baseline
+Clippy/UI-runner blockers.
+
 ## User context menu - September 11, 2026
 
 Baseline `ea68e0e9afaa822e64e6bea1e144d48816aab339`, compared with integrated code `de73c85`.
