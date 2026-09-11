@@ -688,7 +688,7 @@ impl MessagingUi {
 		if !compact {
 			ui.label(
 				RichText::new(
-					"Applies to this session. Your microphone starts only after you join a secured call.",
+					"Audio preferences are saved on this device. Your microphone starts only after you join a secured call.",
 				)
 				.size(12.0)
 				.color(colors.muted),

@@ -8,6 +8,43 @@ const MAX_WINDOW_BYTES: usize = 4 * 1024 * 1024;
 #[derive(serde::Deserialize)]
 struct CachedMentions(#[serde(deserialize_with = "model::deserialize_mentions")] Vec<User>);
 pub struct LocalStore(Connection);
+/// Device-local controls, bounded independently of account caches.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct AppPreferences {
+	pub notifications_enabled: bool,
+	pub show_hidden_channels: bool,
+	pub voice_noise_suppression: bool,
+	pub voice_push_to_talk: bool,
+	pub voice_input: Option<String>,
+	pub voice_output: Option<String>,
+	pub input_percent: u16,
+	pub output_percent: u16,
+}
+impl Default for AppPreferences {
+	fn default() -> Self {
+		Self {
+			notifications_enabled: false,
+			show_hidden_channels: false,
+			voice_noise_suppression: false,
+			voice_push_to_talk: false,
+			voice_input: None,
+			voice_output: None,
+			input_percent: 100,
+			output_percent: 100,
+		}
+	}
+}
+impl AppPreferences {
+	pub fn is_valid(&self) -> bool {
+		self.input_percent <= 200
+			&& self.output_percent <= 200
+			&& [&self.voice_input, &self.voice_output]
+				.into_iter()
+				.all(|value| value.as_ref().is_none_or(|value| value.len() <= 1024))
+	}
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Appearance {
 	#[default]
@@ -144,6 +181,9 @@ impl LocalStore {
 			|row| row.get(0),
 		)?;
 		let transaction = connection.transaction()?;
+		transaction.execute_batch("CREATE TABLE IF NOT EXISTS app_preferences(
+            singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+            value TEXT NOT NULL CHECK(typeof(value)='text' AND length(CAST(value AS BLOB))<=16384));")?;
 		if !has_reply_deleted {
 			transaction.execute_batch("ALTER TABLE messages ADD COLUMN reply_deleted INTEGER NOT NULL DEFAULT 0 CHECK(typeof(reply_deleted)='integer' AND reply_deleted IN (0,1));")?;
 		}
@@ -189,6 +229,31 @@ impl LocalStore {
 		}
 		transaction.commit()?;
 		Ok(Self(connection))
+	}
+	pub fn app_preferences(&self) -> Result<AppPreferences> {
+		let value: Option<String> = self.0.query_row(
+            "SELECT CASE WHEN length(CAST(value AS BLOB))<=16384 THEN value ELSE NULL END FROM app_preferences WHERE singleton=1",
+            [], |row| row.get(0)).optional()?;
+		let value: AppPreferences = match value {
+			Some(value) => serde_json::from_str(&value).map_err(|_| StoreError::Incompatible)?,
+			None => AppPreferences::default(),
+		};
+		if !value.is_valid() {
+			return Err(StoreError::Incompatible);
+		}
+		Ok(value)
+	}
+	pub fn save_app_preferences(&self, value: &AppPreferences) -> Result<()> {
+		if !value.is_valid() {
+			return Err(StoreError::Incompatible);
+		}
+		let value = serde_json::to_string(value).map_err(|_| StoreError::Incompatible)?;
+		self.0.execute(
+			"INSERT INTO app_preferences VALUES(1,?1)
+            ON CONFLICT(singleton) DO UPDATE SET value=excluded.value",
+			[value],
+		)?;
+		Ok(())
 	}
 	/// Application-wide opt-in; an absent override never enables activity sharing.
 	pub fn game_activity_enabled(&self) -> Result<bool> {
@@ -772,6 +837,30 @@ impl LocalStore {
 }
 #[cfg(test)]
 mod tests {
+	#[test]
+	fn app_preferences_round_trip_and_reject_invalid_replacement() {
+		let store = LocalStore::initialize(Connection::open_in_memory().unwrap()).unwrap();
+		assert_eq!(store.app_preferences().unwrap(), AppPreferences::default());
+		let mut value = AppPreferences {
+			notifications_enabled: true,
+			voice_noise_suppression: true,
+			voice_input: Some("synthetic microphone".into()),
+			output_percent: 75,
+			..Default::default()
+		};
+		store.save_app_preferences(&value).unwrap();
+		assert_eq!(store.app_preferences().unwrap(), value);
+		value.input_percent = 201;
+		assert!(store.save_app_preferences(&value).is_err());
+		assert_eq!(store.app_preferences().unwrap().input_percent, 100);
+		value.input_percent = 100;
+		value.voice_input = Some("x".repeat(1025));
+		assert!(store.save_app_preferences(&value).is_err());
+		assert_eq!(
+			store.app_preferences().unwrap().voice_input.as_deref(),
+			Some("synthetic microphone")
+		);
+	}
 	use super::*;
 	#[test]
 	fn reply_deletion_schema_migrates_reopens_and_rejects_invalid_markers() {
