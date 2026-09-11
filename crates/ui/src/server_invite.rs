@@ -97,15 +97,7 @@ impl InviteDialog {
 					self.picker(ui, state, guild, channel, avatars, commands);
 				}
 			});
-		if close || modal.should_close() {
-			if self.settings.take().is_some() {
-				false
-			} else {
-				true
-			}
-		} else {
-			false
-		}
+		(close || modal.should_close()) && self.settings.take().is_none()
 	}
 	fn picker(
 		&mut self,

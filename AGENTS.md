@@ -39,7 +39,17 @@ commits, pushes, and PR work. Do not start external or live-account
 actions. If the debug run cannot be performed, state the concrete blocker.
 
 Finish with `Done — please check it. Say confirm to commit and push it to main.` On an explicit
-confirmation, review and commit only the fast-task paths, then push `main`; do not create a PR
+confirmation, check formatting and linting before committing or pushing:
+
+```bash
+cargo fmt --all -- --check
+cargo fmt --manifest-path fuzz/Cargo.toml --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+```
+
+Fix formatting/lint failures and rerun these checks until all pass, preserving unrelated
+uncommitted work. If a check cannot pass, report the blocker and do not push. Review and commit
+only the fast-task paths and required formatting/lint fixes, then push `main`; do not create a PR
 unless separately requested. This mode never waives security, input validation, secret handling,
 or the product boundaries above.
 

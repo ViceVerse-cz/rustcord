@@ -323,7 +323,10 @@ impl DiscordApi {
 				guild,
 				user,
 				request,
-				result: self.send_server_invite(user, &code, &nonce).await,
+				result: self
+					.send_server_invite(user, &code, &nonce)
+					.await
+					.map(Box::new),
 			}),
 			Command::GroupAction { action, request } => {
 				Event::GroupAction(client_core::group_actions::Event::Written {

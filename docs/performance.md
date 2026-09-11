@@ -1,5 +1,39 @@
 # Initial performance evidence
 
+## Signing and lint repair — September 12, 2026
+
+Baseline `ff5c125` versus runtime commit `f3f8869`, macOS 27.0 (26A428), Apple
+M1 Pro, 16 GiB RAM, Rust 1.98.1, locked release profile. Both standard
+`cargo xtask package` builds include voice, without demo/developer features.
+Separate worktrees and package directories share a sequential Cargo target cache.
+Package measurements precede this report; neither package is Apple-notarized.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Packaged executable bytes | 57,812,096 | 57,812,096 | 0 |
+| Installed package logical bytes | 62,377,684 | 62,378,917 | +1,233 (+0.0020%) |
+| Package ZIP bytes | 38,524,982 | 38,524,075 | -907 (-0.0024%) |
+| `size_of::<server_actions::Event>()`, bytes | 528 | 64 | -464 (-87.88%) |
+| `size_of::<client_core::Event>()`, bytes | 544 | 352 | -192 (-35.29%) |
+| Synthetic reducer median, ms | 40.9930 | 41.1411 | +0.1481 (+0.36%) |
+
+The successful invite payload moves into one `Box`; errors remain inline and
+queue admission still counts the full channel/message allocation. Type sizes are
+for this target/toolchain, not total process memory. Formatting, equivalent boolean
+simplification, and demo-only helper gating preserve application behavior.
+
+Reducer: one warmup plus five direct `replay-bench` runs per revision, with no
+concurrent compilation. Baseline milliseconds: 40.844708, 40.727459, 41.006500,
+41.145250, 40.993000. After: 41.141125, 40.425292, 40.365000, 41.208666,
+41.195000. Both retain 500 records / 236,992..237,477 estimated timeline bytes
+after 100,000 synthetic message events. This workload does not send invites;
+the small timing difference is within sample variation, not an invite-performance claim.
+
+Installed size sums regular file lengths; ZIP uses the release workflow's
+`ditto -c -k --sequesterRsrc` command. Documentation and archive metadata affect
+these small package deltas. No UI, RSS, frame-time, live-account, microphone or
+Apple signing/notarization performance claim is made.
+
 ## Server menu layout revision - September 11, 2026
 
 Baseline `3002847` versus implementation `1417dad`, Windows 11 Home, AMD Ryzen

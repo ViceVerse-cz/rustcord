@@ -36,6 +36,7 @@ for (const job of Object.values(workflow.jobs)) {
   }
 }
 execFileSync('bash', ['-n', 'packaging/macos/sign-release.sh']);
+execFileSync('bash', ['packaging/macos/test_sign_release.sh'], { stdio: 'inherit' });
 execFileSync(process.env.PYTHON || 'python3', ['-c', `
 import glob, os, pathlib, shutil, subprocess, tempfile, tomllib
 root = pathlib.Path.cwd()

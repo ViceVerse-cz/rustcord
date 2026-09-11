@@ -308,11 +308,11 @@ fn changes_active_history(state: &State, event: &Event) -> bool {
 		| Event::SendResult {
 			result: Ok(message),
 			..
-		}
-		| Event::ServerAction(client_core::server_actions::Event::InviteSent {
-			result: Ok((_, message)),
+		} => &message.channel,
+		Event::ServerAction(client_core::server_actions::Event::InviteSent {
+			result: Ok(sent),
 			..
-		}) => &message.channel,
+		}) => &sent.1.channel,
 		Event::Patch(patch) => &patch.channel,
 		Event::Edited { channel, .. }
 		| Event::Delete { channel, .. }
@@ -1425,7 +1425,7 @@ impl Desktop {
 						guild,
 						user,
 						request,
-						result: Ok((channel, message)),
+						result: Ok(Box::new((channel, message))),
 					})
 				}
 				Command::ServerAction { action, request } => {
@@ -2458,12 +2458,14 @@ impl Desktop {
 					| Event::SendResult {
 						result: Ok(message),
 						..
+					} => {
+						changed_messages.insert(message.id);
 					}
-					| Event::ServerAction(client_core::server_actions::Event::InviteSent {
-						result: Ok((_, message)),
+					Event::ServerAction(client_core::server_actions::Event::InviteSent {
+						result: Ok(sent),
 						..
 					}) => {
-						changed_messages.insert(message.id);
+						changed_messages.insert(sent.1.id);
 					}
 					Event::Edited { message, .. } => {
 						changed_messages.insert(*message);

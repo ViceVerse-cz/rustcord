@@ -67,7 +67,7 @@ pub(super) fn source(
 }
 
 enum Input {
-	#[cfg(any(test, feature = "demo"))]
+	#[cfg(feature = "demo")]
 	Memory(Vec<u8>),
 	Http {
 		client: reqwest::Client,
@@ -91,7 +91,7 @@ fn invalid() -> io::Error {
 	io::Error::new(io::ErrorKind::InvalidData, INVALID)
 }
 impl Raw {
-	#[cfg(any(test, feature = "demo"))]
+	#[cfg(feature = "demo")]
 	fn memory(bytes: Vec<u8>) -> Self {
 		Self {
 			len: bytes.len(),
@@ -116,7 +116,7 @@ impl Read for Raw {
 			return Ok(0);
 		}
 		match &mut self.input {
-			#[cfg(any(test, feature = "demo"))]
+			#[cfg(feature = "demo")]
 			Input::Memory(bytes) => {
 				output[..count].copy_from_slice(&bytes[self.position..self.position + count])
 			}

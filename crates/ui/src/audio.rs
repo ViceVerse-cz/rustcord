@@ -300,7 +300,8 @@ impl AudioUi {
 			}) {
 			self.seen = true;
 			if matches!(state, AudioState::Playing | AudioState::Loading) {
-				ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+				ui.ctx()
+					.request_repaint_after(std::time::Duration::from_millis(100));
 			}
 		}
 		card.response
