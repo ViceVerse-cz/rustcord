@@ -40,7 +40,9 @@ Rust jobs cache dependencies and installed Cargo tools, including after failed c
 the fuzz cache includes the pinned nightly toolchain in its key.
 The small offline check is `bun .github/release/check.mjs` (Bun 1.4.2,
 Python 3.11+; set `PYTHON` if needed). It checks commit bumps/notes, nightly tag
-isolation, version updates on temporary copies, and YAML/shell syntax.
+isolation, version updates on temporary copies, YAML/shell syntax, and the
+synthetic signing regression (`bash packaging/macos/test_sign_release.sh`).
+The signing regression stubs Apple tools; it does not access credentials or Apple services.
 
 ## Mac signing setup
 
@@ -71,6 +73,16 @@ adds only the microphone entitlement. It deletes the temporary identity and
 notarization archive on exit. Missing credentials or failed verification block
 the release; there is no unsigned Mac fallback. Signing does not verify Discord
 compatibility or grant App Store approval.
+
+The temporary keychain is added to the user search list for certificate-chain
+lookup, preserving existing entries and restoring them on exit. Before changing
+the app, signing requires exactly one valid code-signing identity in that keychain
+whose full name matches `MACOS_SIGNING_IDENTITY`, then signs using its fingerprint.
+If that check fails, verify the name against `security find-identity -v -p codesigning`
+on the Mac holding the original identity. Re-export the certificate with its private
+key if needed, and check certificate expiry and intermediate certificate trust.
+Do not paste command output or export contents into chat. The masked `no identity
+found` error alone cannot distinguish these credential problems from keychain setup.
 
 Signing setup (September 11, 2026): a Developer ID Application certificate was
 issued with owner approval, expires September 12, 2031, and is installed with its

@@ -15,9 +15,15 @@ esac
 
 app=${1:?Expected a packaged .app path}
 test -d "$app/Contents/MacOS"
+original_keychains=()
+keychain_list=$(security list-keychains -d user)
+while IFS= read -r entry; do
+  [[ "$entry" =~ \"(.*)\" ]] && original_keychains+=("${BASH_REMATCH[1]}")
+done <<< "$keychain_list"
 temporary=$(mktemp -d "$RUNNER_TEMP/serein-signing.XXXXXX")
 keychain="$temporary/signing.keychain-db"
 cleanup() {
+  security list-keychains -d user -s ${original_keychains[@]+"${original_keychains[@]}"} >/dev/null 2>&1 || true
   security delete-keychain "$keychain" >/dev/null 2>&1 || true
   rm -rf "$temporary"
 }
@@ -34,10 +40,24 @@ security import "$temporary/certificate.p12" -k "$keychain" \
 security set-key-partition-list -S apple-tool:,apple:,codesign: \
   -s -k "$keychain_password" "$keychain" >/dev/null
 rm "$temporary/certificate.p12"
+# --keychain limits identity lookup; certificate-chain lookup still uses this list.
+security list-keychains -d user -s "$keychain" ${original_keychains[@]+"${original_keychains[@]}"}
+identities=$(security find-identity -v -p codesigning "$keychain")
+signing_hashes=()
+while read -r index fingerprint identity; do
+  if [[ "$fingerprint" =~ ^[[:xdigit:]]{40}$ && "$identity" == "\"$MACOS_SIGNING_IDENTITY\"" ]]; then
+    signing_hashes+=("$fingerprint")
+  fi
+done <<< "$identities"
+if [[ "${#signing_hashes[@]}" != 1 ]]; then
+  echo 'Expected exactly one valid identity matching MACOS_SIGNING_IDENTITY in the imported keychain.' >&2
+  echo 'Check the full Developer ID Application name and export its certificate AND private key as a .p12; also check certificate expiry and trust chain.' >&2
+  exit 1
+fi
 
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION%%-*}" "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT" "$app/Contents/Info.plist"
-sign_options=(--force --timestamp --options runtime --keychain "$keychain" --sign "$MACOS_SIGNING_IDENTITY")
+sign_options=(--force --timestamp --options runtime --keychain "$keychain" --sign "${signing_hashes[0]}")
 sign_options+=(--entitlements packaging/macos/voice.entitlements)
 codesign "${sign_options[@]}" "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
