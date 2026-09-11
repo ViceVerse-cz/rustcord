@@ -847,6 +847,8 @@ impl Desktop {
 		self.avatar_start_failed = false;
 		self.messaging.clear_avatars();
 		self.state.generation += 1;
+		self.messaging.own_presence = model::OwnPresence::default();
+		self.messaging.own_presence_changed = false;
 		self.messaging.draft_restore_pending = false;
 		self.state.auth = AuthState::Authenticating;
 		self.state.status = "Connecting to Discord…";
@@ -1033,6 +1035,34 @@ impl Desktop {
 			.tray_error
 			.unwrap_or_else(|| self.tray_setting.status());
 		if previous_status != self.messaging.tray_status {
+			ctx.request_repaint();
+		}
+	}
+	fn sync_own_presence(&mut self, ctx: &egui::Context) {
+		let changed = std::mem::take(&mut self.messaging.own_presence_changed);
+		let previous_status = self.messaging.own_presence_status;
+		self.messaging.own_presence_status = if !self.messaging.own_presence.valid() {
+			"Status must be at most 128 characters without line breaks or surrounding spaces."
+		} else if self.state.demo || self.fixture_only {
+			"Offline preview: not shared or saved."
+		} else if let Some(connection) = &self.connection {
+			if connection.own_presence.is_closed()
+				|| (changed
+					&& connection
+						.own_presence
+						.send(self.messaging.own_presence.clone())
+						.is_err())
+			{
+				"Could not update status: connection unavailable."
+			} else if !self.state.gateway_connected {
+				"Waiting for connection; public visibility unconfirmed."
+			} else {
+				"This session only; public visibility unconfirmed."
+			}
+		} else {
+			"Not connected; status is not shared."
+		};
+		if changed || previous_status != self.messaging.own_presence_status {
 			ctx.request_repaint();
 		}
 	}
@@ -2745,6 +2775,7 @@ impl eframe::App for Desktop {
 		while let Some(notification) = self.state.take_notification() {
 			if !self.fixture_only
 				&& self.messaging.notifications_enabled
+				&& self.messaging.own_presence.status != model::PresenceStatus::DoNotDisturb
 				&& !(focused && self.messaging.viewing_latest(notification.channel))
 			{
 				self.notifications.notify();
@@ -3166,6 +3197,7 @@ impl eframe::App for Desktop {
 		let appearance = ctx.options(|options| options.theme_preference);
 		self.save_app_preferences();
 		self.save_reading_preferences(&ctx);
+		self.sync_own_presence(&ctx);
 		self.sync_game_activity(&ctx);
 		self.sync_tray(&ctx);
 		if appearance != self.appearance {

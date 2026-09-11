@@ -1,4 +1,5 @@
 //! Native egui views; emits commands without owning transports or session credentials.
+mod account_menu;
 mod archives;
 mod audio;
 pub use audio::{AudioCommand, AudioState, AudioUi};
@@ -75,6 +76,10 @@ enum MemberRow {
 
 #[derive(Default)]
 pub struct MessagingUi {
+	account_menu: account_menu::AccountMenu,
+	pub own_presence: model::OwnPresence,
+	pub own_presence_changed: bool,
+	pub own_presence_status: &'static str,
 	group_menu: group_menu::GroupMenu,
 	server_menu: server_menu::ServerMenu,
 	folder_ui: guild_folders::FolderUi,
@@ -891,6 +896,7 @@ impl MessagingUi {
 	}
 	fn account_card(&mut self, ui: &mut egui::Ui, state: &mut State, commands: &mut Vec<Command>) {
 		let colors = design::palette(ui);
+		let mut anchor = None;
 		egui::Frame::new()
 			.fill(colors.raised)
 			.corner_radius(8)
@@ -901,6 +907,21 @@ impl MessagingUi {
 					ui.spacing_mut().item_spacing.x = 8.0;
 					if let Some(user) = &state.user {
 						let avatar = self.avatars.show(ui, user, 32.0, state.demo);
+						avatar.widget_info(|| {
+							egui::WidgetInfo::labeled(
+								egui::WidgetType::Button,
+								true,
+								"Profile and status",
+							)
+						});
+						if avatar.has_focus() {
+							ui.painter().rect_stroke(
+								avatar.rect.expand(2.0),
+								4,
+								egui::Stroke::new(1.0, colors.accent),
+								egui::StrokeKind::Inside,
+							);
+						}
 						user_menu::show(
 							&avatar,
 							state,
@@ -908,10 +929,13 @@ impl MessagingUi {
 							&mut self.profile,
 							&mut self.user_action,
 						);
-						design::presence_dot(ui, avatar.rect, colors.positive, colors.raised);
-						if avatar.clicked() {
-							self.profile = Some(user.clone());
-						}
+						design::presence_dot(
+							ui,
+							avatar.rect,
+							profiles::presence_color(self.own_presence.status.wire()),
+							colors.raised,
+						);
+						anchor = Some(avatar.on_hover_text("Profile and status"));
 					}
 					ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 						ui.spacing_mut().item_spacing.x = 2.0;
@@ -923,51 +947,83 @@ impl MessagingUi {
 						self.mute_toggle(ui, state, commands, true, 32.0);
 						self.mute_toggle(ui, state, commands, false, 32.0);
 						ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-							ui.vertical(|ui| {
-								ui.spacing_mut().item_spacing.y = 0.0;
-								ui.add(
-									egui::Label::new(
-										design::semibold(
-											ui,
-											state
-												.user
-												.as_ref()
-												.map_or("Your account", |u| u.name.as_str()),
-											14.0,
+							let identity = ui
+								.vertical(|ui| {
+									ui.spacing_mut().item_spacing.y = 0.0;
+									ui.add(
+										egui::Label::new(
+											design::semibold(
+												ui,
+												state
+													.user
+													.as_ref()
+													.map_or("Your account", |u| u.name.as_str()),
+												14.0,
+											)
+											.color(colors.text_strong),
 										)
-										.color(colors.text_strong),
-									)
-									.truncate()
-									.selectable(false),
-								);
-								ui.add(
-									egui::Label::new(
-										RichText::new(
-											if let Some(game) = self
-												.own_game
-												.as_deref()
-												.filter(|_| self.share_game_activity)
-											{
-												game.to_owned()
-											} else if state.demo {
-												"Offline preview".to_owned()
-											} else if state.gateway_connected {
-												"Online".to_owned()
-											} else {
-												"Reconnecting…".to_owned()
-											},
+										.truncate()
+										.selectable(false),
+									);
+									ui.add(
+										egui::Label::new(
+											RichText::new(
+												if !self.own_presence.custom_status.is_empty() {
+													self.own_presence.custom_status.clone()
+												} else if let Some(game) = self
+													.own_game
+													.as_deref()
+													.filter(|_| self.share_game_activity)
+												{
+													game.to_owned()
+												} else if state.demo {
+													"Offline preview".to_owned()
+												} else if state.gateway_connected {
+													self.own_presence.status.label().to_owned()
+												} else {
+													"Reconnecting…".to_owned()
+												},
+											)
+											.size(12.0)
+											.color(colors.muted),
 										)
-										.size(12.0)
-										.color(colors.muted),
-									)
-									.truncate()
-									.selectable(false),
-								);
+										.truncate()
+										.selectable(false),
+									);
+								})
+								.response;
+							let identity = ui
+								.interact(
+									identity.rect,
+									ui.id().with("account-identity"),
+									egui::Sense::click(),
+								)
+								.on_hover_text("Profile and status");
+							identity.widget_info(|| {
+								egui::WidgetInfo::labeled(
+									egui::WidgetType::Button,
+									true,
+									"Profile and status",
+								)
 							});
+							if let Some(avatar) = anchor.take() {
+								if identity.has_focus() {
+									ui.painter().rect_stroke(
+										identity.rect.expand(2.0),
+										4,
+										egui::Stroke::new(1.0, colors.accent),
+										egui::StrokeKind::Inside,
+									);
+								}
+								anchor = Some(avatar.union(identity));
+							}
 						});
 					});
 				});
 			});
+		if let Some(anchor) = anchor {
+			self.account_menu(&anchor, state, commands);
+		}
 	}
 	/// Conversation header: channel identity on the left, tools and search on the right.
 	fn channel_header(
