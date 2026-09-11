@@ -70,7 +70,6 @@ ICONS = [
     ("tiktok-logo", "fill/tiktok-logo-fill.svg", "aafb59c3c1902035736bc955e1b4485e46fd8b633bb2cd2e046937cc1b26c5cb"),
     ("paypal-logo", "fill/paypal-logo-fill.svg", "b49cb17698ca5c2d807577413f992b9d0050b2a94ca4c812c6e6441a32f9f820"),
     ("amazon-logo", "fill/amazon-logo-fill.svg", "96d475f1eaed1733e9c6dcae74b52900be7e399b128917a8f50d89d773041491"),
-    ("butterfly", "fill/butterfly-fill.svg", "9c051fc7ee384972e9d39a7281a1987b2b988514abb1f36e706ea1e5ada6c75e"),
     ("mastodon-logo", "fill/mastodon-logo-fill.svg", "f9d1bf489b16a34763aa7f8e8de62f72812cb9888fd92bbc47eeac33d1426122"),
     ("skype-logo", "fill/skype-logo-fill.svg", "bd264055d7317fb0cfe3a39ae17028d2a5447dc3a204a999c5e5fbebed423e28"),
     ("game-controller", "fill/game-controller-fill.svg", "9dcb7af7b4854bb2da15ab1852292428c4d95314b06cd25aa5f45f21b3134884"),
@@ -101,9 +100,28 @@ ICONS = [
 ]
 LICENSE_SHA256 = "ddbe6082ec3cf979db47e5af549d2849c5d6182b3e005ef91ce1dbb9eb122f11"
 
+# Brand marks Phosphor does not ship come from Simple Icons (CC0 1.0). Their 24-unit glyphs
+# fill the whole view box, so they are drawn at Phosphor's visual size inside the cell.
+SIMPLE_VERSION = "16.30.0"  # simple-icons on npm, CC0-1.0
+SIMPLE_BASE = f"https://cdn.jsdelivr.net/npm/simple-icons@{SIMPLE_VERSION}"
+SIMPLE_ICONS = [
+    ("playstation", "icons/playstation.svg", "b68b4d7b63443759b9c4d77a5501c5758eeae06a6d594d278d5eb6cb4d3dbbe4"),
+    ("battle-net", "icons/battledotnet.svg", "78206c9c5e7fd24803cd50cd5c71c3bb1b02def42ca4f5d186e318eb9e247b7e"),
+    ("epic-games", "icons/epicgames.svg", "a19b1eb5a46edc11a7dc7f1ce6fa1701ea4e4cf451feec88441c523f4b50cde3"),
+    ("league-of-legends", "icons/leagueoflegends.svg", "b653d9c5733c71613fa0367c09c9d419df2f0e7ef91cbeab6b93a2e20d5f223b"),
+    ("riot-games", "icons/riotgames.svg", "b80c5880b88b8e489b2da7753bed612b3ce6b2948a3f995ad5d31050f443b520"),
+    ("bungie", "icons/bungie.svg", "92c3b473805eaffdc7092cb8e8c1500ccac1bea19c129d46b026c22af6000db7"),
+    ("roblox", "icons/roblox.svg", "9245b2f23fde91a5ef34f36aea32c1bf08a1a1254c08b86e7f060a4f72986234"),
+    ("crunchyroll", "icons/crunchyroll.svg", "3b9c3d87339e18ec09f25e0c3eaffdc5ad4630df3d108fcd907e1b64c4cd13ea"),
+    ("ebay", "icons/ebay.svg", "846e8d8ac6cea49766e7c62e095e739d115ed355f9b63bf46067f14c9343c745"),
+    ("bluesky", "icons/bluesky.svg", "49752973164fbbf4464fbb4776f011c1eff207e5d7ad9254e031af025814eb75"),
+]
+SIMPLE_LICENSE_SHA256 = "9046848b63a5c92bff14e4accca80bd987e0623b74adf9226ce5198d312b79d5"
+SIMPLE_SCALE = 0.8  # Phosphor fill glyphs span roughly 205 of their 256 units.
 
-def fetch(path):
-    with urllib.request.urlopen(f"{BASE}/{path}", timeout=60) as response:
+
+def fetch(path, base=BASE):
+    with urllib.request.urlopen(f"{base}/{path}", timeout=60) as response:
         return response.read(1024 * 1024)
 
 
@@ -127,9 +145,17 @@ def main():
     elif hashlib.sha256(license_text).hexdigest() != LICENSE_SHA256:
         raise ValueError("LICENSE SHA-256 mismatch")
 
-    names = [name for name, _, _ in ICONS]
+    simple_license = fetch("LICENSE.md", SIMPLE_BASE)
+    if args.print_hashes:
+        print("SIMPLE LICENSE", hashlib.sha256(simple_license).hexdigest())
+    elif hashlib.sha256(simple_license).hexdigest() != SIMPLE_LICENSE_SHA256:
+        raise ValueError("Simple Icons LICENSE SHA-256 mismatch")
+
+    sources = [(name, asset, sha256, False) for name, asset, sha256 in ICONS]
+    sources += [(name, asset, sha256, True) for name, asset, sha256 in SIMPLE_ICONS]
+    names = [name for name, _, _, _ in sources]
     assert len(set(names)) == len(names)
-    rows = (len(ICONS) + COLUMNS - 1) // COLUMNS
+    rows = (len(sources) + COLUMNS - 1) // COLUMNS
     width, height = COLUMNS * CELL, rows * CELL
     parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">']
     parts.append(
@@ -138,19 +164,24 @@ def main():
         '<path d="M40 24 L232 216" stroke="#000" stroke-width="44" stroke-linecap="round"/></mask></defs>'
     )
     index = []
-    for cell, (name, asset, sha256) in enumerate(ICONS):
-        svg = fetch(f"assets/{asset}")
+    for cell, (name, asset, sha256, simple) in enumerate(sources):
+        svg = fetch(asset, SIMPLE_BASE) if simple else fetch(f"assets/{asset}")
         digest = hashlib.sha256(svg).hexdigest()
         if args.print_hashes:
             print(name, asset, digest)
         elif digest != sha256:
             raise ValueError(f"{asset} SHA-256 mismatch: {digest}")
         text = svg.decode("utf-8")
-        assert 'viewBox="0 0 256 256"' in text, asset
         body = inner_svg(text)
         x = (cell % COLUMNS) * CELL + PAD
         y = (cell // COLUMNS) * CELL + PAD
-        scale = GLYPH / 256
+        if simple:
+            assert 'viewBox="0 0 24 24"' in text, asset
+            inset = GLYPH * (1 - SIMPLE_SCALE) / 2
+            x, y, scale = x + inset, y + inset, GLYPH * SIMPLE_SCALE / 24
+        else:
+            assert 'viewBox="0 0 256 256"' in text, asset
+            scale = GLYPH / 256
         if name.endswith("-slash") and "slash" not in asset:
             # Phosphor has no slashed headphones; compose the upstream glyph with a knocked-out
             # diagonal in the style of its own `*-slash` icons.
@@ -169,8 +200,9 @@ def main():
     atlas_svg.unlink()
     (destination / "index.tsv").write_text("".join(f"{name}\t{cell}\n" for name, cell in index), encoding="utf-8")
     (destination / "LICENSE").write_bytes(license_text)
-    print(f"{len(ICONS)} icons; {width}x{height}; atlas {(destination / 'atlas.png').stat().st_size} bytes")
-    for file in ["atlas.png", "index.tsv", "LICENSE"]:
+    (destination / "LICENSE-SIMPLE-ICONS").write_bytes(simple_license)
+    print(f"{len(sources)} icons; {width}x{height}; atlas {(destination / 'atlas.png').stat().st_size} bytes")
+    for file in ["atlas.png", "index.tsv", "LICENSE", "LICENSE-SIMPLE-ICONS"]:
         print(file, hashlib.sha256((destination / file).read_bytes()).hexdigest())
 
 

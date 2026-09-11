@@ -367,8 +367,7 @@ impl TimelineView {
 		state: &mut State,
 		editing: &mut Option<(Id, Id, String)>,
 		deleting: &mut Option<(Id, Id)>,
-		avatars: &mut crate::avatars::Avatars,
-		profile: &mut Option<model::User>,
+		(avatars, profile): (&mut crate::avatars::Avatars, &mut Option<model::User>),
 		upload: Option<&crate::pending::Upload>,
 	) {
 		let width = ui.available_width();
@@ -1214,8 +1213,7 @@ impl TimelineView {
 						state,
 						avatars,
 						upload,
-						&mut self.restore_pending,
-						&mut self.cancel_upload,
+						(&mut self.restore_pending, &mut self.cancel_upload),
 					);
 				});
 				let measured = response.response.rect.height();
@@ -1298,7 +1296,6 @@ impl TimelineView {
 			self.reflow_frames = self.reflow_frames.saturating_add(1);
 			self.consecutive_reflows = self.consecutive_reflows.saturating_add(1);
 			self.revision = u64::MAX;
-			ui.ctx().request_discard("Timeline row heights settled");
 			ui.ctx().request_repaint();
 		}
 		if !reflow {
@@ -1496,8 +1493,7 @@ mod tests {
 						state,
 						&mut None,
 						&mut None,
-						&mut crate::avatars::Avatars::default(),
-						&mut None,
+						(&mut crate::avatars::Avatars::default(), &mut None),
 						None,
 					);
 				},
@@ -1508,20 +1504,41 @@ mod tests {
 			render(&mut view, &mut state);
 		}
 		assert_ne!(view.pending_heights["0"], 100.0);
-		assert_eq!(
-			view.pending_heights["63"], 100.0,
-			"distant pending rows must not be measured at the top"
-		);
+		let measured_at_top: Vec<_> = view
+			.pending_heights
+			.iter()
+			.filter(|(_, height)| **height != 100.0)
+			.map(|(nonce, _)| nonce.parse::<usize>().unwrap())
+			.collect();
+		let mut top = 0.0;
+		for index in 0..64 {
+			if measured_at_top.contains(&index) {
+				assert!(
+					top <= 300.0 + 100.0,
+					"only rows near the viewport should be measured"
+				);
+			}
+			top += view.pending_heights[&index.to_string()];
+		}
+		assert_eq!(view.pending_heights["63"], 100.0);
 		view.follow_latest();
 		for _ in 0..5 {
 			render(&mut view, &mut state);
 		}
 		assert_ne!(view.pending_heights["63"], 100.0);
 		assert!(view.following);
-		assert_eq!(
-			view.pending_heights["32"], 100.0,
-			"jumping past the middle must leave its rows unmeasured"
-		);
+		let mut bottom = 0.0;
+		for index in (0..64).rev() {
+			let height = view.pending_heights[&index.to_string()];
+			if height != 100.0 && !measured_at_top.contains(&index) {
+				assert!(
+					bottom <= 300.0 + 100.0,
+					"jumping should only measure rows near the bottom viewport"
+				);
+			}
+			bottom += height;
+		}
+		assert_eq!(view.pending_heights["32"], 100.0);
 		state.pending.clear();
 		render(&mut view, &mut state);
 		assert!(view.pending_heights.is_empty());
@@ -1725,8 +1742,7 @@ mod tests {
 							state,
 							&mut None,
 							&mut None,
-							&mut images,
-							&mut None,
+							(&mut images, &mut None),
 							None,
 						)
 					},
@@ -1880,8 +1896,7 @@ mod tests {
 							&mut state,
 							&mut None,
 							&mut None,
-							&mut avatars,
-							&mut None,
+							(&mut avatars, &mut None),
 							None,
 						)
 					},
@@ -1975,8 +1990,7 @@ mod tests {
 							&mut state,
 							&mut None,
 							&mut None,
-							&mut images,
-							&mut None,
+							(&mut images, &mut None),
 							None,
 						)
 					},
@@ -2037,8 +2051,7 @@ mod tests {
 							&mut state,
 							&mut None,
 							&mut None,
-							&mut avatars,
-							&mut None,
+							(&mut avatars, &mut None),
 							None,
 						)
 					},
@@ -2127,8 +2140,7 @@ mod tests {
 						state,
 						&mut None,
 						&mut None,
-						&mut avatars,
-						&mut None,
+						(&mut avatars, &mut None),
 						None,
 					)
 				},
@@ -2301,8 +2313,7 @@ mod tests {
 								state,
 								&mut editing,
 								&mut None,
-								&mut avatars,
-								&mut None,
+								(&mut avatars, &mut None),
 								None,
 							)
 						},
@@ -2460,8 +2471,7 @@ mod tests {
 							state,
 							&mut None,
 							&mut None,
-							&mut avatars,
-							&mut None,
+							(&mut avatars, &mut None),
 							None,
 						)
 					},
@@ -2590,8 +2600,7 @@ mod tests {
 							state,
 							&mut None,
 							&mut None,
-							&mut avatars,
-							&mut None,
+							(&mut avatars, &mut None),
 							None,
 						);
 						assert!(ui.min_rect().right() <= ui.max_rect().right() + 1.0);
@@ -2687,8 +2696,7 @@ mod tests {
 						state,
 						&mut None,
 						&mut None,
-						&mut avatars,
-						&mut None,
+						(&mut avatars, &mut None),
 						None,
 					);
 				},
@@ -2762,8 +2770,7 @@ mod tests {
 						state,
 						&mut None,
 						&mut None,
-						&mut avatars,
-						&mut None,
+						(&mut avatars, &mut None),
 						None,
 					)
 				},
@@ -2787,22 +2794,23 @@ mod tests {
 		view.anchor = Some((Id(3), 5.0));
 		view.revision = u64::MAX;
 		let output = frame(&mut view, &mut state);
+		let final_visible = output
+			.shapes
+			.iter()
+			.any(|shape| shape.clip_rect.is_positive() && contains_final_row(&shape.shape));
+		output.drop_without_applying_deltas();
 		assert!(
 			view.heights[&Id(1)].1 > 600.0,
 			"Fixture must measure a tall leading row"
 		);
 		assert!(
-			output
-				.shapes
-				.iter()
-				.any(|shape| { shape.clip_rect.is_positive() && contains_final_row(&shape.shape) }),
+			final_visible,
 			"Leading measurement must not blank the visible rows"
 		);
 		assert!(
 			view.following,
 			"The compensated short content must reach its real bottom; hidden leading bounds must not create phantom scroll space"
 		);
-		output.drop_without_applying_deltas();
 	}
 
 	#[test]
@@ -2869,8 +2877,7 @@ mod tests {
 							&mut state,
 							&mut None,
 							&mut None,
-							&mut avatars,
-							&mut None,
+							(&mut avatars, &mut None),
 							None,
 						)
 					},
@@ -2963,8 +2970,7 @@ mod tests {
 							state,
 							&mut None,
 							&mut None,
-							&mut avatars,
-							&mut None,
+							(&mut avatars, &mut None),
 							None,
 						);
 					},
@@ -2988,6 +2994,17 @@ mod tests {
 			assert!(!view.following);
 			let anchor = view.anchor.unwrap();
 			assert_eq!(anchor.0, Id(200));
+			// A newly measured leading row while browsing must not opt into the
+			// bottom restoration used for a following layout retry.
+			let (key, height) = view.heights[&Id(199)];
+			assert!(height > 1.0);
+			let reflows = view.reflow_frames;
+			view.heights.insert(Id(199), (key, 1.0));
+			view.revision = u64::MAX;
+			render(&mut view, &mut state);
+			assert!(view.reflow_frames > reflows);
+			assert!(!view.following && !view.jump);
+			assert_eq!(view.anchor, Some(anchor));
 			crate::MessagingUi::default().apply_reading_preferences(
 				&ctx,
 				model::ReadingPreferences {
@@ -3100,8 +3117,7 @@ mod tests {
 								state,
 								&mut None,
 								&mut None,
-								&mut avatars,
-								&mut None,
+								(&mut avatars, &mut None),
 								None,
 							);
 							assert!(ui.min_rect().right() <= ui.max_rect().right() + 1.0);
@@ -3260,8 +3276,7 @@ mod tests {
 							state,
 							&mut None,
 							&mut None,
-							&mut avatars,
-							&mut None,
+							(&mut avatars, &mut None),
 							None,
 						);
 						assert!(ui.min_rect().right() <= ui.max_rect().right() + 1.0);
@@ -3390,7 +3405,7 @@ mod tests {
 							)),
 							..Default::default()
 						},
-						|ui| view.show(ui, state, &mut None, &mut None, images, &mut None, None),
+						|ui| view.show(ui, state, &mut None, &mut None, (images, &mut None), None),
 					)
 					.drop_without_applying_deltas();
 			};
@@ -3453,8 +3468,7 @@ mod tests {
 						&mut state,
 						&mut None,
 						&mut None,
-						&mut crate::avatars::Avatars::default(),
-						&mut None,
+						(&mut crate::avatars::Avatars::default(), &mut None),
 						None,
 					);
 				})
@@ -3521,8 +3535,7 @@ mod tests {
 				&mut state,
 				&mut None,
 				&mut None,
-				&mut crate::avatars::Avatars::default(),
-				&mut None,
+				(&mut crate::avatars::Avatars::default(), &mut None),
 				None,
 			);
 		});
@@ -3645,7 +3658,7 @@ mod tests {
 						)),
 						..Default::default()
 					},
-					|ui| view.show(ui, state, &mut None, &mut None, images, &mut None, None),
+					|ui| view.show(ui, state, &mut None, &mut None, (images, &mut None), None),
 				);
 				assert!(
 					output.platform_output.commands.is_empty(),

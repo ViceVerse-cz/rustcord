@@ -481,6 +481,10 @@ impl State {
 				.sum::<usize>()
 	}
 	pub fn select(&mut self, channel: Id) -> Option<Command> {
+		// Re-opening the current conversation keeps its history, scroll position and draft.
+		if self.selected == Some(channel) {
+			return None;
+		}
 		if !self
 			.channels
 			.iter()

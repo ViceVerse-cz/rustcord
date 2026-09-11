@@ -2128,6 +2128,7 @@ impl eframe::App for Desktop {
 				.selection()
 				.map(|(name, size)| (name.to_owned(), size));
 			self.messaging.attachment_preview = self.uploads.preview();
+			self.messaging.attachment_files = self.uploads.files();
 		}
 		self.messaging.upload_busy = self.uploads.busy() || self.clipboard.is_some();
 		self.messaging.upload_status = self.uploads.status();
@@ -2247,6 +2248,13 @@ impl eframe::App for Desktop {
 				.is_some_and(|channel| self.state.can_attach(channel))
 			{
 				self.uploads.cancel();
+			}
+			if let Some(index) = self.messaging.remove_attachment_index.take() {
+				self.uploads.remove_at(index);
+				if self.state.demo {
+					self.messaging.attachment = None;
+					self.messaging.attachment_preview = None;
+				}
 			}
 			if std::mem::take(&mut self.messaging.remove_attachment_requested) {
 				self.uploads.remove();

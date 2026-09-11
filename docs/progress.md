@@ -2244,6 +2244,110 @@ change without developing, tuning or live-testing it. Offline checks do not reso
 product-boundary conflict or validate its anti-spam claims; the full spec goal is incomplete.
 
 
+## September 11, 2026 - per-build dependency notice assembly
+
+Baseline: clean `11d041676f47824332b812c6e53c4dd57a9893f0`, branch
+`chore/dependency-notice-assembly`, Windows x86_64 MSVC, pinned Rust 1.98.1.
+The original checkout and its relocated target junction/backup remain untouched.
+
+Text and optional voice packaging now capture actual Cargo compiler-artifact package IDs,
+join locked offline metadata filtered to the host, and assemble license/notice files plus
+reviewed exact-version/source supplements in `licenses/dependencies`. The inventory includes
+host build dependencies and procedural macros conservatively; it is not linker precision.
+The collector rejects unknown missing coverage, changed override sources, path escapes,
+symlinks and oversized input, then refreshes only its four explicitly owned package subtrees.
+Limits: 4,096 packages, 8,192 notice files, 8 MiB per file, 128 MiB total, 1 MiB inventory,
+32 MiB metadata. Linux packages copy only inventory-listed files with bounded reads.
+
+The provenance records and 24 original registry source archives were reviewed; every archive
+SHA-256 matched Cargo.lock. Existing font/direct-component notices and MPL sources are reused.
+Modern objc2, dispatch and realfft upstream omissions stay explicitly unresolved with original
+source/declarations and an unmodified, labeled MIT reference. They set `complete: false` when
+selected; this does not assert a copyright grant or close redistribution review. Unknown new
+missing texts still stop packaging. Supplement bytes are preserved by scoped Git attributes.
+
+Independent review caught unfiltered offline metadata, which could fail in fresh native caches;
+assembly now reuses host discovery from the policy check. Linux reads were also bounded during
+copying to handle growth after the initial size check. Its synthetic Debian regression passed
+(2 tests, 2.188 seconds) with both variant allowlists, archive contents and unsafe-input checks.
+No app launch, account traffic or microphone capture was used; screenshots are not applicable.
+
+Baseline main also contained a formatting failure, a mechanical permission-helper Clippy lint
+and five stale avatar test compile errors after the cache became a HashMap. These are repaired
+without changing permission outcomes or texture behavior; tests use semantic keys and retain
+the existing rendering and byte-bound assertions. Final validation and package measurements
+are recorded below and in performance.md.
+
+
+Final local validation passed: `cargo xtask check` (385 tests, strict Clippy, text-only
+and policy checks), `node tests/xtask-workspace.cjs`, both Windows release package commands,
+and the Linux synthetic package regression above. The category fixture now advances its
+revision and invalidates navigation after direct replacement, matching the reducer contract;
+its final focused rerun and format check passed. The avatar test compares real unloaded and
+synthetically loaded frames rather than requiring a fallback behind an already loaded image.
+These last edits are test-only; measured release runtime code is unchanged.
+
+Windows text: 324 dependency entries / 602 notice payload files / 3,679,554 notice bytes.
+Windows voice: 421 / 781 / 4,695,971 bytes, with realfft explicitly unresolved. All 61 staged
+supplement/source files match their recorded provenance hashes. Per-package installed and
+DEFLATE9 sizes are in performance.md; executable sizes stayed unchanged. Diff review passed
+with Git's cr-at-eol whitespace interpretation for exact upstream CRLF notice bytes.
+GitHub native/security/license/fuzz checks are pending at this commit; no cross-platform or
+live-client completion is claimed. Full redistribution and the existing project gates remain
+incomplete.
+
+
+Main advanced to `ea68e0e` during CI (GIF animation/media preferences and composer
+autocomplete). Integrated those commits; the avatar conflict preserves incoming production
+animation code and our semantic-key/unloaded-to-loaded test assertions. Incoming desktop
+formatting was normalized. The combined `cargo xtask check` passes 395 tests plus Clippy,
+text-only and policy checks. Both combined Windows release packages pass (1m37s / 1m42s).
+Their absolute sizes are recorded separately in performance.md; the original notice-only
+comparison is tied to `584163e` and is not attributed to the newer main UI work. Earlier-head
+native CI has reached packaging on all three OSes, but final integrated CI remains pending.
+
+
+Integrated Windows CI exposed the incoming long-GIF fixture's dependence on runner speed:
+100 frames at 320x320 exceeded the unchanged production three-second decode guard. Temporal
+compaction now uses 100 small frames while retaining total duration, frame and byte assertions;
+the existing two-frame case separately verifies 320x160-to-160x80 resizing, timing and colors.
+Both focused tests passed locally in 0.05 seconds. This is a test-only repair; production
+budgets and the measured integrated release binaries remain unchanged. Linux integrated CI
+already passed both packages; final-head CI is checked on the PR.
+
+The full `cargo xtask check` also passed after the GIF fixture repair (395 tests and policy checks).
+
+
+macOS CI then exposed a temporary-directory naming collision between parallel notice tests:
+the clock returned the same timestamp twice. Fixture names now include a process-local atomic
+sequence in addition to PID/time. This changes only test isolation, and the full local check
+passed again (395 tests); no packaging/runtime limits or release code changed.
+
+
+Main then advanced to `d8cb031` (pending upload/message UI). The PR merge checks exposed two
+new UI functions above Clippy's argument limit. That main commit was integrated without
+conflicts. The repair groups related mutable arguments using existing tuple conventions;
+no lint is disabled and upload/render behavior is retained. Validation of this combined tree
+follows; earlier measurements remain explicitly scoped to their recorded main revisions.
+
+
+The new compact pending-row fixture assumed fewer rows fit within the viewport. Its test
+now checks measured geometry against the viewport and overscan, and verifies unseen middle
+rows remain unmeasured. Integration also exposed a real scroll regression: the new immediate
+retry for existing timeline-row measurements applied wheel input twice and could replace the
+compensated bottom view with the tall leading row. Removing that immediate retry restores the
+existing next-frame repaint and anchor behavior. Pending-row handling is unchanged. All 106
+UI tests pass, including an explicit forced reflow while browsing that preserves the anchor.
+The leading-row test consumes its synthetic texture output before assertions so future failures
+report normally instead of aborting during a second destructor panic. Native automation remains
+paused by the owner; native screenshots and UI process measurements were not resumed.
+
+Final local validation of the d8cb031 integration and repairs passed: `cargo xtask check`
+(399 tests, strict Clippy and policy checks) and both Windows release packages. Cargo reported
+1m40s text and 1m41s voice. Separate combined sizes are in performance.md. Native automation
+remains paused and latest-head CI is pending at this commit.
+
+
 ## Optimistic message rows ? September 11, 2026
 
 Implemented on `feat/optimistic-message-rows` from fetched `origin/main` at
@@ -2311,6 +2415,18 @@ Native evidence is still unavailable. The earlier package measurements describe 
 pre-integration implementation, not the combined #68 tree.
 
 Both integrated release builds pass: text (cargo build --locked --release -p serein --no-default-features, 1m32s) and voice (same command plus --features voice, 1m45s). No live launch was performed. The owner-requested main merge retains the check limitations above.
+
+
+Main advanced to `36b5c33` (user context menus and DM actions) after the previous push.
+The integration preserves those features and both documentation records. Pending-row test
+conflicts retain the geometric culling checks plus the same distant-row assertions; the new
+pending test module uses the grouped timeline arguments. Validation of this combined revision
+is recorded separately below; earlier size tables retain their original scopes.
+
+The `36b5c33` combined integration passed `cargo xtask check`: 412 tests, strict Clippy,
+text-only and policy checks. Both Windows release packages passed (Cargo 1m38s text / 1m47s
+voice). Combined package sizes are recorded separately in performance.md. Latest integrated
+CI is pending; native automation remains owner-paused and live compatibility unverified.
 
 
 ## Chat placeholder and sidebar alignment - September 11, 2026
