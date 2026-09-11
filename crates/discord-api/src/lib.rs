@@ -1,6 +1,7 @@
 // Direct, origin-fixed REST adapter. No cookies, redirects, logging, persistence or bot SDK.
 mod archives;
 pub mod upload;
+mod user_actions;
 use client_core::{
 	Command, Event,
 	auth::{AuthProvider, Failure, SessionSecret},
@@ -283,6 +284,13 @@ impl DiscordApi {
 	}
 	pub async fn execute(&self, command: Command) -> Event {
 		match command {
+			Command::UserAction { action, request } => {
+				Event::UserAction(client_core::user_actions::Event::Written {
+					action,
+					request,
+					result: self.user_action(action).await,
+				})
+			}
 			Command::Invite { code } => {
 				let result = self.invite(&code).await.map(Box::new);
 				Event::Invite { code, result }

@@ -49,7 +49,7 @@ pub fn show(
 						}).size(12.0).color(if pending.delivery == Delivery::Rejected { colors.danger } else { colors.muted }));
 					}); }
 					if !pending.content.is_empty() {
-						ui.add(egui::Label::new(RichText::new(&pending.content).color(colors.muted)).wrap()).on_hover_text(match pending.delivery {
+						ui.add(egui::Label::new(RichText::new(&pending.content).color(if pending.delivery == Delivery::Rejected { colors.danger } else { colors.muted })).wrap().selectable(true)).on_hover_text(match pending.delivery {
  Delivery::Sending => "Sending…", Delivery::Ambiguous => "Delivery unknown", Delivery::Rejected => "Not sent", Delivery::Confirmed => "Sent", });
 					}
 					if let Some(filename) = &pending.attachment {

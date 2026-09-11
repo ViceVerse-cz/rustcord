@@ -171,6 +171,11 @@ fn access_candidates(state: &State, event: &Event) -> Vec<model::Id> {
 		}
 		Event::ChannelChanged(patch) | Event::ThreadChanged { patch, .. } => (None, Some(patch.id)),
 		Event::ThreadRemoved { id, .. } => (None, Some(*id)),
+		Event::UserAction(client_core::user_actions::Event::Written {
+			action: client_core::user_actions::Action::CloseDm(channel),
+			result: Ok(()),
+			..
+		}) => (None, Some(*channel)),
 		Event::ThreadsSync { guild, .. } => (Some(vec![*guild]), None),
 		_ => return Vec::new(),
 	};
@@ -956,6 +961,13 @@ impl Desktop {
 		}
 		if self.state.demo {
 			let event = match command {
+				Command::UserAction { action, request } => {
+					Event::UserAction(client_core::user_actions::Event::Written {
+						action,
+						request,
+						result: Ok(()),
+					})
+				}
 				Command::MarkRead {
 					channel,
 					message,
@@ -1793,6 +1805,7 @@ impl Desktop {
 					|| matches!(
 						&event.event,
 						Event::NotificationPreferences(_)
+							| Event::UserAction(_)
 							| Event::Disconnected | Event::ReadState(
 							client_core::read_state::Event::Ack { .. }
 						) | Event::ReadState(client_core::read_state::Event::Result {

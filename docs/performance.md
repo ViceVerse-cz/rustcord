@@ -1,5 +1,54 @@
 # Initial performance evidence
 
+## User context menu - September 11, 2026
+
+Baseline `ea68e0e9afaa822e64e6bea1e144d48816aab339`, compared with integrated code `de73c85`.
+The after column includes the pending-upload UI merged from `d8cb031`; it cannot
+isolate this menu's overhead. Before that merge, the menu-only text/voice executables
+grew by 56,832 / 57,856 bytes. Reducer samples predate the UI-only integration;
+client-core is unchanged by that merge.
+Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical cores), 31.1 GiB visible RAM,
+Rust 1.98.1, locked release, thin LTO/one codegen unit, wgpu. Both
+`cargo xtask package` and `cargo xtask package-voice` passed on both revisions.
+Final releases use the isolated `E:/codex-builds/rustcord-user-menu-target`; source
+builds replaced stale artifacts encountered in the shared build cache. No new dependencies.
+
+| Metric | Baseline | After | Delta |
+| --- | --- | --- | --- |
+| text executable, bytes | 53,986,304 | 54,098,432 | +112,128 (+0.208%) |
+| text installed package, bytes | 55,106,039 | 55,227,192 | +121,153 (+0.220%) |
+| text ZIP (DEFLATE 9), bytes | 33,243,781 | 33,289,588 | +45,807 (+0.138%) |
+| voice executable, bytes | 59,091,968 | 59,205,120 | +113,152 (+0.191%) |
+| voice installed package, bytes | 60,317,494 | 60,439,743 | +122,249 (+0.203%) |
+| voice ZIP (DEFLATE 9), bytes | 35,345,246 | 35,390,825 | +45,579 (+0.129%) |
+| Reducer median, 100,000 events | 39.3572 ms | 38.4854 ms | -0.8718 ms (-2.22%); noisy |
+| Idle CPU, % of one logical core | 2.275 | 0.000 | -2.275 |
+| Median working set, MiB | 157.254 | 157.199 | -0.055 |
+| Peak sampled working set, MiB | 159.766 | 157.199 | -2.566 |
+| Median private bytes, MiB | 375.941 | 375.672 | -0.270 |
+
+Package samples include all declared shipped files (65 text / 92 voice), measured
+before this performance addendum; the baseline's stale, untracked
+`docs/agent-orchestration.md` was excluded from its text archive for identical file sets.
+The text ZIP remains above the initial 30 MiB compressed target.
+One reducer warmup plus five runs per revision, direct release `replay-bench.exe`:
+baseline 40.1823, 39.3572, 40.3051, 36.3527, 36.1438 ms; after 43.8780, 36.7993,
+41.1610, 38.4854, 37.9227 ms. Both retain 500 messages / 236992..237477 estimated
+bytes. This measures the synthetic reducer, not UI latency or RSS; overlapping
+ranges do not establish a speed improvement.
+
+Native process samples: one fresh text-only `--demo` process per revision, 10-second
+warmup, 20 samples at requested 500 ms intervals (10.303 / 10.285 actual seconds),
+System.Diagnostics.Process working set/private bytes and TotalProcessorTime delta.
+No scripted input because native Computer Use was unavailable; default requested
+1120x760-point viewport, actual display scale/occlusion unverified. No auth/audio
+helpers were started. GPU memory, startup/frame p95 and menu-interaction memory
+remain unmeasured. Builds and other desktop activity were present, so these short
+single-process samples are noisy. The observed CPU/memory differences are recorded,
+not attributed to menu rendering or represented as a performance improvement.
+Working-set samples exceed the original 80 MiB settled-idle target on both revisions.
+
+
 ## Combined DM/group activity ordering - September 11, 2026
 
 Baseline `fd20dc9`, compared with this change on Windows 11 Home 10.0.26200,
@@ -2156,3 +2205,58 @@ Cargo release build observations: 1m40s text / 1m41s voice. The integration repa
 immediate layout retry; all 106 synthetic UI tests pass, including wheel displacement and
 anchor preservation. Native screenshot/process/frame measurements remain owner-paused; no
 native UI performance improvement is claimed.
+
+
+## Optimistic message rows ? September 11, 2026
+
+Baseline `ea68e0e9afaa822e64e6bea1e144d48816aab339`; task branch
+`feat/optimistic-message-rows`. Windows 11 Home 10.0.26200, Rust 1.98.1,
+x86_64-pc-windows-msvc, pinned lockfile and existing release profile. Baseline packages
+were rebuilt before production edits; baseline and changed packages were kept separately.
+Both `cargo xtask package` (text, no default features) and `cargo xtask package-voice`
+passed before and after. One package per variant/revision; these are size measurements,
+not latency or throughput measurements.
+
+| Metric, bytes | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Text executable | 53,986,304 | 54,011,904 | +25,600 (+0.047%) |
+| Text installed, 65 files | 55,106,060 | 55,131,660 | +25,600 (+0.046%) |
+| Text ZIP | 33,243,793 | 33,254,716 | +10,923 (+0.033%) |
+| Voice executable | 59,091,968 | 59,117,568 | +25,600 (+0.043%) |
+| Voice installed, 128 files | 60,515,031 | 60,540,631 | +25,600 (+0.042%) |
+| Voice ZIP | 35,425,347 | 35,434,915 | +9,568 (+0.027%) |
+
+Installed sums include all package files; text excludes nested `voice/`. ZIPs use Python
+`zipfile`, sorted relative paths and DEFLATE level 9. Bundled documentation is the snapshot
+copied during packaging, before this evidence append. No dependencies or network workers
+were added. Pending bodies stay in the existing 64-item / shared 2 MiB input budget;
+the UI retains only up to 64 nonce/height entries, prunes them on confirmation/channel
+changes, and lays out nearby pending rows with 100-point overscan.
+
+Native before/after CPU, memory, renderer/display-scale and frame/startup latency are
+unmeasured: `orca` is not installed and the bundled Windows Computer Use API returned
+`Computer Use native pipe is unavailable: failed to connect native pipe: The system
+cannot find the file specified. (os error 2)`. Native screenshots could not be captured.
+Headless egui tests cover dark/light wrapping and scroll behavior; they are not native
+screenshots or proof of Discord compatibility. No runtime speed or memory improvement
+is claimed. No account, message, microphone or call actions were performed.
+
+
+The later owner-requested integration with main `d8cb031` preserves #68's shared
+pending/upload renderer and removes this branch's duplicate implementation. The table
+above remains historical evidence for the pre-integration revision; no size or native
+performance delta is attributed to the combined implementation.
+
+
+Notice-assembly integration with main `36b5c33` also preserves user context menus and DM
+actions. Both combined Windows release packages passed with the same size method above.
+These absolute measurements precede this evidence append and are not notice-only deltas.
+
+| Combined user-menu metric | Text | Voice |
+| --- | ---: | ---: |
+| Executable bytes | 54,099,456 | 59,205,632 |
+| Installed bytes | 58,929,204 | 65,355,104 |
+| DEFLATE9 ZIP bytes | 34,990,295 | 37,608,788 |
+| Files | 668 | 910 |
+
+Cargo reported 1m38s text / 1m47s voice. No native UI performance claim is added.

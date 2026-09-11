@@ -9,6 +9,7 @@ use std::{
 
 #[derive(Default)]
 pub struct TimelineView {
+	pub(super) user_action: Option<crate::user_menu::Action>,
 	pub(super) restore_pending: Option<String>,
 	pub(super) cancel_upload: bool,
 	pending_heights: BTreeMap<String, f32>,
@@ -590,7 +591,11 @@ impl TimelineView {
 			})
 			.collect();
 		if std::mem::take(&mut self.jump) {
-			offset = Some(total + pending_rows.iter().map(|(_, height)| height).sum::<f32>());
+			offset = Some(
+				(total + pending_rows.iter().map(|(_, height)| height).sum::<f32>()
+					- ui.available_height())
+				.max(0.0),
+			);
 		}
 		if let Some(offset) = offset {
 			scroll = scroll.vertical_scroll_offset(offset);
@@ -814,11 +819,19 @@ impl TimelineView {
 										)
 										.0,
 									);
-								} else if avatars
-									.show(ui, &message.author, 40.0, state.demo)
-									.clicked()
-								{
-									*profile = Some(message.author.clone());
+								} else {
+									let avatar =
+										avatars.show(ui, &message.author, 40.0, state.demo);
+									crate::user_menu::show(
+										&avatar,
+										state,
+										&message.author,
+										profile,
+										&mut self.user_action,
+									);
+									if avatar.clicked() {
+										*profile = Some(message.author.clone());
+									}
 								}
 								ui.vertical(|ui| {
 									ui.set_width(ui.available_width());
@@ -839,6 +852,13 @@ impl TimelineView {
 													)
 													.truncate()
 													.sense(egui::Sense::click()),
+												);
+												crate::user_menu::show(
+													&author,
+													state,
+													&message.author,
+													profile,
+													&mut self.user_action,
 												);
 												if author.clicked() {
 													*profile = Some(message.author.clone());
@@ -1430,6 +1450,9 @@ impl TimelineView {
 		}
 	}
 }
+#[cfg(test)]
+#[path = "pending_tests.rs"]
+mod pending_tests;
 #[cfg(test)]
 mod tests {
 	use super::*;
