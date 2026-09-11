@@ -359,7 +359,12 @@ mod macos {
 			};
 			last_frame = Instant::now();
 			let mut rgb = vec![0; WIDTH * HEIGHT * 3];
-			for (bgra, rgb) in bgra.as_chunks::<4>().0.iter().zip(rgb.as_chunks_mut::<3>().0) {
+			for (bgra, rgb) in bgra
+				.as_chunks::<4>()
+				.0
+				.iter()
+				.zip(rgb.as_chunks_mut::<3>().0)
+			{
 				rgb.copy_from_slice(&[bgra[2], bgra[1], bgra[0]]);
 			}
 			yuv.read_rgb8(RgbSliceU8::new(&rgb, (WIDTH, HEIGHT)));

@@ -2711,6 +2711,7 @@ mod composer_tests {
 		let ctx = egui::Context::default();
 		let mut state = edit_state();
 		let mut view = MessagingUi::default();
+		view.reading_preferences.confirm_external_links = true;
 		let frame = |view: &mut MessagingUi, state: &mut State, events| {
 			let output = ctx.run_ui(
 				egui::RawInput {
@@ -2734,7 +2735,7 @@ mod composer_tests {
 		};
 		frame(&mut view, &mut state, vec![]);
 		view.search.open = true;
-		view.timeline.opening = Some("https://discord.com/channels/@me/10/20".into());
+		view.timeline.opening = Some("https://example.com/message".into());
 		for _ in 0..3 {
 			frame(&mut view, &mut state, vec![]);
 		}
@@ -2745,7 +2746,7 @@ mod composer_tests {
 			"Escape belongs to the foreground confirmation"
 		);
 		state.selected = None;
-		view.timeline.opening = Some("https://discord.com/channels/@me/10".into());
+		view.timeline.opening = Some("https://example.com/conversation".into());
 		for _ in 0..3 {
 			frame(&mut view, &mut state, vec![]);
 		}
@@ -2967,12 +2968,32 @@ mod composer_tests {
 
 	#[test]
 	fn inline_edit_uses_mentions_ime_and_preserves_draft_with_optimistic_updates() {
+		// Restoring failed edits needs the full shell; keep editor IDs stable across frames.
+		let edit_frame =
+			|ctx: &egui::Context, view: &mut MessagingUi, state: &mut State, events| {
+				let mut commands = Vec::new();
+				let output = ctx.run_ui(
+					egui::RawInput {
+						screen_rect: Some(egui::Rect::from_min_size(
+							egui::Pos2::ZERO,
+							egui::vec2(1000.0, 700.0),
+						)),
+						events,
+						..Default::default()
+					},
+					|ui| commands.extend(view.show(ui, state)),
+				);
+				output.drop_without_applying_deltas();
+				ctx.input_mut(|input| input.keys_down.clear());
+				commands
+			};
 		let ctx = egui::Context::default();
 		let mut state = edit_state();
 		let mut view = MessagingUi {
 			editing: Some((Id(10), Id(20), "Original".into())),
 			..Default::default()
 		};
+		view.reading_preferences.show_members = false;
 		assert!(edit_frame(&ctx, &mut view, &mut state, vec![]).is_empty());
 		assert!(
 			edit_frame(
@@ -3019,7 +3040,15 @@ mod composer_tests {
 			state.timeline.get(Id(20)).unwrap().content,
 			"Original <@1> 語\n"
 		);
-		state.command_rejected(commands.into_iter().next().unwrap());
+		let [Command::Edit { request, .. }] = commands.as_slice() else {
+			panic!("Saving the edit emits one edit command");
+		};
+		state.apply_edit_result(
+			Id(10),
+			Id(20),
+			*request,
+			Err(client_core::auth::Failure::Network),
+		);
 		assert_eq!(state.timeline.get(Id(20)).unwrap().content, "Original");
 		assert_eq!(
 			state.message_actions.failed_edits[0].2,
@@ -3030,10 +3059,7 @@ mod composer_tests {
 			view.draft_changes.is_empty(),
 			"edits must not overwrite unsent drafts"
 		);
-		let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-			view.show(ui, &mut state);
-		});
-		output.drop_without_applying_deltas();
+		assert!(edit_frame(&ctx, &mut view, &mut state, vec![]).is_empty());
 		assert_eq!(view.editing.as_ref().unwrap().2, "Original <@1> 語\n");
 		assert!(state.message_actions.failed_edits.is_empty());
 		let commands = edit_frame(

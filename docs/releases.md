@@ -31,8 +31,13 @@ The selected commit is checked, packaged and released; normal push/PR CI remains
   `GITHUB_TOKEN` needs contents-write access; branch rules must permit the release
   version commit. The workflow does not bypass protections or post issue/PR comments.
 
-Release-only Node dependencies are pinned in `.github/release/package-lock.json`;
-CI uses Node 24.19.0 and `npm ci`. They are not application/runtime dependencies.
+Release-only Node dependencies are pinned in `.github/release/bun.lock`;
+CI installs them with Bun 1.4.2 using
+`bun install --cwd .github/release --frozen-lockfile --ignore-scripts`.
+Node 24.19.0 runs semantic-release. These are not application/runtime dependencies.
+Release jobs cache Bun downloads by OS, architecture, Bun version and lockfile.
+Rust jobs cache dependencies and installed Cargo tools, including after failed checks;
+the fuzz cache includes the pinned nightly toolchain in its key.
 The small offline check is `node .github/release/check.mjs` (Node 24.19.0,
 Python 3.11+; set `PYTHON` if needed). It checks commit bumps/notes, nightly tag
 isolation, version updates on temporary copies, and YAML/shell syntax.

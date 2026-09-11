@@ -2935,3 +2935,43 @@ Final voice release compilation also passed (+1,536 executable bytes), but
 `cargo xtask package-voice` failed on both baseline and after: missing exact license
 texts for openh264-sys2 0.9.8 and openh264 0.9.8, plus the existing realfft evidence
 warning. No notices or policy checks were bypassed; complete voice packages unavailable.
+
+## CI caches, Bun and current check failures — September 11, 2026
+
+Baseline: `1ff190b1eafb6ff701231f56b4eff296c7d6c578` on `origin/main`;
+implementation branch `perf/ci-dependency-cache`.
+The latest baseline run (34632696298) passed security and licenses. Native jobs
+and fuzz stopped at the camera formatting change from the preceding fast fix.
+The formatter correction is included here. Running the full local check then
+exposed stale UI fixtures for link confirmation, edit retry, and typing placement;
+the fixtures now exercise the current UI paths without changing runtime behavior.
+
+Rust dependency caches already existed for native, license, fuzz and release jobs.
+They now save after failed checks too. Security now caches its pinned cargo-audit
+binary and registry downloads; Cargo-tool versions are included in tool-job keys.
+The pinned fuzz nightly is installed before computing its cache key. Release
+installation now uses Bun 1.4.2, a frozen `bun.lock`, disabled install scripts and
+a cache of Bun's package downloads. Node remains the semantic-release runtime.
+No app caches, account data, signed artifacts, signing keys or advisory databases
+are added to these caches.
+
+Verification so far:
+
+- actionlint 1.7.12 passed both workflows (optional shellcheck/pyflakes disabled).
+- Bun 1.4.2 migrated the npm lockfile; all 298 checksummed dependency version and
+  integrity pairs were preserved. A clean temporary frozen install passed the
+  existing offline release smoke with Python 3.14. Local Node was 24.13.0; the
+  workflow retains Node 24.19.0. No release plan/publish command was executed.
+- Authentication handoff, xtask workspace and license-policy script checks passed.
+- Fuzz workspace formatting and diff whitespace checks passed.
+
+Performance: the baseline GitHub cargo-audit install took 133 seconds, cargo-deny
+117 seconds. Cache configuration now permits reuse; no warm-run speedup or total
+pipeline-time reduction is claimed before the new workflow has run. No runtime,
+package-size or screenshot comparison applies to workflow/test/formatting changes.
+
+Release blocker found during review: `openh264` and `openh264-sys2` 0.9.8 lack
+complete wrapper license texts in their published crates and exact upstream tree.
+The upstream BSD-2-Clause declaration and Cisco codec license are distinct; no
+unresolved override or license-check bypass was added. Signing and live Discord
+compatibility are not validated by these changes.
