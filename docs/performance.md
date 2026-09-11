@@ -3084,3 +3084,30 @@ samples of the three-second 320x180/24fps synthetic MOV. AMD Ryzen 7 7800X3D,
 16 logical CPUs. Includes in-memory decoding and RGBA conversion; excludes
 Decoder::open, seek, portrait check, network, GUI, audio output and playback timing.
 The baseline lacks this player, so no comparable decode delta is asserted.
+
+
+### Friends overview (September 12, 2026)
+
+Baseline `ecf6eca` in a clean detached worktree, compared with `feat/friends-list`.
+Windows x86_64, pinned Rust 1.98.1, standard `cargo xtask package` including voice,
+without demo/developer features. Separate package outputs; ZIP uses PowerShell
+Compress-Archive Optimal. Snapshots precede adding this note to bundled docs.
+
+| Metric | Base ecf6eca | Friends overview | Delta |
+| --- | ---: | ---: | ---: |
+| Executable bytes | 62,275,072 | 62,333,440 | +58,368 (+0.094%) |
+| Installed bytes (214 files) | 68,385,759 | 68,444,701 | +58,942 (+0.086%) |
+| ZIP bytes (Optimal) | 41,300,580 | 41,323,504 | +22,924 (+0.056%) |
+
+The page virtualizes 64-point rows and reuses existing avatar/relationship/presence
+bounds. Native capture/interaction failed with native pipe Windows error 2;
+CPU/RSS, frame/startup percentiles and native rendered appearance are unmeasured.
+No responsiveness improvement or live account interoperability is claimed.
+
+Reducer control workload: 100,000 synthetic events, one warmup then five direct
+release runs per revision on the same Ryzen 7 7800X3D host. Base milliseconds:
+43.2221, 40.7410, 40.0848, 39.0685, 39.6544 (median 40.0848). After:
+39.9235, 39.6237, 40.2908, 39.6087, 39.6787 (median 39.6787; -0.4061 ms / -1.01%).
+Both retain 500 timeline records / 236,992..237,477 estimated bytes. This small
+sequential difference is noise, not a demonstrated improvement. The workload
+checks reducer cost; it does not exercise friend rendering or measure RSS.

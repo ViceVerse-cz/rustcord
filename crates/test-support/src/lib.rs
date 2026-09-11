@@ -863,6 +863,30 @@ pub fn video_demo_state() -> State {
 	state
 }
 
+/// Offline friends overview using existing synthetic relationship data.
+pub fn friends_demo_state() -> State {
+	let mut state = demo_state();
+	state.selected = None;
+	state.apply(Envelope {
+		generation: state.generation,
+		event: Event::DirectPresence(
+			(0..16)
+				.map(|i| client_core::presence::Update {
+					user: Id(1001 + i),
+					status: model::Patch::Value(if i < 7 { "online" } else { "offline" }.into()),
+					custom_status: if i == 0 {
+						model::Patch::Value("Building something fun".into())
+					} else {
+						model::Patch::Null
+					},
+					activities: model::Patch::Value(Vec::new()),
+				})
+				.collect(),
+		),
+	});
+	state
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;

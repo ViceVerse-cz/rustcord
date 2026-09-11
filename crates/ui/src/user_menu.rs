@@ -38,74 +38,81 @@ pub(super) fn show(
 	profile: &mut Option<User>,
 	action: &mut Option<Action>,
 ) {
-	popup(response, egui::Popup::default_response_id(response)).show(|ui| {
-		let colors = crate::design::palette(ui);
-		ui.set_min_width(200.0);
-		ui.spacing_mut().button_padding = egui::vec2(8.0, 6.0);
-		if ui.button("Profile").clicked() {
-			*profile = Some(user.clone());
-			ui.close();
-		}
-		if state.user.as_ref().is_some_and(|own| own.id == user.id) {
-			return;
-		}
-		let dm = state.channels.iter().find(|c| {
-			c.guild.is_none() && c.kind == 1 && c.recipients.iter().any(|u| u.id == user.id)
-		});
-		let enabled = (state.demo || state.gateway_connected) && !state.user_action_pending();
-		ui.separator();
-		if let Some(dm) = dm {
-			let muted = state.dm_muted(dm.id) == Some(true);
-			if ui
-				.add_enabled(
-					enabled,
-					egui::Button::new(if muted { "Unmute" } else { "Mute" }),
-				)
-				.on_hover_text("Mute this direct message's notifications until you unmute it.")
-				.clicked()
-			{
-				*action = Some(Action::Mute {
-					channel: dm.id,
-					muted: !muted,
-				});
-				ui.close();
-			}
-			if ui
-				.add_enabled(enabled, egui::Button::new("Close DM"))
-				.on_hover_text("Remove this conversation from your DM list. Messages are kept.")
-				.clicked()
-			{
-				*action = Some(Action::CloseDm(dm.id));
-				ui.close();
-			}
-		} else {
-			ui.add_enabled(false, egui::Button::new("Mute"))
-				.on_disabled_hover_text("No open direct message with this user.");
-		}
-		ui.separator();
-		let blocked = state.user_blocked(user.id) == Some(true);
+	popup(response, egui::Popup::default_response_id(response))
+		.show(|ui| contents(ui, state, user, profile, action));
+}
+
+pub(super) fn contents(
+	ui: &mut egui::Ui,
+	state: &State,
+	user: &User,
+	profile: &mut Option<User>,
+	action: &mut Option<Action>,
+) {
+	let colors = crate::design::palette(ui);
+	ui.set_min_width(200.0);
+	ui.spacing_mut().button_padding = egui::vec2(8.0, 6.0);
+	if ui.button("Profile").clicked() {
+		*profile = Some(user.clone());
+		ui.close();
+	}
+	if state.user.as_ref().is_some_and(|own| own.id == user.id) {
+		return;
+	}
+	let dm = state
+		.channels
+		.iter()
+		.find(|c| c.guild.is_none() && c.kind == 1 && c.recipients.iter().any(|u| u.id == user.id));
+	let enabled = (state.demo || state.gateway_connected) && !state.user_action_pending();
+	ui.separator();
+	if let Some(dm) = dm {
+		let muted = state.dm_muted(dm.id) == Some(true);
 		if ui
 			.add_enabled(
 				enabled,
-				egui::Button::new(
-					egui::RichText::new(if blocked { "Unblock" } else { "Block" })
-						.color(colors.danger),
-				),
+				egui::Button::new(if muted { "Unmute" } else { "Mute" }),
 			)
+			.on_hover_text("Mute this direct message's notifications until you unmute it.")
 			.clicked()
 		{
-			*action = Some(Action::Block {
-				user: user.id,
-				blocked: !blocked,
+			*action = Some(Action::Mute {
+				channel: dm.id,
+				muted: !muted,
 			});
 			ui.close();
 		}
-		if let Some(status) = state.user_action_status() {
-			ui.add(
-				egui::Label::new(egui::RichText::new(status).small().color(colors.muted)).wrap(),
-			);
+		if ui
+			.add_enabled(enabled, egui::Button::new("Close DM"))
+			.on_hover_text("Remove this conversation from your DM list. Messages are kept.")
+			.clicked()
+		{
+			*action = Some(Action::CloseDm(dm.id));
+			ui.close();
 		}
-	});
+	} else {
+		ui.add_enabled(false, egui::Button::new("Mute"))
+			.on_disabled_hover_text("No open direct message with this user.");
+	}
+	ui.separator();
+	let blocked = state.user_blocked(user.id) == Some(true);
+	if ui
+		.add_enabled(
+			enabled,
+			egui::Button::new(
+				egui::RichText::new(if blocked { "Unblock" } else { "Block" }).color(colors.danger),
+			),
+		)
+		.clicked()
+	{
+		*action = Some(Action::Block {
+			user: user.id,
+			blocked: !blocked,
+		});
+		ui.close();
+	}
+	if let Some(status) = state.user_action_status() {
+		ui.add(egui::Label::new(egui::RichText::new(status).small().color(colors.muted)).wrap());
+	}
 }
 
 #[cfg(test)]
