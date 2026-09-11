@@ -437,3 +437,16 @@ subtree is capped at 16 KiB and discarded after each request. No raw settings ar
 logged or saved. Server activity diagnostics borrow at most 64 KiB / 16 sessions /
 16 activities per list and retain only a fixed enum, never session identities or
 raw presence payloads. Connection teardown clears these reports and workers.
+
+
+### Inline attachment video
+
+Video data is memory-only. One lazy worker handles the latest requested attachment,
+with a replaceable pending request and cancellation fencing. The network source retains
+one 16 KiB range; responses are checked for exact range/total/body lengths and reject
+redirects and content encoding. Encoded attachment size is capped at 100 MiB.
+The application queues at most two 1080p RGBA frames, one replaceable display frame,
+one UI texture, one second of stereo float PCM (at most 768,000 bytes), and one decoded
+audio packet plus at most two seconds of timestamp-gap silence. Each native decoded
+sample is rejected above 16 MiB before copying. OS decoder/GPU allocations are additional
+and are released with the player. No file cache or media URL/byte diagnostics are written.

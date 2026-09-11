@@ -701,3 +701,21 @@ successful invite responses are treated as uncertain writes.
 These routes are documented developer API protocol evidence, not approval or proof
 of normal-user compatibility. Synthetic state/HTTP checks cover this adapter; live
 normal-user creation/leaving, service challenges and restricted guilds remain unverified.
+
+
+### Inline attachment video (September 12, 2026)
+
+MOV/MP4 attachments expose explicit Play/Pause, seek and volume controls on Windows.
+Media Foundation decodes through a credential-free, validated Discord CDN range reader;
+no attachment is opened as an OS URL and no webview is involved. Windows codec availability
+controls playback (including HEVC); unsupported containers/codecs show an error with the
+existing download/open fallback. Linux/macOS inline playback is not implemented.
+Limits are 100 MiB encoded, two hours, 1920 pixels per side and 1920x1080 total pixels,
+and mono/stereo audio up to 96 kHz. Rotated portrait video uses the same pixel budget.
+Only an explicit attachment Play starts decoding; leaving its visible message/channel,
+hiding the app, logout, replacement or cancellation stops that player. Embeds with web
+video pages continue using their external link action. No live Discord media was tested.
+
+The native MPEG-4 source does not support external tracks; it receives an unnamed byte
+stream without a base URL and Media Foundation starts with socket support disabled.
+See [Microsoft MPEG-4 source documentation](https://learn.microsoft.com/en-us/windows/win32/medfound/mpeg-4-file-source).

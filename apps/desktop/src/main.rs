@@ -13,6 +13,7 @@ mod reading_settings;
 mod screen;
 mod toggle_setting;
 mod uploads;
+mod video;
 mod voice;
 use client_core::{
 	Command, Envelope, Event, State,
@@ -122,6 +123,7 @@ struct Desktop {
 	messaging: ui::MessagingUi,
 	downloads: downloads::Downloads,
 	audio: audio::Audio,
+	video: video::Video,
 	notifications: platform::notifications::Notifications,
 	uploads: uploads::Uploads,
 	group_icon: group_icon::GroupIcon,
@@ -426,6 +428,8 @@ impl Desktop {
 					.any(|arg| arg == "--demo-audio" || arg == "--demo-voice-messages")
 				{
 					test_support::audio_demo_state()
+				} else if std::env::args().any(|arg| arg == "--demo-video") {
+					test_support::video_demo_state()
 				} else if std::env::args().any(|arg| arg == "--demo-system-messages") {
 					test_support::system_demo_state()
 				} else if std::env::args().any(|arg| arg == "--demo-notifications") {
@@ -762,6 +766,7 @@ impl Desktop {
 			messaging,
 			downloads: downloads::Downloads::default(),
 			audio: audio::Audio::default(),
+			video: video::Video::default(),
 			notifications: {
 				let wake = cc.egui_ctx.clone();
 				platform::notifications::Notifications::new(move || wake.request_repaint())
@@ -864,6 +869,7 @@ impl Desktop {
 		}
 		self.downloads.cancel();
 		self.audio.stop();
+		self.video.stop();
 		self.voice.stop();
 		let was_demo = self.state.demo;
 		self.clear_avatars(ctx);
@@ -2717,7 +2723,10 @@ impl eframe::App for Desktop {
 		{
 			self.audio.stop();
 			self.messaging.audio().stop();
+			self.video.stop();
+			self.messaging.video().stop();
 		}
+		self.video.poll(self.messaging.video(), ctx);
 		let audio = self.audio.poll();
 		let player = self.messaging.audio();
 		player.position = audio.position.as_secs_f64();
@@ -2995,6 +3004,23 @@ impl eframe::App for Desktop {
 					ui::AudioCommand::Volume(volume) => self.audio.volume(volume),
 					ui::AudioCommand::Stop => self.audio.stop(),
 				}
+			}
+			let player = self.messaging.video();
+			if !player.seen
+				|| player.active.is_none()
+				|| (!self.state.demo && self.state.auth != AuthState::Authenticated)
+			{
+				self.video.stop();
+				player.stop();
+			}
+			if let Some(command) = player.command.take() {
+				self.video.command(
+					command,
+					player,
+					self.runtime.handle(),
+					&ctx,
+					self.fixture_only || self.state.demo,
+				);
 			}
 			self.notifications.set_enabled(
 				self.messaging.notifications_enabled
