@@ -2951,7 +2951,9 @@ They now save after failed checks too. Security now caches its pinned cargo-audi
 binary and registry downloads; Cargo-tool versions are included in tool-job keys.
 The pinned fuzz nightly is installed before computing its cache key. Release
 installation now uses Bun 1.4.2, a frozen `bun.lock`, disabled install scripts and
-a cache of Bun's package downloads. Node remains the semantic-release runtime.
+a cache of Bun's package downloads. Bun 1.4.2 also runs the release smoke,
+semantic-release planning and publishing scripts; Node remains only for the
+separate native-build login handoff check.
 No app caches, account data, signed artifacts, signing keys or advisory databases
 are added to these caches.
 
@@ -2960,8 +2962,9 @@ Verification so far:
 - actionlint 1.7.12 passed both workflows (optional shellcheck/pyflakes disabled).
 - Bun 1.4.2 migrated the npm lockfile; all 298 checksummed dependency version and
   integrity pairs were preserved. A clean temporary frozen install passed the
-  existing offline release smoke with Python 3.14. Local Node was 24.13.0; the
-  workflow retains Node 24.19.0. No release plan/publish command was executed.
+  existing offline release smoke with Python 3.14. A Bun-run semantic-release
+  dry-run plan also completed and selected the expected first nightly version.
+  No release publish command was executed.
 - Authentication handoff, xtask workspace and license-policy script checks passed.
 - Fuzz workspace formatting and diff whitespace checks passed.
 

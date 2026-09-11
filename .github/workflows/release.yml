@@ -35,9 +35,6 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24.19.0
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
@@ -47,12 +44,12 @@ jobs:
           key: bun-${{ runner.os }}-${{ runner.arch }}-1.4.2-${{ hashFiles('.github/release/bun.lock') }}
           restore-keys: bun-${{ runner.os }}-${{ runner.arch }}-1.4.2-
       - run: bun install --cwd .github/release --frozen-lockfile --ignore-scripts
-      - run: node .github/release/check.mjs
+      - run: bun .github/release/check.mjs
       - name: Calculate semantic version and notes
         id: version
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: node .github/release/release.mjs plan
+        run: bun .github/release/release.mjs plan
       - name: Require Mac signing credentials before building
         if: steps.version.outputs.release == 'true'
         env:
@@ -176,9 +173,6 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24.19.0
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
@@ -203,4 +197,4 @@ jobs:
       - name: Commit versions and publish semantic release with notes and assets
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: node .github/release/release.mjs publish
+        run: bun .github/release/release.mjs publish
