@@ -2189,3 +2189,56 @@ Separate outstanding spec conflict: incoming `5a6fb8a` advertises a Chrome finge
 avoid spam quarantine, contrary to SPEC section 3.2. This task preserves that separate main
 change without developing, tuning or live-testing it. Offline checks do not resolve the
 product-boundary conflict or validate its anti-spam claims; the full spec goal is incomplete.
+
+
+## September 11, 2026 - per-build dependency notice assembly
+
+Baseline: clean `11d041676f47824332b812c6e53c4dd57a9893f0`, branch
+`chore/dependency-notice-assembly`, Windows x86_64 MSVC, pinned Rust 1.98.1.
+The original checkout and its relocated target junction/backup remain untouched.
+
+Text and optional voice packaging now capture actual Cargo compiler-artifact package IDs,
+join locked offline metadata filtered to the host, and assemble license/notice files plus
+reviewed exact-version/source supplements in `licenses/dependencies`. The inventory includes
+host build dependencies and procedural macros conservatively; it is not linker precision.
+The collector rejects unknown missing coverage, changed override sources, path escapes,
+symlinks and oversized input, then refreshes only its four explicitly owned package subtrees.
+Limits: 4,096 packages, 8,192 notice files, 8 MiB per file, 128 MiB total, 1 MiB inventory,
+32 MiB metadata. Linux packages copy only inventory-listed files with bounded reads.
+
+The provenance records and 24 original registry source archives were reviewed; every archive
+SHA-256 matched Cargo.lock. Existing font/direct-component notices and MPL sources are reused.
+Modern objc2, dispatch and realfft upstream omissions stay explicitly unresolved with original
+source/declarations and an unmodified, labeled MIT reference. They set `complete: false` when
+selected; this does not assert a copyright grant or close redistribution review. Unknown new
+missing texts still stop packaging. Supplement bytes are preserved by scoped Git attributes.
+
+Independent review caught unfiltered offline metadata, which could fail in fresh native caches;
+assembly now reuses host discovery from the policy check. Linux reads were also bounded during
+copying to handle growth after the initial size check. Its synthetic Debian regression passed
+(2 tests, 2.188 seconds) with both variant allowlists, archive contents and unsafe-input checks.
+No app launch, account traffic or microphone capture was used; screenshots are not applicable.
+
+Baseline main also contained a formatting failure, a mechanical permission-helper Clippy lint
+and five stale avatar test compile errors after the cache became a HashMap. These are repaired
+without changing permission outcomes or texture behavior; tests use semantic keys and retain
+the existing rendering and byte-bound assertions. Final validation and package measurements
+are recorded below and in performance.md.
+
+
+Final local validation passed: `cargo xtask check` (385 tests, strict Clippy, text-only
+and policy checks), `node tests/xtask-workspace.cjs`, both Windows release package commands,
+and the Linux synthetic package regression above. The category fixture now advances its
+revision and invalidates navigation after direct replacement, matching the reducer contract;
+its final focused rerun and format check passed. The avatar test compares real unloaded and
+synthetically loaded frames rather than requiring a fallback behind an already loaded image.
+These last edits are test-only; measured release runtime code is unchanged.
+
+Windows text: 324 dependency entries / 602 notice payload files / 3,679,554 notice bytes.
+Windows voice: 421 / 781 / 4,695,971 bytes, with realfft explicitly unresolved. All 61 staged
+supplement/source files match their recorded provenance hashes. Per-package installed and
+DEFLATE9 sizes are in performance.md; executable sizes stayed unchanged. Diff review passed
+with Git's cr-at-eol whitespace interpretation for exact upstream CRLF notice bytes.
+GitHub native/security/license/fuzz checks are pending at this commit; no cross-platform or
+live-client completion is claimed. Full redistribution and the existing project gates remain
+incomplete.

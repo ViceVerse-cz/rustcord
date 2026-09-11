@@ -32,10 +32,7 @@ pub(crate) struct Avatars {
 impl Avatars {
 	#[cfg(test)]
 	pub(crate) fn texture_id(&self, key: &str) -> Option<egui::TextureId> {
-		self.textures
-			.iter()
-			.find(|(stored, _)| stored == key)
-			.map(|(_, texture)| texture.id())
+		self.textures.get(key).map(|(_, texture)| texture.id())
 	}
 	pub fn take_requests(&mut self) -> Vec<String> {
 		std::mem::take(&mut self.requests)
@@ -669,17 +666,15 @@ mod tests {
 			discriminator: 0,
 		};
 		let mut response_rect = egui::Rect::NOTHING;
-		let mut output = ctx.run_ui(Default::default(), |ui| {
+		let output = ctx.run_ui(Default::default(), |ui| {
 			ui.with_layout(
 				egui::Layout::top_down(egui::Align::Min).with_cross_justify(true),
 				|ui| {
 					ui.set_width(200.0);
-					response_rect = images.show(ui, &user, 36.0, true).rect;
+					response_rect = images.show(ui, &user, 36.0, false).rect;
 				},
 			);
 		});
-		output.textures_delta.clear();
-		let texture = images.textures[0].1.id();
 		let fallback = output
 			.shapes
 			.iter()
@@ -688,6 +683,25 @@ mod tests {
 				_ => None,
 			})
 			.unwrap();
+		output.drop_without_applying_deltas();
+		let requests = images.take_requests();
+		assert_eq!(requests.len(), 1);
+		let key = &requests[0];
+		images.accept(
+			&ctx,
+			key.clone(),
+			Some(ColorImage::filled([32, 32], egui::Color32::WHITE)),
+		);
+		let texture = images.texture_id(key).unwrap();
+		let output = ctx.run_ui(Default::default(), |ui| {
+			ui.with_layout(
+				egui::Layout::top_down(egui::Align::Min).with_cross_justify(true),
+				|ui| {
+					ui.set_width(200.0);
+					assert_eq!(images.show(ui, &user, 36.0, false).rect, response_rect);
+				},
+			);
+		});
 		let artwork = output
 			.shapes
 			.iter()
@@ -726,10 +740,10 @@ mod tests {
 					let key = images.take_requests().pop().unwrap();
 					images.accept(
 						&ctx,
-						key,
+						key.clone(),
 						Some(ColorImage::filled(dimensions, egui::Color32::WHITE)),
 					);
-					let texture = images.textures[0].1.id();
+					let texture = images.texture_id(&key).unwrap();
 					let output = ctx.run_ui(Default::default(), |ui| {
 						assert_eq!(
 							slot,
@@ -790,8 +804,8 @@ mod tests {
 		assert_eq!(
 			avatars
 				.textures
-				.iter()
-				.map(|(_, (_, t))| t.byte_size())
+				.values()
+				.map(|(_, texture)| texture.byte_size())
 				.sum::<usize>(),
 			4 * 1024 * 1024
 		);
@@ -814,8 +828,8 @@ mod tests {
 		assert_eq!(
 			avatars
 				.textures
-				.iter()
-				.map(|(_, (_, texture))| texture.byte_size())
+				.values()
+				.map(|(_, texture)| texture.byte_size())
 				.sum::<usize>(),
 			TEXTURE_BYTES
 		);
@@ -832,7 +846,10 @@ mod tests {
 		output.textures_delta.clear();
 		assert!(preview.take_requests().is_empty());
 		assert_eq!(preview.textures.len(), 1);
-		assert_eq!(preview.textures[0].1.size(), [32, 32]);
+		assert_eq!(
+			preview.textures[&guild.icon_key().unwrap()].1.size(),
+			[32, 32]
+		);
 		avatars.request("x".repeat(2055));
 		assert!(avatars.attempts.keys().all(|key| key.len() <= 2054));
 	}

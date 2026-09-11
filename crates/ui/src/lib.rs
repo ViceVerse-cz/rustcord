@@ -145,7 +145,10 @@ pub struct MessagingUi {
 
 impl MessagingUi {
 	pub fn timeline_reflows(&self) -> (u64, u64) {
-		(self.timeline.reflow_frames, self.timeline.consecutive_reflows)
+		(
+			self.timeline.reflow_frames,
+			self.timeline.consecutive_reflows,
+		)
 	}
 	/// Fixture-only entry point: opens People and the profile card for `user` as if clicked.
 	pub fn preview_profile(&mut self, user: model::User) {

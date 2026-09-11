@@ -436,9 +436,7 @@ impl State {
 		let Some(guild) = channel.guild else {
 			return matches!(channel.kind, 1 | 3).then_some(true);
 		};
-		if self.guild(guild).is_none() {
-			return None;
-		}
+		self.guild(guild)?;
 		let guild = self.permissions.guilds.get(&guild)?;
 		let target = if matches!(channel.kind, 10..=12) {
 			let parent = channel.parent_id?;

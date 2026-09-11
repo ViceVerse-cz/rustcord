@@ -2092,3 +2092,33 @@ repair has headless keyboard coverage; native focus and full-client UI performan
 unmeasured. Test-only rendering assertions now identify the actual activity texture and
 keyboard navigation reaches the unread button by accessible label. Neither changes shipped
 layout or adds runtime instrumentation.
+
+
+## Dependency notice assembly - September 11, 2026
+
+Windows x86_64 MSVC / pinned Rust 1.98.1. Clean baseline `11d0416` and task tree
+`chore/dependency-notice-assembly` built in the same private E: target directory, with
+CARGO_INCREMENTAL=0. Both release variants use the locked no-default-features package
+commands, adding `voice` only for voice. One package-size sample per variant/revision:
+sorted Python zipfile DEFLATE9, text excludes nested voice, no PR evidence is bundled.
+Installed/ZIP sizes include documentation at packaging time, before this evidence append.
+
+| Metric (bytes unless files) | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| text executable | 53,877,248 | 53,877,248 | +0 (+0.00%) |
+| text installed | 54,997,004 | 58,677,556 | +3,680,552 (+6.69%) |
+| text zip | 33,203,585 | 34,897,031 | +1,693,446 (+5.10%) |
+| text files | 65 | 668 | +603 (+927.69%) |
+| voice executable | 58,981,888 | 58,981,888 | +0 (+0.00%) |
+| voice installed | 60,404,951 | 65,105,373 | +4,700,422 (+7.78%) |
+| voice zip | 35,389,027 | 37,521,548 | +2,132,521 (+6.03%) |
+| voice files | 128 | 910 | +782 (+610.94%) |
+
+Executable sizes are unchanged. Growth is the per-build notice inventory, texts and
+corresponding component sources; build dependencies are conservatively included.
+Baseline Cargo release builds reported 1m37s text / 1m44s voice; after 1m42s / 1m45s.
+These are single warm-cache build observations, not a statistically controlled speed claim
+or isolated collector timing. No app/runtime dependencies changed. The mechanical permission
+lint repair preserves outcomes; avatar changes only repair tests for the existing map cache.
+Reducer, native UI, process memory and live audio were not remeasured for packaging tooling.
+Linux synthetic Debian assembly passed in WSL; actual Linux/macOS packages remain CI evidence.
