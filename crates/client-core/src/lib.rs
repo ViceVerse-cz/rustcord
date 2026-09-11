@@ -31,6 +31,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub const MAX_DRAFT_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_CONTENT: usize = 2000;
+/// Discord accepts at most ten attachments per message.
+pub const MAX_ATTACHMENTS: usize = 10;
 pub const MAX_NAV: usize = 4000;
 pub const MAX_MEMBER_PRESENCE_BYTES: usize = 128 * 1024;
 pub const MAX_EVENT_BYTES: usize = 4 * 1024 * 1024;
@@ -271,7 +273,8 @@ pub struct Envelope {
 pub struct Pending {
 	pub channel: Id,
 	pub content: String,
-	pub attachment: Option<String>,
+	/// Filenames of the files uploaded with this message, in send order.
+	pub attachments: Vec<String>,
 	pub nonce: String,
 	pub delivery: Delivery,
 	pub confirmed: Option<Id>,
@@ -511,7 +514,8 @@ impl State {
 				.map(|p| {
 					p.content.capacity()
 						+ p.nonce.capacity()
-						+ p.attachment.as_ref().map_or(0, String::capacity)
+						+ p.attachments.iter().map(String::capacity).sum::<usize>()
+						+ p.attachments.capacity() * size_of::<String>()
 						+ size_of::<Pending>()
 				})
 				.sum::<usize>()
@@ -707,15 +711,23 @@ impl State {
 		self.prepare_send_with_attachment(None)
 	}
 	pub fn prepare_send_with_attachment(&mut self, filename: Option<&str>) -> Option<Command> {
+		self.prepare_send_with_attachments(filename.as_slice())
+	}
+	/// Queue the draft with up to ten attachment filenames; an empty slice sends text only.
+	pub fn prepare_send_with_attachments(&mut self, filenames: &[&str]) -> Option<Command> {
 		let channel = self.selected?;
-		if !self.can_send(channel) || (filename.is_some() && !self.can_attach(channel)) {
+		if !self.can_send(channel) || (!filenames.is_empty() && !self.can_attach(channel)) {
 			self.status = "Sending is unavailable with the current connection or permissions";
 			return None;
 		}
-		if filename.is_some_and(|name| {
+		if filenames.len() > MAX_ATTACHMENTS {
+			self.status = "Attach up to 10 files per message";
+			return None;
+		}
+		if filenames.iter().any(|name| {
 			name.trim().is_empty()
 				|| name.len() > 256
-				|| matches!(name, "." | "..")
+				|| matches!(*name, "." | "..")
 				|| name
 					.chars()
 					.any(|c| c.is_control() || matches!(c, '/' | '\\' | ':'))
@@ -724,12 +736,15 @@ impl State {
 			return None;
 		}
 		let content = self.drafts.get(&channel).map_or("", String::as_str);
-		if (content.trim().is_empty() && filename.is_none())
+		if (content.trim().is_empty() && filenames.is_empty())
 			|| content.chars().count() > MAX_CONTENT
 			|| self.pending.len() >= 64
 			|| self.draft_bytes()
 				+ content.len()
-				+ filename.map_or(0, str::len)
+				+ filenames
+					.iter()
+					.map(|name| name.len() + size_of::<String>())
+					.sum::<usize>()
 				+ size_of::<Pending>()
 				+ 32 > MAX_DRAFT_BYTES
 		{
@@ -746,7 +761,7 @@ impl State {
 		self.pending.push(Pending {
 			channel,
 			content: content.clone(),
-			attachment: filename.map(str::to_owned),
+			attachments: filenames.iter().map(|name| (*name).to_owned()).collect(),
 			nonce: nonce.clone(),
 			delivery: Delivery::Sending,
 			confirmed: None,
@@ -2286,6 +2301,23 @@ mod tests {
 				.prepare_send_with_attachment(Some(&"é".repeat(129)))
 				.is_none()
 		);
+		assert!(
+			state
+				.prepare_send_with_attachments(&["a.txt"; MAX_ATTACHMENTS + 1])
+				.is_none()
+		);
+		assert!(
+			state
+				.prepare_send_with_attachments(&["a.txt", "../b.txt"])
+				.is_none()
+		);
+		assert!(state.pending.is_empty());
+		let batch = state
+			.prepare_send_with_attachments(&["a.png", "b.png", "c.pdf"])
+			.unwrap();
+		assert_eq!(state.pending[0].attachments, ["a.png", "b.png", "c.pdf"]);
+		state.command_rejected(batch);
+		state.pending.clear();
 		state.reply = Some(Id(4));
 		let Command::Send {
 			content,
@@ -2300,7 +2332,7 @@ mod tests {
 		};
 		assert!(content.is_empty());
 		assert_eq!(reply, Some(Id(4)));
-		assert_eq!(state.pending[0].attachment.as_deref(), Some("résumé.txt"));
+		assert_eq!(state.pending[0].attachments, ["résumé.txt"]);
 		assert!(state.draft_bytes() >= "résumé.txt".len() + nonce.len() + size_of::<Pending>());
 		apply(
 			&mut state,

@@ -117,5 +117,19 @@
     "after_executable_bytes": 57249216,
     "package": null,
     "blocker": "Baseline build terminated with signal 15. Final voice release builds; packaging fails for missing exact-version license texts: objc2-core-media 0.3.2, objc2-core-video 0.3.2, openh264-sys2 0.9.8, openh264 0.9.8."
+  },
+  "measured_task_commit": "0477d0614b238be6ddcbfff983a4f243afff48d7",
+  "integration": {
+    "main_commit": "f01aeb6775946c97c3d4cda97cf6f33683ee86f5",
+    "text_package": {
+      "executable": 51705104,
+      "installed": 58956832,
+      "archive": 36670157,
+      "files": 686
+    },
+    "text_executable_sha256": "b972bc262bb9a523db45e4e34d948bed193969cf3cdc3c5d4723ef3f813871de",
+    "voice_executable_bytes": 57350800,
+    "timeline_source_sha256": "af457a01dbe0317c2a31f6e72025dfc430f9b0515a827800bb5b744dce514cbe",
+    "note": "Integrated release sizes include unrelated main changes; isolated task comparisons above are not a benchmark of this merged tree. No repeated native process sample after integration."
   }
 }

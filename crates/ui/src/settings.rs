@@ -62,7 +62,7 @@ impl Page {
 		let keywords = match self {
 			Self::Account => "my account profile logout",
 			Self::Appearance => {
-				"appearance theme dark light system zoom reading layout sidebar people reset colour color preset animate animated gifs autoplay hide image links confirm confirmation external browser"
+				"appearance window tray minimize theme dark light system zoom reading layout sidebar people reset colour color preset animate animated gifs autoplay hide image links confirm confirmation external browser"
 			}
 			Self::Notifications => "notifications desktop system alerts",
 			Self::Activity => "game activity playing osu status presence sharing",
@@ -476,6 +476,26 @@ impl MessagingUi {
 
 	fn appearance_settings(&mut self, ui: &mut egui::Ui) {
 		let colors = design::palette(ui);
+		ui.label(design::eyebrow(ui, "Window", colors.muted));
+		design::card(ui, |ui| {
+			ui.add_enabled_ui(self.tray_available, |ui| {
+				design::switch(
+					ui,
+					"Minimize to tray",
+					Some("Keep Serein running in the notification area when minimized."),
+					&mut self.minimize_to_tray,
+				);
+			});
+			let status = if self.tray_available {
+				self.tray_status
+			} else {
+				"Tray is unavailable on this platform."
+			};
+			if !status.is_empty() {
+				ui.label(RichText::new(status).size(12.0).color(colors.muted));
+			}
+		});
+		ui.add_space(8.0);
 		ui.label(design::eyebrow(ui, "Theme", colors.muted));
 		theme_preference_cards(ui);
 		ui.add_space(8.0);
@@ -613,6 +633,25 @@ impl MessagingUi {
 				.size(12.0)
 				.color(colors.muted),
 			);
+			if self.share_game_activity && state.gateway_connected && !state.demo {
+				let action = if self.discord_activity_sharing == Some(false) {
+					Some(("Enable on Discord", true))
+				} else if self.discord_activity_sharing_retry {
+					Some(("Check Discord setting again", false))
+				} else {
+					None
+				};
+				if let Some((label, enable)) = action
+					&& ui
+						.add_enabled(
+							!self.discord_activity_sharing_busy,
+							egui::Button::new(label),
+						)
+						.clicked()
+				{
+					self.discord_activity_sharing_request = Some(enable);
+				}
+			}
 		});
 	}
 

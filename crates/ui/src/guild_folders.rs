@@ -220,15 +220,14 @@ impl MessagingUi {
 					if folder
 						.id
 						.is_none_or(|id| self.folder_ui.expanded.contains(&id))
+						&& state.guilds.iter().any(|g| g.id == id)
 					{
-						if state.guilds.iter().any(|g| g.id == id) {
-							rows.push((
-								Item::Server(id),
-								folder
-									.id
-									.map(|folder_id| (folder_id, folder.color.unwrap_or(0x5865f2))),
-							));
-						}
+						rows.push((
+							Item::Server(id),
+							folder
+								.id
+								.map(|folder_id| (folder_id, folder.color.unwrap_or(0x5865f2))),
+						));
 					}
 				}
 			}
@@ -465,43 +464,43 @@ impl MessagingUi {
 			&& let Some(pointer) = ui.ctx().pointer_hover_pos()
 			&& ui.clip_rect().contains(pointer)
 		{
-			if let Some((target, rect, placement)) = drop_target(&drop_rows, *source, pointer.y) {
-				if target != *source {
-					if placement == Placement::Inside {
-						ui.painter().rect_stroke(
-							rect.expand(2.0),
-							12,
-							(2.0, colors.accent),
-							egui::StrokeKind::Outside,
-						);
-					} else {
-						let mut rect = rect;
-						if (matches!(*source, Item::Folder(_)) || matches!(target, Item::Folder(_)))
-							&& let Some(settings) = &state.guild_folders
-							&& let Some(index) = entry(settings, target)
-						{
-							for (item, sibling) in &drop_rows {
-								if entry(settings, *item) == Some(index) {
-									rect = rect.union(*sibling);
-								}
+			if let Some((target, rect, placement)) = drop_target(&drop_rows, *source, pointer.y)
+				&& target != *source
+			{
+				if placement == Placement::Inside {
+					ui.painter().rect_stroke(
+						rect.expand(2.0),
+						12,
+						(2.0, colors.accent),
+						egui::StrokeKind::Outside,
+					);
+				} else {
+					let mut rect = rect;
+					if (matches!(*source, Item::Folder(_)) || matches!(target, Item::Folder(_)))
+						&& let Some(settings) = &state.guild_folders
+						&& let Some(index) = entry(settings, target)
+					{
+						for (item, sibling) in &drop_rows {
+							if entry(settings, *item) == Some(index) {
+								rect = rect.union(*sibling);
 							}
 						}
-						let y = if placement == Placement::Before {
-							rect.top() - 6.0
-						} else {
-							rect.bottom() + 6.0
-						};
-						ui.painter().hline(
-							rect.x_range(),
-							y.max(ui.clip_rect().top() + 2.0)
-								.min(ui.clip_rect().bottom() - 2.0),
-							(3.0, colors.accent),
-						);
 					}
-					if ui.input(|i| i.pointer.any_released()) {
-						egui::DragAndDrop::take_payload::<Item>(ui.ctx());
-						change = Some(Edit::Drop(*source, target, placement));
-					}
+					let y = if placement == Placement::Before {
+						rect.top() - 6.0
+					} else {
+						rect.bottom() + 6.0
+					};
+					ui.painter().hline(
+						rect.x_range(),
+						y.max(ui.clip_rect().top() + 2.0)
+							.min(ui.clip_rect().bottom() - 2.0),
+						(3.0, colors.accent),
+					);
+				}
+				if ui.input(|i| i.pointer.any_released()) {
+					egui::DragAndDrop::take_payload::<Item>(ui.ctx());
+					change = Some(Edit::Drop(*source, target, placement));
 				}
 			}
 			if ui.input(|i| i.pointer.primary_down()) {
@@ -570,12 +569,11 @@ impl MessagingUi {
 			ui.label(egui::RichText::new("Sync…").small())
 				.on_hover_text("Syncing server folders with Discord");
 		}
-		if let Some(error) = state.folders_error {
-			if ui.small_button("Retry").on_hover_text(error).clicked()
-				&& let Some(command) = state.load_guild_folders()
-			{
-				commands.push(command);
-			}
+		if let Some(error) = state.folders_error
+			&& ui.small_button("Retry").on_hover_text(error).clicked()
+			&& let Some(command) = state.load_guild_folders()
+		{
+			commands.push(command);
 		}
 		let mut close = false;
 		if let Some((id, name, color)) = &mut self.folder_ui.editor {
