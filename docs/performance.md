@@ -2948,3 +2948,49 @@ with a native window; its rendered appearance could not be inspected because the
 Use native pipe was unavailable (Windows error 2). It was then stopped. No live account,
 microphone, call, recording or non-Windows test was used. Passive call storage is bounded
 to 64 channel IDs / 512 bytes plus the Vec header, with no polling or new disk storage.
+
+## September 11: group chat menu and editor
+
+Baseline `c6a7678` versus application commit `90215ef`, built from separate clean
+worktrees with Rust 1.98.1 and the pinned lockfile on Windows 11 Home, Ryzen 7
+7800X3D (16 logical CPUs), 32,627,616 KiB visible RAM. Standard release packages
+include voice. Package snapshots precede this report and the fuzz-fixture-only
+follow-up. PowerShell Compress-Archive compressed each fresh complete package;
+stale staging from other tasks was excluded by building in clean worktrees.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Standard executable bytes | 61,676,032 | 61,890,048 | +214,016 |
+| Installed package bytes | 66,152,280 | 66,368,675 | +216,395 |
+| Package ZIP bytes | 39,526,857 | 39,595,728 | +68,871 |
+| Demo executable bytes | 61,934,080 | 62,155,776 | +221,696 |
+| Reducer replay median ms | 39.0069 | 43.3565 | +4.3496 (+11.15%) |
+| Sampled peak/final private bytes | 384,749,568 | 399,253,504 | +14,503,936 |
+| Process CPU seconds | 0.03125 / 10.1212 s | 1.25000 / 10.1006 s | +1.21875 s |
+
+Reducer: one warmup then five direct release replay-bench runs per revision,
+100,000 synthetic events, retaining 500 records / 236,992..237,477 estimated bytes
+on both. Baseline ms: 39.8373, 39.5234, 38.7091, 38.8876, 39.0069. After ms:
+43.3565, 41.6803, 43.8050, 44.4834, 40.4160. This limited sequential comparison
+shows slower after samples; it does not isolate a cause or exercise menu actions.
+
+Process method: locked release builds with `--features demo`, launched with
+`--demo` and Start-Process -WindowStyle Hidden, eight-second warmup then ten
+one-second Process samples; no compilation during sampling. After private bytes
+rose from 397,840,384 to 399,253,504. Baseline was flat. The after demo additionally
+contains the synthetic group fixture. CPU corresponds to 0.31% versus 12.38% of
+one logical CPU; these uncontrolled single runs do not establish steady idle
+cost or attribute the difference to the menu. Raw artifacts and scripts are in
+`E:/codex-builds/group-menu-evidence` on the measurement machine.
+
+wgpu and an initial 1120x760 viewport are configured; actual adapter, display
+scale, visibility/occlusion and rendered appearance were not inspected. Native
+capture failed because the Computer Use native pipe was unavailable (Windows
+error 2). Menu latency, frame/startup p95, GPU memory and live interoperability
+remain unmeasured. Focused headless egui tests are not native visual evidence.
+
+Both release packages and the changed fuzz targets compile. No new dependency
+or persistent cache was added. One native picker reads at most 8 MiB and decodes
+off the rendering thread under 4096x4096 / 64 MiB allocation limits. The upload
+is normalized to at most 256x256 / 256 KiB PNG. Only one icon picker and one group
+write can be pending; core pending state retains no image payload.
