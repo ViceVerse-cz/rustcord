@@ -366,6 +366,15 @@ impl MessagingUi {
 											colors.sidebar,
 										);
 									}
+									if channel.kind == 1 {
+										crate::user_menu::show(
+											&avatar,
+											state,
+											user,
+											&mut self.profile,
+											&mut self.user_action,
+										);
+									}
 									if avatar.clicked() {
 										self.profile = Some(user.clone());
 									}
@@ -492,6 +501,17 @@ impl MessagingUi {
 									),
 								)
 							});
+							if channel.kind == 1
+								&& let Some(user) = channel.recipients.first()
+							{
+								crate::user_menu::show(
+									&response,
+									state,
+									user,
+									&mut self.profile,
+									&mut self.user_action,
+								);
+							}
 							if enabled && response.clicked() {
 								selected = Some(channel.id);
 							}

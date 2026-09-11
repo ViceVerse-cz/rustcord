@@ -27,6 +27,7 @@ mod settings;
 mod switcher;
 mod timeline;
 mod typing;
+mod user_menu;
 mod voice;
 use client_core::{Command, MAX_CONTENT, MAX_DRAFT_BYTES, State};
 use egui::{RichText, TextEdit};
@@ -78,6 +79,7 @@ pub struct MessagingUi {
 	edit_closed_channel: Option<Id>,
 	avatars: avatars::Avatars,
 	profile: Option<model::User>,
+	user_action: Option<user_menu::Action>,
 	profile_link: Option<String>,
 	pub reading_preferences: model::ReadingPreferences,
 	pub reading_status: &'static str,
@@ -146,7 +148,10 @@ pub struct MessagingUi {
 
 impl MessagingUi {
 	pub fn timeline_reflows(&self) -> (u64, u64) {
-		(self.timeline.reflow_frames, self.timeline.consecutive_reflows)
+		(
+			self.timeline.reflow_frames,
+			self.timeline.consecutive_reflows,
+		)
 	}
 	/// Fixture-only entry point: opens People and the profile card for `user` as if clicked.
 	pub fn preview_profile(&mut self, user: model::User) {
@@ -514,6 +519,13 @@ impl MessagingUi {
 							inner.spacing_mut().item_spacing.x = 12.0;
 							inner.push_id(member.user.id.0, |ui| {
 								let avatar = self.avatars.show(ui, &member.user, 32.0, state.demo);
+								user_menu::show(
+									&avatar,
+									state,
+									&member.user,
+									&mut self.profile,
+									&mut self.user_action,
+								);
 								if avatar.clicked() {
 									self.profile = Some(member.user.clone());
 								}
@@ -568,6 +580,13 @@ impl MessagingUi {
 									);
 								});
 							});
+							user_menu::show(
+								&response,
+								state,
+								&member.user,
+								&mut self.profile,
+								&mut self.user_action,
+							);
 							if response.clicked() {
 								self.profile = Some(member.user.clone());
 							}
@@ -684,6 +703,13 @@ impl MessagingUi {
 					ui.spacing_mut().item_spacing.x = 8.0;
 					if let Some(user) = &state.user {
 						let avatar = self.avatars.show(ui, user, 32.0, state.demo);
+						user_menu::show(
+							&avatar,
+							state,
+							user,
+							&mut self.profile,
+							&mut self.user_action,
+						);
 						design::presence_dot(ui, avatar.rect, colors.positive, colors.raised);
 						if avatar.clicked() {
 							self.profile = Some(user.clone());
@@ -772,6 +798,15 @@ impl MessagingUi {
 						Some(c) if c.guild.is_none() => {
 							if let Some(user) = c.recipients.first() {
 								let avatar = self.avatars.show(ui, user, 24.0, state.demo);
+								if dm {
+									user_menu::show(
+										&avatar,
+										state,
+										user,
+										&mut self.profile,
+										&mut self.user_action,
+									);
+								}
 								if dm
 									&& let Some(status) = profiles::presence(state, user.id, None).0
 								{
@@ -2150,6 +2185,11 @@ impl MessagingUi {
 			} else {
 				state.refresh_reactions(message);
 			}
+		}
+		if let Some(action) = self.user_action.take().or(self.timeline.user_action.take())
+			&& let Some(command) = user_menu::prepare(action, state)
+		{
+			commands.push(command);
 		}
 		if let Some(user) = &self.profile {
 			let profile_guild = state

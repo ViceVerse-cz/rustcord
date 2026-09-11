@@ -13,6 +13,7 @@ pub mod profile;
 mod reactions;
 pub mod read_state;
 pub mod ready;
+pub mod relationships;
 pub mod search;
 pub mod threads;
 pub mod typing;
@@ -289,6 +290,8 @@ impl GuildPatchDto {
 }
 #[derive(Deserialize)]
 pub struct Ready {
+	#[serde(default)]
+	pub relationships: Option<relationships::Snapshot>,
 	#[serde(default)]
 	pub presences: Option<Box<RawValue>>,
 	#[serde(default)]

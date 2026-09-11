@@ -171,6 +171,11 @@ fn access_candidates(state: &State, event: &Event) -> Vec<model::Id> {
 		}
 		Event::ChannelChanged(patch) | Event::ThreadChanged { patch, .. } => (None, Some(patch.id)),
 		Event::ThreadRemoved { id, .. } => (None, Some(*id)),
+		Event::UserAction(client_core::user_actions::Event::Written {
+			action: client_core::user_actions::Action::CloseDm(channel),
+			result: Ok(()),
+			..
+		}) => (None, Some(*channel)),
 		Event::ThreadsSync { guild, .. } => (Some(vec![*guild]), None),
 		_ => return Vec::new(),
 	};
@@ -952,6 +957,13 @@ impl Desktop {
 		}
 		if self.state.demo {
 			let event = match command {
+				Command::UserAction { action, request } => {
+					Event::UserAction(client_core::user_actions::Event::Written {
+						action,
+						request,
+						result: Ok(()),
+					})
+				}
 				Command::MarkRead {
 					channel,
 					message,
@@ -1532,8 +1544,10 @@ impl Desktop {
 					self.cache_error = true;
 					self.cache_status = error;
 				}
-				self.messaging.accept_avatar(ctx, result.key.clone(), result.image);
-				self.messaging.accept_gif_animation(result.key, result.frames);
+				self.messaging
+					.accept_avatar(ctx, result.key.clone(), result.image);
+				self.messaging
+					.accept_gif_animation(result.key, result.frames);
 			}
 		}
 	}
@@ -1787,6 +1801,7 @@ impl Desktop {
 					|| matches!(
 						&event.event,
 						Event::NotificationPreferences(_)
+							| Event::UserAction(_)
 							| Event::Disconnected | Event::ReadState(
 							client_core::read_state::Event::Ack { .. }
 						) | Event::ReadState(client_core::read_state::Event::Result {

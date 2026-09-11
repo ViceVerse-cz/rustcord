@@ -140,6 +140,48 @@ pub struct Preferences {
 	dnd: Option<bool>,
 }
 impl State {
+	/// Per-DM notification override; absent settings remain unknown outside the fixture.
+	pub fn dm_muted(&self, channel: Id) -> Option<bool> {
+		let Some(setting) = self.notification_preferences.settings.get(&None) else {
+			return self.demo.then_some(false);
+		};
+		setting
+			.channels
+			.iter()
+			.find(|(id, ..)| *id == channel)
+			.map(|(_, muted, _)| *muted)
+			.unwrap_or_else(|| (self.demo || setting.muted.is_some()).then_some(false))
+	}
+	pub(crate) fn confirm_dm_muted(
+		&mut self,
+		channel: Id,
+		muted: bool,
+	) -> Result<(), &'static str> {
+		let existing = self.notification_preferences.settings.get(&None);
+		if !existing.is_some_and(|s| s.channels.iter().any(|(id, ..)| *id == channel))
+			&& self
+				.notification_preferences
+				.settings
+				.values()
+				.map(|s| s.channels.len())
+				.sum::<usize>()
+				>= MAX_NAV
+		{
+			return Err("Notification settings exceed safe capacity");
+		}
+		let setting = self
+			.notification_preferences
+			.settings
+			.entry(None)
+			.or_default();
+		if let Some((_, value, _)) = setting.channels.iter_mut().find(|(id, ..)| *id == channel) {
+			*value = Some(muted);
+		} else {
+			setting.channels.push((channel, Some(muted), None));
+		}
+		self.read_state.activity.clear_notifications();
+		Ok(())
+	}
 	/// Latest known message activity, retained across deletion for navigation ordering.
 	pub fn channel_activity(&self, channel: &model::Channel) -> Id {
 		self.read_state
@@ -223,6 +265,14 @@ impl State {
 		let Some(setting) = self.notification_preferences.settings.get(&channel.guild) else {
 			return false;
 		};
+		if channel.guild.is_none()
+			&& channel
+				.recipients
+				.iter()
+				.any(|user| self.user_blocked(user.id) == Some(true))
+		{
+			return false;
+		}
 		if setting.muted != Some(false) {
 			return false;
 		}
@@ -242,6 +292,7 @@ impl State {
 		level == Some(0) || (mention && level == Some(1))
 	}
 	pub fn apply_notification_preferences(&mut self, event: Event) -> Result<(), &'static str> {
+		self.observe_dm_settings(&event);
 		self.read_state.activity.clear_notifications();
 		if event.bytes() > 512 * 1024 {
 			self.notification_preferences = Preferences::default();
@@ -360,6 +411,7 @@ impl State {
 		);
 		// Silent messages still contribute to badges, but never enqueue an OS alert.
 		let allowed = !message.suppress_notifications
+			&& self.user_blocked(message.author.id) != Some(true)
 			&& self.notification_allowed_for(message.channel, mention);
 		let activity = &mut self.read_state.activity;
 		// ponytail: retain 4096 observed messages; counts become a lower bound after eviction.
@@ -519,6 +571,44 @@ mod tests {
 			.apply_notification_preferences(Event::Presence(Some(false)))
 			.unwrap();
 		state
+	}
+	#[test]
+	fn confirmed_dm_mute_and_block_suppress_notifications() {
+		let mut state = notification_state();
+		let mut incoming = message(100, 20);
+		incoming.author.id = Id(3);
+		state.channels[0].guild = None;
+		state.channels[0].kind = 1;
+		state.channels[0].recipients = vec![incoming.author.clone()];
+		state
+			.apply_notification_preferences(Event::Settings {
+				entries: vec![Setting {
+					muted: Some(false),
+					level: Some(0),
+					..Default::default()
+				}],
+				replace: false,
+			})
+			.unwrap();
+		state.observe_notification(&incoming);
+		assert!(state.take_notification().is_some());
+		state.confirm_dm_muted(Id(20), true).unwrap();
+		incoming.id = Id(101);
+		state.observe_notification(&incoming);
+		assert!(state.take_notification().is_none());
+		state.confirm_dm_muted(Id(20), false).unwrap();
+		incoming.id = Id(102);
+		state.observe_notification(&incoming);
+		assert!(state.take_notification().is_some());
+		state
+			.apply_user_action(crate::user_actions::Event::Relationship {
+				user: Id(3),
+				blocked: true,
+			})
+			.unwrap();
+		incoming.id = Id(103);
+		state.observe_notification(&incoming);
+		assert!(state.take_notification().is_none());
 	}
 	fn message(id: u64, channel: u64) -> Message {
 		let owner = User {

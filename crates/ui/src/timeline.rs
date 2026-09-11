@@ -9,6 +9,7 @@ use std::{
 
 #[derive(Default)]
 pub struct TimelineView {
+	pub(super) user_action: Option<crate::user_menu::Action>,
 	pub(super) hide_media_links: bool,
 	applied_hide_media_links: bool,
 	pub(super) gif_favorite: Option<model::Gif>,
@@ -772,11 +773,19 @@ impl TimelineView {
 										)
 										.0,
 									);
-								} else if avatars
-									.show(ui, &message.author, 40.0, state.demo)
-									.clicked()
-								{
-									*profile = Some(message.author.clone());
+								} else {
+									let avatar =
+										avatars.show(ui, &message.author, 40.0, state.demo);
+									crate::user_menu::show(
+										&avatar,
+										state,
+										&message.author,
+										profile,
+										&mut self.user_action,
+									);
+									if avatar.clicked() {
+										*profile = Some(message.author.clone());
+									}
 								}
 								ui.vertical(|ui| {
 									ui.set_width(ui.available_width());
@@ -797,6 +806,13 @@ impl TimelineView {
 													)
 													.truncate()
 													.sense(egui::Sense::click()),
+												);
+												crate::user_menu::show(
+													&author,
+													state,
+													&message.author,
+													profile,
+													&mut self.user_action,
 												);
 												if author.clicked() {
 													*profile = Some(message.author.clone());

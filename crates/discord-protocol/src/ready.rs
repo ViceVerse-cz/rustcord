@@ -8,6 +8,8 @@ use serde_json::value::RawValue;
 
 #[derive(Deserialize)]
 pub struct Envelope<'a> {
+	#[serde(default)]
+	relationships: Option<crate::relationships::Snapshot>,
 	pub user: UserDto,
 	pub session_id: String,
 	pub resume_gateway_url: String,
@@ -49,6 +51,7 @@ impl Envelope<'_> {
 	}
 	pub fn navigation(self) -> Result<Ready, DecodeError> {
 		Ok(Ready {
+			relationships: self.relationships,
 			user: self.user,
 			session_id: self.session_id,
 			resume_gateway_url: self.resume_gateway_url,

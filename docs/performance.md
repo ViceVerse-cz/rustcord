@@ -1,5 +1,50 @@
 # Initial performance evidence
 
+## User context menu - September 11, 2026
+
+Baseline `ea68e0e9afaa822e64e6bea1e144d48816aab339`, compared with this task.
+Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical cores), 31.1 GiB visible RAM,
+Rust 1.98.1, locked release, thin LTO/one codegen unit, wgpu. Both
+`cargo xtask package` and `cargo xtask package-voice` passed on both revisions.
+Final releases use the isolated `E:/codex-builds/rustcord-user-menu-target`; source
+builds replaced stale artifacts encountered in the shared build cache. No new dependencies.
+
+| Metric | Baseline | After | Delta |
+| --- | --- | --- | --- |
+| text executable, bytes | 53,986,304 | 54,043,136 | +56,832 (+0.105%) |
+| text installed package, bytes | 55,106,039 | 55,168,162 | +62,123 (+0.113%) |
+| text ZIP (DEFLATE 9), bytes | 33,243,781 | 33,266,872 | +23,091 (+0.069%) |
+| voice executable, bytes | 59,091,968 | 59,149,824 | +57,856 (+0.098%) |
+| voice installed package, bytes | 60,317,494 | 60,380,641 | +63,147 (+0.105%) |
+| voice ZIP (DEFLATE 9), bytes | 35,345,246 | 35,367,615 | +22,369 (+0.063%) |
+| Reducer median, 100,000 events | 39.3572 ms | 38.4854 ms | -0.8718 ms (-2.22%); noisy |
+| Idle CPU, % of one logical core | 2.275 | 5.323 | +3.048 |
+| Median working set, MiB | 157.254 | 161.141 | +3.887 |
+| Peak sampled working set, MiB | 159.766 | 162.312 | +2.547 |
+| Median private bytes, MiB | 375.941 | 378.586 | +2.645 |
+
+Package samples include all declared shipped files (65 text / 92 voice), measured
+before this performance addendum; the baseline's stale, untracked
+`docs/agent-orchestration.md` was excluded from its text archive for identical file sets.
+The text ZIP remains above the initial 30 MiB compressed target.
+One reducer warmup plus five runs per revision, direct release `replay-bench.exe`:
+baseline 40.1823, 39.3572, 40.3051, 36.3527, 36.1438 ms; after 43.8780, 36.7993,
+41.1610, 38.4854, 37.9227 ms. Both retain 500 messages / 236992..237477 estimated
+bytes. This measures the synthetic reducer, not UI latency or RSS; overlapping
+ranges do not establish a speed improvement.
+
+Native process samples: one fresh text-only `--demo` process per revision, 10-second
+warmup, 20 samples at requested 500 ms intervals (10.303 / 10.273 actual seconds),
+System.Diagnostics.Process working set/private bytes and TotalProcessorTime delta.
+No scripted input because native Computer Use was unavailable; default requested
+1120x760-point viewport, actual display scale/occlusion unverified. No auth/audio
+helpers were started. GPU memory, startup/frame p95 and menu-interaction memory
+remain unmeasured. Builds and other desktop activity were present, so these short
+single-process samples are noisy. The observed CPU/memory increase is recorded,
+not attributed to menu rendering or represented as a performance improvement.
+Working-set samples exceed the original 80 MiB settled-idle target on both revisions.
+
+
 ## Combined DM/group activity ordering - September 11, 2026
 
 Baseline `fd20dc9`, compared with this change on Windows 11 Home 10.0.26200,
