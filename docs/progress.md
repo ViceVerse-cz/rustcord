@@ -2,6 +2,15 @@
 
 ## User context menu — September 11, 2026
 
+Integration: `main` advanced to `d8cb031` (pending message uploads) while PR #69
+was being opened. Its timeline state fields were combined with the menu action
+field without removing either feature. Both focused menu tests pass after the
+merge. The integrated UI suite also encounters the new upstream
+`pending_rows_share_scroll_and_only_measure_near_viewport` failure, reproduced
+directly on `d8cb031`; the full UI runner aborts with Windows `0xc0000409`
+while exercising the underestimated-leading-row test. That abort also reproduces
+on `d8cb031` without this feature; neither full UI run is reported green.
+
 Implemented Profile, Close DM, Block/Unblock and Mute/Unmute through a shared native
 context menu on DM rows/avatars, people rows, message authors, DM header avatars,
 unread DM avatars and resolved voice participants. Shift+F10 opens the focused
