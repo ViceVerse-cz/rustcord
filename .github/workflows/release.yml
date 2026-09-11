@@ -91,7 +91,6 @@ jobs:
       VERSION: ${{ needs.prepare.outputs.version }}
       VARIANT: ${{ matrix.variant }}
       PACKAGE_ROOT: ${{ matrix.variant == 'voice' && 'dist/voice' || 'dist' }}
-      ASSET: serein-${{ needs.prepare.outputs.tag }}-${{ runner.os }}-${{ runner.arch }}-${{ matrix.variant }}
     defaults:
       run:
         shell: bash
@@ -126,6 +125,7 @@ jobs:
             cargo xtask package
           fi
           mkdir release-assets
+          echo "ASSET=serein-$TAG-$RUNNER_OS-$RUNNER_ARCH-$VARIANT" >> "$GITHUB_ENV"
       - name: Sign, notarize and verify Mac app
         if: runner.os == 'macOS'
         env:
