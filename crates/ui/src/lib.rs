@@ -110,6 +110,10 @@ pub struct MessagingUi {
 	pub notification_test_requested: bool,
 	pub notification_status: &'static str,
 	pub storage_status: &'static str,
+	/// Release channel and version shown in the title bar.
+	pub build: design::Build,
+	/// Header pin button rect while the pins popout is open.
+	pins_anchor: Option<egui::Rect>,
 	editing: Option<(Id, Id, String)>,
 	composer_edit: Option<(Id, Id)>,
 	edit_sent: bool,
@@ -128,6 +132,10 @@ impl MessagingUi {
 		self.profile = Some(user);
 	}
 	/// Fixture-only entry point: opens the emoji popout as if the composer button was clicked.
+	/// Fixture-only: open the pinned messages popout on the next frame.
+	pub fn preview_pins(&mut self) {
+		self.search.preview_pins();
+	}
 	pub fn preview_emoji_picker(&mut self) {
 		self.emoji_picker.preview();
 	}
@@ -262,28 +270,18 @@ impl MessagingUi {
 						.layout(egui::Layout::right_to_left(egui::Align::Center)),
 					|ui| {
 						ui.spacing_mut().item_spacing.x = 10.0;
-						let (label, hint) = if state.demo {
-							(
-								"OFFLINE PREVIEW",
-								"Synthetic data · no network or local storage",
-							)
-						} else {
-							(
-								"EXPERIMENTAL",
-								"Unofficial Discord client · live compatibility is unverified",
-							)
-						};
-						egui::Frame::new()
-							.fill(colors.accent.gamma_multiply(0.22))
-							.corner_radius(4)
-							.inner_margin(egui::Margin::symmetric(6, 2))
-							.show(ui, |ui| {
-								ui.label(
-									design::semibold(ui, label, 10.0).color(colors.text_strong),
-								);
-							})
-							.response
-							.on_hover_text(hint);
+						design::build_badge(ui, self.build);
+						if state.demo {
+							egui::Frame::new()
+								.stroke(egui::Stroke::new(1.0, colors.border))
+								.corner_radius(10)
+								.inner_margin(egui::Margin::symmetric(8, 3))
+								.show(ui, |ui| {
+									ui.label(design::semibold(ui, "OFFLINE PREVIEW", 10.0).color(colors.muted));
+								})
+								.response
+								.on_hover_text("Synthetic data · no network or local storage");
+						}
 						if !state.demo
 							&& state.auth != client_core::auth::AuthState::Authenticated
 							&& ui.small_button("Sign in again").clicked()
@@ -558,6 +556,7 @@ impl MessagingUi {
 			})
 			.show(ui, |ui| {
 				let ctx = ui.ctx().clone();
+				if self.guild.is_none() {
 				let find = ui
 					.add_enabled_ui(
 						!self.ime_active
@@ -587,6 +586,7 @@ impl MessagingUi {
 					self.switcher.open(&ctx);
 				}
 				ui.add_space(8.0);
+				}
 				if self.guild.is_none() {
 					ui.horizontal(|ui| {
 						ui.add_space(8.0);
@@ -949,9 +949,16 @@ impl MessagingUi {
 									self.members_narrow_open = !self.members_narrow_open;
 								}
 							}
+							let pins_open = self.search.open && self.search.pins();
 							let pins = ui
-								.add_enabled_ui(state.can_search(), |ui| {
-									icons::button(ui, icons::Icon::Pin, 32.0, "Pinned messages")
+								.add_enabled_ui(state.can_search() || pins_open, |ui| {
+									icons::toggle(
+										ui,
+										icons::Icon::Pin,
+										32.0,
+										pins_open,
+										"Pinned messages",
+									)
 								})
 								.inner;
 							if pins.clicked()
@@ -960,6 +967,8 @@ impl MessagingUi {
 							{
 								commands.push(command);
 							}
+							self.pins_anchor =
+								(self.search.open && self.search.pins()).then_some(pins.rect);
 							if let Some(c) = channel
 								.as_ref()
 								.filter(|c| c.guild.is_some() && matches!(c.kind, 0 | 5 | 15 | 16))
@@ -1001,29 +1010,53 @@ impl MessagingUi {
 							self.call_button(ui, state, channel, commands);
 						}
 						ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+							// Centre the name block in the fixed-height header even without a subtitle.
+							let name = channel
+								.as_ref()
+								.map_or("Direct Messages", |c| c.name.as_str());
+							let subtitle = channel
+								.as_ref()
+								.filter(|_| dm)
+								.and_then(|c| c.recipients.first())
+								.and_then(|user| {
+									let (_, custom, activities) =
+										profiles::presence(state, user.id, None);
+									profiles::subtitle(custom, activities)
+								});
+							let name_height = ui
+								.painter()
+								.layout_no_wrap(
+									name.to_owned(),
+									egui::FontId::new(16.0, design::semibold_family(ui.ctx())),
+									colors.text_strong,
+								)
+								.size()
+								.y;
+							let subtitle_height = subtitle.as_ref().map_or(0.0, |text| {
+								1.0 + ui
+									.painter()
+									.layout_no_wrap(
+										text.clone(),
+										egui::FontId::proportional(12.0),
+										colors.muted,
+									)
+									.size()
+									.y
+							});
 							ui.vertical(|ui| {
+								ui.add_space(
+									((ui.available_height() - name_height - subtitle_height) / 2.0)
+										.max(0.0),
+								);
 								ui.spacing_mut().item_spacing.y = 1.0;
 								ui.add(
 									egui::Label::new(
-										design::semibold(
-											ui,
-											channel
-												.as_ref()
-												.map_or("Direct Messages", |c| c.name.as_str()),
-											16.0,
-										)
-										.color(colors.text_strong),
+										design::semibold(ui, name, 16.0).color(colors.text_strong),
 									)
 									.truncate(),
 								);
-								if let Some(user) = channel
-									.as_ref()
-									.filter(|_| dm)
-									.and_then(|c| c.recipients.first())
 								{
-									let (_, custom, activities) =
-										profiles::presence(state, user.id, None);
-									if let Some(text) = profiles::subtitle(custom, activities) {
+									if let Some(text) = subtitle {
 										ui.add(
 											egui::Label::new(
 												RichText::new(&text).size(12.0).color(colors.muted),
@@ -1085,15 +1118,6 @@ impl MessagingUi {
 			ctx.request_repaint();
 			return;
 		}
-		ui.label(
-			RichText::new(if state.demo {
-				"Preview only · drafts stay in memory"
-			} else {
-				self.storage_status
-			})
-			.size(10.0)
-			.color(design::palette(ui).muted),
-		);
 		typing::show(ui, state, channel, std::time::Instant::now());
 		let colors = crate::design::palette(ui);
 		let editing_key = self
@@ -1604,6 +1628,9 @@ impl MessagingUi {
                             .char_limit(MAX_CONTENT)
                             .desired_rows(1)
                             .desired_width(f32::INFINITY)
+                            // Match the 28px icon row so the hint sits on the same centre line.
+                            .min_size(egui::vec2(0.0, 28.0))
+                            .align(egui::Align2::LEFT_CENTER)
                             .frame(egui::Frame::NONE)
                             .hint_text(placeholder.as_str())
                             .show(ui);
@@ -1773,7 +1800,10 @@ impl MessagingUi {
 			.any(|c| Some(c.id) == state.selected && c.kind == 2);
 		let wide_members = ui.available_width() >= 720.0;
 		self.search.sync(&ctx, state, &mut commands);
-		let search_open = self.search.open && state.selected.is_some() && !selected_voice;
+		let search_open = self.search.open
+			&& !self.search.pins()
+			&& state.selected.is_some()
+			&& !selected_voice;
 		let show_members = !selected_voice
 			&& !search_open
 			&& state.selected.is_some()
@@ -1996,6 +2026,30 @@ impl MessagingUi {
 			.is_some_and(|view| self.guild != Some(view.guild))
 		{
 			commands.push(state.clear_archives());
+		}
+		if let Some((channel, message, pinned)) = self.timeline.pin_request.take()
+			&& let Some(command) = state.prepare_pin(channel, message, pinned)
+		{
+			commands.push(command);
+		}
+		if let Some(channel) = state.pins_changed.take()
+			&& self.search.open
+			&& self.search.pins()
+			&& state.selected == Some(channel)
+			&& let Some(command) = state.request_pins()
+		{
+			commands.push(command);
+		}
+		if let Some(anchor) = self.pins_anchor {
+			let dm = state
+				.channels
+				.iter()
+				.any(|c| Some(c.id) == state.selected && c.guild.is_none());
+			self.search
+				.pins_popout(&ctx, state, anchor, dm, &mut commands);
+			if !(self.search.open && self.search.pins()) {
+				self.pins_anchor = None;
+			}
 		}
 		self.archives.show(&ctx, state, &mut commands);
 		if let Some(id) = self.timeline.channel_reference.take()

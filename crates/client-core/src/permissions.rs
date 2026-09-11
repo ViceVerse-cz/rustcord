@@ -527,6 +527,50 @@ impl State {
 				&& matches!(target.kind, 0 | 5 | 10..=12)
 				&& self.permission(channel, p::MANAGE_MESSAGES) == Some(true))
 	}
+	/// Pinning needs Manage Messages in servers; direct and group messages allow any member.
+	pub fn can_pin(&self, channel: Id, message: Id) -> bool {
+		if self.auth != AuthState::Authenticated
+			|| !self.gateway_connected
+			|| !self.can_view(channel)
+			|| self.user.as_ref().is_none_or(|user| user.id.0 == 0)
+		{
+			return false;
+		}
+		if !self
+			.timeline
+			.get(message)
+			.is_some_and(|message| message.channel == channel && message.id.0 != 0 && matches!(message.kind, 0 | 19))
+		{
+			return false;
+		}
+		let Some(target) = self
+			.channels
+			.iter()
+			.find(|target| target.id == channel && target.supports_text())
+		else {
+			return false;
+		};
+		target.guild.is_none() || self.permission(channel, p::MANAGE_MESSAGES) == Some(true)
+	}
+	/// True when the current pins page lists `message`.
+	pub fn is_pinned(&self, channel: Id, message: Id) -> bool {
+		self.search
+			.as_ref()
+			.filter(|view| view.pins && view.channel == channel)
+			.and_then(|view| view.page.as_ref())
+			.is_some_and(|page| page.hits.iter().any(|hit| hit.id == message))
+	}
+	pub fn prepare_pin(&mut self, channel: Id, message: Id, pinned: bool) -> Option<Command> {
+		if !self.can_pin(channel, message) {
+			self.status = "This message cannot be pinned with the current access";
+			return None;
+		}
+		Some(Command::Pin {
+			channel,
+			message,
+			pinned,
+		})
+	}
 	pub fn prepare_edit(&mut self, channel: Id, message: Id, content: String) -> Option<Command> {
 		if !self.can_edit(channel, message)
 			|| content.trim().is_empty()

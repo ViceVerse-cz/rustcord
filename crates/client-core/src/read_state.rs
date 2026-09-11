@@ -340,7 +340,8 @@ impl State {
 								(Some(message).max(current), self.read_state.revision),
 							);
 						}
-						self.read_state.status = Some("Read marker saved");
+						// Success is silent; only failures deserve a notice line.
+						self.read_state.status = None;
 					}
 					Err(failure) => {
 						self.read_state.status = Some(failure.label());

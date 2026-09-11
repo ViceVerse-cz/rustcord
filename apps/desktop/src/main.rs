@@ -359,6 +359,16 @@ impl Desktop {
 			.last()
 			.map_or(10_000, |m| m.id.0.max(10_000));
 		let mut messaging = ui::MessagingUi::default();
+		messaging.build = ui::design::Build {
+			channel: if cfg!(debug_assertions) {
+				ui::design::Channel::Dev
+			} else if option_env!("SEREIN_CHANNEL") == Some("nightly") {
+				ui::design::Channel::Nightly
+			} else {
+				ui::design::Channel::Stable
+			},
+			version: env!("CARGO_PKG_VERSION"),
+		};
 		messaging.notification_test_available =
 			demo && std::env::args().any(|arg| arg == "--demo-system-notifications");
 		if messaging.notification_test_available {
@@ -372,6 +382,10 @@ impl Desktop {
 			}
 			messaging.preview_profile(test_support::message(1, model::Id(20)).author);
 			state.status = "Offline fixture · synthetic profile card opened at startup";
+		}
+		if demo && std::env::args().any(|arg| arg == "--demo-pins") {
+			messaging.preview_pins();
+			state.status = "Offline fixture · pinned messages popout opened at startup";
 		}
 		if demo && std::env::args().any(|arg| arg == "--demo-emoji") {
 			messaging.preview_emoji_picker();
@@ -461,7 +475,7 @@ impl Desktop {
 		self.state.generation += 1;
 		self.messaging.draft_restore_pending = false;
 		self.state.auth = AuthState::Authenticating;
-		self.state.status = "Connecting to Discord · experimental normal-user adapter";
+		self.state.status = "Connecting to Discord…";
 		let secret = Arc::new(secret);
 		self.pending_save = save.then(|| secret.clone());
 		self.connection = Some(connection::Connection::start(
@@ -1029,6 +1043,16 @@ impl Desktop {
 				Command::Delete { channel, message } => Event::Delete {
 					channel,
 					id: message,
+				},
+				Command::Pin {
+					channel,
+					message,
+					pinned,
+				} => Event::Pinned {
+					channel,
+					message,
+					pinned,
+					result: Ok(()),
 				},
 			};
 			self.state.apply(Envelope {

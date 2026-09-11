@@ -498,3 +498,123 @@ mod tests {
 		assert_eq!(Variant::from_u8(200), Variant::Standard);
 	}
 }
+
+/// Release channel shown in the title bar; stable builds show nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Channel {
+	#[default]
+	Stable,
+	Nightly,
+	Dev,
+}
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Build {
+	pub channel: Channel,
+	pub version: &'static str,
+}
+/// Gradient release pill with a glow, a channel glyph and the version. None for stable builds.
+pub fn build_badge(ui: &mut egui::Ui, build: Build) -> Option<egui::Response> {
+	let (label, hint, stops) = match build.channel {
+		Channel::Stable => return None,
+		Channel::Nightly => (
+			"NIGHTLY",
+			"Nightly build from the latest main. Unofficial client; live compatibility is unverified.",
+			[rgb(0x5865f2), rgb(0xa06cff)],
+		),
+		Channel::Dev => (
+			"DEV",
+			"Local development build. Unofficial client; live compatibility is unverified.",
+			[rgb(0xf0b232), rgb(0xe8590c)],
+		),
+	};
+	let font = FontId::new(10.0, semibold_family(ui.ctx()));
+	let title = ui
+		.painter()
+		.layout_no_wrap(label.to_owned(), font, Color32::WHITE);
+	let version = (!build.version.is_empty()).then(|| {
+		ui.painter().layout_no_wrap(
+			format!("v{}", build.version),
+			FontId::monospace(10.0),
+			Color32::from_white_alpha(210),
+		)
+	});
+	const HEIGHT: f32 = 20.0;
+	const PAD: f32 = 8.0;
+	const GLYPH: f32 = 12.0;
+	let width = PAD
+		+ GLYPH
+		+ 5.0
+		+ title.size().x
+		+ version.as_ref().map_or(0.0, |v| 13.0 + v.size().x)
+		+ PAD;
+	let (rect, response) = ui.allocate_exact_size(egui::vec2(width, HEIGHT), egui::Sense::hover());
+	let painter = ui.painter();
+	let radius = HEIGHT / 2.0;
+	// Soft glow, then a pill whose caps carry the gradient end colours.
+	painter.rect_filled(rect.expand(3.0), radius + 3.0, stops[0].gamma_multiply(0.14));
+	painter.rect_filled(rect.expand(1.0), radius + 1.0, stops[0].gamma_multiply(0.22));
+	let left = egui::pos2(rect.left() + radius, rect.center().y);
+	let right = egui::pos2(rect.right() - radius, rect.center().y);
+	painter.circle_filled(left, radius, stops[0]);
+	painter.circle_filled(right, radius, stops[1]);
+	let mut mesh = egui::Mesh::default();
+	mesh.colored_vertex(egui::pos2(left.x, rect.top()), stops[0]);
+	mesh.colored_vertex(egui::pos2(right.x, rect.top()), stops[1]);
+	mesh.colored_vertex(egui::pos2(right.x, rect.bottom()), stops[1]);
+	mesh.colored_vertex(egui::pos2(left.x, rect.bottom()), stops[0]);
+	mesh.add_triangle(0, 1, 2);
+	mesh.add_triangle(0, 2, 3);
+	painter.add(egui::Shape::mesh(mesh));
+	// Top highlight line for a glassy edge.
+	painter.line_segment(
+		[
+			egui::pos2(rect.left() + radius, rect.top() + 1.0),
+			egui::pos2(rect.right() - radius, rect.top() + 1.0),
+		],
+		Stroke::new(1.0, Color32::from_white_alpha(56)),
+	);
+	let glyph = egui::Rect::from_center_size(
+		egui::pos2(rect.left() + PAD + GLYPH / 2.0, rect.center().y),
+		egui::Vec2::splat(GLYPH),
+	);
+	match build.channel {
+		Channel::Nightly => {
+			// Crescent moon: a white disc with a pill-coloured bite.
+			painter.circle_filled(glyph.center(), 4.6, Color32::WHITE);
+			painter.circle_filled(glyph.center() + egui::vec2(2.4, -1.8), 4.0, stops[0]);
+		}
+		Channel::Dev | Channel::Stable => {
+			// Code chevrons: < >
+			let s = Stroke::new(1.5, Color32::WHITE);
+			let c = glyph.center();
+			painter.line_segment([c + egui::vec2(-1.5, -3.5), c + egui::vec2(-4.5, 0.0)], s);
+			painter.line_segment([c + egui::vec2(-4.5, 0.0), c + egui::vec2(-1.5, 3.5)], s);
+			painter.line_segment([c + egui::vec2(1.5, -3.5), c + egui::vec2(4.5, 0.0)], s);
+			painter.line_segment([c + egui::vec2(4.5, 0.0), c + egui::vec2(1.5, 3.5)], s);
+		}
+	}
+	let mut x = glyph.right() + 5.0;
+	painter.galley(
+		egui::pos2(x, rect.center().y - title.size().y / 2.0),
+		title.clone(),
+		Color32::WHITE,
+	);
+	x += title.size().x;
+	if let Some(version) = version {
+		x += 6.0;
+		painter.line_segment(
+			[
+				egui::pos2(x, rect.top() + 5.0),
+				egui::pos2(x, rect.bottom() - 5.0),
+			],
+			Stroke::new(1.0, Color32::from_white_alpha(90)),
+		);
+		x += 7.0;
+		painter.galley(
+			egui::pos2(x, rect.center().y - version.size().y / 2.0),
+			version,
+			Color32::WHITE,
+		);
+	}
+	Some(response.on_hover_text(hint))
+}

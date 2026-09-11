@@ -32,6 +32,12 @@ impl SearchUi {
 		self.query = query.to_owned();
 		self.pending_submit = true;
 	}
+	/// Fixture-only: open the pins popout and request the first page on the next frame.
+	pub fn preview_pins(&mut self) {
+		self.open = true;
+		self.pins = true;
+		self.pending_submit = true;
+	}
 	/// True while the pane shows pinned messages rather than query results.
 	pub fn pins(&self) -> bool {
 		self.pins
@@ -126,13 +132,334 @@ impl SearchUi {
 			commands.push(command);
 		}
 	}
+	/// Anchored pinned-messages popout under the header pin button, like Discord's.
+	pub fn pins_popout(
+		&mut self,
+		ctx: &egui::Context,
+		state: &mut State,
+		anchor: egui::Rect,
+		dm: bool,
+		commands: &mut Vec<Command>,
+	) {
+		if !(self.open && self.pins) {
+			return;
+		}
+		if std::mem::take(&mut self.pending_submit)
+			&& let Some(command) = state.request_pins()
+		{
+			commands.push(command);
+		}
+		let colors = design::palette_for(ctx);
+		let bounds = ctx.content_rect().shrink(8.0);
+		let width = PANE_WIDTH.min(bounds.width());
+		let max_height = (bounds.height() * 0.7).clamp(240.0, 560.0);
+		let x = (anchor.right() - width)
+			.min(bounds.right() - width)
+			.max(bounds.left());
+		let y = (anchor.bottom() + 8.0).min(bounds.bottom() - 120.0);
+		let area = egui::Area::new(egui::Id::unique("pins-popout"))
+			.kind(egui::UiKind::Popup)
+			.order(egui::Order::Foreground)
+			.fixed_pos(egui::pos2(x, y))
+			.constrain_to(bounds)
+			.interactable(true)
+			.show(ctx, |ui| {
+				egui::Frame::new()
+					.fill(colors.sidebar)
+					.stroke(egui::Stroke::new(1.0, colors.border))
+					.corner_radius(8)
+					.shadow(egui::epaint::Shadow {
+						offset: [0, 8],
+						blur: 24,
+						spread: 0,
+						color: egui::Color32::from_black_alpha(96),
+					})
+					.show(ui, |ui| {
+						ui.set_width(width);
+						ui.set_max_height(max_height);
+						ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
+						// Header.
+						egui::Frame::new()
+							.fill(colors.base)
+							.corner_radius(egui::CornerRadius {
+								nw: 8,
+								ne: 8,
+								..Default::default()
+							})
+							.inner_margin(egui::Margin::symmetric(16, 0))
+							.show(ui, |ui| {
+								ui.set_width(ui.available_width());
+								ui.set_height(48.0);
+								ui.horizontal_centered(|ui| {
+									ui.spacing_mut().item_spacing.x = 8.0;
+									icons::inline(ui, icons::Icon::Pin, 20.0, colors.muted);
+									ui.label(
+										design::semibold(ui, "Pinned Messages", 16.0)
+											.color(colors.text_strong),
+									);
+									ui.with_layout(
+										egui::Layout::right_to_left(egui::Align::Center),
+										|ui| {
+											if icons::button(ui, icons::Icon::Close, 28.0, "Close")
+												.clicked()
+											{
+												self.open = false;
+											}
+											let reload = ui
+												.add_enabled_ui(state.can_search(), |ui| {
+													icons::button(
+														ui,
+														icons::Icon::Reload,
+														28.0,
+														"Reload pins",
+													)
+												})
+												.inner;
+											if self.focus {
+												reload.request_focus();
+												self.focus = false;
+											}
+											if reload.clicked()
+												&& let Some(command) = state.request_pins()
+											{
+												commands.push(command);
+											}
+										},
+									);
+								});
+							});
+						ui.painter().hline(
+							ui.max_rect().x_range(),
+							ui.cursor().top(),
+							egui::Stroke::new(1.0, colors.border),
+						);
+						let view = state.search.as_ref().filter(|view| view.pins);
+						let empty = view.map_or(state.can_search(), |view| {
+							view.page.as_ref().is_some_and(|page| page.hits.is_empty())
+						});
+						if empty {
+							Self::pins_empty(ui, dm);
+						} else {
+							egui::Frame::new()
+								.inner_margin(egui::Margin::symmetric(12, 12))
+								.show(ui, |ui| {
+									ui.set_width(ui.available_width());
+									self.pins_content(ui, state, commands);
+								});
+						}
+						// Footer protip.
+						ui.painter().hline(
+							ui.max_rect().x_range(),
+							ui.cursor().top(),
+							egui::Stroke::new(1.0, colors.border),
+						);
+						egui::Frame::new()
+							.fill(colors.base)
+							.corner_radius(egui::CornerRadius {
+								sw: 8,
+								se: 8,
+								..Default::default()
+							})
+							.inner_margin(egui::Margin::symmetric(16, 14))
+							.show(ui, |ui| {
+								ui.set_width(ui.available_width());
+								ui.vertical_centered(|ui| {
+									ui.spacing_mut().item_spacing.y = 2.0;
+									ui.label(design::eyebrow(ui, "Protip", colors.positive));
+									ui.label(
+										RichText::new(
+											"You can pin a message from its context menu.",
+										)
+										.size(13.0)
+										.color(colors.text),
+									);
+								});
+							});
+					});
+			});
+		let clicked_outside = ctx.input(|i| i.pointer.any_pressed())
+			&& !area.response.rect.contains(
+				ctx.input(|i| i.pointer.interact_pos())
+					.unwrap_or(area.response.rect.center()),
+			)
+			&& !anchor.contains(
+				ctx.input(|i| i.pointer.interact_pos())
+					.unwrap_or(anchor.center()),
+			);
+		if clicked_outside {
+			self.open = false;
+		}
+	}
+	fn pins_empty(ui: &mut egui::Ui, dm: bool) {
+		let colors = design::palette(ui);
+		egui::Frame::new()
+			.inner_margin(egui::Margin::symmetric(24, 36))
+			.show(ui, |ui| {
+				ui.set_width(ui.available_width());
+				ui.vertical_centered(|ui| {
+					let (rect, _) = ui.allocate_exact_size(egui::Vec2::splat(96.0), egui::Sense::hover());
+					let face = colors.muted.gamma_multiply(0.35);
+					ui.painter().circle_filled(rect.center(), 44.0, face);
+					let eye = colors.sidebar;
+					ui.painter().circle_filled(rect.center() + egui::vec2(-14.0, -4.0), 4.0, eye);
+					ui.painter().circle_filled(rect.center() + egui::vec2(14.0, -4.0), 4.0, eye);
+					// Frown.
+					let mut points = Vec::with_capacity(12);
+					for i in 0..=11 {
+						let t = i as f32 / 11.0;
+						let angle = std::f32::consts::PI * (1.2 + 0.6 * t);
+						points.push(
+							rect.center()
+								+ egui::vec2(-angle.cos() * 14.0, -angle.sin() * 12.0 + 26.0),
+						);
+					}
+					ui.painter()
+						.add(egui::Shape::line(points, egui::Stroke::new(3.0, eye)));
+					icons::paint(
+						ui.painter(),
+						icons::Icon::Pin,
+						egui::Rect::from_center_size(
+							rect.center() + egui::vec2(30.0, -34.0),
+							egui::Vec2::splat(30.0),
+						),
+						colors.text,
+					);
+					ui.add_space(20.0);
+					ui.label(
+						design::medium(
+							ui,
+							if dm {
+								"This direct message doesn't have\nany pinned messages… yet."
+							} else {
+								"This channel doesn't have\nany pinned messages… yet."
+							},
+							15.0,
+						)
+						.color(colors.text_strong),
+					);
+				});
+			});
+	}
+	/// Pinned message cards, load-more control and status lines.
+	fn pins_content(&mut self, ui: &mut egui::Ui, state: &mut State, commands: &mut Vec<Command>) {
+		let colors = design::palette(ui);
+		let allowed = state.can_search();
+		let mut older_pins = false;
+		let mut target = None;
+		ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+		if !allowed {
+			ui.label(
+				RichText::new(
+					"Pinned messages are unavailable while disconnected or without channel access.",
+				)
+				.small()
+				.color(colors.muted),
+			);
+		}
+		if let Some(view) = state.search.as_ref().filter(|view| view.pins) {
+			if view.loading {
+				ui.label(
+					RichText::new(if view.pin_before.is_some() {
+						"Loading older pins…"
+					} else {
+						"Loading pinned messages…"
+					})
+					.small()
+					.color(colors.muted),
+				);
+			}
+			if let Some(error) = view.error {
+				ui.label(RichText::new(error).color(colors.danger));
+			}
+			let retry = view.error.is_some() && view.pin_before.is_some();
+			if retry
+				|| view
+					.page
+					.as_ref()
+					.is_some_and(|page| page.pin_cursor.is_some())
+			{
+				older_pins = ui
+					.push_id("older-pins", |ui| {
+						ui.add_enabled(
+							allowed && !view.loading,
+							egui::Button::new(if retry {
+								"Retry older pins"
+							} else {
+								"Older pins"
+							}),
+						)
+					})
+					.inner
+					.clicked();
+			}
+			if let Some(page) = &view.page {
+				egui::ScrollArea::vertical()
+					.id_salt(("pins", view.request))
+					.auto_shrink([false, true])
+					.show(ui, |ui| {
+						ui.spacing_mut().item_spacing.y = 8.0;
+						for hit in &page.hits {
+							ui.push_id(hit.id, |ui| {
+								Self::hit_card(ui, hit, allowed, &mut target);
+							});
+						}
+					});
+				if page.pin_cursor.is_none() && !view.loading && page.partial {
+					ui.label(
+						RichText::new("More pins may exist, but this page has no usable continuation.")
+							.small()
+							.color(colors.muted),
+					);
+				}
+			}
+		}
+		if older_pins && let Some(command) = state.request_older_pins() {
+			commands.push(command);
+		}
+		if let Some(target) = target
+			&& let Some(command) = state.open_search_hit(target)
+		{
+			commands.push(command);
+			self.open = false;
+		}
+	}
+	fn hit_card(ui: &mut egui::Ui, hit: &model::SearchHit, allowed: bool, target: &mut Option<Id>) {
+		let colors = design::palette(ui);
+		egui::Frame::new()
+			.fill(colors.raised)
+			.stroke(egui::Stroke::new(1.0, colors.border))
+			.corner_radius(8)
+			.inner_margin(egui::Margin::same(10))
+			.show(ui, |ui| {
+				ui.set_width(ui.available_width());
+				ui.horizontal(|ui| {
+					ui.label(design::semibold(ui, &hit.author, 14.0).color(colors.text_strong));
+					ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+						if ui
+							.add_enabled(
+								allowed && hit.id.0 < u64::MAX,
+								egui::Button::new(RichText::new("Jump").size(12.0)),
+							)
+							.on_hover_text("Open this message in the timeline")
+							.clicked()
+						{
+							*target = Some(hit.id);
+						}
+					});
+				});
+				ui.add(
+					egui::Label::new(RichText::new(&hit.excerpt).color(colors.text))
+						.wrap()
+						.selectable(true),
+				);
+			});
+	}
 	/// Results pane rendered where the member list normally lives.
 	pub fn pane(&mut self, ui: &mut egui::Ui, state: &mut State, commands: &mut Vec<Command>) {
 		let colors = design::palette(ui);
 		let allowed = state.can_search();
 		let mut submit = std::mem::take(&mut self.pending_submit) && !self.pins;
 		let mut older = None;
-		let mut older_pins = false;
 		let mut target = None;
 		ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
 		ui.horizontal(|ui| {
@@ -179,30 +506,12 @@ impl SearchUi {
 				}
 			});
 		});
-		if self.pins
-			&& let Some(view) = &state.search
-		{
-			let retry = view.error.is_some() && view.pin_before.is_some();
-			if retry
-				|| view
-					.page
-					.as_ref()
-					.is_some_and(|page| page.pin_cursor.is_some())
-			{
-				older_pins = ui
-					.push_id("older-pins", |ui| {
-						ui.add_enabled(
-							allowed && !view.loading,
-							egui::Button::new(if retry {
-								"Retry older pins"
-							} else {
-								"Older pins"
-							}),
-						)
-					})
-					.inner
-					.clicked();
+		if self.pins {
+			if submit && let Some(command) = state.request_pins() {
+				commands.push(command);
 			}
+			self.pins_content(ui, state, commands);
+			return;
 		}
 		if !allowed {
 			ui.label(
@@ -213,7 +522,7 @@ impl SearchUi {
 				.color(colors.muted),
 			);
 		}
-		if state.search.is_none() && !self.pins {
+		if state.search.is_none() {
 			ui.label(
 				RichText::new("Type a query above and press Enter.")
 					.small()
@@ -222,50 +531,22 @@ impl SearchUi {
 		}
 		if let Some(view) = &state.search {
 			if view.loading {
-				ui.label(
-					RichText::new(if view.pins {
-						if view.pin_before.is_some() {
-							"Loading older pins…"
-						} else {
-							"Loading newest pins…"
-						}
-					} else {
-						"Searching…"
-					})
-					.small()
-					.color(colors.muted),
-				);
+				ui.label(RichText::new("Searching…").small().color(colors.muted));
 			}
 			if let Some(error) = view.error {
 				ui.label(RichText::new(error).color(colors.danger));
 			}
 			if let Some(page) = &view.page {
-				let note = if view.pins {
-					if page.pin_cursor.is_none() && !view.loading {
-						Some(if page.partial {
-							"More pins may exist, but this page has no usable continuation."
-						} else {
-							"Showing one page of up to 25 pins."
-						})
-					} else {
-						None
-					}
-				} else if page.partial {
-					Some("Indexing is incomplete; results may be missing.")
-				} else {
-					None
-				};
-				if let Some(note) = note {
-					ui.label(RichText::new(note).small().color(colors.muted));
+				if page.partial {
+					ui.label(
+						RichText::new("Indexing is incomplete; results may be missing.")
+							.small()
+							.color(colors.muted),
+					);
 				}
 				if page.hits.is_empty() {
 					ui.label(
-						RichText::new(if view.pins {
-							"No pinned messages returned; history access may be unavailable."
-						} else {
-							"No matching messages in this page."
-						})
-						.color(colors.muted),
+						RichText::new("No matching messages in this page.").color(colors.muted),
 					);
 				}
 				egui::ScrollArea::vertical()
@@ -275,70 +556,18 @@ impl SearchUi {
 						ui.spacing_mut().item_spacing.y = 8.0;
 						for hit in &page.hits {
 							ui.push_id(hit.id, |ui| {
-								egui::Frame::new()
-									.fill(colors.raised)
-									.stroke(egui::Stroke::new(1.0, colors.border))
-									.corner_radius(8)
-									.inner_margin(egui::Margin::same(10))
-									.show(ui, |ui| {
-										ui.set_width(ui.available_width());
-										ui.horizontal(|ui| {
-											ui.label(
-												design::semibold(ui, &hit.author, 14.0)
-													.color(colors.text_strong),
-											);
-											ui.label(
-												RichText::new(format!("#{}", hit.id))
-													.size(11.0)
-													.color(colors.muted),
-											);
-											ui.with_layout(
-												egui::Layout::right_to_left(egui::Align::Center),
-												|ui| {
-													if ui
-														.add_enabled(
-															allowed && hit.id.0 < u64::MAX,
-															egui::Button::new(
-																RichText::new("Jump").size(12.0),
-															),
-														)
-														.on_hover_text(
-															"Open this message in the timeline",
-														)
-														.clicked()
-													{
-														target = Some(hit.id);
-													}
-												},
-											);
-										});
-										ui.add(
-											egui::Label::new(
-												RichText::new(&hit.excerpt).color(colors.text),
-											)
-											.wrap()
-											.selectable(true),
-										);
-									});
+								Self::hit_card(ui, hit, allowed, &mut target);
 							});
 						}
 					});
 			}
 		}
-		if submit
-			&& let Some(command) = if self.pins {
-				state.request_pins()
-			} else {
-				state.request_search(self.query.trim().into(), None)
-			} {
+		if submit && let Some(command) = state.request_search(self.query.trim().into(), None) {
 			commands.push(command);
 		}
 		if let Some((query, before)) = older
 			&& let Some(command) = state.request_search(query, before)
 		{
-			commands.push(command);
-		}
-		if older_pins && let Some(command) = state.request_older_pins() {
 			commands.push(command);
 		}
 		if let Some(target) = target

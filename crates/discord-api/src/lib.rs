@@ -470,6 +470,27 @@ impl DiscordApi {
 					Err(f) => Event::Failure(f),
 				}
 			}
+			Command::Pin {
+				channel,
+				message,
+				pinned,
+			} => {
+				// Documented message pin routes; a failed pin never affects channel access.
+				let result = self
+					.request(
+						if pinned { Method::PUT } else { Method::DELETE },
+						&format!("/channels/{channel}/messages/pins/{message}"),
+						None,
+					)
+					.await
+					.map(|_| ());
+				Event::Pinned {
+					channel,
+					message,
+					pinned,
+					result,
+				}
+			}
 		}
 	}
 }

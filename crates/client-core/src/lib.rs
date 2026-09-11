@@ -90,6 +90,11 @@ pub enum Command {
 		channel: Id,
 		message: Id,
 	},
+	Pin {
+		channel: Id,
+		message: Id,
+		pinned: bool,
+	},
 }
 pub enum Event {
 	Typing(typing::Signal),
@@ -178,6 +183,13 @@ pub enum Event {
 		channel: Id,
 		ids: Vec<Id>,
 	},
+	/// A pin or unpin request finished; `Err` carries the service failure label.
+	Pinned {
+		channel: Id,
+		message: Id,
+		pinned: bool,
+		result: Result<(), auth::Failure>,
+	},
 	SendResult {
 		nonce: String,
 		result: Result<Message, auth::Failure>,
@@ -209,6 +221,8 @@ pub struct State {
 	pub archived_thread: Option<Id>,
 	pub search: Option<search::SearchView>,
 	pub search_request: u64,
+	/// A pin changed in this channel; the pins view should be reloaded once.
+	pub pins_changed: Option<Id>,
 	pub search_target: Option<Id>,
 	/// The active range was fetched around a target, independently of its consumed scroll cue.
 	pub history_targeted: bool,
@@ -257,6 +271,7 @@ impl Default for State {
 			archived_thread: None,
 			search: None,
 			search_request: 0,
+			pins_changed: None,
 			search_target: None,
 			history_targeted: false,
 			reply_deletions: ReplyDeletions::default(),
@@ -356,9 +371,6 @@ impl State {
 			return None;
 		}
 		let command = self.history(None);
-		if self.freshness == Freshness::Loading && self.timeline.row_count() != 0 {
-			self.status = "Showing recent conversation · revalidating history";
-		}
 		Some(command)
 	}
 	pub fn request_members(&mut self) -> Option<Command> {
@@ -581,6 +593,23 @@ impl State {
 			return;
 		}
 		if matches!(command, Command::CancelSearch) {
+			return;
+		}
+		if let Command::Pin {
+			channel,
+			message,
+			pinned,
+		} = command
+		{
+			let _ = self.apply(Envelope {
+				generation: self.generation,
+				event: Event::Pinned {
+					channel,
+					message,
+					pinned,
+					result: Err(auth::Failure::Capacity),
+				},
+			});
 			return;
 		}
 		if let Command::MarkRead {
@@ -1338,6 +1367,41 @@ impl State {
 				} else {
 					Ok(())
 				}
+			}
+			Event::Pinned {
+				channel,
+				message,
+				pinned,
+				result,
+			} => {
+				match result {
+					Ok(()) => {
+						self.status = if pinned {
+							"Message pinned"
+						} else {
+							"Message unpinned"
+						};
+						if let Some(view) = self.search.as_mut().filter(|view| view.pins && view.channel == channel)
+							&& let Some(page) = view.page.as_mut()
+							&& !pinned
+						{
+							page.hits.retain(|hit| hit.id != message);
+						}
+						self.pins_changed = Some(channel);
+					}
+					Err(failure) if failure.ends_session() => self.fail(failure),
+					Err(failure) => {
+						self.status = if pinned {
+							match failure {
+								auth::Failure::Forbidden => "Pinning is unavailable with the current permissions or the pin limit was reached",
+								_ => "Pin was not applied; check the pinned messages before retrying",
+							}
+						} else {
+							"Unpin was not applied; check the pinned messages before retrying"
+						};
+					}
+				}
+				Ok(())
 			}
 			Event::DeleteBulk { channel, ids } => {
 				if ids.len() <= 100 {

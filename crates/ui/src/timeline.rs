@@ -22,6 +22,8 @@ pub struct TimelineView {
 	auto_read_attempt: Option<Id>,
 	at_current_latest: bool,
 	pub(super) reaction: Option<(Id, Option<model::ReactionEmoji>)>,
+	/// Requested pin change: channel, message, pinned.
+	pub(super) pin_request: Option<(Id, Id, bool)>,
 	toolbar: Option<(Id, egui::Rect)>,
 	heights: BTreeMap<Id, (u64, f32)>,
 	width: f32,
@@ -198,9 +200,11 @@ fn message_actions(
 	reply: &mut Option<Id>,
 	editing: (&mut Option<(Id, Id, String)>, &mut bool),
 	deleting: &mut Option<(Id, Id)>,
+	pin: (bool, bool, &mut Option<(Id, Id, bool)>),
 ) {
 	let (editing, edit_started) = editing;
 	let (own, can_reply, can_edit, can_delete) = actions;
+	let (can_pin, pinned, pin_request) = pin;
 	let menu = crate::icons::button(ui, crate::icons::Icon::More, 28.0, "More");
 	egui::Popup::menu(&menu).show(|ui| {
 		ui.set_min_width(160.0);
@@ -225,6 +229,20 @@ fn message_actions(
 			if let Some(mark_read) = mark_read {
 				*mark_read = Some(message.id);
 			}
+			ui.close();
+		}
+		if ui
+			.add_enabled(
+				can_pin,
+				egui::Button::new(if pinned {
+					"Unpin message"
+				} else {
+					"Pin message"
+				}),
+			)
+			.clicked()
+		{
+			*pin_request = Some((message.channel, message.id, !pinned));
 			ui.close();
 		}
 		if own || can_delete {
@@ -1008,6 +1026,11 @@ impl TimelineView {
 							&mut selected_reply,
 							(editing, &mut self.edit_started),
 							deleting,
+							(
+								state.can_pin(message.channel, *id),
+								state.is_pinned(message.channel, *id),
+								&mut self.pin_request,
+							),
 						);
 						self.toolbar = Some((*id, toolbar_rect));
 					}
@@ -1235,6 +1258,7 @@ mod tests {
 							&mut reply,
 							(&mut editing, &mut edit_started),
 							&mut deleting,
+							(false, false, &mut None),
 						)
 					},
 				);
