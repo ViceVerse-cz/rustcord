@@ -466,6 +466,7 @@ mod tests {
 			show_members: false,
 			animate_gifs: false,
 			hide_media_links: true,
+			confirm_external_links: true,
 		};
 		store
 			.as_mut()

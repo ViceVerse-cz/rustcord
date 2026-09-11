@@ -226,7 +226,6 @@ fn hydrate_cached_history(
 		&& state.timeline.seed_cache(messages).is_ok()
 	{
 		state.revision += 1;
-		state.status = "Showing cached history · waiting for Discord revalidation";
 	}
 	state.enforce_resident_budget();
 }
@@ -2510,8 +2509,7 @@ impl eframe::App for Desktop {
 			downloads::Status::Downloading { received, total } => {
 				format!("Downloading: {} / {} KiB", received / 1024, total / 1024)
 			}
-			downloads::Status::Saved => "Attachment downloaded".into(),
-			downloads::Status::Cancelled => "Download cancelled".into(),
+			downloads::Status::Saved | downloads::Status::Cancelled => String::new(),
 			downloads::Status::Failed(error) => (*error).into(),
 		};
 		self.messaging.downloads().active = self.downloads.is_active();

@@ -13,6 +13,7 @@ mod embeds;
 pub mod emoji;
 mod emoji_picker;
 pub mod fonts;
+mod formatting;
 mod forum;
 mod guild_folders;
 pub mod icons;
@@ -103,6 +104,9 @@ pub struct MessagingUi {
 	reading_sidebar_applied: Option<u16>,
 	reading_sidebar_constrained: bool,
 	reading_zoom_pending: bool,
+	/// Slider value while the pointer is still down; zoom is applied on release so the
+	/// slider does not rescale under the cursor mid-drag.
+	reading_zoom_draft: Option<u16>,
 	/// Where the open profile was requested from; the popout is placed beside it.
 	profile_anchor: Option<(Id, egui::Pos2)>,
 	members_narrow_open: bool,
@@ -1193,6 +1197,36 @@ impl MessagingUi {
 			return;
 		}
 		let colors = crate::design::palette(ui);
+		let keyboard_enabled = !self.switcher_frame
+			&& !self.switcher.is_open()
+			&& ctx.memory(|memory| memory.top_modal_layer().is_none());
+		if keyboard_enabled
+			&& self.editing.is_none()
+			&& !self.ime_active
+			&& !egui::Popup::is_any_open(ctx)
+			&& ctx.memory(|memory| memory.has_focus(ui.make_persistent_id("message-input")))
+			&& state.drafts.get(&channel).is_none_or(String::is_empty)
+			&& ctx.input_mut(|input| {
+				let up = !input
+					.events
+					.iter()
+					.any(|event| matches!(event, egui::Event::Ime(_)))
+					&& input.events.iter().any(|event| {
+						matches!(event, egui::Event::Key {
+							key: egui::Key::ArrowUp, pressed: true, repeat: false, modifiers, ..
+						} if *modifiers == egui::Modifiers::NONE)
+					});
+				up && input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)
+			}) && let Some(message) = state
+			.timeline
+			.iter()
+			.rev()
+			.find(|message| !message.unsupported && state.can_edit(channel, message.id))
+		{
+			self.editing = Some((channel, message.id, message.content.clone()));
+			self.edit_modified = None;
+			self.composer_edit = None;
+		}
 		let editing_key = self
 			.editing
 			.as_ref()
@@ -1234,9 +1268,6 @@ impl MessagingUi {
 				});
 			return;
 		}
-		let keyboard_enabled = !self.switcher_frame
-			&& !self.switcher.is_open()
-			&& ctx.memory(|memory| memory.top_modal_layer().is_none());
 		let focus_edit =
 			keyboard_enabled && editing_key.is_some() && self.composer_edit != editing_key;
 		let focus_composer = keyboard_enabled
@@ -1692,6 +1723,23 @@ impl MessagingUi {
                             edit_state.store(ctx, composer_id);
                             mention_changed = true;
                         }
+                        if keyboard_enabled
+                            && !self.ime_active
+                            && !ime_this_frame
+                            && ctx.memory(|m| m.has_focus(composer_id))
+                            && let Some(style) = formatting::Style::consume(ctx)
+                        {
+                            let mut edit_state =
+                                egui::text_edit::TextEditState::load(ctx, composer_id).unwrap_or_default();
+                            let range = edit_state.cursor.char_range();
+                            if let Some(range) = formatting::apply(draft, style, range, remaining) {
+                                edit_state.cursor.set_char_range(Some(range));
+                                edit_state.store(ctx, composer_id);
+                                mention_changed = true;
+                            } else {
+                                state.status = "Formatting will not fit. Shorten this message or free draft space.";
+                            }
+                        }
                         let rich_layout = &mut self.composer_layout;
                         if !self.ime_active
                             && !ime_this_frame
@@ -1932,7 +1980,11 @@ impl MessagingUi {
 			ui.disable();
 		}
 		// Foreground confirmation handles Escape before background search/archive shortcuts.
-		markdown::confirm_external_link(&ctx, &mut self.timeline.opening);
+		markdown::confirm_external_link(
+			&ctx,
+			&mut self.timeline.opening,
+			self.reading_preferences.confirm_external_links,
+		);
 		let colors = crate::design::palette(ui);
 		if !settings_open
 			&& !self.switcher.is_open()
@@ -2196,6 +2248,11 @@ impl MessagingUi {
 							(&mut self.avatars, &mut self.profile),
 							self.pending_upload.as_ref(),
 						);
+						if let Some((channel, message)) = self.timeline.quick_delete.take()
+							&& let Some(command) = state.prepare_delete(channel, message)
+						{
+							commands.push(command);
+						}
 						if let Some(nonce) = self.timeline.restore_pending.take() {
 							self.restore_pending(state, channel, &nonce);
 						}
@@ -2360,6 +2417,7 @@ impl MessagingUi {
 				state,
 				&mut self.avatars,
 				&mut self.profile_link,
+				self.reading_preferences.confirm_external_links,
 				anchor,
 			) {
 				Some(profiles::Action::Profile(user)) => {

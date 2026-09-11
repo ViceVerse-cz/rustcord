@@ -19,10 +19,10 @@ pub struct TimelineView {
 	pub(super) invite_requests: Vec<String>,
 	pub(super) invite_join: Option<String>,
 	pub(super) edit_started: bool,
+	pub(super) quick_delete: Option<(Id, Id)>,
 	pub(super) channel_reference: Option<Id>,
 	pub(super) reply_target: Option<Id>,
 	target_browsing: bool,
-	unread_browsing: bool,
 	initial_read_checked: bool,
 	pub(super) unread_jump: bool,
 	pub(super) load_newer: bool,
@@ -399,14 +399,12 @@ impl TimelineView {
 	/// Leaving the latest page is deliberate reading; nothing is acknowledged automatically.
 	fn browse_away(&mut self) {
 		self.target_browsing = true;
-		self.unread_browsing = true;
 		self.following = false;
 		self.jump = false;
 		self.mark_read = None;
 	}
 	pub(super) fn follow_latest(&mut self) {
 		self.target_browsing = false;
-		self.unread_browsing = false;
 		self.following = true;
 		self.jump = true;
 		self.anchor = None;
@@ -448,7 +446,6 @@ impl TimelineView {
 			if unread && !marker_loaded {
 				// Opening a recent page is not consent to skip an unseen unread gap.
 				self.target_browsing = true;
-				self.unread_browsing = true;
 				self.following = false;
 				self.jump = false;
 				self.mark_read = None;
@@ -673,6 +670,8 @@ impl TimelineView {
 		}
 		let mut measurements = Vec::new();
 		let mut selected_reply = state.reply;
+		// ScrollArea consumes wheel input while applying it; retain the viewing gesture.
+		let scroll_delta = ui.input(|input| input.smooth_scroll_delta().y);
 		let output = scroll.show_viewport(ui, |ui, viewport| {
 			ui.spacing_mut().item_spacing.y = 0.0;
 			let (first, _, top) = visible_range(
@@ -1256,22 +1255,41 @@ impl TimelineView {
 							*editing = Some((message.channel, *id, message.content.clone()));
 							self.edit_started = true;
 						}
-						message_actions(
-							&mut toolbar,
-							message,
-							(own, can_reply, can_edit, can_delete),
-							(
-								can_mark_read.then_some(&mut self.mark_read),
-								&mut selected_reply,
-							),
-							(editing, &mut self.edit_started),
-							deleting,
-							(
-								state.can_pin(message.channel, *id),
-								state.is_pinned(message.channel, *id),
-								&mut self.pin_request,
-							),
-						);
+						if can_delete
+							&& toolbar.input(|input| input.modifiers.shift)
+							&& !egui::Popup::is_any_open(toolbar.ctx())
+						{
+							if toolbar
+								.push_id("quick-delete", |ui| {
+									action_button(
+										ui,
+										crate::icons::Icon::Trash,
+										"Delete message immediately",
+									)
+								})
+								.inner
+								.clicked()
+							{
+								self.quick_delete = Some((message.channel, *id));
+							}
+						} else {
+							message_actions(
+								&mut toolbar,
+								message,
+								(own, can_reply, can_edit, can_delete),
+								(
+									can_mark_read.then_some(&mut self.mark_read),
+									&mut selected_reply,
+								),
+								(editing, &mut self.edit_started),
+								deleting,
+								(
+									state.can_pin(message.channel, *id),
+									state.is_pinned(message.channel, *id),
+									&mut self.pin_request,
+								),
+							);
+						}
 						self.toolbar = Some((*id, toolbar_rect));
 					}
 				});
@@ -1311,7 +1329,7 @@ impl TimelineView {
 						pending,
 						compact,
 						state,
-						avatars,
+						(avatars, &mut self.opening, profile, &mut self.channel_reference),
 						upload,
 						(&mut self.restore_pending, &mut self.cancel_upload),
 					);
@@ -1332,6 +1350,7 @@ impl TimelineView {
 					self.rows[index].1 = *height;
 				}
 			}
+			viewport.min.y
 		});
 		// ScrollArea applies wheel input after laying out its contents. Preserve that
 		// movement when new row measurements rebuild the timeline on the next pass.
@@ -1348,27 +1367,32 @@ impl TimelineView {
 		let distance_from_bottom =
 			(output.content_size.y - output.state.offset.y - output.inner_rect.height()).max(0.0);
 		let at_bottom = distance_from_bottom <= 3.0;
+		self.at_current_latest = state.timeline.iter().last().is_some_and(|message| {
+			state.channels.iter().any(|channel| {
+				Some(channel.id) == state.selected && channel.last_message == Some(message.id)
+			})
+		});
 		if at_bottom
-			&& !self.unread_browsing
+			&& self.at_current_latest
 			&& ui.input(|input| {
-				input.smooth_scroll_delta().y < 0.0
+				(scroll_delta < 0.0
 					&& input
 						.pointer
 						.hover_pos()
-						.is_some_and(|pos| output.inner_rect.contains(pos))
+						.is_some_and(|pos| output.inner_rect.contains(pos)))
+					|| (input.pointer.any_down() && output.state.offset.y > output.inner)
 			}) {
 			self.target_browsing = false;
+			if state.history_targeted || state.history_after.is_some() {
+				self.latest = true;
+			}
+			ui.ctx().request_repaint();
 		}
 		if self.reply_target.is_some() {
 			self.target_browsing = true;
 			self.mark_read = None;
 		}
 		self.following = at_bottom && !self.target_browsing;
-		self.at_current_latest = state.timeline.iter().last().is_some_and(|message| {
-			state.channels.iter().any(|channel| {
-				Some(channel.id) == state.selected && channel.last_message == Some(message.id)
-			})
-		});
 		if self.following
 			&& !state.history_targeted
 			&& state.history_before.is_none()
@@ -2752,7 +2776,7 @@ mod tests {
 				);
 				continue;
 			}
-			assert!(view.target_browsing && view.unread_browsing);
+			assert!(view.target_browsing && !view.following);
 			assert!(view.mark_read.is_none());
 			let key = |key| egui::Event::Key {
 				key,
@@ -2778,6 +2802,23 @@ mod tests {
 			assert!(view.unread_jump);
 			assert!(view.mark_read.is_none());
 			assert_eq!(state.read_marker(Id(20)), Some(marker));
+
+			// Scrolling to the live edge also resumes reading without clicking a banner.
+			view.unread_jump = false;
+			frame(
+				&mut view,
+				&mut state,
+				vec![
+					egui::Event::PointerMoved(egui::pos2(width / 2.0, 300.0)),
+					egui::Event::MouseWheel {
+						unit: egui::MouseWheelUnit::Point,
+						delta: egui::vec2(0.0, -600.0),
+						modifiers: egui::Modifiers::NONE,
+					},
+				],
+			);
+			assert!(view.following && !view.target_browsing);
+			assert_eq!(view.mark_read.take(), Some(Id(20)));
 		}
 	}
 

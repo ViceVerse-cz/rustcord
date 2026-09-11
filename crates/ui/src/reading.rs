@@ -46,11 +46,20 @@ impl MessagingUi {
 			ui.horizontal(|ui| {
 				ui.label(design::medium(ui, "Zoom", 15.0).color(colors.text_strong));
 				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-					ui.add(
-						egui::Slider::new(&mut value.zoom_percent, 80..=150)
+					let mut zoom = self.reading_zoom_draft.unwrap_or(value.zoom_percent);
+					let response = ui.add(
+						egui::Slider::new(&mut zoom, 80..=150)
 							.suffix("%")
 							.trailing_fill(true),
 					);
+					// Applying zoom rescales this slider under the pointer, so commit only
+					// once the drag ends; typed values apply immediately.
+					if response.dragged() {
+						self.reading_zoom_draft = Some(zoom);
+					} else {
+						self.reading_zoom_draft = None;
+						value.zoom_percent = zoom;
+					}
 				});
 			});
 			ui.separator();
@@ -84,6 +93,13 @@ impl MessagingUi {
 				"Hide image and GIF links",
 				Some("Hide standalone links when their image or GIF preview is shown."),
 				&mut value.hide_media_links,
+			);
+			ui.separator();
+			design::switch(
+				ui,
+				"Confirm before opening links",
+				Some("Ask before opening external links. Discord links always open directly."),
+				&mut value.confirm_external_links,
 			);
 		});
 		ui.horizontal_wrapped(|ui| {
@@ -199,6 +215,7 @@ mod tests {
 			show_members: false,
 			animate_gifs: false,
 			hide_media_links: true,
+			confirm_external_links: true,
 		};
 		view.apply_reading_preferences(&ctx, custom);
 		for _ in 0..3 {
