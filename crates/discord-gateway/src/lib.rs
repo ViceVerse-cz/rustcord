@@ -961,6 +961,7 @@ mod tests {
 		timeout(Duration::from_secs(10), async {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let endpoint = format!("ws://{}/", listener.local_addr().unwrap());
+            let (client_finished, terminal_observed) = tokio::sync::oneshot::channel();
             let server = async {
                 let (stream, _) = listener.accept().await.unwrap();
                 let mut socket = accept_async(stream).await.unwrap();
@@ -981,9 +982,13 @@ mod tests {
                 }
                 send(&mut socket, json!({"op":0,"t":"MESSAGE_CREATE","s":8,"d":{"id":"4","channel_id":"2","author":{"id":"3","username":"Synthetic"},"content":"Message after invalid typing"}})).await;
                 acknowledge(&mut socket, 8).await;
+                // Exercise a heartbeat reply racing the terminal close.
+                send(&mut socket, json!({"op":1,"d":null})).await;
                 socket.send(Frame::Close(Some(CloseFrame {
                     code: CloseCode::from(4004), reason: "synthetic stop".into(),
                 }))).await.unwrap();
+                // Keep TCP alive: unread heartbeat bytes on drop can reset it and lose Close.
+                terminal_observed.await.unwrap();
             };
             let observed = std::sync::Mutex::new(Vec::new());
             let client = run_inner(
@@ -1002,6 +1007,11 @@ mod tests {
                     Ok(())
                 }, Some(&endpoint),
             );
+            let client = async {
+                let result = client.await;
+                let _ = client_finished.send(());
+                result
+            };
             let ((), result) = tokio::join!(server, client);
             assert_eq!(result, Err(Failure::Expired));
             assert_eq!(observed.into_inner().unwrap(), vec![(Id(2), Id(3), 1700000000), (Id(2), Id(3), 0)]);

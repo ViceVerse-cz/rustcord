@@ -2149,3 +2149,10 @@ VIEW_CHANNEL/SEND_MESSAGES grants. Send/compose authorization remains unchanged.
 Main subsequently advanced to `46df1a2` (profile and attachment card work). The c83 package
 comparison above predates that integration; its source scope is preserved explicitly. Final
 combined verification follows on the integrated tree.
+
+The integrated run also reproduced a Gateway fixture close race: dropping TCP immediately
+after 4004 could reset unread heartbeat data and lose the close frame. It now reuses the
+neighboring fixture's client-completion barrier, deliberately racing a heartbeat while keeping
+the original deadline, dispatch cursor and exact event assertions. The profile artwork test
+was updated from 64 to 56 pixels to match main's intentional restyle; it still requires one
+rendered image before presence clears and zero afterward. No artwork renderer was removed.

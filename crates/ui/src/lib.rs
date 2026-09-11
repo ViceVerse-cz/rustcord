@@ -3886,7 +3886,7 @@ mod composer_tests {
 						.iter()
 						.filter_map(|shape| match &shape.primitive {
 							egui::epaint::Primitive::Mesh(mesh)
-								if (mesh.calc_bounds().size() - egui::vec2(64.0, 64.0))
+								if (mesh.calc_bounds().size() - egui::vec2(56.0, 56.0))
 									.length() < 2.0 =>
 							{
 								Some(mesh.calc_bounds())
