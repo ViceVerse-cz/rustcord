@@ -84,7 +84,7 @@ pub fn check_dimensions(width: u32, height: u32) -> Result<(), &'static str> {
 }
 
 /// Rotate a packed RGBA frame clockwise by a quarter-turn multiple; returns the new dimensions.
-#[cfg(not(target_os = "windows"))]
+#[cfg(any(target_os = "macos", all(test, target_os = "linux")))]
 pub(crate) fn rotate_rgba(
 	rgba: &[u8],
 	width: u32,

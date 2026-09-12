@@ -429,7 +429,7 @@ fn wait_ready(pipeline: &gst::Pipeline, shared: &Shared) -> Result<(), &'static 
 				gst::MessageType::Eos,
 			],
 		) else {
-			if started.elapsed().as_secs() as u64 > WAIT.seconds() {
+			if started.elapsed().as_secs() > WAIT.seconds() {
 				return Err(INVALID);
 			}
 			continue;
