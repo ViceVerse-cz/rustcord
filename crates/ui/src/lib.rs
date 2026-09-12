@@ -768,9 +768,7 @@ impl MessagingUi {
 							);
 							inner.spacing_mut().item_spacing.x = 12.0;
 							inner.push_id(member.user.id.0, |ui| {
-								// The member list opens profiles from its context menu only.
-								let avatar =
-									self.avatars.show_plain(ui, &member.user, 32.0, state.demo);
+								let avatar = self.avatars.show(ui, &member.user, 32.0, state.demo);
 								user_menu::show(
 									&avatar,
 									state,
@@ -778,6 +776,9 @@ impl MessagingUi {
 									&mut self.profile,
 									&mut self.user_action,
 								);
+								if avatar.clicked() {
+									self.profile = Some(member.user.clone());
+								}
 								if let Some(status) = status {
 									design::presence_dot(
 										ui,
@@ -845,6 +846,9 @@ impl MessagingUi {
 								&mut self.profile,
 								&mut self.user_action,
 							);
+							if response.clicked() {
+								self.profile = Some(member.user.clone());
+							}
 						}
 					}
 				}
