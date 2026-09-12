@@ -899,3 +899,26 @@ Only existing author/mention/content fields are used; missing moderation targets
 is invented. This adds display support, not moderation, stream upgrades or automatic
 call joining. Synthetic model/parser/UI tests cover the descriptions and fallback;
 live rendering and native visual comparison remain unverified.
+
+
+### Server role administration (September 12, 2026)
+
+Server Settings now includes Roles for accounts with Manage Roles. The role list,
+@everyone permissions, create/edit/delete, hierarchy reordering, display options,
+and member assignment use the existing single server-administration request lane.
+Managed roles and roles at or above the actor's highest role remain read-only;
+owners retain their hierarchy exemption. Unknown permission bits are preserved,
+and only changed permission bits are merged into a fresh role before a write.
+
+The role and image shapes follow Discord's [role documentation](https://docs.discord.com/developers/topics/permissions#role-object)
+and [image formatting reference](https://docs.discord.com/developers/reference#image-formatting).
+Role icons require ROLE_ICONS; enhanced colors require ENHANCED_ROLE_COLORS.
+There is no boost purchase flow or invented role-link support. Static icon uploads
+reuse the bounded native image worker. Member counts remain unknown when the count
+route is unavailable. Member search retains the existing unofficial normal-user
+members-search path and additionally requires Manage Server. No directory scraping
+fallback is used. These normal-account transport paths remain live-unverified.
+
+Writes reconcile from a fresh catalog. An ambiguous response requires an explicit
+reload before another write; creates and deletes are never automatically retried.
+Synthetic fixtures and tests do not demonstrate live Discord interoperability.

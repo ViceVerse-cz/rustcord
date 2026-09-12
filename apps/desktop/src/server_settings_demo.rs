@@ -80,6 +80,7 @@ pub fn execute_admin(
 	);
 	let owner = state.user.as_ref().expect("fixture user");
 	let result = match action {
+		Action::Roles(action) => execute_roles(state, guild, action),
 		Action::LoadEmojis
 		| Action::CreateEmoji { .. }
 		| Action::RenameEmoji { .. }
@@ -130,7 +131,7 @@ pub fn execute_admin(
 			Outcome::Emojis(page)
 		}
 		Action::LoadMembers(query) => {
-			let mut page = state.server_admin.members.clone().unwrap_or_else(|| {
+			let mut page = {
 				let roles: Vec<_> = state
 					.permissions
 					.guilds
@@ -143,6 +144,16 @@ pub fn execute_admin(
 						managed: false,
 					})
 					.collect();
+				let roles = state.server_admin.roles.as_ref().map_or(roles, |catalog| {
+					catalog
+						.items
+						.iter()
+						.map(|role| Role {
+							role: role.permission_role(),
+							managed: role.managed,
+						})
+						.collect()
+				});
 				let items = [
 					"Avery", "Mika", "Rowan", "Sam", "Taylor", "Morgan", "Alex", "Jamie",
 				]
@@ -161,7 +172,8 @@ pub fn execute_admin(
 						roles: roles
 							.iter()
 							.filter(|role| role.role.id != guild)
-							.take(index % 2)
+							.skip(index % 4)
+							.take(1)
 							.map(|role| role.role.id)
 							.collect(),
 						joined_at: Some(1_789_200_000_000 - index as i128 * 86_400_000),
@@ -181,7 +193,18 @@ pub fn execute_admin(
 					features: Vec::new(),
 					show_in_channel_list: Some(false),
 				}
-			});
+			};
+			if let Some(cached) = &state.server_admin.members {
+				for row in &mut page.items {
+					if let Some(previous) = cached
+						.items
+						.iter()
+						.find(|previous| previous.user.id == row.user.id)
+					{
+						*row = previous.clone();
+					}
+				}
+			}
 			page.items.retain(|row| {
 				query.search.is_empty()
 					|| row
@@ -236,6 +259,148 @@ pub fn execute_admin(
 		request,
 		result: Ok(result),
 	})
+}
+
+fn role_catalog(state: &State, guild: Id) -> model::server_roles::Catalog {
+	use model::server_roles::{Catalog, Colors, Role};
+	state.server_admin.roles.clone().unwrap_or_else(|| {
+		let mut items = vec![Role {
+			id: guild,
+			name: "@everyone".into(),
+			permissions: model::permissions::VIEW_CHANNEL,
+			member_count: Some(8),
+			..Default::default()
+		}];
+		for (index, (name, color, count, managed)) in [
+			("Founder", 0xa93226, 2, false),
+			("Game For Dev Shooting Blaster 2D", 0x34495e, 0, false),
+			("Members", 0x1abc9c, 4, false),
+			("Marketing", 0xf1c40f, 1, false),
+			("Support", 0x99aab5, 0, false),
+			("Bots", 0x99aab5, 2, true),
+			("Tickety", 0x99aab5, 1, true),
+			("carl-bot", 0x99aab5, 1, true),
+		]
+		.into_iter()
+		.enumerate()
+		{
+			items.push(Role {
+				id: Id(9500 + index as u64),
+				name: name.into(),
+				colors: Colors {
+					primary: color,
+					..Default::default()
+				},
+				permissions: model::permissions::VIEW_CHANNEL,
+				position: 8 - index as i32,
+				member_count: Some(count),
+				managed,
+				..Default::default()
+			});
+		}
+		items.sort_by(|a, b| b.position.cmp(&a.position).then_with(|| a.id.cmp(&b.id)));
+		Catalog {
+			guild,
+			items,
+			features: vec!["ROLE_ICONS".into(), "ENHANCED_ROLE_COLORS".into()],
+		}
+	})
+}
+
+fn execute_roles(
+	state: &State,
+	guild: Id,
+	action: model::server_roles::Action,
+) -> model::server_admin::Result {
+	use model::server_roles::{Action, Result as Outcome, Role};
+	let mut catalog = role_catalog(state, guild);
+	let mut selected = None;
+	match action {
+		Action::Load => {}
+		Action::Create(edit) => {
+			let id = Id(catalog
+				.items
+				.iter()
+				.map(|role| role.id.0)
+				.max()
+				.unwrap_or(9500)
+				+ 1);
+			let mut role = Role {
+				id,
+				position: 1,
+				member_count: Some(0),
+				..Default::default()
+			};
+			edit.apply(&mut role);
+			for existing in &mut catalog.items {
+				if existing.position >= 1 {
+					existing.position += 1;
+				}
+			}
+			catalog.items.push(role);
+			selected = Some(id);
+		}
+		Action::Edit { id, edit } => {
+			if let Some(role) = catalog.items.iter_mut().find(|role| role.id == id) {
+				edit.apply(role);
+				if matches!(edit.icon, model::Patch::Value(_)) {
+					role.icon = Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into());
+				}
+			}
+			selected = Some(id);
+		}
+		Action::Delete(id) => catalog.items.retain(|role| role.id != id),
+		Action::Move { id, position } => {
+			if let Some(old) = catalog
+				.items
+				.iter()
+				.find(|role| role.id == id)
+				.map(|role| role.position)
+			{
+				for role in &mut catalog.items {
+					if role.id == id {
+						role.position = position;
+					} else if old < position && role.position > old && role.position <= position {
+						role.position -= 1;
+					} else if old > position && role.position >= position && role.position < old {
+						role.position += 1;
+					}
+				}
+			}
+		}
+		Action::Members { role, query } => {
+			let event = execute_admin(
+				state,
+				guild,
+				0,
+				model::server_admin::Action::LoadMembers(query),
+			);
+			let Event::ServerAdmin(client_core::server_admin::Event {
+				result: Ok(model::server_admin::Result::Members(mut page)),
+				..
+			}) = event
+			else {
+				unreachable!()
+			};
+			page.roles = catalog
+				.items
+				.iter()
+				.map(|role| model::server_admin::Role {
+					role: role.permission_role(),
+					managed: role.managed,
+				})
+				.collect();
+			if let Some(role) = role {
+				page.items.retain(|member| member.roles.contains(&role));
+			}
+			page.total = page.items.len() as u64;
+			return model::server_admin::Result::Roles(Outcome::Members { role, page });
+		}
+	}
+	catalog
+		.items
+		.sort_by(|a, b| b.position.cmp(&a.position).then_with(|| a.id.cmp(&b.id)));
+	model::server_admin::Result::Roles(Outcome::Catalog { catalog, selected })
 }
 
 pub fn open(state: &mut State, messaging: &mut ui::MessagingUi) {

@@ -85,7 +85,7 @@ impl GroupIcon {
 			state.server_settings.guild == Some(id) && state.can_manage_guild(id)
 		})
 	}
-	fn poll_scoped(
+	pub(crate) fn poll_scoped(
 		&mut self,
 		generation: u64,
 		valid: impl FnOnce(Id) -> bool,

@@ -526,3 +526,19 @@ the existing 500-row / 4 MiB timeline limit and resident-history budget. They ar
 excluded from normal message iteration, service actions and disk cache writes.
 Disabling the plugin, logout, lost channel access or eviction releases the payloads.
 The usual disk-cache deletion still runs when a deletion arrives.
+
+
+### Server role editor
+
+One in-memory role catalog is retained for the open guild: at most 512 roles,
+512 KiB including allocated string/vector capacity, and 256 bounded feature names.
+There is one UI draft and one server-administration request at a time; role-member
+search reuses the existing bounded member page. Unknown role permission bits are
+retained and edits carry a changed-bit mask. Closing settings/logout releases the
+editor state; no new database table or persistent role cache is added.
+
+Role icon preparation reuses the off-thread image worker, bounded source input and
+PNG data URI limits. Its preview is at most 128 by 128 pixels; the completion is
+scoped to account generation, guild, role and picker request. The retained core
+request drops the image payload. CDN role icons share the existing bounded image
+cache and are confined to a validated numeric role ID and icon hash.

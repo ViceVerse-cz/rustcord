@@ -3626,3 +3626,51 @@ disabled notifications. The old behavior fails that regression; the fix passes.
 Native restart interaction, CPU/RSS and save latency are unmeasured: the native
 Computer Use pipe was unavailable (OS error 2), and Orca CLI was absent. No live
 Discord session or system notification was exercised for this verification.
+
+
+## Server role settings - September 12, 2026
+
+Baseline `cba6894`, implementation `5b63b80`, Windows 11 Home 10.0.26200,
+Ryzen 7 7800X3D (16 logical processors), 33,410,678,784 physical RAM bytes,
+Rust 1.98.1. Standard packages include voice; no dependency or feature-flag
+change. The separate process samples enable the existing `demo` feature on both
+revisions and never load an account.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Standard executable bytes | 66,586,112 | 66,858,496 | +272,384 (+0.409%) |
+| Installed package bytes | 72,918,003 | 73,192,802 | +274,799 (+0.377%) |
+| Sorted DEFLATE-9 ZIP bytes | 42,757,346 | 42,860,548 | +103,202 (+0.241%) |
+| Reducer replay median, ms | 41.9324 | 42.0395 | +0.1071 (+0.255%) |
+| Peak working-set bytes | 172,265,472 | 170,835,968 | -1,429,504 (-0.830%) |
+| Peak private bytes | 399,007,744 | 397,062,144 | -1,945,600 (-0.488%) |
+
+Package sizes use one `cargo xtask package` output per revision. ZIP uses Python
+zipfile DEFLATE level 9, sorted relative paths and fixed timestamps; installed size
+sums all 234 standard package files. After files were staged using the unchanged
+packager manifest from the clean baseline, excluding unrelated stale root dist
+files (an old voice executable and legacy docs); those files were preserved.
+Both package snapshots precede this measurement note. Reducer replay uses `cargo replay`, one warmup then five direct
+release executable runs without concurrent builds. Both retain 500 records and
+236,992-237,477 estimated timeline bytes. A preliminary after series overlapped
+Clippy compilation and was excluded; the recorded after series ran at idle.
+This is a generic synthetic reducer check, not role-request latency or process RSS.
+The 0.26% difference is within sample variation, not a demonstrated regression.
+
+Process comparison: one release `--features demo` process per revision,
+`--demo --demo-server-settings`, default 1120x760 logical window, Wgpu renderer,
+five seconds warmup then twenty samples spaced 500 ms apart. Start-Process used
+Hidden consistently; no scripted native input was available. The before process
+settled at 172,199,936 working-set / 398,938,112 private bytes; after settled at
+170,835,968 / 397,062,144 bytes. TotalProcessorTime increased by 0 ms between
+first and last samples in both runs; timer resolution does not prove zero CPU use.
+The small memory difference from one pair is not evidence of an improvement.
+
+A separate new role-editor fixture (`--demo-server-page=role-editor`) used the same
+sampling: peak/settled working set 170,749,952 bytes, private bytes 397,332,480,
+0 ms measured CPU delta. There is no predecessor Roles view for comparison.
+Child/GPU allocation, frame-time p95, startup latency, and runtime display-scale
+interaction remain unmeasured. Framebuffer exports were inspected at 1440x1000
+and 800x900 logical sizes (125% pixel output); native Computer Use failed to
+connect to its pipe (OS error 2) and Orca CLI was absent. No live Discord result
+is inferred. Raw samples: [metrics.json](pr-evidence/server-roles/metrics.json).

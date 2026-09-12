@@ -21,6 +21,7 @@ pub mod relationships;
 pub mod rpc;
 pub mod search;
 pub mod server_admin;
+pub mod server_roles;
 pub mod server_settings;
 pub mod stream;
 pub mod threads;

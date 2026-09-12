@@ -17,7 +17,7 @@ impl DiscordApi {
 			result,
 		}
 	}
-	async fn admin_metadata(&self, guild: Id) -> Result<wire::GuildMetadata, Failure> {
+	pub(super) async fn admin_metadata(&self, guild: Id) -> Result<wire::GuildMetadata, Failure> {
 		let bytes = self
 			.request_limited(Method::GET, &format!("/guilds/{guild}"), None, MAX_WIRE)
 			.await?;
@@ -56,6 +56,10 @@ impl DiscordApi {
 			return Err(Failure::Protocol);
 		}
 		match action {
+			Action::Roles(action) => self
+				.server_role_action(guild, action)
+				.await
+				.map(Outcome::Roles),
 			Action::LoadEmojis => self.admin_emojis(guild).await,
 			Action::CreateEmoji { name, image } => {
 				if !wire::valid_emoji_data_uri(image) {

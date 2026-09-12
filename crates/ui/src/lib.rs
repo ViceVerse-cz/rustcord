@@ -47,6 +47,7 @@ mod search;
 mod server_admin;
 mod server_invite;
 mod server_menu;
+mod server_roles;
 mod server_settings;
 mod settings;
 mod switcher;
@@ -105,6 +106,7 @@ pub struct MessagingUi {
 	server_settings: server_settings::Editor,
 	server_icon_sequence: u64,
 	server_emoji_sequence: u64,
+	server_role_icon_sequence: u64,
 	switcher: switcher::Switcher,
 	focus_switched_composer: bool,
 	switcher_frame: bool,
