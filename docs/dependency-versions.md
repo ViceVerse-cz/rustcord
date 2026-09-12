@@ -1,5 +1,13 @@
 # Resolved dependencies
 
+September 12 egui refresh: `egui` and `eframe` now pin upstream `main` commit
+`441971a776322a482e371775219380eca812cfa9`, verified with `git ls-remote`.
+The new `ContainerAtom` API lays out the server-menu title and chevron inside
+its existing button without adding another interactive response. This replaces
+manual text/icon positioning and reserves the icon width when truncating titles.
+The workspace remains on Rust 1.98.1 with the same egui feature flags and
+transitive versions. Upstream license texts and bundled font files are unchanged.
+
 September 12 community extensions: Wasmi is pinned to 2.0.0 with only `std`,
 `validate`, `stable` and `portable-dispatch`. No WASI implementation is linked.
 WAT 1.245.1 is test-only for executable adversarial sandbox fixtures. The

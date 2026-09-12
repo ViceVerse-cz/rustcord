@@ -38,35 +38,30 @@ impl ServerMenu {
 				[ui.available_width(), 40.0],
 				egui::Button::new(()).frame(false),
 			);
-			let title = egui::WidgetText::from(design::semibold(ui, title, 15.0)).into_galley(
-				ui,
-				Some(egui::TextWrapMode::Truncate),
-				(button.rect.width() - 24.0).max(0.0),
-				egui::TextStyle::Button,
-			);
-			let title_pos = egui::pos2(
-				button.rect.left(),
-				button.rect.center().y - title.size().y / 2.0,
-			);
-			let chevron_x = title_pos.x + title.size().x + 12.0;
-			ui.painter()
-				.galley(title_pos, title.clone(), colors.text_strong);
+			egui::ContainerAtom::new((
+				design::semibold(ui, title, 15.0),
+				egui::Atom::paint(egui::Vec2::splat(14.0), |ui, args| {
+					icons::paint(
+						ui.painter(),
+						icons::Icon::ChevronDown,
+						args.rect,
+						colors.muted,
+					);
+				}),
+			))
+			.gap(5.0)
+			.align2(egui::Align2::LEFT_CENTER)
+			.wrap_mode(egui::TextWrapMode::Truncate)
+			.fallback_text_color(colors.text_strong)
+			.measure(ui, button.rect.size())
+			.paint_at(ui, button.rect);
 			button.widget_info(|| {
 				egui::WidgetInfo::labeled(
 					egui::WidgetType::Button,
-					true,
-					format!("Server menu, {}", title.job.text),
+					ui.is_enabled(),
+					format!("Server menu, {title}"),
 				)
 			});
-			icons::paint(
-				ui.painter(),
-				icons::Icon::ChevronDown,
-				egui::Rect::from_center_size(
-					egui::pos2(chevron_x, button.rect.center().y),
-					egui::Vec2::splat(14.0),
-				),
-				colors.muted,
-			);
 			egui::Popup::menu(&button)
 				.frame(
 					egui::Frame::popup(ui.style())
