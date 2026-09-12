@@ -5,13 +5,7 @@ use std::{
 	time::{Duration, Instant},
 };
 pub type Cache = BTreeMap<String, (Instant, Option<Result<model::InvitePreview, Failure>>)>;
-pub fn valid_code(code: &str) -> bool {
-	!code.is_empty()
-		&& code.len() <= 100
-		&& code
-			.bytes()
-			.all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-}
+pub use model::server_invites::valid_code;
 
 impl State {
 	pub fn request_invite(&mut self, code: String) -> Option<Command> {

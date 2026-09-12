@@ -13,8 +13,10 @@ pub struct Event {
 	pub request: u64,
 	pub result: Result<Outcome, Failure>,
 }
+
 #[derive(Default)]
 pub struct View {
+	pub invites: Option<model::server_invites::Snapshot>,
 	pub roles: Option<model::server_roles::Catalog>,
 	pub selected_role: Option<Id>,
 	pub member_role_filter: Option<Id>,
@@ -35,6 +37,12 @@ pub struct View {
 	prune_days: Option<u8>,
 }
 impl View {
+	pub(crate) fn revoke_invite_access(&mut self) {
+		self.invites = None;
+		if matches!(self.action, Some(Action::Invites(_))) {
+			self.reset();
+		}
+	}
 	pub(crate) fn permissions_changed(&mut self, event: &crate::permissions::Event) {
 		use crate::permissions::Event;
 		let Some(active) = self.guild else {
@@ -64,6 +72,35 @@ impl View {
 	}
 }
 impl State {
+	pub fn can_open_invite_settings(&self, guild: Id) -> bool {
+		self.can_manage_guild(guild)
+	}
+	pub fn can_revoke_guild_invite(&self, guild: Id, code: &str) -> bool {
+		self.can_open_invite_settings(guild)
+			&& self.server_admin.guild == Some(guild)
+			&& model::server_invites::valid_code(code)
+			&& self.server_admin.invites.as_ref().is_some_and(|page| {
+				page.guild == guild && page.items.iter().any(|invite| invite.code == code)
+			})
+	}
+	pub fn can_pause_guild_invites(&self, guild: Id) -> bool {
+		self.can_open_invite_settings(guild)
+			&& self.server_admin.guild == Some(guild)
+			&& self
+				.server_admin
+				.invites
+				.as_ref()
+				.is_some_and(|page| page.guild == guild)
+	}
+	fn invite_action_allowed(&self, guild: Id, action: &model::server_invites::Action) -> bool {
+		match action {
+			model::server_invites::Action::Load => self.can_open_invite_settings(guild),
+			model::server_invites::Action::Revoke { code } => {
+				self.can_revoke_guild_invite(guild, code)
+			}
+			model::server_invites::Action::SetPaused { .. } => self.can_pause_guild_invites(guild),
+		}
+	}
 	pub fn guild_permission(&self, guild: Id, bits: u128) -> bool {
 		let Some(user) = &self.user else {
 			return false;
@@ -251,6 +288,7 @@ impl State {
 		}
 		match action {
 			Action::Roles(action) => self.role_action_allowed(guild, action),
+			Action::Invites(action) => self.invite_action_allowed(guild, action),
 			Action::LoadEmojis => self.can_open_emoji_settings(guild),
 			Action::CreateEmoji { .. } => self.can_create_guild_emoji(guild),
 			Action::RenameEmoji { id, .. } | Action::DeleteEmoji { id } => {
@@ -272,6 +310,7 @@ impl State {
 	pub fn request_server_admin(&mut self, guild: Id, mut action: Action) -> Option<Command> {
 		match &mut action {
 			Action::Roles(action) => action.normalize(),
+			Action::Invites(action) => action.normalize(),
 			Action::LoadMembers(query) => query.search.shrink_to_fit(),
 			Action::SetNickname { nick, .. } => nick.shrink_to_fit(),
 			Action::CreateEmoji { name, image } => {
@@ -359,7 +398,9 @@ impl State {
 		self.server_admin.pending = false;
 		self.server_admin.saving = false;
 		if action.as_ref().is_none_or(|action| {
-			if matches!(action, Action::Roles(_)) {
+			if matches!(action, Action::Invites(_)) {
+				!self.can_open_invite_settings(event.guild)
+			} else if matches!(action, Action::Roles(_)) {
 				!self.can_open_role_settings(event.guild)
 					|| matches!(
 						action,
@@ -416,6 +457,18 @@ impl State {
 				| (Some(Action::Prune { .. }), Outcome::Pruned(_))
 				| (Some(Action::ShowMembers { .. }), Outcome::ChannelList(_))
 		) || match (&action, &result) {
+			(Some(Action::Invites(action)), Outcome::Invites(snapshot)) => {
+				snapshot.guild == event.guild
+					&& match action {
+						model::server_invites::Action::Load => true,
+						model::server_invites::Action::Revoke { code } => {
+							snapshot.items.iter().all(|invite| invite.code != *code)
+						}
+						model::server_invites::Action::SetPaused { paused } => {
+							snapshot.paused() == *paused
+						}
+					}
+			}
 			(Some(Action::Roles(action)), Outcome::Roles(result)) => match (action, result) {
 				(
 					model::server_roles::Action::Members { role, .. },
@@ -454,6 +507,7 @@ impl State {
 			return Ok(());
 		}
 		match result {
+			Outcome::Invites(snapshot) => self.server_admin.invites = Some(snapshot),
 			Outcome::Roles(result) => match result {
 				model::server_roles::Result::Catalog { catalog, selected } => {
 					self.apply_roles_catalog(catalog, selected)
@@ -560,6 +614,7 @@ impl State {
 			action,
 			Some(
 				Action::LoadEmojis
+					| Action::Invites(model::server_invites::Action::Load)
 					| Action::LoadMembers(_)
 					| Action::Roles(model::server_roles::Action::Load)
 			)
@@ -568,5 +623,175 @@ impl State {
 		}
 		self.server_admin.revision = self.server_admin.revision.wrapping_add(1);
 		Ok(())
+	}
+}
+
+#[cfg(test)]
+mod invite_tests {
+	use super::*;
+	use crate::{Envelope, Event as CoreEvent};
+	use model::server_invites::{Action as InviteAction, Invite, Snapshot};
+	fn page() -> Snapshot {
+		Snapshot {
+			guild: Id(2),
+			items: vec![Invite {
+				code: "synthetic_code".into(),
+				inviter: None,
+				channel: Some(Id(3)),
+				channel_name: Some("chat".into()),
+				uses: Some(0),
+				max_uses: Some(0),
+				max_age: Some(0),
+				created_at: None,
+				expires_at: None,
+				temporary: Some(false),
+				roles: None,
+			}],
+			features: vec!["FUTURE_FEATURE".into()],
+		}
+	}
+	fn state() -> State {
+		let mut state = State {
+			auth: AuthState::Authenticated,
+			gateway_connected: true,
+			user: Some(model::User {
+				id: Id(1),
+				name: "Synthetic".into(),
+				avatar: None,
+				discriminator: 0,
+				kind: Default::default(),
+				webhook: false,
+			}),
+			guilds: vec![model::Guild {
+				id: Id(2),
+				name: "Synthetic".into(),
+				icon: None,
+				emojis: None,
+			}],
+			..Default::default()
+		};
+		state.permissions.guilds.insert(
+			Id(2),
+			p::Guild {
+				id: Id(2),
+				owner: Some(Id(99)),
+				member: Some(p::Member {
+					roles: vec![],
+					timeout_until: None,
+				}),
+				roles: Some(vec![p::Role {
+					id: Id(2),
+					name: "@everyone".into(),
+					bits: p::MANAGE_GUILD | p::MANAGE_ROLES,
+					color: 0,
+					position: 0,
+					hoist: false,
+				}]),
+			},
+		);
+		state.server_admin.guild = Some(Id(2));
+		state.server_admin.invites = Some(page());
+		state
+	}
+	fn deliver(state: &mut State, guild: Id, request: u64, result: Result<Outcome, Failure>) {
+		state.apply(Envelope {
+			generation: state.generation,
+			event: CoreEvent::ServerAdmin(Event {
+				guild,
+				request,
+				result,
+			}),
+		});
+	}
+	#[test]
+	fn invites_stale_requests_and_permission_loss_do_not_restore_codes() {
+		let mut state = state();
+		assert!(!state.can_revoke_guild_invite(Id(2), "unknown"));
+		let Command::ServerAdmin { guild, request, .. } = state
+			.request_server_admin(Id(2), Action::Invites(InviteAction::Load))
+			.unwrap()
+		else {
+			panic!()
+		};
+		deliver(&mut state, guild, request + 1, Ok(Outcome::Invites(page())));
+		assert!(state.server_admin.pending);
+		state.close_server_admin();
+		deliver(&mut state, guild, request, Ok(Outcome::Invites(page())));
+		assert!(state.server_admin.invites.is_none());
+		let Command::ServerAdmin { guild, request, .. } = state
+			.request_server_admin(Id(2), Action::Invites(InviteAction::Load))
+			.unwrap()
+		else {
+			panic!()
+		};
+		let mut role = state
+			.permissions
+			.guilds
+			.get(&guild)
+			.unwrap()
+			.roles
+			.as_ref()
+			.unwrap()[0]
+			.clone();
+		role.bits = p::MANAGE_ROLES;
+		state.apply(Envelope {
+			generation: state.generation,
+			event: CoreEvent::Permissions(crate::permissions::Event::Role { guild, role }),
+		});
+		assert!(!state.can_open_invite_settings(guild));
+		deliver(&mut state, guild, request, Ok(Outcome::Invites(page())));
+		assert!(state.server_admin.invites.is_none());
+	}
+	#[test]
+	fn invites_revoke_and_pause_require_confirmed_results_and_explicit_reload_after_ambiguity() {
+		let mut state = state();
+		let revoke = Action::Invites(InviteAction::Revoke {
+			code: "synthetic_code".into(),
+		});
+		let Command::ServerAdmin { guild, request, .. } =
+			state.request_server_admin(Id(2), revoke.clone()).unwrap()
+		else {
+			panic!()
+		};
+		deliver(&mut state, guild, request, Err(Failure::Ambiguous));
+		assert!(state.server_admin.needs_refresh);
+		assert!(state.request_server_admin(guild, revoke.clone()).is_none());
+		let Command::ServerAdmin { request, .. } = state
+			.request_server_admin(guild, Action::Invites(InviteAction::Load))
+			.unwrap()
+		else {
+			panic!()
+		};
+		deliver(&mut state, guild, request, Ok(Outcome::Invites(page())));
+		assert!(!state.server_admin.needs_refresh);
+		let Command::ServerAdmin { request, .. } =
+			state.request_server_admin(guild, revoke).unwrap()
+		else {
+			panic!()
+		};
+		let mut empty = page();
+		empty.items.clear();
+		deliver(&mut state, guild, request, Ok(Outcome::Invites(empty)));
+		assert!(
+			state
+				.server_admin
+				.invites
+				.as_ref()
+				.unwrap()
+				.items
+				.is_empty()
+		);
+		let Command::ServerAdmin { request, .. } = state
+			.request_server_admin(
+				guild,
+				Action::Invites(InviteAction::SetPaused { paused: true }),
+			)
+			.unwrap()
+		else {
+			panic!()
+		};
+		deliver(&mut state, guild, request, Ok(Outcome::Invites(page())));
+		assert!(state.server_admin.needs_refresh);
+		assert!(!state.server_admin.invites.as_ref().unwrap().paused());
 	}
 }

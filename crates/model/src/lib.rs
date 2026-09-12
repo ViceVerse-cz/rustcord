@@ -5,6 +5,7 @@ pub mod guild_folders;
 pub mod permissions;
 mod reading_preferences;
 pub mod server_admin;
+pub mod server_invites;
 pub mod server_roles;
 pub mod server_settings;
 pub use reading_preferences::ReadingPreferences;

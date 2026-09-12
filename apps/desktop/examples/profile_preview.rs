@@ -46,6 +46,9 @@ impl eframe::App for Preview {
 					request,
 					edit,
 				} => server_settings_demo::execute(&self.state, guild, request, edit),
+				client_core::Command::ServerAction { action, request } => {
+					server_settings_demo::execute_action(&mut self.state, action, request)
+				}
 				_ => continue,
 			};
 			self.state.apply(client_core::Envelope {

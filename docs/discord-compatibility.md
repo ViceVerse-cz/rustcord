@@ -922,3 +922,24 @@ fallback is used. These normal-account transport paths remain live-unverified.
 Writes reconcile from a fresh catalog. An ambiguous response requires an explicit
 reload before another write; creates and deletes are never automatically retried.
 Synthetic fixtures and tests do not demonstrate live Discord interoperability.
+
+### Server invite administration (September 12, 2026)
+
+The Invites settings page requires Manage Server and loads the guild invite list
+on demand. Uses, limits, inviter, timestamps, channel and assigned role IDs come
+from returned metadata; missing values stay unknown. Creating an invite reuses the
+existing channel invite flow. Revocation requires a code in the loaded guild list
+and current Manage Server access. Pause/resume changes only INVITES_DISABLED in a
+freshly fetched guild feature list, preserving unknown features. Both writes verify
+their scoped response and reload; uncertain outcomes require explicit reload and
+are never automatically retried.
+
+The routes and permission requirements follow the official
+[guild invite listing](https://docs.discord.com/developers/resources/guild#get-guild-invites),
+[mutable guild features](https://docs.discord.com/developers/resources/guild#mutable-guild-features),
+and [invite deletion/object documentation](https://docs.discord.com/developers/resources/invite#delete-invite).
+The list route also accepts View Audit Log, but full invite metadata requires
+Manage Server, which is the gate used here. There is no invite-event subscription,
+scraping, invented pagination or automatic background refresh. Synthetic protocol,
+reducer and local HTTP tests cover bounds, scope, permissions and write reconciliation;
+normal-account compatibility and service-side concurrent edits remain live-unverified.

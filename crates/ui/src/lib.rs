@@ -46,6 +46,7 @@ pub mod screen;
 mod search;
 mod server_admin;
 mod server_invite;
+mod server_invites;
 mod server_menu;
 mod server_roles;
 mod server_settings;

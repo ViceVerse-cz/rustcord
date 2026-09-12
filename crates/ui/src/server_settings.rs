@@ -15,6 +15,7 @@ enum Page {
 	Emoji,
 	Members,
 	Roles,
+	Invites,
 }
 impl Page {
 	fn allowed(self, state: &State, guild: Id) -> bool {
@@ -23,6 +24,7 @@ impl Page {
 			Self::Emoji => state.can_open_emoji_settings(guild),
 			Self::Members => state.can_open_member_settings(guild),
 			Self::Roles => state.can_open_role_settings(guild),
+			Self::Invites => state.can_open_invite_settings(guild),
 		}
 	}
 	fn label(self) -> &'static str {
@@ -32,6 +34,7 @@ impl Page {
 			Self::Emoji => "Emoji",
 			Self::Members => "Members",
 			Self::Roles => "Roles",
+			Self::Invites => "Invites",
 		}
 	}
 }
@@ -55,6 +58,7 @@ pub(super) struct Editor {
 	emoji_picker: crate::emoji_picker::Picker,
 	pub(super) admin: crate::server_admin::Admin,
 	roles: crate::server_roles::RolesUi,
+	invites: crate::server_invites::InvitesUi,
 }
 
 impl MessagingUi {
@@ -114,7 +118,9 @@ impl MessagingUi {
 			}
 			return command;
 		}
-		let page = if page == "members" {
+		let page = if page == "invites" {
+			Page::Invites
+		} else if page == "members" {
 			Page::Members
 		} else {
 			Page::Emoji
@@ -128,9 +134,13 @@ impl MessagingUi {
 			page,
 			..Editor::default()
 		};
-		self.server_settings
-			.admin
-			.load(state, guild, page == Page::Members)
+		if page == Page::Invites {
+			self.server_settings.invites.load(state, guild)
+		} else {
+			self.server_settings
+				.admin
+				.load(state, guild, page == Page::Members)
+		}
 	}
 	pub fn accepts_server_emoji_drops(&self) -> bool {
 		self.server_settings.is_open() && self.server_settings.page == Page::Emoji
@@ -166,6 +176,7 @@ impl MessagingUi {
 				|| self.server_settings.icon_pending)
 			|| self.server_settings.admin.has_changes()
 			|| self.server_settings.roles.has_changes()
+			|| self.server_settings.invites.busy()
 	}
 	/// Opens the same permission-checked editor used by the server menu.
 	pub fn preview_server_settings(&mut self, state: &mut State, guild: Id) -> Option<Command> {
@@ -246,6 +257,7 @@ impl Editor {
 			return true;
 		}
 		if self.roles.has_changes()
+			|| self.invites.busy()
 			|| self.dirty()
 			|| self.admin.has_changes()
 			|| state.server_admin.saving
@@ -314,7 +326,14 @@ impl Editor {
 			};
 			self.admin = crate::server_admin::Admin::default();
 			self.roles = crate::server_roles::RolesUi::default();
+			self.invites = crate::server_invites::InvitesUi::default();
 			state.close_server_admin();
+		}
+		self.invites.sync(state, guild);
+		if self.page == Page::Invites
+			&& let Some(command) = self.invites.load(state, guild)
+		{
+			commands.push(command);
 		}
 		if self.page == Page::Roles
 			&& let Some(command) = self.roles.load(state, guild)
@@ -357,6 +376,7 @@ impl Editor {
 		let height = (size.y - 32.0).max(220.0);
 		let wide = width >= 720.0;
 		let mut close = false;
+		let invite_overlay = self.invites.overlay_open();
 		let modal = egui::Modal::new(egui::Id::unique("server-settings"))
 			.backdrop_color(colors.chat.to_opaque())
 			.frame(
@@ -395,6 +415,7 @@ impl Editor {
 								Page::Emoji,
 								Page::Members,
 								Page::Roles,
+								Page::Invites,
 							] {
 								if !page.allowed(state, guild) {
 									continue;
@@ -463,6 +484,7 @@ impl Editor {
 									Page::Emoji,
 									Page::Members,
 									Page::Roles,
+									Page::Invites,
 								] {
 									if !page.allowed(state, guild) {
 										continue;
@@ -497,6 +519,10 @@ impl Editor {
 							.auto_shrink([false, false])
 							.show(ui, |ui| {
 								ui.set_width(ui.available_width());
+								if self.page == Page::Invites {
+									self.invites.show(ui, state, guild, avatars, commands);
+									return;
+								}
 								if self.page == Page::Roles {
 									self.roles.show(ui, state, guild, avatars, commands);
 									return;
@@ -545,17 +571,22 @@ impl Editor {
 							});
 					});
 			});
-		if close || modal.should_close() {
+		if self.page == Page::Invites {
+			self.invites.overlays(ctx, state, guild, avatars, commands);
+		}
+		if !invite_overlay && (close || modal.should_close()) {
 			if self.dirty()
 				|| state.server_settings.saving
 				|| self.admin.has_changes()
 				|| self.roles.has_changes()
+				|| self.invites.busy()
 				|| state.server_admin.saving
 			{
 				self.discard = true;
 			} else {
 				self.scope = None;
 				self.roles = crate::server_roles::RolesUi::default();
+				self.invites = crate::server_invites::InvitesUi::default();
 				state.close_server_settings();
 				state.close_server_admin();
 			}
@@ -566,7 +597,10 @@ impl Editor {
 					ui.set_max_width(380.0);
 					ui.heading("Discard unsaved changes?");
 					ui.label(
-						if state.server_settings.saving || state.server_admin.saving {
+						if state.server_settings.saving
+							|| state.server_admin.saving
+							|| self.invites.busy()
+						{
 							"Wait for the current save to finish before closing."
 						} else {
 							"Your changes to this server will be lost."
@@ -578,7 +612,9 @@ impl Editor {
 						}
 						if ui
 							.add_enabled(
-								!state.server_settings.saving && !state.server_admin.saving,
+								!state.server_settings.saving
+									&& !state.server_admin.saving
+									&& !self.invites.busy(),
 								egui::Button::new("Discard Changes"),
 							)
 							.clicked()
