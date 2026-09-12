@@ -28,6 +28,17 @@ fn code(raw: &str) -> Option<String> {
 	};
 	valid_code(code).then(|| code.to_owned())
 }
+pub(super) fn input_code(raw: &str) -> Option<String> {
+	if raw.len() > 2048 {
+		return None;
+	}
+	let raw = raw.trim();
+	if valid_code(raw) {
+		Some(raw.to_owned())
+	} else {
+		code(raw)
+	}
+}
 fn codes(message: &Message) -> Vec<String> {
 	if message.embeds_suppressed || message.content.contains("||") {
 		return Vec::new();
@@ -307,6 +318,29 @@ pub fn show(
 }
 #[cfg(test)]
 mod tests {
+	#[test]
+	fn standalone_invites_accept_codes_without_turning_plain_messages_into_cards() {
+		assert_eq!(
+			super::input_code("  synthetic-123  ").as_deref(),
+			Some("synthetic-123")
+		);
+		assert_eq!(
+			super::input_code("https://discord.gg/synthetic").as_deref(),
+			Some("synthetic")
+		);
+		assert!(super::code("synthetic").is_none());
+		for raw in [
+			"",
+			"../bad",
+			"https://discord.gg.evil.test/code",
+			"https://user@discord.gg/code",
+			"https://discord.gg/a/b",
+			"two codes",
+		] {
+			assert!(super::input_code(raw).is_none(), "{raw}");
+		}
+		assert!(super::input_code(&"a".repeat(2049)).is_none());
+	}
 	#[test]
 	fn invite_urls_are_origin_and_path_checked() {
 		assert_eq!(

@@ -15,11 +15,17 @@ pub fn valid_code(code: &str) -> bool {
 
 impl State {
 	pub fn request_invite(&mut self, code: String) -> Option<Command> {
+		if !self.selected.is_some_and(|c| self.can_read_history(c)) {
+			return None;
+		}
+		self.request_join_preview(code)
+	}
+	/// Explicit invite lookup from the join dialog does not require a selected conversation.
+	pub fn request_join_preview(&mut self, code: String) -> Option<Command> {
 		if self.demo
 			|| !valid_code(&code)
 			|| self.auth != crate::auth::AuthState::Authenticated
 			|| !self.gateway_connected
-			|| !self.selected.is_some_and(|c| self.can_read_history(c))
 		{
 			return None;
 		}
@@ -63,6 +69,38 @@ impl State {
 mod tests {
 	use super::*;
 	use crate::{Envelope, Event};
+	#[test]
+	fn explicit_preview_works_without_a_channel_but_keeps_session_and_cache_guards() {
+		let mut state = State::default();
+		assert!(state.request_join_preview("synthetic".into()).is_none());
+		state.auth = crate::auth::AuthState::Authenticated;
+		state.gateway_connected = true;
+		assert!(state.request_invite("synthetic".into()).is_none());
+		assert!(state.request_join_preview("../bad".into()).is_none());
+		assert!(matches!(
+			state.request_join_preview("synthetic".into()),
+			Some(Command::Invite { .. })
+		));
+		assert!(state.request_join_preview("synthetic".into()).is_none());
+		assert!(state.request_join_preview("another".into()).is_none());
+		state.apply_invite(
+			"synthetic".into(),
+			Ok(model::InvitePreview {
+				guild: model::Id(2),
+				embed: model::Embed::default(),
+			}),
+		);
+		assert!(state.guild(model::Id(2)).is_none());
+		assert!(matches!(
+			state.join_invite("synthetic".into()),
+			Some(Command::JoinInvite { .. })
+		));
+		state.demo = true;
+		assert!(state.request_join_preview("another".into()).is_none());
+		state.demo = false;
+		state.gateway_connected = false;
+		assert!(state.request_join_preview("another".into()).is_none());
+	}
 
 	#[test]
 	fn boxed_invite_charges_payload_and_reaches_the_pending_preview() {

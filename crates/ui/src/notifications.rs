@@ -200,6 +200,38 @@ impl MessagingUi {
 							colors.raised,
 						);
 						self.server_folders(ui, state, commands, &guild_badges);
+						let (rect, response) =
+							ui.allocate_exact_size(egui::Vec2::splat(48.0), egui::Sense::click());
+						let hovered = response.hovered() || response.has_focus();
+						ui.painter().rect_filled(
+							rect,
+							16,
+							if hovered {
+								colors.accent
+							} else {
+								colors.raised
+							},
+						);
+						crate::icons::paint(
+							ui.painter(),
+							crate::icons::Icon::Plus,
+							rect.shrink(12.0),
+							if hovered {
+								colors.accent_text
+							} else {
+								colors.text
+							},
+						);
+						response.widget_info(|| {
+							egui::WidgetInfo::labeled(
+								egui::WidgetType::Button,
+								true,
+								"Join a Server",
+							)
+						});
+						if response.on_hover_text("Join a Server").clicked() {
+							self.join_server.open(state.generation);
+						}
 					});
 			});
 		if let Some(id) = selected

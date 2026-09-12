@@ -1,5 +1,30 @@
 # Initial performance evidence
 
+## Standalone Join Server dialog — September 12, 2026
+
+Baseline `9bbdd07b2a545b554ee164fd862cda79b86608f7` versus the standalone join
+dialog, Windows 11 Home 10.0.26200, Rust 1.98.1 MSVC, locked release profile.
+Both `cargo xtask package` builds include voice without demo/developer features.
+One build and PowerShell `Compress-Archive` per revision; installed size sums file
+lengths. Separate snapshots under `target/join-server-{baseline,after}-install`
+contain the standard generated package, excluding an unrelated obsolete `dist/voice`
+sub-package (preserved in place). These measurements precede this report's addition
+to bundled documentation.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Executable bytes | 62,809,600 | 62,850,048 | +40,448 (+0.0644%) |
+| Installed package bytes | 73,002,844 | 73,043,960 | +41,116 (+0.0563%) |
+| ZIP bytes | 43,448,863 | 43,459,289 | +10,426 (+0.0240%) |
+
+No new dependencies or persistent storage. One 512-character/2048-byte dialog draft
+reuses the bounded invite cache and single in-flight lookup/write guards. Opening or
+repainting never sends a join; checking and confirming are separate explicit actions.
+Synthetic egui click tests cover wide/dark and narrow/light layouts, preview failure,
+retry, duplicate suppression and session reset. Native capture/control is unavailable
+in this session (no native apps surface), so screenshots, CPU/RSS and frame timings
+remain unmeasured. No live Discord join was performed; no native performance claim.
+
 ## Profile and status menu — September 12, 2026
 
 Baseline `96d94285531f7ede3780187c858b786dd189bb2d` versus the profile/status menu
