@@ -777,18 +777,23 @@ impl MessagingUi {
 									colors.muted
 								};
 								let show_name = |ui: &mut egui::Ui| {
-									ui.horizontal(|ui| {
-										ui.spacing_mut().item_spacing.x = 5.0;
-										account_badge::name(
-											ui,
-											&member.user,
-											name,
-											15.0,
-											text_color,
-											egui::Sense::hover(),
-											0.0,
-										);
-									});
+									// A text line must not inherit the 32-point interactive-row height.
+									ui.allocate_ui_with_layout(
+										egui::vec2(ui.available_width(), 18.0),
+										egui::Layout::left_to_right(egui::Align::Center),
+										|ui| {
+											ui.spacing_mut().item_spacing.x = 5.0;
+											account_badge::name(
+												ui,
+												&member.user,
+												name,
+												15.0,
+												text_color,
+												egui::Sense::hover(),
+												0.0,
+											);
+										},
+									);
 								};
 								if let Some(subtitle) = subtitle {
 									ui.vertical(|ui| {
@@ -4186,6 +4191,98 @@ mod composer_tests {
 		}
 	}
 
+	#[test]
+	fn member_badges_and_subtitles_stay_inside_adjacent_rows() {
+		for light in [false, true] {
+			for width in [180.0, 240.0] {
+				let ctx = egui::Context::default();
+				ctx.set_theme(if light {
+					egui::ThemePreference::Light
+				} else {
+					egui::ThemePreference::Dark
+				});
+				design::apply(&ctx);
+				let state = State {
+					demo: true,
+					selected: Some(Id(1)),
+					members: Some(model::MemberList {
+						channel: Id(1),
+						guild: Some(Id(2)),
+						request: 1,
+						total: 3,
+						freshness: Freshness::Fresh,
+						rows: (1..=3)
+							.map(|id| {
+								Some(model::Member {
+									user: model::User {
+										id: Id(id),
+										name: format!("Member {id}"),
+										avatar: None,
+										kind: model::AccountKind::Bot,
+										webhook: false,
+										discriminator: 0,
+									},
+									nick: None,
+									roles: vec![],
+									status: Some("online".into()),
+									custom_status: Some(format!("Activity {id}")),
+									activities: vec![],
+								})
+							})
+							.collect(),
+					}),
+					..Default::default()
+				};
+				let mut messaging = MessagingUi::default();
+				for hover in [false, true] {
+					let mut origin = egui::Pos2::ZERO;
+					let mut output = ctx.run_ui(
+						egui::RawInput {
+							screen_rect: Some(egui::Rect::from_min_size(
+								egui::Pos2::ZERO,
+								egui::vec2(width, 260.0),
+							)),
+							events: if hover {
+								vec![egui::Event::PointerMoved(egui::pos2(80.0, 105.0))]
+							} else {
+								vec![]
+							},
+							..Default::default()
+						},
+						|ui| {
+							origin = ui.cursor().min;
+							messaging.member_rows(ui, &state);
+						},
+					);
+					output.textures_delta.clear();
+					for id in 1..=3 {
+						let row = egui::Rect::from_min_size(
+							origin + egui::vec2(0.0, id as f32 * 42.0),
+							egui::vec2(width, 42.0),
+						);
+						for label in [format!("Member {id}"), format!("Activity {id}")] {
+							let text = output
+								.shapes
+								.iter()
+								.find_map(|s| match &s.shape {
+									egui::Shape::Text(t) if t.galley.job.text == label => {
+										Some(egui::Rect::from_min_size(t.pos, t.galley.size()))
+									}
+									_ => None,
+								})
+								.expect("visible member text");
+							assert!(
+								text.top() >= row.top() && text.bottom() <= row.bottom() - 1.0,
+								"{label}, hover={hover}: text {text:?} exceeds row {row:?}"
+							);
+						}
+					}
+					assert!(messaging.take_avatar_requests().is_empty());
+					output.drop_without_applying_deltas();
+				}
+			}
+		}
+	}
 	#[test]
 	fn member_pane_virtualizes_and_preview_never_requests_network() {
 		fn collect_text(shape: &egui::Shape, text: &mut Vec<String>) {

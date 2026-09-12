@@ -3432,3 +3432,24 @@ Native `--demo` startup was responsive; it is not visual proof of the new badges
 Native screenshot/control is unavailable, so before/after inspection, CPU/RSS and
 p95 UI frame comparisons remain unmeasured. Synthetic UI tests cover both surfaces,
 long names and light/dark layouts; no live Discord compatibility is claimed.
+
+## Member badge row overlap - September 12, 2026
+
+Baseline `d7d96b5`; Windows, Ryzen 7 7800X3D, 33,410,678,784 bytes RAM,
+Rust 1.98.1. Rebuilt standard release packages include voice; separate snapshots
+exclude the unrelated obsolete `dist/voice` directory, which was left untouched.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Executable bytes | 63,095,808 | 63,095,808 | 0 |
+| Installed bytes | 73,314,466 | 73,314,466 | 0 |
+| Compress-Archive ZIP bytes | 43,546,839 | 43,546,583 | -256 (-0.0006%) |
+
+The only runtime change gives the member name/badge line an explicit 18-point
+height instead of the 32-point interactive minimum. Virtualized 42-point rows,
+retained state, caches and dependency set are unchanged. A synthetic geometry
+regression test reproduced a subtitle ending 10 points beyond its row before the
+fix and passed after it at 180/240-point widths, light/dark and hover/no-hover.
+This is not a native screenshot or timing benchmark. Native application control
+is unavailable; CPU/RSS/p95 frame comparisons and native visual inspection remain
+unmeasured. No speed or live-service compatibility improvement is claimed.
