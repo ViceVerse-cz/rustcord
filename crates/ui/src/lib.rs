@@ -34,6 +34,7 @@ mod profiles;
 pub fn synthetic_own_profile(user: &model::User) -> model::UserProfile {
 	profiles::synthetic(user, None)
 }
+mod contact_editor;
 mod join_server;
 mod profile_edit;
 mod reactions;
@@ -108,6 +109,7 @@ pub struct MessagingUi {
 	avatars: avatars::Avatars,
 	profile: Option<model::User>,
 	user_action: Option<user_menu::Action>,
+	contact_editor: contact_editor::ContactEditor,
 	profile_link: Option<String>,
 	profile_formatted: markdown::FormatCache,
 	pub reading_preferences: model::ReadingPreferences,
@@ -1277,7 +1279,7 @@ impl MessagingUi {
 							// Centre the name block in the fixed-height header even without a subtitle.
 							let name = channel
 								.as_ref()
-								.map_or("Direct Messages", |c| c.name.as_str());
+								.map_or("Direct Messages", |c| state.conversation_name(c));
 							let subtitle = channel
 								.as_ref()
 								.filter(|_| dm)
@@ -1810,7 +1812,7 @@ impl MessagingUi {
 				if c.guild.is_some() {
 					format!("Message #{}", c.name)
 				} else {
-					format!("Message @{}", c.name)
+					format!("Message @{}", state.conversation_name(c))
 				}
 			},
 		);
@@ -2615,11 +2617,23 @@ impl MessagingUi {
 		}
 		self.group_menu
 			.show(&ctx, state, &mut self.avatars, &mut commands);
-		if let Some(action) = self.user_action.take().or(self.timeline.user_action.take())
-			&& let Some(command) = user_menu::prepare(action, state)
-		{
-			commands.push(command);
+		if let Some(action) = self.user_action.take().or(self.timeline.user_action.take()) {
+			let command = match action {
+				user_menu::Action::Note(user) => {
+					self.profile = None;
+					self.contact_editor.open(user, false, state)
+				}
+				user_menu::Action::Nickname(user) => {
+					self.profile = None;
+					self.contact_editor.open(user, true, state)
+				}
+				action => user_menu::prepare(action, state),
+			};
+			if let Some(command) = command {
+				commands.push(command);
+			}
 		}
+		self.contact_editor.show(&ctx, state, &mut commands);
 		if let Some(user) = &self.profile {
 			let profile_guild = state
 				.channels

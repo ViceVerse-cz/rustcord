@@ -3383,3 +3383,28 @@ and existing gutter-icon selection. The synthetic UI check covers 12 rows at 280
 widths, light/dark, in a tall viewport for full-fixture coverage. Native screenshot/control
 is unavailable; process CPU/RSS/frame and visual comparison remain unmeasured. No speed
 improvement or live Discord interoperability is claimed.
+
+## Private contact editors and status menus — September 12, 2026
+
+Baseline `073f0d23adb85c37b9a3779bd30da05ff05d3480`; Windows, Ryzen 7 7800X3D,
+33,410,678,784 bytes installed RAM, Rust 1.98.1. Standard release package includes voice.
+Separate baseline/after snapshots each contain 823 files; the unrelated obsolete
+`dist/voice` directory was excluded and left untouched. Measurements precede this table.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Executable bytes | 62,928,384 | 63,074,304 | +145,920 (+0.232%) |
+| Installed bytes | 73,135,118 | 73,283,035 | +147,917 (+0.202%) |
+| PowerShell Compress-Archive ZIP bytes | 43,491,755 | 43,539,208 | +47,453 (+0.109%) |
+| 100,000-event reducer replay median | 41.4574 ms | 41.2044 ms | -0.2530 ms (-0.610%; noise) |
+| Retained timeline estimated bytes | 236,992–237,477 | 236,992–237,477 | unchanged, 500 records |
+
+Replay binaries were built from their respective revisions in isolated Cargo targets.
+One warmup each, then five alternating baseline/after runs, with no concurrent task build.
+Baseline samples (ms): 42.0041, 43.5626, 41.2310, 41.4574, 40.9729.
+After samples (ms): 41.1566, 47.1019, 40.1776, 41.2044, 41.5186.
+The small median difference is not a speed improvement claim. This existing reducer
+workload does not exercise note saves, status menus, UI timing or process RSS.
+Native CPU/memory/frame and before/after visual inspection are unmeasured: native
+application controls are unavailable. Offline interaction tests are not screenshots
+or proof of real Discord persistence.

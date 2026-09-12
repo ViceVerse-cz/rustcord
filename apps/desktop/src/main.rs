@@ -1505,6 +1505,14 @@ impl Desktop {
 						}),
 					})
 				}
+				Command::UserAction {
+					action: client_core::user_actions::Action::LoadNote(user),
+					request,
+				} => Event::UserAction(client_core::user_actions::Event::NoteLoaded {
+					user,
+					request,
+					result: Ok(self.state.user_note(user).unwrap_or("").to_owned()),
+				}),
 				Command::UserAction { action, request } => {
 					Event::UserAction(client_core::user_actions::Event::Written {
 						action,

@@ -27,6 +27,7 @@ impl Friends {
 		let (status, _, _) = profiles::presence(state, user.id, None);
 		(self.tab == Tab::All || matches!(status, Some("online" | "idle" | "dnd")))
 			&& (user.name.to_lowercase().contains(query)
+				|| state.user_display_name(user).to_lowercase().contains(query)
 				|| state
 					.friend_username(user.id)
 					.is_some_and(|name| name.to_lowercase().contains(query)))
@@ -214,8 +215,12 @@ impl MessagingUi {
 								egui::Layout::top_down(egui::Align::Min),
 								|ui| {
 									ui.add(
-										egui::Label::new(design::semibold(ui, &user.name, 16.0))
-											.truncate(),
+										egui::Label::new(design::semibold(
+											ui,
+											state.user_display_name(user),
+											16.0,
+										))
+										.truncate(),
 									);
 									ui.add(
 										egui::Label::new(RichText::new(name).color(colors.muted))
@@ -436,8 +441,12 @@ impl MessagingUi {
 								));
 								text.spacing_mut().item_spacing.y = 1.0;
 								text.add(
-									egui::Label::new(design::semibold(ui, &user.name, 16.0))
-										.truncate(),
+									egui::Label::new(design::semibold(
+										ui,
+										state.user_display_name(user),
+										16.0,
+									))
+									.truncate(),
 								);
 								let subtitle = profiles::subtitle(custom, activities)
 									.unwrap_or_else(|| {

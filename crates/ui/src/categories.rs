@@ -427,7 +427,7 @@ impl MessagingUi {
 									}),
 								);
 							}
-							let mut label = String::from(channel.name.as_str());
+							let mut label = String::from(state.conversation_name(channel));
 							if !enabled {
 								label.push_str(if visible {
 									" · unavailable"

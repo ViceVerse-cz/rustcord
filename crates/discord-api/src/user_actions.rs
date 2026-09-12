@@ -4,6 +4,24 @@ use reqwest::Method;
 use serde_json::json;
 
 impl DiscordApi {
+	pub(super) async fn user_note(&self, user: model::Id) -> Result<String, Failure> {
+		if user.0 == 0 {
+			return Err(Failure::Protocol);
+		}
+		#[derive(serde::Deserialize)]
+		struct Note {
+			note: Option<String>,
+		}
+		let bytes = self
+			.request_limited(Method::GET, &format!("/users/@me/notes/{user}"), None, 2048)
+			.await?;
+		let note: Note = discord_protocol::decode(&bytes).map_err(|_| Failure::Protocol)?;
+		let text = note.note.unwrap_or_default();
+		if !client_core::user_actions::valid_personal_text(&text, false) {
+			return Err(Failure::Protocol);
+		}
+		Ok(text)
+	}
 	pub(super) async fn user_action(&self, action: &Action) -> Result<(), Failure> {
 		// Unofficial normal-user routes: discord.py-self/http.py, checked 2026-09-12.
 		if let Action::AddFriend { username } = action {
@@ -25,6 +43,9 @@ impl DiscordApi {
 				});
 		}
 		let id = match action {
+			Action::LoadNote(id)
+			| Action::Note { user: id, .. }
+			| Action::Nickname { user: id, .. } => id,
 			Action::AddFriend { .. } => unreachable!(),
 			Action::ResolveFriend { user, .. } => user,
 			Action::CloseDm(id)
@@ -35,6 +56,27 @@ impl DiscordApi {
 			return Err(Failure::Protocol);
 		}
 		match action {
+			Action::LoadNote(_) => Err(Failure::Protocol),
+			Action::Note { user, text } | Action::Nickname { user, text } => {
+				let nickname = matches!(action, Action::Nickname { .. });
+				if !client_core::user_actions::valid_personal_text(text, nickname) {
+					return Err(Failure::Protocol);
+				}
+				let (method, path, body) = if nickname {
+					(
+						Method::PATCH,
+						format!("/users/@me/relationships/{user}"),
+						json!({"nickname": if text.is_empty() { None } else { Some(text) }}),
+					)
+				} else {
+					(
+						Method::PUT,
+						format!("/users/@me/notes/{user}"),
+						json!({"note": text}),
+					)
+				};
+				self.request(method, &path, Some(body)).await.map(|_| ())
+			}
 			Action::AddFriend { .. } => unreachable!(),
 			Action::ResolveFriend { user, accept } => self
 				.request(
@@ -91,6 +133,62 @@ mod tests {
 		net::TcpListener,
 	};
 	#[tokio::test]
+	async fn notes_read_empty_missing_existing_and_forbidden_without_writes() {
+		for (status, body, expected) in [
+			(
+				200,
+				r#"{"note":"Synthetic note"}"#,
+				Ok("Synthetic note".to_owned()),
+			),
+			(404, r#"{"code":10013}"#, Ok(String::new())),
+			(403, "{}", Err(Failure::Forbidden)),
+		] {
+			let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+			let mut api = DiscordApi::new(Arc::new(
+				SessionSecret::from_owner_input("SYNTHETIC_NOTE_TOKEN".into()).unwrap(),
+			))
+			.unwrap();
+			api.base = format!("http://{}", listener.local_addr().unwrap());
+			let server = async {
+				let (mut socket, _) = listener.accept().await.unwrap();
+				let mut bytes = Vec::new();
+				while !bytes.windows(4).any(|b| b == b"\r\n\r\n") {
+					let mut chunk = [0; 1024];
+					let count = socket.read(&mut chunk).await.unwrap();
+					assert!(count > 0 && bytes.len() + count <= 4096);
+					bytes.extend_from_slice(&chunk[..count]);
+				}
+				assert!(bytes.starts_with(b"GET /users/@me/notes/2 HTTP/1.1\r\n"));
+				socket
+					.write_all(
+						format!(
+							"HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+							body.len()
+						)
+						.as_bytes(),
+					)
+					.await
+					.unwrap();
+			};
+			let (event, ()) = tokio::join!(
+				api.execute(Command::UserAction {
+					action: Action::LoadNote(Id(2)),
+					request: 7
+				}),
+				server
+			);
+			let Event::UserAction(client_core::user_actions::Event::NoteLoaded {
+				user,
+				request,
+				result,
+			}) = event
+			else {
+				panic!()
+			};
+			assert_eq!((user, request, result), (Id(2), 7, expected));
+		}
+	}
+	#[tokio::test]
 	async fn account_actions_use_scoped_routes_and_confirm_remote_outcomes() {
 		let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
 		let mut api = DiscordApi::new(Arc::new(
@@ -99,6 +197,50 @@ mod tests {
 		.unwrap();
 		api.base = format!("http://{}", listener.local_addr().unwrap());
 		let cases = [
+			(
+				Action::Note {
+					user: Id(2),
+					text: "Remember 🌙".into(),
+				},
+				"PUT /users/@me/notes/2",
+				Some(json!({"note":"Remember 🌙"})),
+				204,
+				"",
+				Ok(()),
+			),
+			(
+				Action::Note {
+					user: Id(2),
+					text: String::new(),
+				},
+				"PUT /users/@me/notes/2",
+				Some(json!({"note":""})),
+				204,
+				"",
+				Ok(()),
+			),
+			(
+				Action::Nickname {
+					user: Id(2),
+					text: "Bestie".into(),
+				},
+				"PATCH /users/@me/relationships/2",
+				Some(json!({"nickname":"Bestie"})),
+				204,
+				"",
+				Ok(()),
+			),
+			(
+				Action::Nickname {
+					user: Id(2),
+					text: String::new(),
+				},
+				"PATCH /users/@me/relationships/2",
+				Some(json!({"nickname":null})),
+				204,
+				"",
+				Ok(()),
+			),
 			(
 				Action::AddFriend {
 					username: "synthetic_friend".into(),

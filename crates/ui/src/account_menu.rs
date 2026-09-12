@@ -9,6 +9,7 @@ pub(super) struct AccountMenu {
 	open: bool,
 	generation: u64,
 	draft: String,
+	custom_open: bool,
 }
 
 impl MessagingUi {
@@ -60,6 +61,23 @@ impl MessagingUi {
 					.show(ui, |ui| self.account_menu_contents(ui, state, commands));
 			});
 		self.account_menu.open = open;
+		if self.account_menu.custom_open {
+			let response = egui::Modal::new(egui::Id::unique("custom-status-editor")).show(
+				&anchor.ctx,
+				|ui| {
+					ui.set_width((ui.ctx().content_rect().width() - 56.0).clamp(160.0, 360.0));
+					ui.heading("Set a custom status");
+					ui.add_space(12.0);
+					self.custom_status_editor(ui, state);
+					if ui.button("Done").clicked() {
+						self.account_menu.custom_open = false;
+					}
+				},
+			);
+			if response.should_close() {
+				self.account_menu.custom_open = false;
+			}
+		}
 	}
 
 	fn account_menu_contents(
@@ -141,92 +159,205 @@ impl MessagingUi {
 			}
 			ui.add_space(8.0);
 			ui.separator();
-			ui.label(design::eyebrow(ui, "Status", colors.muted));
-			for status in PresenceStatus::ALL {
-				let selected = self.own_presence.status == status;
-				let response = ui.add_sized(
-					[ui.available_width(), 30.0],
-					egui::Button::new(status.label()).selected(selected),
-				);
-				ui.painter().circle_filled(
-					egui::pos2(response.rect.left() + 16.0, response.rect.center().y),
-					4.0,
-					profiles::presence_color(status.wire()),
-				);
-				if response.clicked() && !selected {
-					self.own_presence.status = status;
-					self.own_presence_changed = true;
-				}
-			}
-			ui.add_space(10.0);
-			let label = ui.label(design::eyebrow(ui, "Custom status", colors.muted));
-			ui.add(
-				egui::TextEdit::singleline(&mut self.account_menu.draft)
-					.id_salt(("account-custom-status", state.generation))
-					.hint_text("What's on your mind?")
-					.char_limit(128)
-					.desired_width(f32::INFINITY),
-			)
-			.labelled_by(label.id);
-			let valid = model::OwnPresence {
-				status: self.own_presence.status,
-				custom_status: self.account_menu.draft.trim().to_owned(),
-			}
-			.valid();
-			let changed = self.account_menu.draft.trim() != self.own_presence.custom_status;
-			ui.horizontal(|ui| {
-				if ui
-					.add_enabled(valid && changed, egui::Button::new("Apply"))
-					.clicked()
-				{
-					self.own_presence.custom_status = self.account_menu.draft.trim().to_owned();
-					self.account_menu
-						.draft
-						.clone_from(&self.own_presence.custom_status);
-					self.own_presence_changed = true;
-				}
-				if ui
-					.add_enabled(
-						!self.own_presence.custom_status.is_empty()
-							|| !self.account_menu.draft.is_empty(),
-						egui::Button::new("Clear"),
-					)
-					.clicked()
-				{
-					self.account_menu.draft.clear();
-					if !self.own_presence.custom_status.is_empty() {
-						self.own_presence.custom_status.clear();
-						self.own_presence_changed = true;
-					}
-				}
-			});
-			if !valid {
-				ui.colored_label(
-					colors.danger,
-					"Use up to 128 characters without control characters.",
-				);
-			}
-			ui.add_space(6.0);
-			ui.label(
-				RichText::new(if state.demo {
-					"Offline preview · this session only"
-				} else {
-					"This session only"
-				})
-				.small()
-				.color(colors.muted),
-			);
-			if !self.own_presence_status.is_empty() {
-				ui.add(
-					egui::Label::new(
-						RichText::new(self.own_presence_status)
-							.small()
-							.color(colors.muted),
-					)
-					.wrap(),
-				);
+			egui::Frame::new()
+				.fill(colors.base)
+				.corner_radius(8)
+				.inner_margin(8)
+				.show(ui, |ui| {
+					ui.style_mut().spacing.interact_size.y = 36.0;
+					let status_menu = ui.menu_button(
+						format!("    {}  ›", self.own_presence.status.label()),
+						|ui| {
+							ui.set_width(260.0_f32.min(ui.ctx().content_rect().width() - 48.0));
+							for status in PresenceStatus::ALL {
+								let description = match status {
+									PresenceStatus::DoNotDisturb => {
+										"You will not receive desktop notifications"
+									}
+									PresenceStatus::Invisible => "You will appear offline",
+									_ => "",
+								};
+								let height = if description.is_empty() { 42.0 } else { 66.0 };
+								let response = ui.add_sized(
+									[ui.available_width(), height],
+									egui::Button::new("").frame(false),
+								);
+								response.widget_info(|| {
+									egui::WidgetInfo::labeled(
+										egui::WidgetType::Button,
+										true,
+										status.label(),
+									)
+								});
+								let x = response.rect.left() + 32.0;
+								let y = response.rect.top() + 12.0;
+								ui.painter().circle_filled(
+									egui::pos2(x - 18.0, y + 8.0),
+									5.0,
+									profiles::presence_color(status.wire()),
+								);
+								let dot = egui::pos2(x - 18.0, y + 8.0);
+								let background = if response.hovered() || response.has_focus() {
+									ui.visuals().widgets.hovered.weak_bg_fill
+								} else {
+									ui.visuals().window_fill
+								};
+								match status {
+									PresenceStatus::Idle => {
+										ui.painter().circle_filled(
+											dot + vec2(-2.5, -2.5),
+											4.0,
+											background,
+										);
+									}
+									PresenceStatus::Invisible => {
+										ui.painter().circle_filled(dot, 2.8, background);
+									}
+									PresenceStatus::DoNotDisturb => {
+										ui.painter().line_segment(
+											[dot - vec2(3.0, 0.0), dot + vec2(3.0, 0.0)],
+											egui::Stroke::new(2.0, background),
+										);
+									}
+									_ => {}
+								}
+								ui.painter().text(
+									egui::pos2(x, y),
+									egui::Align2::LEFT_TOP,
+									status.label(),
+									egui::FontId::proportional(15.0),
+									colors.text_strong,
+								);
+								if !description.is_empty() {
+									let galley = ui.painter().layout(
+										description.into(),
+										egui::FontId::proportional(12.0),
+										colors.muted,
+										(response.rect.width() - 44.0).max(80.0),
+									);
+									ui.painter().galley(
+										egui::pos2(x, y + 23.0),
+										galley,
+										colors.muted,
+									);
+								}
+								if response.clicked() {
+									if self.own_presence.status != status {
+										self.own_presence.status = status;
+										self.own_presence_changed = true;
+									}
+									ui.close();
+								}
+								if status == PresenceStatus::Online {
+									ui.separator();
+								}
+							}
+						},
+					);
+					ui.painter().circle_filled(
+						egui::pos2(
+							status_menu.response.rect.left() + 12.0,
+							status_menu.response.rect.center().y,
+						),
+						5.0,
+						profiles::presence_color(self.own_presence.status.wire()),
+					);
+				});
+			ui.add_space(8.0);
+			let label = if self.own_presence.custom_status.is_empty() {
+				"Set a custom status"
+			} else {
+				&self.own_presence.custom_status
+			};
+			if ui
+				.add_sized(
+					[ui.available_width(), 44.0],
+					egui::Button::new(label).wrap(),
+				)
+				.clicked()
+			{
+				self.account_menu
+					.draft
+					.clone_from(&self.own_presence.custom_status);
+				self.account_menu.custom_open = true;
 			}
 		});
+	}
+	fn custom_status_editor(&mut self, ui: &mut egui::Ui, state: &State) {
+		let colors = design::palette(ui);
+		let label = ui.label(design::eyebrow(ui, "Custom status", colors.muted));
+		ui.add_sized(
+			[ui.available_width(), 44.0],
+			egui::TextEdit::singleline(&mut self.account_menu.draft)
+				.align(egui::Align2::LEFT_CENTER)
+				.id_salt(("account-custom-status", state.generation))
+				.hint_text("What's on your mind?")
+				.char_limit(128)
+				.desired_width(f32::INFINITY),
+		)
+		.labelled_by(label.id);
+		let valid = model::OwnPresence {
+			status: self.own_presence.status,
+			custom_status: self.account_menu.draft.trim().to_owned(),
+		}
+		.valid();
+		let changed = self.account_menu.draft.trim() != self.own_presence.custom_status;
+		ui.horizontal(|ui| {
+			if ui
+				.add_enabled(
+					valid && changed,
+					egui::Button::new(RichText::new("Apply").color(colors.accent_text))
+						.fill(colors.accent),
+				)
+				.clicked()
+			{
+				self.own_presence.custom_status = self.account_menu.draft.trim().to_owned();
+				self.account_menu
+					.draft
+					.clone_from(&self.own_presence.custom_status);
+				self.own_presence_changed = true;
+			}
+			if ui
+				.add_enabled(
+					!self.own_presence.custom_status.is_empty()
+						|| !self.account_menu.draft.is_empty(),
+					egui::Button::new("Clear"),
+				)
+				.clicked()
+			{
+				self.account_menu.draft.clear();
+				if !self.own_presence.custom_status.is_empty() {
+					self.own_presence.custom_status.clear();
+					self.own_presence_changed = true;
+				}
+			}
+		});
+		if !valid {
+			ui.colored_label(
+				colors.danger,
+				"Use up to 128 characters without control characters.",
+			);
+		}
+		ui.add_space(6.0);
+		ui.label(
+			RichText::new(if state.demo {
+				"Offline preview · this session only"
+			} else {
+				"This session only"
+			})
+			.small()
+			.color(colors.muted),
+		);
+		if !self.own_presence_status.is_empty() {
+			ui.add(
+				egui::Label::new(
+					RichText::new(self.own_presence_status)
+						.small()
+						.color(colors.muted),
+				)
+				.wrap(),
+			);
+		}
 	}
 }
 
@@ -351,6 +482,17 @@ mod tests {
 				}
 				assert!(view.account_menu.open);
 				let text = frame(&ctx, &mut view, &mut state, size, vec![]);
+				click(
+					&ctx,
+					&mut view,
+					&mut state,
+					size,
+					locate(&text, "    Online  ›"),
+				);
+				for _ in 0..3 {
+					frame(&ctx, &mut view, &mut state, size, vec![]);
+				}
+				let text = frame(&ctx, &mut view, &mut state, size, vec![]);
 				for status in PresenceStatus::ALL {
 					let p = locate(&text, status.label());
 					assert!(Rect::from_min_size(Pos2::ZERO, size).contains(p));
@@ -364,6 +506,19 @@ mod tests {
 				);
 				assert_eq!(view.own_presence.status, PresenceStatus::Invisible);
 				assert!(std::mem::take(&mut view.own_presence_changed));
+				view.account_menu.open = true;
+				for _ in 0..3 {
+					frame(&ctx, &mut view, &mut state, size, vec![]);
+				}
+				let text = frame(&ctx, &mut view, &mut state, size, vec![]);
+				click(
+					&ctx,
+					&mut view,
+					&mut state,
+					size,
+					locate(&text, "Set a custom status"),
+				);
+				assert!(view.account_menu.custom_open);
 				// A bounded draft is separate from the value published by the host.
 				view.account_menu.draft = "  Synthetic status 🌙  ".into();
 				assert!(view.own_presence.custom_status.is_empty());
@@ -393,7 +548,7 @@ mod tests {
 						modifiers: egui::Modifiers::NONE,
 					}],
 				);
-				assert!(!view.account_menu.open);
+				assert!(!view.account_menu.custom_open);
 				view.account_menu.open = true;
 				view.account_menu.draft = "Old account draft".into();
 				state.generation += 1;

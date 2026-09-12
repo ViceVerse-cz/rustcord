@@ -529,9 +529,10 @@ pub fn show(
 									p.guild
 										.as_ref()
 										.and_then(|g| g.nick.as_deref())
+										.or(state.friend_nickname(user.id))
 										.or(p.global_name.as_deref())
 								})
-								.unwrap_or(&user.name);
+								.unwrap_or_else(|| state.user_display_name(user));
 							ui.horizontal_wrapped(|ui| {
 								ui.spacing_mut().item_spacing.x = 8.0;
 								ui.add(

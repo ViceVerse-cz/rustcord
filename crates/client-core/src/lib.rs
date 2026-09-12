@@ -2229,6 +2229,24 @@ impl Event {
 					action: user_actions::Action::AddFriend { username },
 					..
 				}) => username.capacity(),
+				Self::UserAction(user_actions::Event::Written {
+					action:
+						user_actions::Action::Note { text, .. }
+						| user_actions::Action::Nickname { text, .. },
+					..
+				}) => text.capacity(),
+				Self::UserAction(user_actions::Event::NoteChanged { text, .. }) => text.capacity(),
+				Self::UserAction(user_actions::Event::NoteLoaded { result, .. }) => {
+					result.as_ref().map_or(0, String::capacity)
+				}
+				Self::UserAction(user_actions::Event::Nickname { text, .. }) => text.capacity(),
+				Self::UserAction(user_actions::Event::Nicknames(entries)) => {
+					entries.capacity() * size_of::<(Id, String)>()
+						+ entries
+							.iter()
+							.map(|(_, text)| text.capacity())
+							.sum::<usize>()
+				}
 				Self::UserAction(user_actions::Event::Friend { profile, .. }) => profile
 					.as_ref()
 					.map_or(0, |(u, n)| u.heap_bytes() + n.capacity()),

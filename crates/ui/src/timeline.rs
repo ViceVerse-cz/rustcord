@@ -996,7 +996,8 @@ impl TimelineView {
 													egui::Label::new(
 														crate::design::medium(
 															ui,
-															&message.author.name,
+															state
+																.user_display_name(&message.author),
 															15.5,
 														)
 														.color(colors.text_strong),

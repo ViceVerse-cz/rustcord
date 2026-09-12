@@ -744,9 +744,11 @@ async fn run_inner(
 										if was_ready { emit(Event::Resync)?; }
 										emit(Event::Ready { user: ready.user.into_model(), guilds, channels, permissions })?; was_ready = true;
 
+										let nicknames = ready.relationships.as_ref().map(|s| s.nicknames());
 										emit(Event::UserAction(client_core::user_actions::Event::Relationships(ready.relationships.take().map(|s| s.entries()))))?;
 										emit(Event::UserAction(client_core::user_actions::Event::Friends(friends)))?;
 										emit(Event::UserAction(client_core::user_actions::Event::Requests(requests)))?;
+										if let Some(nicknames) = nicknames { emit(Event::UserAction(client_core::user_actions::Event::Nicknames(nicknames)))?; }
 										if let Some(friends) = ready.merged_presences.as_ref().and_then(|m| m.friends.as_deref()).or(ready.presences.as_deref()) {
 											direct_presence.friends(friends, Instant::now(), &emit)?;
 										}
@@ -817,6 +819,12 @@ async fn run_inner(
 									}
 									"CHANNEL_RECIPIENT_ADD" => {let d:RecipientAdded=decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;emit(Event::RecipientAdded {channel:d.channel_id,user:d.user.into_model()})?;}
 									"CHANNEL_RECIPIENT_REMOVE" => {let d:RecipientRemoved=decode(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;emit(Event::RecipientRemoved {channel:d.channel_id,user:d.user.id})?;}
+									"USER_NOTE_UPDATE" => {
+										#[derive(serde::Deserialize)]
+										struct NoteUpdate { id: Id, note: Option<String> }
+										let note: NoteUpdate = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?;
+										emit(Event::UserAction(client_core::user_actions::Event::NoteChanged { user: note.id, text: note.note.unwrap_or_default() }))?;
+									}
 									"RELATIONSHIP_ADD" | "RELATIONSHIP_UPDATE" | "RELATIONSHIP_REMOVE" => {
 										let relationship: discord_protocol::relationships::Relationship = decode(packet.d.get().as_bytes()).map_err(|_| Failure::ProtocolAt("Unsupported relationship update"))?;
 										emit(Event::UserAction(client_core::user_actions::Event::Relationship { user: relationship.id, blocked: packet.t.as_deref() != Some("RELATIONSHIP_REMOVE") && relationship.kind == 2 }))?;
@@ -825,6 +833,11 @@ async fn run_inner(
 										let incoming = (packet.t.as_deref() != Some("RELATIONSHIP_REMOVE") && matches!(relationship.kind,3|4)).then_some(relationship.kind==3);
 										emit(Event::UserAction(client_core::user_actions::Event::Friend { user: relationship.id, friend, profile: profile.clone() }))?;
 										emit(Event::UserAction(client_core::user_actions::Event::Request { user: relationship.id, incoming, profile }))?;
+										if friend { match relationship.nickname {
+											model::Patch::Absent => {},
+											model::Patch::Null => emit(Event::UserAction(client_core::user_actions::Event::Nickname { user: relationship.id, text: String::new() }))?,
+											model::Patch::Value(text) => emit(Event::UserAction(client_core::user_actions::Event::Nickname { user: relationship.id, text }))?,
+										} }
 									}
 									"USER_UPDATE" => {
 										let user: discord_protocol::UserDto = decode(packet.d.get().as_bytes()).map_err(|_| Failure::ProtocolAt("Invalid user update"))?;

@@ -219,6 +219,10 @@ impl DiscordApi {
 					(*next).max(Instant::now() + safe_delay(error.retry_after.or(retry_header))?);
 				return Err(Failure::RateLimited);
 			}
+			// A missing private note is empty, not a missing user profile. No other 404 is converted.
+			if !write && status == StatusCode::NOT_FOUND && path.starts_with("/users/@me/notes/") {
+				return Ok(br#"{"note":""}"#.to_vec());
+			}
 			return Err(if status == StatusCode::FORBIDDEN {
 				Failure::Forbidden
 			} else if status.is_server_error() && write {
@@ -351,6 +355,13 @@ impl DiscordApi {
 				})
 			}
 			Command::UserAction { action, request } => {
+				if let client_core::user_actions::Action::LoadNote(user) = action {
+					return Event::UserAction(client_core::user_actions::Event::NoteLoaded {
+						user,
+						request,
+						result: self.user_note(user).await,
+					});
+				}
 				let result = self.user_action(&action).await;
 				Event::UserAction(client_core::user_actions::Event::Written {
 					action,
