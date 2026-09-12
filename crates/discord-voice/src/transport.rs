@@ -607,6 +607,7 @@ pub async fn run_stream(
 	let mut seq_ack = -1i64;
 	let mut deadline = Some(Instant::now() + Duration::from_secs(90));
 	let mut announced = false;
+	let mut waiting_announced = false;
 	let mut awaiting_keyframe = true;
 	let mut packet = [0u8; MAX_PACKET + 1];
 	let mut tick = tokio::time::interval(Duration::from_millis(20));
@@ -623,7 +624,13 @@ pub async fn run_stream(
 					json_send(&mut ws,json!({"op":3,"d":{"t":heartbeat_nonce,"seq_ack":seq_ack}})).await?;
 					awaiting_ack=Some(heartbeat_nonce); heartbeat_at=now+Duration::from_millis(interval);
 				}
-				if dave.waiting && encryption.is_some() && !discovering {deadline=None;}
+				if encryption.is_some() && !discovering && dave.should_wait_for_peer() {dave.wait_for_peer()?;}
+				let waiting=dave.waiting && encryption.is_some() && !discovering;
+				if waiting {deadline=None;}
+				if waiting!=waiting_announced {
+					emit(if waiting {Status::WaitingForPeer} else {Status::Securing}).map_err(|_|"Stream interface closed")?;
+					waiting_announced=waiting;
+				}
 				let secure=dave.ready&&dave.session.is_ready()&&dave.pending.is_none()&&encryption.is_some()&&!discovering;
 				if secure && !announced {
 					let streams=json!([{"type":"video","rid":"100","ssrc":video_ssrc,"active":true,"quality":100,"rtx_ssrc":0,"max_bitrate":video.settings.bit_rate(),"max_framerate":video.settings.fps,"max_resolution":{"type":"fixed","width":video.settings.width,"height":video.settings.height}}]);

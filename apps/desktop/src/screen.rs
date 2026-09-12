@@ -211,6 +211,7 @@ impl Screen {
 			ui.screen.request = None;
 			ui.screen.busy = false;
 			ui.screen.supported = false;
+			ui.screen.preview = None;
 			return None;
 		}
 		ui.screen.supported = discord_voice::screen::supported();
@@ -321,7 +322,10 @@ impl Screen {
 								&& state.voice.active.as_ref().is_some_and(|active| {
 									active.channel == call.channel
 										&& active.request == call.request
-										&& active.phase == voice::Phase::Connected
+										&& matches!(
+											active.phase,
+											voice::Phase::Connected | voice::Phase::Waiting
+										)
 								})
 						});
 					if self.context().is_some() || self.retiring.is_some() {
@@ -400,6 +404,22 @@ impl Screen {
 		if let Some(error) = failure {
 			self.request_stop(error);
 		}
+		if let Some(live) = &self.live {
+			if let Some(frame) = live.worker.take_preview() {
+				let image = egui::ColorImage::from_rgba_unmultiplied(
+					[frame.width() as usize, frame.height() as usize],
+					frame.as_raw(),
+				);
+				if let Some(texture) = &mut ui.screen.preview {
+					texture.set(image, egui::TextureOptions::LINEAR);
+				} else {
+					ui.screen.preview =
+						Some(ctx.load_texture("local-screen", image, egui::TextureOptions::LINEAR));
+				}
+			}
+		} else {
+			ui.screen.preview = None;
+		}
 
 		if let Some(closing) = &mut self.closing {
 			if !closing.timed_out && closing.started.elapsed() >= SIGNAL_TIMEOUT {
@@ -456,7 +476,7 @@ impl Screen {
 					Status::Connecting => "Connecting screen-share transport…",
 					Status::Discovering => "Checking screen-share network…",
 					Status::TransportReady | Status::Securing => "Securing screen video…",
-					Status::WaitingForPeer => "Waiting for screen-share security…",
+					Status::WaitingForPeer => "Screen preview · waiting for others",
 					Status::Ready { .. } => "Sharing your screen",
 					Status::RemoteAudio | Status::Speaking(_) | Status::CameraAvailable(_) => {
 						return Ok(());
@@ -486,6 +506,57 @@ impl Screen {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn waiting_dm_and_guild_calls_can_request_sharing_without_opening_capture() {
+		let runtime = tokio::runtime::Builder::new_current_thread()
+			.enable_all()
+			.build()
+			.unwrap();
+		let ctx = egui::Context::default();
+		for channel in [Id(22), Id(25)] {
+			let mut state = test_support::demo_state();
+			state.demo = false;
+			let mut role = state.permissions.guilds[&Id(10)].roles.as_ref().unwrap()[0].clone();
+			role.bits |= model::permissions::STREAM;
+			state.apply(client_core::Envelope {
+				generation: state.generation,
+				event: Event::Permissions(client_core::permissions::Event::Role {
+					guild: Id(10),
+					role,
+				}),
+			});
+			state.start_call(channel, false).unwrap();
+			let active = state.voice.active.as_mut().unwrap();
+			active.phase = voice::Phase::Waiting;
+			let request = active.request;
+			let mut ui = ui::MessagingUi::default();
+			ui.screen.context = Some((state.generation, channel, request));
+			ui.screen.request = Some(ui::screen::Request::Start(Settings {
+				source: screen::SourceId::Display(1),
+				width: 1280,
+				height: 720,
+				fps: 30,
+				cursor: true,
+			}));
+			let call = Call {
+				generation: state.generation,
+				channel,
+				request,
+				user: Id(1),
+				peer: (channel == Id(22)).then_some(Id(2)),
+				session: "synthetic-session",
+				identity: Identity::generate(),
+			};
+			let mut screen = Screen::default();
+			assert!(matches!(
+				screen.poll(&runtime, &state, &mut ui, &ctx, Some(call)),
+				Some(Command::Voice(voice::Command::StartStream { .. }))
+			));
+			assert!(screen.pending.is_some());
+			assert!(screen.live.is_none());
+		}
+	}
 
 	fn pending(context: Context, settings: Settings) -> Pending {
 		Pending {

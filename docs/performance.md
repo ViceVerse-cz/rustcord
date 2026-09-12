@@ -3475,3 +3475,30 @@ geometry, Friends navigation, bounded visible rows and stacked artwork at 24/32/
 Native screenshot/control is unavailable, so visual inspection and CPU/RSS/p95 frame
 comparisons remain unmeasured. These tests do not establish native smoothness or live
 Discord interoperability; no speed improvement is claimed.
+
+## Solo call camera and screen previews - September 12, 2026
+
+Baseline `ec0ce9553dac516fdccd678958be94d1cf1996cf`; Windows 11 Home,
+Ryzen 7 7800X3D, 33,410,678,784 bytes RAM, Rust 1.98.1. Separate clean
+`cargo xtask package` snapshots use standard release builds including voice,
+without default features. Package snapshots include the behavior documentation
+but precede this measurement entry. ZIPs use PowerShell Compress-Archive.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Executable bytes | 63,097,856 | 63,088,128 | -9,728 (-0.0154%) |
+| Installed package bytes | 69,337,029 | 69,328,524 | -8,505 (-0.0123%) |
+| Compress-Archive ZIP bytes | 41,683,608 | 41,686,605 | +2,997 (+0.0072%) |
+
+These small size changes are not a performance improvement claim. Shared
+DM/guild tiles replace the separate DM avatar renderer. Local screen capture now
+runs after the user starts sharing even without a peer; its worker retains one
+preview up to 640x360 RGBA (921,600 bytes), replaces it at most 10 times per second,
+and uses the existing bounded native raw-frame channel. UI texture/upload copies
+are additional. Encoding/transmission still wait for secure readiness.
+
+Synthetic checks cover both preview textures in empty DM/guild rosters at
+320/900-point widths, light/dark, waiting/connected/failed, preview byte/color
+validation, and camera rekeys. Native screenshot/interaction tools were unavailable
+(missing Computer Use pipe; no Orca CLI), so native CPU, RSS, GPU, startup and frame
+timings are unmeasured. No real device or Discord call was exercised.
