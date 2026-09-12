@@ -4,6 +4,7 @@ pub mod gifs;
 pub mod guild_folders;
 pub mod permissions;
 mod reading_preferences;
+pub mod server_settings;
 pub use reading_preferences::ReadingPreferences;
 mod profile;
 mod system_messages;

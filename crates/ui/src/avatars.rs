@@ -541,6 +541,16 @@ impl Avatars {
 		selected: bool,
 		demo: bool,
 	) -> egui::Response {
+		self.show_guild_sized(ui, guild, selected, demo, 48.0)
+	}
+	pub fn show_guild_sized(
+		&mut self,
+		ui: &mut egui::Ui,
+		guild: &model::Guild,
+		selected: bool,
+		demo: bool,
+		size: f32,
+	) -> egui::Response {
 		let short: String = guild
 			.name
 			.split_whitespace()
@@ -549,7 +559,7 @@ impl Avatars {
 			.collect();
 		let colors = crate::design::palette(ui);
 		let (rect, response) =
-			ui.allocate_exact_size(egui::Vec2::splat(48.0), egui::Sense::click_and_drag());
+			ui.allocate_exact_size(egui::Vec2::splat(size), egui::Sense::click_and_drag());
 		let rounded = selected || response.hovered() || response.has_focus();
 		let radius: u8 = if rounded { 16 } else { 24 };
 		let mut painted = false;

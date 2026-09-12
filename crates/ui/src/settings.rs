@@ -918,7 +918,7 @@ fn nav_item(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
 }
 
 /// Discord's round close button with the "ESC" hint underneath.
-fn close_control(ui: &mut egui::Ui) -> egui::Response {
+pub(super) fn close_control(ui: &mut egui::Ui) -> egui::Response {
 	let colors = design::palette(ui);
 	let (rect, response) = ui.allocate_exact_size(egui::vec2(40.0, 56.0), egui::Sense::click());
 	response.widget_info(|| {

@@ -89,7 +89,7 @@ impl Permissions {
 	pub fn clear_cache(&self) {
 		self.cache.borrow_mut().clear();
 	}
-	fn effective(
+	pub(crate) fn effective(
 		&self,
 		target: Id,
 		guild: &p::Guild,
@@ -470,7 +470,7 @@ impl State {
 			)
 			.map(|permissions| permissions & bits == bits)
 	}
-	fn permission_time() -> i64 {
+	pub(crate) fn permission_time() -> i64 {
 		std::time::SystemTime::now()
 			.duration_since(std::time::UNIX_EPOCH)
 			.map_or(0, |duration| duration.as_secs().min(i64::MAX as u64) as i64)

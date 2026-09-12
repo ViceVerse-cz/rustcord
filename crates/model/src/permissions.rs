@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub const ADMINISTRATOR: u128 = 1 << 3;
 pub const MANAGE_CHANNELS: u128 = 1 << 4;
+pub const MANAGE_GUILD: u128 = 1 << 5;
 pub const ADD_REACTIONS: u128 = 1 << 6;
 pub const STREAM: u128 = 1 << 9;
 pub const VIEW_CHANNEL: u128 = 1 << 10;

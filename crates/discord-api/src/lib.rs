@@ -6,6 +6,7 @@ mod guild_folders;
 mod profile_edit;
 pub mod rpc;
 mod server_actions;
+mod server_settings;
 pub mod upload;
 mod user_actions;
 use client_core::{
@@ -317,6 +318,11 @@ impl DiscordApi {
 	}
 	pub async fn execute(&self, command: Command) -> Event {
 		match command {
+			Command::ServerSettings {
+				guild,
+				request,
+				edit,
+			} => Event::ServerSettings(self.server_settings(guild, request, edit).await),
 			Command::SendServerInvite {
 				guild,
 				user,

@@ -17,12 +17,13 @@ pub fn extension_source(
 	}
 }
 
-pub fn group_icon_source(
+pub fn icon_source(
 	parent: Arc<winit::window::Window>,
+	title: &'static str,
 ) -> impl std::future::Future<Output = Option<PathBuf>> + Send + 'static {
 	let dialog = rfd::AsyncFileDialog::new()
 		.set_parent(parent.as_ref())
-		.set_title("Choose group icon")
+		.set_title(title)
 		.add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp"])
 		.pick_file();
 	async move {
