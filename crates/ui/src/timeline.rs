@@ -611,7 +611,11 @@ impl TimelineView {
 			self.width = width;
 			self.text_size = text_size;
 			self.scale = scale;
-			let row_ids: Vec<_> = state.timeline.iter().map(|message| message.id).collect();
+			let row_ids: Vec<_> = state
+				.timeline
+				.display_iter()
+				.map(|message| message.id)
+				.collect();
 			self.heights
 				.retain(|id, _| row_ids.binary_search(id).is_ok());
 			self.formatted.retain(|id| state.timeline.get(id).is_some());
@@ -623,10 +627,11 @@ impl TimelineView {
 			let mut previous = None;
 			self.rows = state
 				.timeline
-				.iter()
+				.display_iter()
 				.map(|m| {
-					let key = row_key(m, previous, self.unread_boundary);
-					previous = Some(m);
+					let key = row_key(m, previous, self.unread_boundary)
+						^ u64::from(state.timeline.is_deleted(m.id));
+					previous = (!state.timeline.is_deleted(m.id)).then_some(m);
 					let estimate = (if m.embeds_suppressed {
 						0.0
 					} else {
@@ -667,7 +672,7 @@ impl TimelineView {
 			ui.weak("Message history is unavailable with current permission information.");
 		}
 		if history_available && state.freshness == model::Freshness::Loading {
-			let empty = state.timeline.is_empty()
+			let empty = state.timeline.display_iter().next().is_none()
 				&& !state
 					.pending
 					.iter()
@@ -676,7 +681,7 @@ impl TimelineView {
 			if empty {
 				return;
 			}
-		} else if state.timeline.is_empty()
+		} else if state.timeline.display_iter().next().is_none()
 			&& history_available
 			&& !state
 				.pending
@@ -810,12 +815,53 @@ impl TimelineView {
 				end = index + 1;
 				let (id, _) = &self.rows[index];
 				let can_mark_read = state.can_mark_read(*id);
-				let Some(message) = state.timeline.get(*id) else {
+				let Some(message) = state.timeline.get_display(*id) else {
 					continue;
 				};
 				let previous = index
 					.checked_sub(1)
 					.and_then(|i| state.timeline.get(self.rows[i].0));
+				if state.timeline.is_deleted(*id) {
+					let colors = crate::design::palette(ui);
+					let response = ui.push_id(row_id, |ui| {
+						egui::Frame::new()
+							.fill(colors.danger.gamma_multiply(0.10))
+							.inner_margin(egui::Margin::symmetric(16, 10))
+							.show(ui, |ui| {
+								ui.set_min_width((width - 32.0).max(1.0));
+								ui.horizontal_wrapped(|ui| {
+									ui.label(
+										RichText::new(&message.author.name)
+											.strong()
+											.color(colors.danger),
+									);
+									ui.label(
+										RichText::new("Deleted - kept by Message delete protector")
+											.small()
+											.color(colors.danger),
+									);
+								});
+								ui.add(
+									egui::Label::new(
+										RichText::new(if message.content.is_empty() {
+											"[Deleted message had no text]"
+										} else {
+											&message.content
+										})
+										.color(colors.danger),
+									)
+									.wrap()
+									.selectable(true),
+								);
+							});
+					});
+					measurements.push((
+						*id,
+						row_key(message, previous, self.unread_boundary) ^ 1,
+						response.response.rect.height(),
+					));
+					continue;
+				}
 				let compact = grouped(previous, message, self.unread_boundary);
 				let new_day =
 					previous.is_none_or(|p| timestamp(p.id).date() != timestamp(*id).date());

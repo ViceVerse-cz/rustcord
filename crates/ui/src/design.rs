@@ -404,6 +404,15 @@ fn customize(mut palette: Palette, primary: Option<[u8; 3]>) -> Palette {
 	}
 	palette
 }
+pub(crate) fn theme_preview_palette(ui: &egui::Ui, theme: &extensions::Theme) -> Palette {
+	let base = palette(ui);
+	let theme = if ui.visuals().dark_mode {
+		&theme.dark
+	} else {
+		&theme.light
+	};
+	extension_palette(theme).map_or(base, |overrides| recolor(base, overrides))
+}
 pub fn palette(ui: &egui::Ui) -> Palette {
 	opaque_surfaces(colors(ui.visuals().dark_mode, variant()))
 }

@@ -37,6 +37,11 @@ fn main() -> eframe::Result {
 		eprintln!("Demo support is not included; rebuild with --features demo and run with --demo");
 		std::process::exit(2);
 	}
+	#[cfg(feature = "demo")]
+	if demo && std::env::args().any(|arg| arg == "--demo-check-extensions") {
+		demo_check_extensions();
+		return Ok(());
+	}
 	let options = eframe::NativeOptions {
 		viewport: {
 			let builder = egui::ViewportBuilder::default()
@@ -75,6 +80,92 @@ fn main() -> eframe::Result {
 		}),
 	)
 }
+/// One offline debug path through the shipped Wasm, reducer, and native egui rows.
+#[cfg(feature = "demo")]
+fn demo_check_extensions() {
+	let enabled =
+		extensions::demo_check_examples().expect("starter packages activate with consent");
+	let mut state = test_support::demo_state();
+	let channel = state.selected.expect("demo conversation");
+	state.timeline.clear();
+	state.set_preserve_deleted_messages(enabled);
+	let mut message = test_support::message(600, channel);
+	message.content = "A useful message stays readable".into();
+	message.attachments.clear();
+	message.embeds.clear();
+	state.timeline.insert(message.clone(), true, false).unwrap();
+	state.apply(Envelope {
+		generation: state.generation,
+		event: Event::Delete {
+			channel,
+			id: message.id,
+		},
+	});
+	assert!(state.timeline.is_deleted(message.id));
+	assert!(
+		state.timeline.get(message.id).is_none(),
+		"deleted messages cannot receive service actions"
+	);
+	assert_eq!(
+		state.timeline.get_display(message.id).unwrap().content,
+		message.content
+	);
+	state
+		.timeline
+		.insert(message.clone(), false, false)
+		.unwrap();
+	assert!(
+		state.timeline.get(message.id).is_none(),
+		"stale history cannot resurrect a deletion"
+	);
+	let ctx = egui::Context::default();
+	ui::fonts::install(&ctx);
+	ui::design::apply(&ctx);
+	let mut messaging = ui::MessagingUi::default();
+	let mut saw_deleted = false;
+	for _ in 0..3 {
+		let frame = ctx.run_ui(
+			egui::RawInput {
+				screen_rect: Some(egui::Rect::from_min_size(
+					egui::Pos2::ZERO,
+					egui::vec2(1120.0, 760.0),
+				)),
+				..Default::default()
+			},
+			|ui| {
+				let _ = messaging.show(ui, &mut state);
+			},
+		);
+		saw_deleted |= frame.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains("Deleted - kept by Message delete protector")));
+		frame.drop_without_applying_deltas();
+	}
+	assert!(
+		saw_deleted,
+		"native timeline renders the retained deletion label"
+	);
+	state.set_preserve_deleted_messages(false);
+	assert!(
+		state.timeline.get_display(message.id).is_none(),
+		"disabling releases preserved text"
+	);
+	let next = test_support::message(601, channel);
+	state.timeline.insert(next.clone(), true, false).unwrap();
+	state.apply(Envelope {
+		generation: state.generation,
+		event: Event::Delete {
+			channel,
+			id: next.id,
+		},
+	});
+	assert!(
+		state.timeline.get_display(next.id).is_none(),
+		"default deletion still removes the payload"
+	);
+	println!(
+		"Extension debug check passed: one Wasm protector, five themes, consent, red deleted row, stale-history rejection and disable cleanup."
+	);
+}
+
 /// Opt-in aggregate CPU callback timings; no payloads, per-frame logs, or repaint timer.
 struct FrameMetrics {
 	enabled: bool,
@@ -2810,7 +2901,7 @@ impl eframe::App for Desktop {
 		self.messaging.sync_reading_zoom(ctx);
 		self.poll(ctx);
 		self.extensions.tick(
-			&self.state,
+			&mut self.state,
 			&mut self.messaging,
 			ctx,
 			&self.runtime,

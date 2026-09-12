@@ -7,7 +7,8 @@ send a message, read credentials, open files or make network requests.
 
 ## Install and remove
 
-Open Extensions to browse the free catalog; Refresh explicitly checks it again.
+Open Extensions to browse bundled starters offline; Refresh explicitly checks the
+remote free catalog. Bundled packages use the same capability review before enabling.
 Enable downloads the selected, hash-pinned package after its capabilities have
 been accepted. Updates are manual and require renewed capability consent.
 Import selects a local `.serein-extension` JSON package. An import is unreviewed;
@@ -26,7 +27,7 @@ preference. There are no background catalog refreshes or automatic updates.
 ## Creator workflow
 
 1. Keep source and license in a public Git repository. Use the standalone Rust
-   starters under `examples/extensions` for a composer tool and message tool.
+   example under `examples/extensions/message-delete-protector` and its small SDK.
 2. Build a Wasm module implementing the version 1 ABI documented by the starter.
    No native binary, installer, Git hook or build script runs on an end user's
    computer. Other languages can implement the same Wasm buffer/JSON contract.
@@ -59,7 +60,9 @@ Catalog entries may include a short `description` (at most 256 characters and
 Use an original or licensed PNG/JPEG screenshot showing the theme or plugin in
 use. Pin its URL to an immutable release or source commit, then record the exact
 file size and digest. Prefer a 16:9 image; the shop preserves its aspect ratio.
-Existing entries without an image remain valid and show a built-in illustration.
+Bundled themes show expandable native palette previews using their actual colors.
+The protector shows a deleted-row illustration. Other entries without an image
+remain valid and show a built-in illustration.
 Previews describe the listed version, including when an installed version has
 an update available; they are creator-provided, not proof of compatibility.
 
@@ -83,7 +86,14 @@ boundary; internal `client-core` structures and egui objects are not an SDK.
 Unknown API versions and invalid packages are rejected before installation.
 
 Actions are invoked by a message context-menu item, composer tool or panel
-button. Input is restricted to the granted context and bounded form values.
+button. A plugin may also declare one `activation` action that runs in the worker
+on enable/account load. With explicit `deleted_messages` consent, its boolean
+`preserve_deleted_messages` output enables session-only retention of loaded deleted
+messages. Deleted text is red and has no live message actions; default deletion,
+tombstone reconciliation and disk-cache removal remain unchanged. Disabling clears
+retained deleted content across active and dormant windows. Logout, lost channel
+access and ordinary timeline eviction also clear it. The same 500-row / 4 MiB
+per-window budget includes both live and retained deleted payloads. Input is restricted to the granted context and bounded form values.
 Results can propose a composer replacement or return native text, rows,
 buttons, text inputs and checkboxes. Composer proposals require Apply, retain
 the ordinary Send action and are discarded when their originating context is

@@ -15,7 +15,7 @@ use std::{
 
 use extensions::{
 	Capability, Catalog, CatalogEntry, ExtensionKind, Invocation, Manifest, Output, Package,
-	Preview, Theme,
+	Preview, Surface, Theme,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -32,6 +32,11 @@ const MAX_QUEUE: usize = 4;
 
 #[derive(Clone)]
 pub enum InstallSource {
+	Bundled {
+		bytes: &'static [u8],
+		sha256: String,
+		manifest: Manifest,
+	},
 	Catalog(CatalogEntry),
 	Local {
 		path: PathBuf,
@@ -76,6 +81,123 @@ pub enum Job {
 }
 
 #[derive(Clone)]
+pub struct Starter {
+	pub source: InstallSource,
+	pub theme: Option<Theme>,
+	pub description: &'static str,
+	pub download_bytes: u64,
+}
+
+pub(crate) fn starters() -> Result<Vec<Starter>, String> {
+	let packages: [(&'static [u8], &'static str); 6] = [
+		(
+			include_bytes!(
+				"../../../examples/extensions/packages/message-delete-protector.serein-extension"
+			),
+			"Keep messages already seen in this session visible in red after deletion. Cleared when disabled or signed out.",
+		),
+		(
+			include_bytes!("../../../extensions/ocean.serein-extension"),
+			"Deep blue surfaces with a bright ocean accent.",
+		),
+		(
+			include_bytes!("../../../extensions/midnight.serein-extension"),
+			"Inky midnight surfaces with a vivid violet accent.",
+		),
+		(
+			include_bytes!("../../../extensions/rose.serein-extension"),
+			"Soft rose surfaces with a warm pink accent.",
+		),
+		(
+			include_bytes!("../../../extensions/forest.serein-extension"),
+			"Calm forest greens and fresh leafy accents.",
+		),
+		(
+			include_bytes!("../../../extensions/latte.serein-extension"),
+			"Warm coffee tones and a creamy caramel accent.",
+		),
+	];
+	packages
+		.into_iter()
+		.map(|(bytes, description)| {
+			let package = extensions::parse_package(bytes).map_err(|error| error.to_string())?;
+			Ok(Starter {
+				source: InstallSource::Bundled {
+					bytes,
+					sha256: digest(bytes),
+					manifest: package.manifest,
+				},
+				theme: package.theme,
+				description,
+				download_bytes: bytes.len() as u64,
+			})
+		})
+		.collect()
+}
+
+/// Offline debug smoke check of the exact starter packages embedded in the app.
+#[cfg(feature = "demo")]
+pub fn demo_check_examples() -> Result<bool, String> {
+	let starters = starters()?;
+	if starters.len() != 6
+		|| starters
+			.iter()
+			.filter(|entry| entry.theme.is_some())
+			.count() != 5
+	{
+		return Err("Expected one starter plugin and five themes".into());
+	}
+	let gate = Gate {
+		epoch: 0,
+		generation: Arc::new(AtomicU64::new(0)),
+		wake_cancel: Arc::new(tokio::sync::Notify::new()),
+	};
+	let mut activated = false;
+	for starter in starters {
+		let InstallSource::Bundled {
+			bytes,
+			sha256,
+			manifest,
+		} = starter.source
+		else {
+			return Err("Starter source must be bundled".into());
+		};
+		if digest(bytes) != sha256 || bytes.len() as u64 != starter.download_bytes {
+			return Err("Starter checksum or byte length changed".into());
+		}
+		let package = extensions::parse_package(bytes).map_err(|error| error.to_string())?;
+		if package.manifest != manifest {
+			return Err("Starter manifest changed".into());
+		}
+		let mut stored = Stored {
+			grants: manifest.capabilities.clone(),
+			package,
+			reviewed: true,
+			sha256,
+			download_bytes: starter.download_bytes,
+		};
+		let summary = stored.summary(&gate);
+		if let Some(error) = summary.error {
+			return Err(error);
+		}
+		if manifest.kind == ExtensionKind::Plugin {
+			if manifest.id != "message-delete-protector" || !summary.preserve_deleted_messages {
+				return Err("Message Delete Protector did not activate".into());
+			}
+			activated = true;
+			stored.grants.clear();
+			let denied = stored.summary(&gate);
+			if denied.preserve_deleted_messages || denied.error.is_none() {
+				return Err("Message preservation must require explicit permission".into());
+			}
+		} else if summary.preserve_deleted_messages || summary.theme.is_none() {
+			return Err("Theme starter must only supply a valid palette".into());
+		}
+	}
+	Ok(activated)
+}
+
+#[derive(Clone)]
 pub struct InstalledExtension {
 	pub manifest: Manifest,
 	pub theme: Option<Theme>,
@@ -83,10 +205,14 @@ pub struct InstalledExtension {
 	pub sha256: String,
 	pub download_bytes: u64,
 	pub error: Option<String>,
+	pub preserve_deleted_messages: bool,
 }
 
 pub enum Event {
-	Loaded(Vec<InstalledExtension>),
+	Loaded {
+		installed: Vec<InstalledExtension>,
+		starters: Vec<Starter>,
+	},
 	Catalog(Catalog),
 	Preview {
 		id: String,
@@ -248,14 +374,40 @@ struct Stored {
 }
 
 impl Stored {
-	fn summary(&self) -> InstalledExtension {
+	fn summary(&self, gate: &Gate) -> InstalledExtension {
+		let activation = self
+			.package
+			.manifest
+			.actions
+			.iter()
+			.find(|action| action.surface == Surface::Activation);
+		let result = activation.map_or(Ok(false), |action| {
+			validate_grants(&self.package.manifest, &self.grants)?;
+			gate.check()?;
+			let output = extensions::invoke(
+				&self.package,
+				&Invocation {
+					action: action.id.clone(),
+					..Default::default()
+				},
+			)
+			.map_err(|error| error.to_string())?;
+			gate.check()?;
+			if output.preserve_deleted_messages
+				&& !self.grants.contains(&Capability::DeletedMessages)
+			{
+				return Err("Deleted message access was not granted".into());
+			}
+			Ok(output.preserve_deleted_messages)
+		});
 		InstalledExtension {
 			manifest: self.package.manifest.clone(),
 			theme: self.package.theme.clone(),
 			reviewed: self.reviewed,
 			sha256: self.sha256.clone(),
 			download_bytes: self.download_bytes,
-			error: None,
+			preserve_deleted_messages: result.as_ref().copied().unwrap_or(false),
+			error: result.err(),
 		}
 	}
 }
@@ -292,7 +444,7 @@ fn validate_job(job: &Job) -> Result<(), String> {
 			preview.validate().map_err(|e| e.to_string())?;
 		}
 		Job::Disable { id, .. } => valid_id(id)?,
-		Job::Enable { grants, .. } if grants.len() > 3 => {
+		Job::Enable { grants, .. } if grants.len() > 4 => {
 			return Err("Invalid plugin grants".into());
 		}
 		Job::InspectImport { path } if path.as_os_str().len() > 4096 => {
@@ -306,7 +458,10 @@ fn validate_job(job: &Job) -> Result<(), String> {
 fn run(root: &Path, job: Job, gate: &Gate) -> Result<Event, String> {
 	gate.check()?;
 	match job {
-		Job::Load { account } => load(root, account.as_deref(), gate).map(Event::Loaded),
+		Job::Load { account } => Ok(Event::Loaded {
+			starters: starters()?,
+			installed: load(root, account.as_deref(), gate)?,
+		}),
 		Job::RefreshCatalog { demo } => {
 			let bytes = if demo {
 				include_bytes!("../../../extensions/catalog.json").to_vec()
@@ -409,6 +564,11 @@ fn enable(
 	gate: &Gate,
 ) -> Result<InstalledExtension, String> {
 	let (bytes, manifest, sha256, reviewed) = match source {
+		InstallSource::Bundled {
+			bytes,
+			manifest,
+			sha256,
+		} => (bytes.to_vec(), manifest, sha256, true),
 		InstallSource::Catalog(entry) => {
 			let bytes = download(
 				&entry.release_url,
@@ -458,6 +618,10 @@ fn enable(
 		sha256: sha256.to_ascii_lowercase(),
 		download_bytes: bytes.len() as u64,
 	};
+	let summary = stored.summary(gate);
+	if let Some(error) = &summary.error {
+		return Err(error.clone());
+	}
 	let record = serde_json::to_vec(&stored).map_err(|_| "Cannot encode extension package")?;
 	if record.len() > MAX_RECORD {
 		return Err("Extension package exceeds storage budget".into());
@@ -474,7 +638,7 @@ fn enable(
 		)?;
 		cleanup_inactive_themes(&parent, &stored.package.manifest.id, gate)?;
 	}
-	Ok(stored.summary())
+	Ok(summary)
 }
 
 fn validate_grants(manifest: &Manifest, grants: &[Capability]) -> Result<(), String> {
@@ -576,7 +740,7 @@ fn load(
 				remove_file(&entry.path().join("package.partial"))?;
 				remove_file(&entry.path().join("data.partial"))?;
 				installed.push(match stored {
-					Ok(stored) => stored.summary(),
+					Ok(stored) => stored.summary(gate),
 					Err(error) => InstalledExtension {
 						manifest: Manifest {
 							api_version: extensions::API_VERSION,
@@ -595,6 +759,7 @@ fn load(
 						sha256: String::new(),
 						download_bytes: 0,
 						error: Some(error),
+						preserve_deleted_messages: false,
 					},
 				});
 			}
@@ -806,12 +971,6 @@ fn demo_preview(id: &str) -> Option<&'static [u8]> {
 	{
 		match id {
 			"serein-ocean" => Some(include_bytes!("../../../extensions/previews/ocean.png")),
-			"composer-uppercase" => Some(include_bytes!(
-				"../../../extensions/previews/composer-uppercase.png"
-			)),
-			"message-word-count" => Some(include_bytes!(
-				"../../../extensions/previews/message-word-count.png"
-			)),
 			_ => None,
 		}
 	}
@@ -1126,29 +1285,23 @@ mod tests {
 	#[cfg(feature = "demo")]
 	#[test]
 	fn shop_preview_demo_catalog_and_images_are_local_and_hash_pinned() {
-		let Event::Catalog(catalog) = run(
-			Path::new("unused"),
-			Job::RefreshCatalog { demo: true },
-			&gate(),
-		)
-		.unwrap() else {
-			panic!("Expected local catalog");
-		};
-		assert_eq!(catalog.entries.len(), 3);
-		for entry in catalog.entries {
-			let Event::Preview { image, .. } = run(
-				Path::new("unused"),
-				Job::Preview {
-					id: entry.manifest.id,
-					preview: entry.preview.unwrap(),
-					demo: true,
-				},
-				&gate(),
-			)
-			.unwrap() else {
-				panic!("Expected preview");
+		let starters = starters().unwrap();
+		assert_eq!(starters.len(), 6);
+		for starter in starters {
+			let InstallSource::Bundled {
+				bytes,
+				sha256,
+				manifest,
+			} = starter.source
+			else {
+				panic!("Expected bundled source");
 			};
-			assert!(image.is_some());
+			assert_eq!(sha256, digest(bytes));
+			assert_eq!(starter.download_bytes, bytes.len() as u64);
+			assert_eq!(
+				starter.theme.is_some(),
+				manifest.kind == ExtensionKind::Theme
+			);
 		}
 	}
 

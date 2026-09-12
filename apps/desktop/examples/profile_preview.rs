@@ -159,27 +159,19 @@ fn extension_fixture(
 > {
 	let bytes: &[u8] = match id {
 		"serein-ocean" => include_bytes!("../../../extensions/ocean.serein-extension"),
-		"composer-uppercase" => include_bytes!(
-			"../../../examples/extensions/packages/composer-uppercase.serein-extension"
+		"message-delete-protector" => include_bytes!(
+			"../../../examples/extensions/packages/message-delete-protector.serein-extension"
 		),
-		"message-word-count" => include_bytes!(
-			"../../../examples/extensions/packages/message-word-count.serein-extension"
-		),
+		"serein-midnight" => include_bytes!("../../../extensions/midnight.serein-extension"),
+		"serein-rose" => include_bytes!("../../../extensions/rose.serein-extension"),
+		"serein-forest" => include_bytes!("../../../extensions/forest.serein-extension"),
+		"serein-latte" => include_bytes!("../../../extensions/latte.serein-extension"),
 		_ => return Err("Unknown fixture extension".into()),
 	};
 	let package = extensions::parse_package(bytes)?;
-	let invocation = match id {
-		"composer-uppercase" => extensions::Invocation {
-			action: "uppercase".into(),
-			composer: Some("Hey everyone, ready for game night?".into()),
-			..Default::default()
-		},
-		"message-word-count" => extensions::Invocation {
-			action: "count".into(),
-			selected_message: Some("Hey everyone, ready for game night?".into()),
-			..Default::default()
-		},
-		_ => extensions::Invocation::default(),
+	let invocation = extensions::Invocation {
+		action: "activate".into(),
+		..Default::default()
 	};
 	let output = if package.theme.is_none() {
 		Some(extensions::invoke(&package, &invocation)?)
@@ -200,6 +192,7 @@ fn seed_catalog(extensions: &mut ui::ExtensionUi) {
 				manifest: entry.manifest,
 				description: entry.description,
 				preview: entry.preview,
+				theme_preview: None,
 				reviewed: true,
 				sha256: entry.sha256,
 				download_bytes: entry.download_bytes,
@@ -211,11 +204,7 @@ fn seed_catalog(extensions: &mut ui::ExtensionUi) {
 			.collect(),
 	);
 	let previews = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../extensions/previews");
-	for (id, filename) in [
-		("serein-ocean", "ocean.png"),
-		("composer-uppercase", "composer-uppercase.png"),
-		("message-word-count", "message-word-count.png"),
-	] {
+	for (id, filename) in [("serein-ocean", "ocean.png")] {
 		let image = image::open(previews.join(filename))
 			.expect("valid fixture preview")
 			.to_rgba8();
@@ -279,27 +268,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			messaging.startup_available = platform::startup::available();
 			messaging.startup_enabled = args.iter().any(|arg| arg == "--startup-enabled");
 			messaging.startup_minimized = args.iter().any(|arg| arg == "--startup-minimized");
-			if let Some((package, invocation, result)) = fixture {
+			if let Some((package, _invocation, result)) = fixture {
 				prime_extension_chat(&mut state);
 				if let Some(theme) = package.theme.as_ref() {
 					ui::design::set_extension_theme(Some(theme));
 					ui::design::apply(&cc.egui_ctx);
 				}
 				if let Some(output) = result {
-					if let (Some(channel), Some(draft)) =
-						(state.selected, invocation.composer.as_ref())
-					{
-						state.drafts.insert(channel, draft.clone());
-					}
-					let context =
-						ui::ExtensionContext::capture(&state, invocation.composer.is_some());
-					messaging.extensions.present_output(
-						package.manifest.id,
-						invocation,
-						context,
-						output,
-						&state,
-					);
+					state.set_preserve_deleted_messages(output.preserve_deleted_messages);
+					let channel = state.selected.unwrap();
+					state.apply(client_core::Envelope {
+						generation: state.generation,
+						event: client_core::Event::Delete {
+							channel,
+							id: model::Id(601),
+						},
+					});
 				}
 			} else {
 				messaging.preview_settings(&page);

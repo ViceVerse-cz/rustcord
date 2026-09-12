@@ -42,6 +42,18 @@ impl Windows {
 	}
 }
 impl State {
+	/// Session-only extension policy. Disabling releases every retained deleted payload.
+	pub fn set_preserve_deleted_messages(&mut self, enabled: bool) {
+		if self.preserve_deleted_messages != enabled {
+			self.preserve_deleted_messages = enabled;
+			self.revision += 1;
+		}
+		self.timeline.set_preserve_deleted_messages(enabled);
+		for entry in &mut self.resident.entries {
+			entry.timeline.set_preserve_deleted_messages(enabled);
+		}
+	}
+
 	/// Drop dormant previews when disk history is cleared; preserve the visible conversation.
 	pub fn clear_cached_history(&mut self) {
 		self.resident = Windows::default();
@@ -145,6 +157,33 @@ impl State {
 		self.enforce_resident_budget();
 	}
 	pub(crate) fn invalidate_resident_event(&mut self, event: &Event) {
+		if self.preserve_deleted_messages {
+			let deletion = match event {
+				Event::Delete { channel, id } => Some((*channel, std::slice::from_ref(id))),
+				Event::DeleteBulk { channel, ids } if ids.len() <= 100 => {
+					Some((*channel, ids.as_slice()))
+				}
+				_ => None,
+			};
+			if let Some((channel, ids)) = deletion {
+				if let Some(window) = self
+					.resident
+					.entries
+					.iter_mut()
+					.find(|w| w.identity.id == channel)
+				{
+					window.timeline.set_preserve_deleted_messages(true);
+					if ids
+						.iter()
+						.try_for_each(|id| window.timeline.delete(*id))
+						.is_err()
+					{
+						self.resident.remove(channel);
+					}
+				}
+				return;
+			}
+		}
 		let channel = match event {
 			Event::Message(message)
 			| Event::SendResult {

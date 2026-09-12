@@ -1,5 +1,5 @@
 [workspace]
-members = ["sdk", "composer-uppercase", "message-word-count"]
+members = ["sdk", "message-delete-protector"]
 resolver = "3"
 
 [workspace.dependencies]

@@ -518,3 +518,9 @@ Unknown stored values are rejected. No new table, cache, queue, payload collecti
 network request is introduced; account, item, byte and page limits remain unchanged.
 Older schema-13 clients cannot reopen a schema-14 cache. User metadata serialized in
 bounded existing caches defaults missing kinds to ordinary/unknown.
+
+Message delete protector is opt-in and session-only. Retained deleted payloads share
+the existing 500-row / 4 MiB timeline limit and resident-history budget. They are
+excluded from normal message iteration, service actions and disk cache writes.
+Disabling the plugin, logout, lost channel access or eviction releases the payloads.
+The usual disk-cache deletion still runs when a deletion arrives.

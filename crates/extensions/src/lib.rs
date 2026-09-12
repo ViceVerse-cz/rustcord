@@ -47,6 +47,7 @@ pub enum Capability {
 	SelectedMessage,
 	Composer,
 	Storage,
+	DeletedMessages,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,6 +56,7 @@ pub enum Surface {
 	Message,
 	Composer,
 	Panel,
+	Activation,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -172,6 +174,8 @@ pub struct Invocation {
 #[serde(deny_unknown_fields)]
 pub struct Output {
 	#[serde(default)]
+	pub preserve_deleted_messages: bool,
+	#[serde(default)]
 	pub replacement: Option<String>,
 	#[serde(default)]
 	pub panel: Vec<Element>,
@@ -252,11 +256,19 @@ impl Manifest {
 				return Err(Error::Invalid);
 			}
 		}
-		if self.capabilities.len() > 3 || self.actions.len() > 16 {
+		if self.capabilities.len() > 4 || self.actions.len() > 16 {
 			return Err(Error::Limit);
 		}
 		let mut capabilities = BTreeSet::new();
 		if self.capabilities.iter().any(|c| !capabilities.insert(*c)) {
+			return Err(Error::Invalid);
+		}
+		if self
+			.actions
+			.iter()
+			.filter(|a| a.surface == Surface::Activation)
+			.count() > 1
+		{
 			return Err(Error::Invalid);
 		}
 		let mut ids = BTreeSet::new();
@@ -273,6 +285,7 @@ impl Manifest {
 				Surface::Message => Some(Capability::SelectedMessage),
 				Surface::Composer => Some(Capability::Composer),
 				Surface::Panel => None,
+				Surface::Activation => Some(Capability::DeletedMessages),
 			};
 			if required.is_some_and(|c| !capabilities.contains(&c)) {
 				return Err(Error::Capability);
@@ -462,6 +475,15 @@ impl Invocation {
 
 impl Output {
 	pub fn validate(&self, manifest: &Manifest, input: &Invocation) -> Result<(), Error> {
+		if self.preserve_deleted_messages
+			&& (!manifest.capabilities.contains(&Capability::DeletedMessages)
+				|| !manifest
+					.actions
+					.iter()
+					.any(|a| a.id == input.action && a.surface == Surface::Activation))
+		{
+			return Err(Error::Capability);
+		}
 		if self.replacement.is_some()
 			&& (input.composer.is_none() || !manifest.capabilities.contains(&Capability::Composer))
 		{

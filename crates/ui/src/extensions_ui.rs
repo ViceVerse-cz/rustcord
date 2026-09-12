@@ -9,6 +9,7 @@ use std::{collections::BTreeMap, sync::Arc};
 pub struct ExtensionEntry {
 	pub description: String,
 	pub preview: Option<extensions::Preview>,
+	pub theme_preview: Option<extensions::Theme>,
 	pub manifest: Manifest,
 	pub reviewed: bool,
 	pub sha256: String,
@@ -111,7 +112,6 @@ pub struct ExtensionUi {
 	result: Option<ResultPanel>,
 	error: Option<String>,
 	message_actions: Arc<Vec<MenuAction>>,
-	opened: bool,
 	themes: bool,
 	query: String,
 	previews: BTreeMap<String, PreviewImage>,
@@ -209,6 +209,22 @@ impl ExtensionUi {
 		if !ui.is_rect_visible(rect) {
 			return;
 		}
+		if entry.theme_preview.is_some()
+			|| entry
+				.manifest
+				.capabilities
+				.contains(&Capability::DeletedMessages)
+		{
+			draw_native_preview(ui, rect, entry);
+			let response = ui.interact(rect, ui.id().with("enlarge-preview"), egui::Sense::click());
+			if response
+				.on_hover_text(format!("Preview {}", entry.manifest.name))
+				.clicked()
+			{
+				self.enlarged = Some(entry.manifest.id.clone());
+			}
+			return;
+		}
 		let id = &entry.manifest.id;
 		if entry.preview.is_some()
 			&& !self.previews.contains_key(id)
@@ -290,20 +306,43 @@ impl ExtensionUi {
 			self.enlarged = None;
 			return;
 		};
-		let Some(texture) = self.previews.get(&id).and_then(|p| p.texture.as_ref()) else {
+		let texture = self.previews.get(&id).and_then(|p| p.texture.as_ref());
+		let native = entry.theme_preview.is_some()
+			|| entry
+				.manifest
+				.capabilities
+				.contains(&Capability::DeletedMessages);
+		if texture.is_none() && !native {
 			self.enlarged = None;
 			return;
-		};
+		}
 		let mut close = false;
 		let modal = egui::Modal::new(egui::Id::unique("extension-preview-modal")).show(ctx, |ui| {
 			ui.label(design::semibold(ui, &entry.manifest.name, 20.0));
 			let available = ctx.content_rect().size() - egui::vec2(64.0, 140.0);
-			ui.add(
-				egui::Image::new(texture)
-					.max_size(available.max(egui::vec2(1.0, 1.0)))
-					.corner_radius(8),
-			);
-			ui.weak("Creator preview");
+			if native {
+				let width = available
+					.x
+					.clamp(1.0, 800.0)
+					.min((available.y * 16.0 / 9.0).max(1.0));
+				let (rect, _) = ui.allocate_exact_size(
+					egui::vec2(width, width * 9.0 / 16.0),
+					egui::Sense::hover(),
+				);
+				draw_native_preview(ui, rect, entry);
+				ui.weak(if entry.theme_preview.is_some() {
+					"Theme palette preview"
+				} else {
+					"Example deleted-message appearance"
+				});
+			} else if let Some(texture) = texture {
+				ui.add(
+					egui::Image::new(texture)
+						.max_size(available.max(egui::vec2(1.0, 1.0)))
+						.corner_radius(8),
+				);
+				ui.weak("Creator preview");
+			}
 			close = ui.button("Close preview").clicked();
 		});
 		if close || modal.should_close() {
@@ -454,10 +493,7 @@ impl ExtensionUi {
 	}
 	pub(crate) fn settings(&mut self, ui: &mut egui::Ui, state: &State) {
 		self.preview_clock = self.preview_clock.saturating_add(1);
-		if !self.opened {
-			self.opened = true;
-			self.queue(ui.ctx(), ExtensionRequest::RefreshCatalog);
-		}
+
 		let colors = design::palette(ui);
 		if ui.available_width() >= 540.0 {
 			ui.label(design::semibold(ui, "Make Serein yours", 26.0).color(colors.text_strong));
@@ -1012,11 +1048,94 @@ fn request_bytes(request: &ExtensionRequest) -> usize {
 		}
 }
 
+/// Draw a small native conversation using the package's real palette, without image IO.
+fn draw_native_preview(ui: &egui::Ui, rect: egui::Rect, entry: &ExtensionEntry) {
+	let colors = entry.theme_preview.as_ref().map_or_else(
+		|| design::palette(ui),
+		|theme| design::theme_preview_palette(ui, theme),
+	);
+	let painter = ui.painter().with_clip_rect(rect);
+	let at = |x: f32, y: f32| rect.min + egui::vec2(rect.width() * x, rect.height() * y);
+	let panel = |x, y, w, h, color| {
+		painter.rect_filled(
+			egui::Rect::from_min_max(at(x, y), at(x + w, y + h)),
+			3,
+			color,
+		);
+	};
+	panel(0.0, 0.0, 1.0, 1.0, colors.base);
+	panel(0.08, 0.0, 0.22, 1.0, colors.sidebar);
+	panel(0.30, 0.0, 0.70, 1.0, colors.chat);
+	let font = egui::FontId::proportional((rect.width() / 29.0).clamp(9.0, 20.0));
+	painter.text(
+		at(0.35, 0.09),
+		egui::Align2::LEFT_CENTER,
+		"# general",
+		font.clone(),
+		colors.text_strong,
+	);
+	for i in 0..3 {
+		let y = 0.25 + i as f32 * 0.20;
+		let deleted = i == 1
+			&& entry
+				.manifest
+				.capabilities
+				.contains(&Capability::DeletedMessages);
+		if deleted {
+			panel(
+				0.31,
+				y - 0.045,
+				0.68,
+				0.17,
+				colors.danger.gamma_multiply(0.12),
+			);
+		}
+		painter.circle_filled(
+			at(0.355, y),
+			rect.height() * 0.035,
+			if deleted {
+				colors.danger
+			} else {
+				colors.accent
+			},
+		);
+		painter.text(
+			at(0.41, y),
+			egui::Align2::LEFT_CENTER,
+			if deleted {
+				"Deleted message"
+			} else {
+				["Robin", "Alex", "You"][i]
+			},
+			font.clone(),
+			if deleted {
+				colors.danger
+			} else {
+				colors.text_strong
+			},
+		);
+		panel(
+			0.41,
+			y + 0.06,
+			if i == 1 { 0.42 } else { 0.31 },
+			0.025,
+			if deleted { colors.danger } else { colors.muted },
+		);
+		panel(0.025, y, 0.025, 0.05, colors.accent);
+		panel(0.115, y, 0.14, 0.025, colors.muted);
+	}
+	panel(0.33, 0.86, 0.64, 0.09, colors.raised);
+	panel(0.89, 0.88, 0.05, 0.05, colors.accent);
+}
+
 fn capability_label(capability: Capability) -> &'static str {
 	match capability {
 		Capability::SelectedMessage => "Read the message I choose for an action",
 		Capability::Composer => "Read my draft and propose text changes",
 		Capability::Storage => "Store up to 1 MiB of local data for this account",
+		Capability::DeletedMessages => {
+			"Keep already-loaded deleted messages in memory until disabled or evicted"
+		}
 	}
 }
 fn entry_details(ui: &mut egui::Ui, entry: &ExtensionEntry) {
@@ -1110,6 +1229,7 @@ mod tests {
 	fn entry() -> ExtensionEntry {
 		ExtensionEntry {
 			description: String::new(),
+			theme_preview: None,
 			preview: None,
 			manifest: Manifest {
 				api_version: 1,

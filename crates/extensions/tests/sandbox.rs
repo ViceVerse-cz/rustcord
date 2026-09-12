@@ -200,30 +200,18 @@ fn validates_themes_catalog_and_path_safe_identifiers() {
 
 #[test]
 fn shipped_rust_examples_execute_through_the_real_abi() {
-	let uppercase = parse_package(include_bytes!(
-		"../../../examples/extensions/packages/composer-uppercase.serein-extension"
+	let protector = parse_package(include_bytes!(
+		"../../../examples/extensions/packages/message-delete-protector.serein-extension"
 	))
 	.unwrap();
 	let input = Invocation {
-		action: "uppercase".into(),
-		composer: Some("Hello, čau!".into()),
-		..Default::default()
-	};
-	assert_eq!(
-		invoke(&uppercase, &input).unwrap().replacement.as_deref(),
-		Some("HELLO, ČAU!")
-	);
-	let counter = parse_package(include_bytes!(
-		"../../../examples/extensions/packages/message-word-count.serein-extension"
-	))
-	.unwrap();
-	let input = Invocation {
-		action: "count".into(),
-		selected_message: Some("Hello\nworld\tčau".into()),
+		action: "activate".into(),
 		..Default::default()
 	};
 	assert!(
-		matches!(&invoke(&counter,&input).unwrap().panel[0],Element::Text{text} if text == "Words: 3")
+		invoke(&protector, &input)
+			.unwrap()
+			.preserve_deleted_messages
 	);
 }
 

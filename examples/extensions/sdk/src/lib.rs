@@ -18,6 +18,7 @@ pub struct Invocation {
 
 #[derive(Default, Serialize)]
 pub struct Output {
+	pub preserve_deleted_messages: bool,
 	pub replacement: Option<String>,
 	pub panel: Vec<Element>,
 	pub storage: Option<String>,

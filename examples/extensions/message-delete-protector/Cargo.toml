@@ -1,5 +1,5 @@
 [package]
-name = "message-word-count"
+name = "message-delete-protector"
 version = "1.0.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"

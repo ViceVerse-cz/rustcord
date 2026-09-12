@@ -1,5 +1,5 @@
 //! Maps the bounded extension worker to native UI requests; no plugin runs here.
-use crate::extensions::{Event, ExtensionHost, InstallSource, InstalledExtension, Job};
+use crate::extensions::{Event, ExtensionHost, InstallSource, InstalledExtension, Job, Starter};
 use client_core::State;
 use eframe::egui;
 use extensions::{CatalogEntry, ExtensionKind, Invocation};
@@ -23,6 +23,7 @@ pub struct Bridge {
 	scope: Option<(u64, Option<String>)>,
 	pending: BTreeMap<u64, Pending>,
 	installed: Vec<InstalledExtension>,
+	starters: BTreeMap<String, Starter>,
 	disabled: BTreeSet<String>,
 	catalog: BTreeMap<String, CatalogEntry>,
 	imported: Option<InstallSource>,
@@ -33,6 +34,9 @@ impl Bridge {
 		self.pending.values().any(|pending| pending.cleanup)
 	}
 	pub fn logout(&mut self, ctx: &egui::Context) -> Result<(), String> {
+		for entry in &mut self.installed {
+			entry.preserve_deleted_messages = false;
+		}
 		self.picker = None;
 		self.pending.retain(|_, pending| pending.cleanup);
 		if let Some(host) = &mut self.host {
@@ -60,7 +64,7 @@ impl Bridge {
 	}
 	pub fn tick(
 		&mut self,
-		state: &State,
+		state: &mut State,
 		messaging: &mut ui::MessagingUi,
 		ctx: &egui::Context,
 		runtime: &tokio::runtime::Runtime,
@@ -86,6 +90,7 @@ impl Bridge {
 		}
 		let scope = (state.generation, account.clone());
 		if self.scope.as_ref() != Some(&scope) {
+			state.set_preserve_deleted_messages(false);
 			self.cancel_previews(messaging);
 			self.host.as_mut().unwrap().cancel();
 			self.pending.retain(|_, pending| pending.cleanup);
@@ -166,6 +171,10 @@ impl Bridge {
 			}
 			match outcome {
 				Err(error) => {
+					if let Some((id, _, _)) = pending.as_ref().and_then(|p| p.invocation.as_ref()) {
+						self.disabled.insert(id.clone());
+						self.entries(messaging);
+					}
 					messaging.extensions.report_error(error);
 					if pending.is_some_and(|p| p.reconcile) {
 						self.submit(
@@ -179,7 +188,14 @@ impl Bridge {
 						);
 					}
 				}
-				Ok(Event::Loaded(installed)) => {
+				Ok(Event::Loaded {
+					installed,
+					starters,
+				}) => {
+					self.starters = starters
+						.into_iter()
+						.map(|entry| (source_id(&entry.source).to_owned(), entry))
+						.collect();
 					self.disabled = installed
 						.iter()
 						.filter(|e| e.error.is_some())
@@ -214,6 +230,7 @@ impl Bridge {
 						manifest,
 						description: String::new(),
 						preview: None,
+						theme_preview: None,
 						sha256,
 						reviewed: false,
 						download_bytes,
@@ -422,6 +439,14 @@ impl Bridge {
 				}
 			}
 		}
+		state.set_preserve_deleted_messages(
+			account.is_some()
+				&& self.installed.iter().any(|entry| {
+					entry.error.is_none()
+						&& !self.disabled.contains(&entry.manifest.id)
+						&& entry.preserve_deleted_messages
+				}),
+		);
 		messaging.extensions.busy = self.picker.is_some()
 			|| self
 				.pending
@@ -477,10 +502,18 @@ impl Bridge {
 		}
 	}
 	fn source_for(&self, id: &str, sha256: &str, reviewed: bool) -> Option<InstallSource> {
-		self.imported
-			.as_ref()
-			.filter(|source| !reviewed && source_id(source) == id && source_hash(source) == sha256)
-			.cloned()
+		self.starters
+			.get(id)
+			.filter(|entry| reviewed && source_hash(&entry.source) == sha256)
+			.map(|entry| entry.source.clone())
+			.or_else(|| {
+				self.imported
+					.as_ref()
+					.filter(|source| {
+						!reviewed && source_id(source) == id && source_hash(source) == sha256
+					})
+					.cloned()
+			})
 			.or_else(|| {
 				self.catalog
 					.get(id)
@@ -501,6 +534,7 @@ impl Bridge {
 						manifest: entry.manifest.clone(),
 						description: entry.description.clone(),
 						preview: entry.preview.clone(),
+						theme_preview: None,
 						sha256: entry.sha256.clone(),
 						reviewed: true,
 						download_bytes: entry.download_bytes,
@@ -512,30 +546,54 @@ impl Bridge {
 				)
 			})
 			.collect();
+		for (id, starter) in &self.starters {
+			let InstallSource::Bundled {
+				manifest, sha256, ..
+			} = &starter.source
+			else {
+				continue;
+			};
+			entries.insert(
+				id.clone(),
+				ExtensionEntry {
+					manifest: manifest.clone(),
+					description: starter.description.into(),
+					preview: None,
+					theme_preview: starter.theme.clone(),
+					sha256: sha256.clone(),
+					reviewed: true,
+					download_bytes: starter.download_bytes,
+					enabled: false,
+					update_available: false,
+					update_manifest: None,
+					cleanup_pending: false,
+				},
+			);
+		}
 		for installed in &self.installed {
-			let catalog = self.catalog.get(&installed.manifest.id);
-			let update = catalog.filter(|entry| {
+			let available = entries.get(&installed.manifest.id);
+			let update = available.filter(|entry| {
 				entry.manifest.version != installed.manifest.version
 					|| !entry.sha256.eq_ignore_ascii_case(&installed.sha256)
 			});
-			entries.insert(
-				installed.manifest.id.clone(),
-				ExtensionEntry {
-					manifest: installed.manifest.clone(),
-					description: catalog
-						.map_or_else(String::new, |entry| entry.description.clone()),
-					preview: catalog.and_then(|entry| entry.preview.clone()),
-					sha256: catalog
-						.map_or_else(|| installed.sha256.clone(), |entry| entry.sha256.clone()),
-					reviewed: installed.reviewed,
-					download_bytes: catalog
-						.map_or(installed.download_bytes, |entry| entry.download_bytes),
-					enabled: !self.disabled.contains(&installed.manifest.id),
-					cleanup_pending: self.disabled.contains(&installed.manifest.id),
-					update_available: update.is_some(),
-					update_manifest: update.map(|entry| entry.manifest.clone()),
-				},
-			);
+			let entry = ExtensionEntry {
+				manifest: installed.manifest.clone(),
+				description: available.map_or_else(String::new, |entry| entry.description.clone()),
+				preview: available.and_then(|entry| entry.preview.clone()),
+				theme_preview: available
+					.and_then(|entry| entry.theme_preview.clone())
+					.or_else(|| installed.theme.clone()),
+				sha256: available
+					.map_or_else(|| installed.sha256.clone(), |entry| entry.sha256.clone()),
+				reviewed: available.map_or(installed.reviewed, |entry| entry.reviewed),
+				download_bytes: available
+					.map_or(installed.download_bytes, |entry| entry.download_bytes),
+				enabled: !self.disabled.contains(&installed.manifest.id),
+				cleanup_pending: self.disabled.contains(&installed.manifest.id),
+				update_available: update.is_some(),
+				update_manifest: update.map(|entry| entry.manifest.clone()),
+			};
+			entries.insert(installed.manifest.id.clone(), entry);
 		}
 		messaging
 			.extensions
@@ -554,14 +612,16 @@ impl Bridge {
 fn source_id(source: &InstallSource) -> &str {
 	match source {
 		InstallSource::Catalog(entry) => &entry.manifest.id,
-		InstallSource::Local { manifest, .. } => &manifest.id,
+		InstallSource::Local { manifest, .. } | InstallSource::Bundled { manifest, .. } => {
+			&manifest.id
+		}
 	}
 }
 
 fn source_hash(source: &InstallSource) -> &str {
 	match source {
 		InstallSource::Catalog(entry) => &entry.sha256,
-		InstallSource::Local { sha256, .. } => sha256,
+		InstallSource::Local { sha256, .. } | InstallSource::Bundled { sha256, .. } => sha256,
 	}
 }
 
