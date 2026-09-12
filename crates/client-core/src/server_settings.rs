@@ -79,6 +79,7 @@ impl State {
 	pub fn save_server_settings(&mut self, edit: Edit) -> Option<Command> {
 		let guild = self.server_settings.guild?;
 		if self.server_settings.pending
+			|| self.server_admin.saving
 			|| self.server_settings.needs_refresh
 			|| edit.is_empty()
 			|| !self.valid_server_settings_edit(guild, &edit)

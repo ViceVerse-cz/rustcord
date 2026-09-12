@@ -8,6 +8,7 @@ mod profile_edit;
 pub mod rpc;
 mod server_actions;
 mod server_admin;
+mod server_invites;
 mod server_roles;
 mod server_settings;
 pub mod upload;

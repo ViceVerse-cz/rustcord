@@ -2152,6 +2152,7 @@ impl State {
 				}
 				if !self.can_open_member_settings(guild) {
 					self.server_admin.members = None;
+					self.server_admin.revoke_invite_access();
 				}
 				if !self.can_open_role_settings(guild) {
 					self.server_admin.roles = None;

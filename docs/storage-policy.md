@@ -542,3 +542,14 @@ PNG data URI limits. Its preview is at most 128 by 128 pixels; the completion is
 scoped to account generation, guild, role and picker request. The retained core
 request drops the image payload. CDN role icons share the existing bounded image
 cache and are confined to a validated numeric role ID and icon hash.
+
+### Server invite settings
+
+One active guild invite snapshot uses the existing in-memory administration lane:
+at most 1,000 invites and 1 MiB including allocated strings/vector capacity, with
+at most 256 feature names and 100 assigned role IDs per invite. REST bodies are
+limited to 2 MiB (64 KiB for a revoke response). Larger responses fail visibly;
+they are not silently truncated. Codes and inviter metadata are released when
+settings close, access is lost or the account resets. No invite database, logs,
+background collection or automatic write retry is added. Create Invite retains
+the existing bounded, session-only invite dialog behavior.

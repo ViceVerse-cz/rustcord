@@ -80,6 +80,7 @@ pub fn execute_admin(
 	);
 	let owner = state.user.as_ref().expect("fixture user");
 	let result = match action {
+		Action::Invites(action) => execute_invites(state, guild, action),
 		Action::Roles(action) => execute_roles(state, guild, action),
 		Action::LoadEmojis
 		| Action::CreateEmoji { .. }
@@ -401,6 +402,137 @@ fn execute_roles(
 		.items
 		.sort_by(|a, b| b.position.cmp(&a.position).then_with(|| a.id.cmp(&b.id)));
 	model::server_admin::Result::Roles(Outcome::Catalog { catalog, selected })
+}
+
+fn invite_snapshot(state: &State, guild: Id) -> model::server_invites::Snapshot {
+	use model::server_invites::{Invite, Snapshot};
+	if let Some(snapshot) = &state.server_admin.invites {
+		return snapshot.clone();
+	}
+	let now = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.unwrap_or_default()
+		.as_nanos() as i128;
+	let channel = state.invite_channel(guild);
+	Snapshot {
+		guild,
+		features: vec!["COMMUNITY".into()],
+		items: [
+			"Avery", "Mika", "Rowan", "Sam", "Taylor", "Morgan", "Alex", "Jamie",
+		]
+		.into_iter()
+		.enumerate()
+		.map(|(index, name)| {
+			let mut user = state.user.clone().expect("fixture owner");
+			user.id = Id(9800 + index as u64);
+			user.name = name.into();
+			user.avatar = None;
+			Invite {
+				code: format!("demo-link-{}", index + 1),
+				inviter: Some(user),
+				channel,
+				channel_name: Some(
+					[
+						"general",
+						"game-night",
+						"announcements",
+						"a-long-channel-name-for-the-community",
+					][index % 4]
+						.into(),
+				),
+				uses: Some(if index == 2 { 6 } else { 0 }),
+				max_uses: Some(0),
+				max_age: Some(if index == 5 { 0 } else { 30 * 86400 }),
+				created_at: Some(now - 3600 * 1_000_000_000),
+				expires_at: (index != 5).then_some(
+					now + (if index == 6 {
+						435
+					} else {
+						2_505_600 - index as i128 * 85123
+					}) * 1_000_000_000,
+				),
+				temporary: Some(false),
+				roles: None,
+			}
+		})
+		.collect(),
+	}
+}
+
+fn execute_invites(
+	state: &State,
+	guild: Id,
+	action: model::server_invites::Action,
+) -> model::server_admin::Result {
+	use model::server_invites::Action;
+	let mut snapshot = invite_snapshot(state, guild);
+	match action {
+		Action::Load => {}
+		Action::Revoke { code } => snapshot.items.retain(|invite| invite.code != code),
+		Action::SetPaused { paused } => {
+			snapshot
+				.features
+				.retain(|feature| feature != "INVITES_DISABLED");
+			if paused {
+				snapshot.features.push("INVITES_DISABLED".into());
+			}
+		}
+	}
+	model::server_admin::Result::Invites(snapshot)
+}
+
+/// Same offline invite creation for the desktop demo and framebuffer harness.
+pub fn execute_action(
+	state: &mut State,
+	action: client_core::server_actions::Action,
+	request: u64,
+) -> Event {
+	use client_core::server_actions::Action;
+	let result = match action {
+		Action::CreateInvite {
+			guild,
+			channel,
+			options,
+		} => {
+			let code = format!("synthetic-{request}");
+			if state.server_admin.guild == Some(guild) {
+				let mut snapshot = invite_snapshot(state, guild);
+				let now = std::time::SystemTime::now()
+					.duration_since(std::time::UNIX_EPOCH)
+					.unwrap_or_default()
+					.as_nanos() as i128;
+				snapshot.items.push(model::server_invites::Invite {
+					code: code.clone(),
+					inviter: state.user.clone(),
+					channel: Some(channel),
+					channel_name: state.channel(channel).map(|channel| channel.name.clone()),
+					uses: Some(0),
+					max_uses: Some(u64::from(options.max_uses)),
+					max_age: Some(u64::from(options.max_age)),
+					created_at: Some(now),
+					expires_at: (options.max_age != 0)
+						.then_some(now + i128::from(options.max_age) * 1_000_000_000),
+					temporary: Some(options.temporary),
+					roles: None,
+				});
+				if !snapshot.valid() {
+					return Event::ServerAction(client_core::server_actions::Event::Written {
+						action,
+						request,
+						result: Err(client_core::auth::Failure::Protocol),
+					});
+				}
+				state.server_admin.invites = Some(snapshot);
+			}
+			Some(code)
+		}
+		Action::Leave(_) => None,
+	};
+	Event::ServerAction(client_core::server_actions::Event::Written {
+		action,
+		request,
+		result: Ok(result),
+	})
 }
 
 pub fn open(state: &mut State, messaging: &mut ui::MessagingUi) {

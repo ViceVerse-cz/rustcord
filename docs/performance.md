@@ -3674,3 +3674,54 @@ interaction remain unmeasured. Framebuffer exports were inspected at 1440x1000
 and 800x900 logical sizes (125% pixel output); native Computer Use failed to
 connect to its pipe (OS error 2) and Orca CLI was absent. No live Discord result
 is inferred. Raw samples: [metrics.json](pr-evidence/server-roles/metrics.json).
+
+
+## Server invite settings - September 12, 2026
+
+Baseline `b47c490`, implementation `7ddf670`, Windows 11 Home 10.0.26200,
+Ryzen 7 7800X3D (16 logical processors), 33,410,678,784 physical RAM bytes,
+Rust 1.98.1. Standard packages include voice; no dependency/feature-policy change.
+The baseline is the clean task starting commit; later unrelated main changes are
+not included in either side of this comparison.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Standard executable bytes | 66,963,456 | 67,083,264 | +119,808 (+0.179%) |
+| Installed package bytes | 73,301,095 | 73,422,980 | +121,885 (+0.166%) |
+| DEFLATE-9 ZIP bytes | 42,895,158 | 42,943,475 | +48,317 (+0.113%) |
+| Reducer replay median, ms | 43.8178 | 40.7485 | -3.0693 (-7.005%) |
+| Peak working-set bytes | 175,968,256 | 170,913,792 | -5,054,464 (-2.872%) |
+| Peak private bytes | 403,664,896 | 398,708,736 | -4,956,160 (-1.228%) |
+
+Final `cargo xtask package` outputs were staged separately. Installed size sums
+all 234 files from the unchanged packager manifest; the changed output was staged
+using the clean baseline's relative paths to exclude unrelated stale root dist
+files, which were preserved. ZIP uses sorted paths, fixed timestamps and Python
+zipfile DEFLATE level 9. Both snapshots precede this measurement note.
+
+Reducer replay: one warmup plus five direct release executable runs, 100,000
+synthetic events each, no concurrent local builds. Both retain 500 messages and
+236,992-237,477 estimated timeline bytes. Baseline samples range 41.6375-53.4924 ms;
+after 40.0589-42.4159 ms. This generic reducer workload is not invite operation
+latency; the difference from one series is not evidence of a feature speedup.
+
+Process samples use separate release builds with the existing `demo` feature,
+`--demo --demo-server-settings`, Wgpu, default 1120x760 logical window. Both used
+Start-Process Hidden, five seconds warmup and twenty samples 500 ms apart, without
+concurrent builds or native scripted input. Working set and private bytes are
+Windows Get-Process metrics, not GPU allocations. Raw samples are committed below.
+
+- Baseline: peak/settled working set 175,968,256/175,968,256 bytes; peak/settled private bytes 403,664,896/403,664,896; measured CPU delta 1093.75 ms.
+- After: peak/settled working set 170,913,792/170,913,792 bytes; peak/settled private bytes 398,708,736/398,708,736; measured CPU delta 0 ms.
+- Invites: peak/settled working set 170,651,648/170,651,648 bytes; peak/settled private bytes 397,152,256/397,152,256; measured CPU delta 31.25 ms.
+
+The additional Invites sample adds `--demo-server-page=invites` and uses eight new
+synthetic rows with visible one-second countdowns. No predecessor Invites page
+exists. Baseline CPU activity and the one-pair memory differences are reported,
+not attributed to this feature; timer resolution does not prove zero idle CPU.
+Helper/GPU allocation, frame-time p95 and startup latency remain unmeasured.
+
+Inspected offline framebuffer exports at 1440x1000 and 800x900 logical sizes
+(125% pixel output), dark/light themes. Native Computer Use could not connect to
+its pipe (OS error 2). These captures and egui click tests are not native input,
+accessibility or live Discord proof. Raw evidence: [metrics.json](pr-evidence/server-invites/metrics.json).

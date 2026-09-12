@@ -1,0 +1,418 @@
+{
+  "baseline_commit": "b47c490",
+  "implementation_commit": "7ddf670fea5aef897010e03bb21f277a47fe40e9",
+  "package_bytes": {
+    "baseline": {
+      "exe": 66963456,
+      "installed": 73301095,
+      "zip": 42895158,
+      "files": 234
+    },
+    "after": {
+      "exe": 67083264,
+      "installed": 73422980,
+      "zip": 42943475,
+      "files": 234
+    }
+  },
+  "replay_ms": {
+    "baseline": [
+      42.0058,
+      53.4924,
+      46.0794,
+      43.8178,
+      41.6375
+    ],
+    "after": [
+      40.0589,
+      41.3262,
+      40.7485,
+      42.4159,
+      40.3126
+    ]
+  },
+  "replay_output": {
+    "baseline": [
+      "Synthetic reducer replay: 100000 events in 42.0058ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 53.4924ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 46.0794ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 43.8178ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 41.6375ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility."
+    ],
+    "after": [
+      "Synthetic reducer replay: 100000 events in 40.0589ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 41.3262ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 40.7485ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 42.4159ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 40.3126ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility."
+    ]
+  },
+  "process_samples": {
+    "baseline": [
+      {
+        "time": "/Date(1789245894152)/",
+        "cpu_ms": 421.875,
+        "ws": 171028480,
+        "private": 399134720
+      },
+      {
+        "time": "/Date(1789245894664)/",
+        "cpu_ms": 421.875,
+        "ws": 171028480,
+        "private": 399134720
+      },
+      {
+        "time": "/Date(1789245895179)/",
+        "cpu_ms": 421.875,
+        "ws": 171028480,
+        "private": 399134720
+      },
+      {
+        "time": "/Date(1789245895692)/",
+        "cpu_ms": 421.875,
+        "ws": 171028480,
+        "private": 399134720
+      },
+      {
+        "time": "/Date(1789245896206)/",
+        "cpu_ms": 515.625,
+        "ws": 171077632,
+        "private": 399138816
+      },
+      {
+        "time": "/Date(1789245896722)/",
+        "cpu_ms": 578.125,
+        "ws": 173060096,
+        "private": 401469440
+      },
+      {
+        "time": "/Date(1789245897241)/",
+        "cpu_ms": 656.25,
+        "ws": 173666304,
+        "private": 401739776
+      },
+      {
+        "time": "/Date(1789245897755)/",
+        "cpu_ms": 703.125,
+        "ws": 173703168,
+        "private": 401739776
+      },
+      {
+        "time": "/Date(1789245898271)/",
+        "cpu_ms": 765.625,
+        "ws": 173715456,
+        "private": 401739776
+      },
+      {
+        "time": "/Date(1789245898791)/",
+        "cpu_ms": 875,
+        "ws": 173846528,
+        "private": 401739776
+      },
+      {
+        "time": "/Date(1789245899302)/",
+        "cpu_ms": 937.5,
+        "ws": 175505408,
+        "private": 403324928
+      },
+      {
+        "time": "/Date(1789245899817)/",
+        "cpu_ms": 1015.625,
+        "ws": 175587328,
+        "private": 403324928
+      },
+      {
+        "time": "/Date(1789245900331)/",
+        "cpu_ms": 1125,
+        "ws": 175620096,
+        "private": 403324928
+      },
+      {
+        "time": "/Date(1789245900848)/",
+        "cpu_ms": 1203.125,
+        "ws": 175628288,
+        "private": 403324928
+      },
+      {
+        "time": "/Date(1789245901363)/",
+        "cpu_ms": 1250,
+        "ws": 175702016,
+        "private": 403394560
+      },
+      {
+        "time": "/Date(1789245901877)/",
+        "cpu_ms": 1296.875,
+        "ws": 175874048,
+        "private": 403664896
+      },
+      {
+        "time": "/Date(1789245902392)/",
+        "cpu_ms": 1343.75,
+        "ws": 175894528,
+        "private": 403664896
+      },
+      {
+        "time": "/Date(1789245902909)/",
+        "cpu_ms": 1390.625,
+        "ws": 175968256,
+        "private": 403664896
+      },
+      {
+        "time": "/Date(1789245903414)/",
+        "cpu_ms": 1484.375,
+        "ws": 175968256,
+        "private": 403664896
+      },
+      {
+        "time": "/Date(1789245903931)/",
+        "cpu_ms": 1515.625,
+        "ws": 175968256,
+        "private": 403664896
+      }
+    ],
+    "after": [
+      {
+        "time": "/Date(1789246758452)/",
+        "cpu_ms": 421.875,
+        "ws": 170913792,
+        "private": 398708736
+      },
+      {
+        "time": "/Date(1789246758961)/",
+        "cpu_ms": 421.875,
+        "ws": 170913792,
+        "private": 398708736
+      },
+      {
+        "time": "/Date(1789246759477)/",
+        "cpu_ms": 421.875,
+        "ws": 170913792,
+        "private": 398708736
+      },
+      {
+        "time": "/Date(1789246759991)/",
+        "cpu_ms": 421.875,
+        "ws": 170913792,
+        "private": 398708736
+      },
+      {
+        "time": "/Date(1789246760506)/",
+        "cpu_ms": 421.875,
+        "ws": 170913792,
+        "private": 398708736
+      },
+      {
+        "time": "/Date(1789246761018)/",
+        "cpu_ms": 421.875,
+        "ws": 170913792,
+        "private": 398708736
+      },
+      {
+        "time": "/Date(1789246761534)/",
+        "cpu_ms": 421.875,
+        "ws": 170913792,
+        "private": 398708736
+      },
+      {
+        "time": "/Date(1789246762048)/",
+        "cpu_ms": 421.875,
+        "ws": 170913792,
+        "private": 398708736
+      },
+      {
+        "time": "/Date(1789246762566)/",
+        "cpu_ms": 421.875,
+        "ws": 170913792,
+        "private": 398708736
+      },
+      {
+        "time": "/Date(1789246763082)/",
+        "cpu_ms": 421.875,
+        "ws": 170913792,
+        "private": 398708736
+      },
+      {
+        "time": "/Date(1789246763600)/",
+        "cpu_ms": 421.875,
+        "ws": 170913792,
+        "private": 398708736
+      },
+      {
+        "time": "/Date(1789246764114)/",
+        "cpu_ms": 421.875,
+        "ws": 170913792,
+        "private": 398708736
+      },
+      {
+        "time": "/Date(1789246764630)/",
+        "cpu_ms": 421.875,
+        "ws": 170913792,
+        "private": 398708736
+      },
+      {
+        "time": "/Date(1789246765147)/",
+        "cpu_ms": 421.875,
+        "ws": 170913792,
+        "private": 398708736
+      },
+      {
+        "time": "/Date(1789246765653)/",
+        "cpu_ms": 421.875,
+        "ws": 170913792,
+        "private": 398708736
+      },
+      {
+        "time": "/Date(1789246766167)/",
+        "cpu_ms": 421.875,
+        "ws": 170913792,
+        "private": 398708736
+      },
+      {
+        "time": "/Date(1789246766688)/",
+        "cpu_ms": 421.875,
+        "ws": 170913792,
+        "private": 398708736
+      },
+      {
+        "time": "/Date(1789246767204)/",
+        "cpu_ms": 421.875,
+        "ws": 170913792,
+        "private": 398708736
+      },
+      {
+        "time": "/Date(1789246767715)/",
+        "cpu_ms": 421.875,
+        "ws": 170913792,
+        "private": 398708736
+      },
+      {
+        "time": "/Date(1789246768229)/",
+        "cpu_ms": 421.875,
+        "ws": 170913792,
+        "private": 398708736
+      }
+    ],
+    "invites": [
+      {
+        "time": "/Date(1789246773983)/",
+        "cpu_ms": 421.875,
+        "ws": 170639360,
+        "private": 397152256
+      },
+      {
+        "time": "/Date(1789246774506)/",
+        "cpu_ms": 421.875,
+        "ws": 170639360,
+        "private": 397152256
+      },
+      {
+        "time": "/Date(1789246775022)/",
+        "cpu_ms": 421.875,
+        "ws": 170639360,
+        "private": 397152256
+      },
+      {
+        "time": "/Date(1789246775534)/",
+        "cpu_ms": 421.875,
+        "ws": 170643456,
+        "private": 397152256
+      },
+      {
+        "time": "/Date(1789246776049)/",
+        "cpu_ms": 421.875,
+        "ws": 170643456,
+        "private": 397152256
+      },
+      {
+        "time": "/Date(1789246776567)/",
+        "cpu_ms": 437.5,
+        "ws": 170643456,
+        "private": 397152256
+      },
+      {
+        "time": "/Date(1789246777084)/",
+        "cpu_ms": 437.5,
+        "ws": 170643456,
+        "private": 397152256
+      },
+      {
+        "time": "/Date(1789246777599)/",
+        "cpu_ms": 437.5,
+        "ws": 170643456,
+        "private": 397152256
+      },
+      {
+        "time": "/Date(1789246778118)/",
+        "cpu_ms": 437.5,
+        "ws": 170643456,
+        "private": 397152256
+      },
+      {
+        "time": "/Date(1789246778630)/",
+        "cpu_ms": 437.5,
+        "ws": 170643456,
+        "private": 397152256
+      },
+      {
+        "time": "/Date(1789246779135)/",
+        "cpu_ms": 437.5,
+        "ws": 170643456,
+        "private": 397152256
+      },
+      {
+        "time": "/Date(1789246779653)/",
+        "cpu_ms": 453.125,
+        "ws": 170647552,
+        "private": 397152256
+      },
+      {
+        "time": "/Date(1789246780170)/",
+        "cpu_ms": 453.125,
+        "ws": 170647552,
+        "private": 397152256
+      },
+      {
+        "time": "/Date(1789246780682)/",
+        "cpu_ms": 453.125,
+        "ws": 170647552,
+        "private": 397152256
+      },
+      {
+        "time": "/Date(1789246781200)/",
+        "cpu_ms": 453.125,
+        "ws": 170647552,
+        "private": 397152256
+      },
+      {
+        "time": "/Date(1789246781717)/",
+        "cpu_ms": 453.125,
+        "ws": 170647552,
+        "private": 397152256
+      },
+      {
+        "time": "/Date(1789246782229)/",
+        "cpu_ms": 453.125,
+        "ws": 170647552,
+        "private": 397152256
+      },
+      {
+        "time": "/Date(1789246782747)/",
+        "cpu_ms": 453.125,
+        "ws": 170647552,
+        "private": 397152256
+      },
+      {
+        "time": "/Date(1789246783263)/",
+        "cpu_ms": 453.125,
+        "ws": 170647552,
+        "private": 397152256
+      },
+      {
+        "time": "/Date(1789246783781)/",
+        "cpu_ms": 453.125,
+        "ws": 170651648,
+        "private": 397152256
+      }
+    ]
+  }
+}
