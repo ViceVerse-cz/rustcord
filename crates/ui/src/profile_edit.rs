@@ -442,6 +442,7 @@ mod tests {
 			name: "Synthetic".into(),
 			avatar: None,
 			webhook: false,
+			kind: Default::default(),
 			discriminator: 0,
 		};
 		let mut profile = crate::profiles::synthetic(&user, None);

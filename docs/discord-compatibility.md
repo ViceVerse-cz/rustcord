@@ -738,6 +738,25 @@ and Invisible, including the latter two explanations. Custom text opens its own 
 editor with Apply/Clear. This reuses session presence publication; no automatic expiry,
 emoji picker, account switching or public-profile editing is claimed.
 
+### Account-type badges (September 12, 2026)
+
+Chat author headers and member-list names share a compact theme-aware badge, reserving
+space when a nickname is long. BOT is driven by the user object's explicit `bot` flag;
+WEBHOOK requires message `webhook_id`; APP takes precedence for bot/webhook messages
+with an explicit `application_id`. Ordinary users and rich-presence embeds are not
+relabeled from their names, profile errors or generic `application` objects.
+Member payloads normally expose only `bot`, so these display BOT, not a guessed APP
+classification. Webhooks are message authors, not invented guild members.
+
+Sources checked September 12:
+[Discord User Resource](https://docs.discord.com/developers/resources/user),
+[Discord Message Resource](https://docs.discord.com/developers/resources/message).
+These are documented metadata fields, not a live normal-session verification.
+One fixed-size model enum survives cache schema 14; legacy messages remain unclassified
+until refreshed. Tests cover metadata precedence, migration/roundtrip, grouping changes,
+both named UI surfaces and narrow/light/dark badge layout. Native visual evidence and
+live-account validation are not available in this agent environment.
+
 ### Private notes and friend nicknames (September 12, 2026)
 
 Shared user menus expose Add Note and Add/Edit Friend Nickname; the latter requires a

@@ -170,6 +170,8 @@ fn layout_key(message: &Message) -> u64 {
 		user.name.hash(&mut key);
 	}
 	message.author.name.hash(&mut key);
+	message.author.kind.hash(&mut key);
+	message.author.webhook.hash(&mut key);
 	message.edited.hash(&mut key);
 	message.reply_to.hash(&mut key);
 	message.reply_deleted.hash(&mut key);
@@ -221,6 +223,7 @@ fn system_icon(kind: u8, colors: &crate::design::Palette) -> (crate::icons::Icon
 fn grouped(previous: Option<&Message>, message: &Message, boundary: Option<Id>) -> bool {
 	previous.is_some_and(|previous| {
 		previous.author.id == message.author.id
+			&& previous.author.account_label() == message.author.account_label()
 			&& message.reply_to.is_none()
 			&& !message.unsupported
 			&& !previous.unsupported
@@ -992,18 +995,14 @@ impl TimelineView {
 											egui::Layout::left_to_right(egui::Align::Center),
 											|ui| {
 												ui.spacing_mut().item_spacing.x = 8.0;
-												let author = ui.add(
-													egui::Label::new(
-														crate::design::medium(
-															ui,
-															state
-																.user_display_name(&message.author),
-															15.5,
-														)
-														.color(colors.text_strong),
-													)
-													.truncate()
-													.sense(egui::Sense::click()),
+												let author = crate::account_badge::name(
+													ui,
+													&message.author,
+													state.user_display_name(&message.author),
+													15.5,
+													colors.text_strong,
+													egui::Sense::click(),
+													48.0,
 												);
 												crate::user_menu::show(
 													&author,
@@ -2111,6 +2110,7 @@ mod tests {
 				name: "Robin".into(),
 				avatar: None,
 				webhook: false,
+				kind: Default::default(),
 				discriminator: 0,
 			},
 			content: "Synthetic text with enough words to wrap in a narrow viewport.".into(),
@@ -2528,6 +2528,11 @@ mod tests {
 		let mut next = text_message((60_000 << 22) | 1);
 		assert_eq!(timestamp(first.id).date().to_string(), "2015-01-01");
 		assert!(grouped(Some(&first), &next, None));
+		let original_key = layout_key(&next);
+		next.author.kind = model::AccountKind::Bot;
+		assert!(!grouped(Some(&first), &next, None));
+		assert_ne!(original_key, layout_key(&next));
+		next.author.kind = model::AccountKind::Human;
 		next.edited = true;
 		assert!(grouped(Some(&first), &next, None));
 		next.edited = false;
@@ -2545,6 +2550,60 @@ mod tests {
 		next.id = Id(86_400_000 << 22);
 		assert!(!grouped(Some(&first), &next, None));
 		assert_eq!(timestamp(Id(u64::MAX)).year(), 2154);
+	}
+	#[test]
+	fn account_badges_render_in_chat_without_grouping_different_author_kinds() {
+		let ctx = egui::Context::default();
+		crate::design::apply(&ctx);
+		let mut state = State {
+			demo: true,
+			selected: Some(Id(20)),
+			..Default::default()
+		};
+		for (index, kind, webhook) in [
+			(1, model::AccountKind::Bot, false),
+			(2, model::AccountKind::App, true),
+			(3, model::AccountKind::Human, true),
+		] {
+			let mut message = text_message(index);
+			message.author.kind = kind;
+			message.author.webhook = webhook;
+			state.timeline.insert(message, false, false).unwrap();
+		}
+		let mut view = TimelineView::default();
+		let mut avatars = crate::avatars::Avatars::default();
+		for _ in 0..4 {
+			ctx.run_ui(Default::default(), |ui| {
+				view.show(
+					ui,
+					&mut state,
+					&mut None,
+					&mut None,
+					(&mut avatars, &mut None),
+					None,
+				);
+			})
+			.drop_without_applying_deltas();
+		}
+		let output = ctx.run_ui(Default::default(), |ui| {
+			view.show(
+				ui,
+				&mut state,
+				&mut None,
+				&mut None,
+				(&mut avatars, &mut None),
+				None,
+			);
+		});
+		for expected in ["BOT", "APP", "WEBHOOK"] {
+			assert!(
+				output.shapes.iter().any(
+					|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text == expected)
+				),
+				"Missing {expected}"
+			);
+		}
+		output.drop_without_applying_deltas();
 	}
 	#[test]
 	fn short_continuations_use_one_line_and_keep_internal_breaks() {
@@ -4055,6 +4114,7 @@ mod tests {
 				name: "Synthetic".into(),
 				avatar: None,
 				webhook: false,
+				kind: Default::default(),
 				discriminator: 0,
 			},
 			content: "<#4> ".repeat(12),
@@ -4203,6 +4263,7 @@ mod tests {
 				name: "Synthetic".into(),
 				avatar: None,
 				webhook: false,
+				kind: Default::default(),
 				discriminator: 0,
 			},
 			content: "||old revealed content||".into(),
@@ -4289,6 +4350,7 @@ mod tests {
 				name: "Synthetic".into(),
 				avatar: None,
 				webhook: false,
+				kind: Default::default(),
 				discriminator: 0,
 			},
 			content: "Ordinary text".into(),

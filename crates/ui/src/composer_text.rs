@@ -325,6 +325,7 @@ mod tests {
 			name: "Zoë".into(),
 			avatar: None,
 			webhook: false,
+			kind: Default::default(),
 			discriminator: 0,
 		}]
 	}

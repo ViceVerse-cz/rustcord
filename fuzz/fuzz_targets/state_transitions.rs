@@ -8,6 +8,7 @@ use std::hash::{Hash, Hasher};
 fn user() -> User {
 	User {
 		webhook: false,
+		kind: Default::default(),
 		id: Id(2),
 		name: "Synthetic".into(),
 		avatar: None,

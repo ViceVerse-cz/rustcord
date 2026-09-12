@@ -106,6 +106,7 @@ pub fn message(id: u64, channel: Id) -> Message {
 		author: User {
 			avatar: None,
 			webhook: false,
+			kind: Default::default(),
 			discriminator: 0,
 			id: Id(if id.is_multiple_of(2) { 1 } else { 2 }),
 			name: if id.is_multiple_of(2) {
@@ -193,6 +194,7 @@ pub fn message(id: u64, channel: Id) -> Message {
 				name: "Robin (synthetic)".into(),
 				avatar: None,
 				webhook: false,
+				kind: Default::default(),
 				discriminator: 0,
 			}]
 		} else {
@@ -240,6 +242,7 @@ pub fn demo_state() -> State {
 			user: User {
 				avatar: None,
 				webhook: false,
+				kind: Default::default(),
 				discriminator: 0,
 				id: Id(1),
 				name: "You (synthetic)".into(),
@@ -334,6 +337,7 @@ pub fn demo_state() -> State {
 							name: "Casey (synthetic)".into(),
 							avatar: None,
 							webhook: false,
+							kind: Default::default(),
 							discriminator: 0,
 						},
 					],
@@ -466,6 +470,7 @@ pub fn demo_state() -> State {
 						name: name.into(),
 						avatar: None,
 						webhook: false,
+						kind: Default::default(),
 						discriminator: 0,
 					},
 					format!("{}.synthetic", name.to_lowercase()),
@@ -550,6 +555,7 @@ pub fn voice_demo_state() -> State {
 				name: name.into(),
 				avatar: None,
 				webhook: false,
+				kind: Default::default(),
 				discriminator: 0,
 			},
 			nick: None,
@@ -842,6 +848,7 @@ pub fn system_demo_state() -> State {
 			name: "Casey (synthetic)".into(),
 			avatar: None,
 			webhook: false,
+			kind: Default::default(),
 			discriminator: 0,
 		}];
 		state.timeline.insert(m, false, false).unwrap();
@@ -892,6 +899,7 @@ pub fn friends_demo_state() -> State {
 					avatar: None,
 					discriminator: 0,
 					webhook: false,
+					kind: Default::default(),
 				},
 				"avery.synthetic".into(),
 				true,
@@ -903,6 +911,7 @@ pub fn friends_demo_state() -> State {
 					avatar: None,
 					discriminator: 0,
 					webhook: false,
+					kind: Default::default(),
 				},
 				"morgan.synthetic".into(),
 				false,

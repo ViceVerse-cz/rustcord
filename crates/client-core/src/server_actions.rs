@@ -467,6 +467,7 @@ mod tests {
 				name: "Synthetic".into(),
 				avatar: None,
 				webhook: false,
+				kind: Default::default(),
 				discriminator: 0,
 			}),
 			guilds: vec![model::Guild {
@@ -556,6 +557,7 @@ mod tests {
 			name: "Friend".into(),
 			avatar: None,
 			webhook: false,
+			kind: Default::default(),
 			discriminator: 0,
 		};
 		state

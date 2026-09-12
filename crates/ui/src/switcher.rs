@@ -551,6 +551,7 @@ mod tests {
 					name: "Žofie Example".into(),
 					avatar: None,
 					webhook: false,
+					kind: Default::default(),
 					discriminator: 0,
 				}],
 				member_list_id: None,

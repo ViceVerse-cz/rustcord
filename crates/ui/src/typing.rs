@@ -204,6 +204,7 @@ mod tests {
 				name: "You".into(),
 				avatar: None,
 				webhook: false,
+				kind: Default::default(),
 				discriminator: 0,
 			}),
 			channels: vec![Channel {
@@ -223,6 +224,7 @@ mod tests {
 						name: "Alex".into(),
 						avatar: None,
 						webhook: false,
+						kind: Default::default(),
 						discriminator: 0,
 					},
 					User {
@@ -230,6 +232,7 @@ mod tests {
 						name: "Robin".into(),
 						avatar: None,
 						webhook: false,
+						kind: Default::default(),
 						discriminator: 0,
 					},
 					User {
@@ -237,6 +240,7 @@ mod tests {
 						name: "Long name\n".repeat(100),
 						avatar: None,
 						webhook: false,
+						kind: Default::default(),
 						discriminator: 0,
 					},
 				],

@@ -840,6 +840,7 @@ mod tests {
 			author: model::User {
 				avatar: None,
 				webhook: false,
+				kind: Default::default(),
 				discriminator: 0,
 				id: Id(2),
 				name: "Synthetic".into(),

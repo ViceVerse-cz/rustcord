@@ -433,6 +433,7 @@ mod tests {
 					name: "Synthetic".into(),
 					avatar: None,
 					webhook: false,
+					kind: Default::default(),
 					discriminator: 0,
 				},
 				channels: state.channels.clone(),

@@ -67,6 +67,11 @@ pub struct UserDto {
 impl UserDto {
 	pub fn into_model(self) -> User {
 		User {
+			kind: if self.bot {
+				model::AccountKind::Bot
+			} else {
+				model::AccountKind::Human
+			},
 			id: self.id,
 			name: self
 				.global_name
@@ -495,6 +500,8 @@ fn mention_roles<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Id>, D::E
 #[derive(Deserialize)]
 pub struct MessageDto {
 	#[serde(default)]
+	pub application_id: Option<Id>,
+	#[serde(default)]
 	pub webhook_id: Option<Id>,
 	#[serde(default)]
 	pub poll: Option<extra_content::Object>,
@@ -567,6 +574,11 @@ impl MessageDto {
 			reply_to.is_some() && matches!(self.referenced_message, model::Patch::Null);
 		let mut author = self.author.into_model();
 		author.webhook = self.webhook_id.is_some();
+		if self.application_id.is_some()
+			&& (author.webhook || author.kind == model::AccountKind::Bot)
+		{
+			author.kind = model::AccountKind::App;
+		}
 		Message {
 			extra_content: model::ExtraContent {
 				poll: self.poll.is_some(),
@@ -741,6 +753,35 @@ mod tests {
 		assert!(!read(&wire).unwrap().into_model().author.webhook);
 		wire["webhook_id"] = serde_json::json!("invalid");
 		assert!(read(&wire).is_err());
+	}
+	#[test]
+	fn account_badges_follow_bot_and_application_provenance() {
+		let mut wire = serde_json::json!({"id":"100","channel_id":"2","author":{"id":"3","username":"BOT WEBHOOK APP"},"content":"synthetic"});
+		let label = |wire: &serde_json::Value| {
+			decode::<MessageDto>(&serde_json::to_vec(wire).unwrap())
+				.unwrap()
+				.into_model()
+				.author
+				.account_label()
+		};
+		assert_eq!(label(&wire), None, "Names are not account metadata");
+		wire["author"]["bot"] = serde_json::json!(true);
+		assert_eq!(label(&wire), Some("BOT"));
+		wire["webhook_id"] = serde_json::json!("3");
+		assert_eq!(label(&wire), Some("WEBHOOK"));
+		wire["application_id"] = serde_json::json!("4");
+		assert_eq!(label(&wire), Some("APP"));
+		wire["webhook_id"] = serde_json::Value::Null;
+		assert_eq!(label(&wire), Some("APP"));
+		wire["author"]["bot"] = serde_json::json!(false);
+		assert_eq!(
+			label(&wire),
+			None,
+			"Human rich-presence/game messages are not apps"
+		);
+		let user: UserDto =
+			decode(br#"{"id":"3","username":"Synthetic member","bot":true}"#).unwrap();
+		assert_eq!(user.into_model().account_label(), Some("BOT"));
 	}
 	#[test]
 	fn notification_metadata_is_service_derived_and_role_mentions_are_bounded() {

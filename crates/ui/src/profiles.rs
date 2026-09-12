@@ -1129,6 +1129,7 @@ mod tests {
 			name: "Synthetic person".into(),
 			avatar: None,
 			webhook: false,
+			kind: Default::default(),
 			discriminator: 0,
 		};
 		let profile = ProfileView {
@@ -1243,6 +1244,7 @@ mod tests {
 			name: "Synthetic person".into(),
 			avatar: None,
 			webhook: false,
+			kind: Default::default(),
 			discriminator: 0,
 		};
 		let state = State::default();
