@@ -6,10 +6,20 @@ use serde::{
 };
 const MAX_ENTRIES: usize = 4000;
 
+/// Discord sends cursors as snowflake strings, but some non-channel read-state kinds carry a
+/// bare integer `0`; either spelling of zero means "no cursor".
 fn cursor<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Id>, D::Error> {
-	match Option::<String>::deserialize(d)?.as_deref() {
-		None | Some("0") => Ok(None),
-		Some(value) => value.parse().map(Some).map_err(serde::de::Error::custom),
+	#[derive(Deserialize)]
+	#[serde(untagged)]
+	enum Cursor {
+		Text(String),
+		Number(u64),
+	}
+	match Option::<Cursor>::deserialize(d)? {
+		None | Some(Cursor::Number(0)) => Ok(None),
+		Some(Cursor::Number(value)) => Ok(Some(Id(value))),
+		Some(Cursor::Text(value)) if value == "0" => Ok(None),
+		Some(Cursor::Text(value)) => value.parse().map(Some).map_err(serde::de::Error::custom),
 	}
 }
 pub(crate) fn entries<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
@@ -127,6 +137,17 @@ mod tests {
 		let snapshot: Snapshot = crate::decode(br#"{"entries":[{"id":"1","last_message_id":"0","mention_count":7},{"id":"2","last_message_id":"3","type":2}],"version":4,"partial":true}"#).unwrap();
 		assert_eq!(snapshot.entries[0].last_message_id, None);
 		assert_eq!(snapshot.entries[0].mention_count, 7);
+		let numeric: Snapshot = crate::decode(br#"{"entries":[{"id":"1","last_message_id":0,"type":1},{"id":"2","last_message_id":5,"type":1},{"id":"3","last_message_id":null}],"version":4,"partial":false}"#).unwrap();
+		assert_eq!(numeric.entries[0].last_message_id, None);
+		assert_eq!(numeric.entries[1].last_message_id, Some(Id(5)));
+		assert_eq!(numeric.entries[2].last_message_id, None);
+		assert!(
+			crate::decode::<Snapshot>(br#"{"entries":[{"id":"1","last_message_id":-1}]}"#).is_err()
+		);
+		assert!(
+			crate::decode::<Snapshot>(br#"{"entries":[{"id":"1","last_message_id":true}]}"#)
+				.is_err()
+		);
 		assert_eq!(snapshot.entries[1].last_message_id, Some(Id(3)));
 		assert_eq!(snapshot.entries[1].kind, 2);
 		assert_eq!(snapshot.version, Some(4));
