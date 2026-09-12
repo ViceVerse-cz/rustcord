@@ -49,6 +49,12 @@ pub fn search_terms(query: &str) -> Result<SearchTerms, &'static str> {
 				}
 				"author_type"
 			}
+			"pinned" => {
+				if !matches!(value, "true" | "false") {
+					return Err("Choose true or false for Pinned.");
+				}
+				"pinned"
+			}
 			_ => {
 				content.push(token);
 				continue;

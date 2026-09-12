@@ -3134,6 +3134,51 @@ Native CPU/RSS, frame/startup timing and screenshots are unmeasured: native comp
 failed with "native pipe is unavailable ... The system cannot find the file specified.
 (os error 2)". No live Discord account was used.
 
+## Windows and Linux camera capture - September 12, 2026
+
+Baseline `e9ce858406e5cb016b86bd4399edec8afdfd5224` versus camera implementation
+`2622717` (subsequent commit changes only this evidence). Both Windows packages
+use the locked standard `cargo xtask package`, including voice and existing notices.
+Package snapshots precede this measurement note; 217 installed files, no PR images
+or build/debug artifacts. ZIPs use .NET ZipFile Optimal compression without an
+enclosing directory. No dependency versions or codec binaries were added.
+
+| Metric / method | Baseline | After | Delta |
+| --- | --- | --- | --- |
+| Standard executable, bytes | 62,360,576 | 62,393,856 | +33,280 (+0.053%) |
+| Full installed package, bytes | 68,560,885 | 68,598,162 | +37,277 (+0.054%) |
+| Optimal ZIP, bytes | 41,418,852 | 41,434,153 | +15,301 (+0.037%) |
+| Settled working set, MiB (first pair) | 196.254 | 200.695 | +4.441 (+2.26%) |
+| Peak sampled working set, MiB (first pair) | 196.258 | 200.703 | +4.445 (+2.27%) |
+| Settled private bytes, MiB (first pair) | 367.324 | 396.238 | +28.914 (+7.87%) |
+| Peak sampled private bytes, MiB (first pair) | 367.363 | 396.277 | +28.914 (+7.87%) |
+| Idle CPU, % of one logical core (first pair) | 0.232 | 2.630 | +2.398 percentage points |
+
+Native idle sampling uses separate release builds with `--features demo`, launched
+with `--demo --demo-voice`; the standard package deliberately excludes demo fixtures.
+Both run the same synthetic call scene, without camera or microphone access, with
+10 seconds warmup then 20 one-second process samples. The initial viewport is
+1120×760 logical pixels; renderer is wgpu. Hardware: Windows 11 Home 10.0.26200,
+Ryzen 7 7800X3D (16 logical processors), 33,410,678,784 bytes visible RAM, Rust 1.98.1.
+Windows process WorkingSet64 and PrivateMemorySize64 are sampled separately;
+CPU is process CPU time divided by elapsed wall time (100% means one logical core).
+Backend adapter, actual display scale and GPU memory were not measured. No scripted
+interaction was possible because the native computer-use pipe was unavailable.
+
+The first pair sampled 20.1945/20.1962 seconds and 0.046875/0.53125 CPU seconds.
+A repeat changed-build run (same 10-second warmup and 20 samples) settled at
+157.102 MiB working set / 377.000 MiB private bytes and 0.232% of one core.
+The second baseline process exited during sampling, so that incomplete run was
+discarded. The visible variation prevents a stable idle-regression or improvement
+claim; the initial higher private-memory sample is reported rather than hidden.
+The changed process loaded the system MF/MFCORE libraries; their individual cost
+was not isolated. No camera capture was started in any measurement.
+
+Active capture memory/CPU, sustained video bandwidth, frame latency and Linux native
+runtime are unmeasured. These idle samples cannot establish camera performance or
+Discord interoperability. Native screenshots could not be inspected or exported:
+the tool reported `native pipe is unavailable ... (os error 2)` after retry/reset.
+
 
 ### Inline video debug playback and range buffering (September 12, 2026)
 

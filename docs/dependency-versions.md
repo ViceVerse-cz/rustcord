@@ -2,6 +2,16 @@
 
 Voice is now included in every desktop build without a feature flag. Dated dependency-selection notes below describe their original snapshots.
 
+September 12 camera capture: Windows reuses the locked `windows 0.61.3` and
+`windows-core 0.61.2` bindings with Media Foundation/COM features. Linux uses the
+locked `libc 0.2.189` V4L2 interface and `image 0.25.10` JPEG decoder. No package
+versions, codec binaries or helper processes were added; existing dependency
+notices apply. Camera encoding reuses `openh264 0.9.8` on all three platforms.
+
+September 12 link-opening fix: enable eframe's `links` feature, adding webbrowser 1.2.4
+(MIT OR Apache-2.0) to launch the default browser. No existing dependency versions change.
+The registry release's MIT license is bundled in `assets/licenses/files/webbrowser-1.2.4-LICENSE-MIT`.
+
 September 10 egui main experiment: `egui` and `eframe` are pinned to upstream
 `65e7db3c06d779c60ac56647bdd3011ed8ba1cbd`, the `main` tip returned by
 `git ls-remote https://github.com/emilk/egui.git refs/heads/main` during this task.

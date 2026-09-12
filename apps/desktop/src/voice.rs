@@ -558,7 +558,7 @@ impl Voice {
 		ui: &mut ui::MessagingUi,
 		ctx: &egui::Context,
 	) -> Option<Command> {
-		let supported = cfg!(target_os = "macos");
+		let supported = discord_voice::camera::SUPPORTED;
 		ui.voice_camera_available = supported
 			&& self
 				.live
@@ -717,7 +717,7 @@ impl Voice {
 				capture,
 				playback,
 				control_receive,
-				if cfg!(target_os = "macos") {
+				if discord_voice::camera::SUPPORTED {
 					Some(camera_receive)
 				} else {
 					None
