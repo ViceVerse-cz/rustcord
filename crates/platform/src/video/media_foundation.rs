@@ -29,31 +29,7 @@ const ALL: u32 = MF_SOURCE_READER_ALL_STREAMS.0 as u32;
 const UNSUPPORTED: &str = "This video format or codec is not supported by Windows.";
 const INVALID: &str = "The video could not be decoded safely.";
 
-pub trait ReadSeek: Read + Seek + Send {}
-impl<T: Read + Seek + Send> ReadSeek for T {}
-
-#[derive(Clone, Copy, Debug)]
-pub struct Info {
-	pub width: u32,
-	pub height: u32,
-	pub duration: f64,
-	/// Zero when the attachment has no audio track.
-	pub sample_rate: u32,
-	pub channels: u16,
-}
-
-pub enum Sample {
-	Video {
-		pts: f64,
-		width: u32,
-		height: u32,
-		rgba: Vec<u8>,
-	},
-	Audio {
-		pts: f64,
-		frames: Vec<[f32; 2]>,
-	},
-}
+use super::{Info, ReadSeek, Sample};
 
 // Keep the reader and byte stream ahead of Runtime: COM objects must be released
 // before MFShutdown/CoUninitialize. Rc also makes this actor thread-affine.
@@ -735,7 +711,7 @@ mod tests {
 	#[test]
 	fn native_mov_decodes_audio_video_and_seeks() {
 		let source = std::io::Cursor::new(
-			include_bytes!("../../../apps/desktop/tests/fixtures/video.mov").as_slice(),
+			include_bytes!("../../../../apps/desktop/tests/fixtures/video.mov").as_slice(),
 		);
 		let mut decoder = Decoder::open(Box::new(source)).unwrap();
 		let info = decoder.info();
@@ -797,7 +773,7 @@ mod tests {
 		// Rotate only the known synthetic fixture's video-track matrix, retaining
 		// the same compressed samples. No second media fixture is needed.
 		let mut portrait =
-			include_bytes!("../../../apps/desktop/tests/fixtures/video.mov").to_vec();
+			include_bytes!("../../../../apps/desktop/tests/fixtures/video.mov").to_vec();
 		let track = portrait
 			.windows(4)
 			.enumerate()
