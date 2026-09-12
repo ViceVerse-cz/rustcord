@@ -32,6 +32,11 @@ in both packages. Recipients can extract the supplied `.crate` archives with `ta
 source remains under its original MPL-2.0 terms, separately from Serein source.
 Attachment playback never opens a microphone; Discord voice transport ships in every build.
 
+The native attachment video adapter also uses **symphonia-codec-aac 0.6.1**
+(MPL-2.0). Its unmodified source archive and checksum are included in
+`assets/licenses/audio/source` and `assets/licenses/audio/PROVENANCE.md`, alongside
+the other Symphonia codecs, and ship through the same package copy step.
+
 The egui main experiment pins the egui/eframe ecosystem to upstream commit
 `65e7db3c06d779c60ac56647bdd3011ed8ba1cbd` (version 0.36.2, MIT OR Apache-2.0).
 It adds unicode-properties 0.1.4 (MIT/Apache-2.0) and updates glifo to 0.3.0 and

@@ -346,10 +346,11 @@ fn nv12_to_rgba(bytes: &[u8], format: OutputFormat) -> Result<Frame, &'static st
 			let r = 1.164 * yy + 1.596 * v;
 			let g = 1.164 * yy - 0.392 * u - 0.813 * v;
 			let b = 1.164 * yy + 2.017 * u;
+			// Round to the nearest channel value: limited-range white is 254.916 here.
 			*pixel = [
-				r.clamp(0.0, 255.0) as u8,
-				g.clamp(0.0, 255.0) as u8,
-				b.clamp(0.0, 255.0) as u8,
+				r.round().clamp(0.0, 255.0) as u8,
+				g.round().clamp(0.0, 255.0) as u8,
+				b.round().clamp(0.0, 255.0) as u8,
 				255,
 			];
 		}
@@ -385,5 +386,17 @@ mod tests {
 				.all(|px| *px == [255, 255, 255, 255])
 		);
 		assert!(nv12_to_rgba(&bytes[..6], format).is_err());
+		for (luma, expected) in [(16, 0), (126, 128), (0, 0), (255, 255)] {
+			bytes[..8].fill(luma);
+			assert!(
+				nv12_to_rgba(&bytes, format)
+					.unwrap()
+					.rgba
+					.as_chunks::<4>()
+					.0
+					.iter()
+					.all(|px| *px == [expected, expected, expected, 255])
+			);
+		}
 	}
 }

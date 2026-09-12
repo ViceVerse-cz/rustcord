@@ -1,7 +1,7 @@
 # Attachment audio dependency provenance
 
 Collected September 11–12, 2026 from the exact crates.io archives resolved in Cargo.lock.
-Both package variants include this directory at `licenses/audio`. The nine unmodified
+All desktop packages include this directory at `licenses/audio`. The ten unmodified
 Symphonia 0.6.1 source archives in `source/` provide corresponding MPL-2.0 source to
 recipients; extract with `tar -xf <archive>.crate`. They retain their original licenses,
 copyrights and source notices. Serein does not modify or relicense those components.
@@ -14,6 +14,7 @@ SHA-256 checksums match Cargo.lock:
 | symphonia-0.6.1.crate | a7edef6a96b696d4e0cab5ee9ebb7ca155ed95f30a6b45bbb8b97d2727f02424 |
 | symphonia-bundle-mp3-0.6.1.crate | 98ea5ffc8716bff677dfb3b01b420c7b758de901a72b8c330bf2040ab74b4add |
 | symphonia-codec-pcm-0.6.1.crate | e04ba75686acbe43542fdd374571195f0530c0b7785ca25cc6840e9c6c4b6eea |
+| symphonia-codec-aac-0.6.1.crate | f5bf8e39552d34a3c4c98333370e62f48c92456d2e814f273b5c3ad7c4a5f45c |
 | symphonia-core-0.6.1.crate | 01c412864d599d4750d0c3d684d7e093ec05e5309681ef5252cc1096a437f6e0 |
 | symphonia-format-riff-0.6.1.crate | 1ff70929083a8c1a5f6cd7c904b6071c7914ad04739b510c2f7239dfc9b7dabe |
 | symphonia-metadata-0.6.1.crate | 83713a97705d77bdef7cdbc0768fd6e5a54e4cd7e48d60a806ae85639e2c87c6 |
