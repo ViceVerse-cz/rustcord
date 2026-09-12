@@ -1301,6 +1301,10 @@ pub struct VoiceStateDto {
 	#[serde(default)]
 	pub suppress: bool,
 	#[serde(default)]
+	pub self_video: bool,
+	#[serde(default)]
+	pub self_stream: bool,
+	#[serde(default)]
 	pub member: Option<VoiceMemberDto>,
 }
 #[derive(Deserialize)]

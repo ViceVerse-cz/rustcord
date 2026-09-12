@@ -35,11 +35,21 @@ pub struct EncodedFrame {
 	pub keyframe: bool,
 }
 
+/// Longest system-audio chunk accepted from the OS: 100 ms of 48 kHz stereo.
+pub const MAX_AUDIO_SAMPLES: usize = 4800 * 2;
+
 pub struct Video {
 	pub settings: Settings,
 	pub frames: tokio::sync::mpsc::Receiver<EncodedFrame>,
 	pub ready: Arc<AtomicBool>,
 	pub keyframe: Arc<AtomicBool>,
+	/// Interleaved 48 kHz stereo system audio, present only when the share requested it.
+	pub audio: Option<tokio::sync::mpsc::Receiver<Vec<f32>>>,
+}
+
+/// Whether this platform can capture system audio with the screen.
+pub fn audio_supported() -> bool {
+	cfg!(target_os = "macos")
 }
 
 pub fn supported() -> bool {
@@ -70,8 +80,15 @@ impl Worker {
 		let keyframe = Arc::new(AtomicBool::new(true));
 		let preview = Arc::new(Mutex::new(None));
 		let worker_preview = preview.clone();
-		let (send, frames) = tokio::sync::mpsc::channel(1);
+		// A few frames of slack absorbs send jitter without forcing keyframes on every hiccup.
+		let (send, frames) = tokio::sync::mpsc::channel(3);
 		let (complete, done) = mpsc::sync_channel(1);
+		let (audio_send, audio) = if settings.audio && audio_supported() {
+			let (send, receive) = tokio::sync::mpsc::channel(16);
+			(Some(send), Some(receive))
+		} else {
+			(None, None)
+		};
 		let (worker_stop, worker_ready, worker_keyframe) =
 			(stop.clone(), ready.clone(), keyframe.clone());
 		std::thread::Builder::new()
@@ -83,6 +100,7 @@ impl Worker {
 					worker_ready,
 					worker_keyframe,
 					send,
+					audio_send,
 					worker_preview,
 					&wake,
 				);
@@ -102,6 +120,7 @@ impl Worker {
 				frames,
 				ready,
 				keyframe,
+				audio,
 			},
 		))
 	}
@@ -127,12 +146,14 @@ impl Drop for Worker {
 	}
 }
 
+#[allow(clippy::too_many_arguments)] // Media outputs of one explicitly started capture.
 fn encode_loop(
 	settings: Settings,
 	stop: Arc<AtomicBool>,
 	ready: Arc<AtomicBool>,
 	keyframe: Arc<AtomicBool>,
 	send: tokio::sync::mpsc::Sender<EncodedFrame>,
+	audio: Option<tokio::sync::mpsc::Sender<Vec<f32>>>,
 	preview: Arc<Mutex<Option<image::RgbaImage>>>,
 	wake: &impl Fn(),
 ) -> Result<(), &'static str> {
@@ -142,7 +163,7 @@ fn encode_loop(
 	let origin = Instant::now();
 	let (raw_send, raw) = mpsc::sync_channel(1);
 	let capture_stop = Arc::new(AtomicBool::new(false));
-	let _native = capture::Capture::start(settings, raw_send, capture_stop.clone())?;
+	let _native = capture::Capture::start(settings, raw_send, audio, capture_stop.clone())?;
 	let mut encoding = None;
 	let mut first_frame_deadline = Some(Instant::now() + Duration::from_secs(15));
 	let mut next_frame = Instant::now();
@@ -185,10 +206,18 @@ fn encode_loop(
 			keyframe.store(true, Ordering::Release);
 			continue;
 		}
-		if now < next_frame {
+		// Pace on an accumulating schedule with a little tolerance: capture timing jitter must
+		// not skip every other frame, and a stalled encoder resumes from now instead of bursting.
+		let interval = Duration::from_secs_f64(1.0 / f64::from(settings.fps));
+		if now + Duration::from_millis(2) < next_frame {
 			continue;
 		}
-		next_frame = now + Duration::from_secs_f64(1.0 / f64::from(settings.fps));
+		next_frame = (next_frame + interval).max(now + interval / 2);
+		// Drop before encoding while the transport is behind, so the encoder never references
+		// a picture the receiver did not get.
+		if send.capacity() == 0 {
+			continue;
+		}
 		if encoding.is_none() {
 			encoding = Some((
 				encoder(settings)?,
@@ -233,10 +262,14 @@ fn encoder(settings: Settings) -> Result<Encoder, &'static str> {
 		.max_frame_rate(FrameRate::from_hz(settings.fps as f32))
 		.usage_type(UsageType::ScreenContentRealTime)
 		.rate_control_mode(RateControlMode::Bitrate)
-		.num_threads(2)
+		.num_threads(encoder_threads())
 		.intra_frame_period(IntraFramePeriod::from_num_frames(settings.fps * 2));
 	Encoder::with_api_config(OpenH264API::from_source(), config)
 		.map_err(|_| "Screen video encoder is unavailable")
+}
+
+fn encoder_threads() -> u16 {
+	std::thread::available_parallelism().map_or(2, |count| count.get().clamp(2, 8) as u16)
 }
 
 fn encode_pixels(
@@ -422,6 +455,7 @@ mod tests {
 			height: 720,
 			fps: 30,
 			cursor: true,
+			audio: false,
 		};
 		let mut encoder = encoder(settings).unwrap();
 		let mut yuv = YUVBuffer::new(1280, 720);

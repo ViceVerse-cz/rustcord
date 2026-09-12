@@ -60,7 +60,7 @@ struct Output {
 	error: Option<&'static str>,
 }
 
-struct Session(CFRetained<VTDecompressionSession>);
+pub(super) struct Session(pub(super) CFRetained<VTDecompressionSession>);
 impl Drop for Session {
 	fn drop(&mut self) {
 		// SAFETY: Invalidate stops callbacks before the shared output slot is released.
@@ -100,7 +100,12 @@ impl Decoder {
 			frames: Vec::new(),
 			error: None,
 		}));
-		let session = create_session(&format, Arc::as_ptr(&output).cast_mut().cast::<c_void>())?;
+		let session = create_session(
+			&format,
+			Arc::as_ptr(&output).cast_mut().cast::<c_void>(),
+			output_frame,
+			kCVPixelFormatType_32BGRA,
+		)?;
 		let audio = match &movie.audio {
 			Some(track) => Some(Audio {
 				decoder: audio_decoder(track)?,
@@ -410,17 +415,27 @@ fn format_description(codec: &VideoCodec) -> Result<CFRetained<CMFormatDescripti
 		.ok_or(UNSUPPORTED)
 }
 
-fn create_session(
+pub(super) fn create_session(
 	format: &CMFormatDescription,
 	refcon: *mut c_void,
+	callback: unsafe extern "C-unwind" fn(
+		*mut c_void,
+		*mut c_void,
+		i32,
+		VTDecodeInfoFlags,
+		*mut CVImageBuffer,
+		CMTime,
+		CMTime,
+	),
+	pixel_format: u32,
 ) -> Result<Session, &'static str> {
-	let pixel_format = CFNumber::new_i32(kCVPixelFormatType_32BGRA as i32);
+	let pixel_format = CFNumber::new_i32(pixel_format as i32);
 	// SAFETY: The static key is a valid CFString; the dictionary is a plain attribute map.
 	let attributes = unsafe {
 		CFDictionary::from_slices(&[kCVPixelBufferPixelFormatTypeKey], &[&*pixel_format])
 	};
 	let record = VTDecompressionOutputCallbackRecord {
-		decompressionOutputCallback: Some(output_frame),
+		decompressionOutputCallback: Some(callback),
 		decompressionOutputRefCon: refcon,
 	};
 	let mut session: *mut VTDecompressionSession = null_mut();
@@ -506,7 +521,9 @@ unsafe extern "C-unwind" fn output_frame(
 }
 
 /// Copy one BGRA picture into a tightly packed RGBA buffer after checking every bound.
-unsafe fn copy_rgba(pixels: &CVImageBuffer) -> Result<(u32, u32, Vec<u8>), &'static str> {
+pub(super) unsafe fn copy_rgba(
+	pixels: &CVImageBuffer,
+) -> Result<(u32, u32, Vec<u8>), &'static str> {
 	let width = CVPixelBufferGetWidth(pixels);
 	let height = CVPixelBufferGetHeight(pixels);
 	let stride = CVPixelBufferGetBytesPerRow(pixels);

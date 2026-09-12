@@ -24,6 +24,8 @@ pub struct Settings {
 	pub height: u32,
 	pub fps: u32,
 	pub cursor: bool,
+	/// Share system audio with the screen (macOS only); the microphone is unaffected.
+	pub audio: bool,
 }
 impl Settings {
 	pub fn valid(self) -> bool {

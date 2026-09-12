@@ -63,6 +63,7 @@ mod voice;
 use client_core::{Command, MAX_CONTENT, MAX_DRAFT_BYTES, State};
 use egui::{RichText, TextEdit};
 use model::{Freshness, Id};
+pub use voice::StageFocus;
 
 pub struct VoiceGain {
 	pub input_percent: u16,
@@ -196,6 +197,17 @@ pub struct MessagingUi {
 	pub voice_camera_available: bool,
 	pub voice_camera_status: &'static str,
 	pub voice_camera_preview: Option<egui::TextureHandle>,
+	/// Decoded remote cameras by user; the desktop bounds and replaces them.
+	pub voice_remote_video: Vec<(Id, egui::TextureHandle)>,
+	/// Latest picture of the screen share this device chose to watch.
+	pub voice_stream_view: Option<egui::TextureHandle>,
+	pub voice_stream_status: &'static str,
+	/// Enlarged stage tile; cleared when it stops showing video or on Escape.
+	pub voice_focus: Option<voice::StageFocus>,
+	/// Whether the other participants stay visible as a strip under the enlarged tile.
+	pub voice_focus_participants: bool,
+	/// Tile click to start (`Some(user)`) or stop (`None`) watching, applied by the stage.
+	watch_request: Option<Option<Id>>,
 	pub voice_inputs: Vec<(String, String)>,
 	pub voice_outputs: Vec<(String, String)>,
 	pub voice_input: Option<String>,

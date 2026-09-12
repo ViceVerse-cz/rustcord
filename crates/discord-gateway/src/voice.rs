@@ -23,6 +23,15 @@ struct StreamAttempt {
 	created: Option<(Id, Id)>,
 	departing: bool,
 }
+/// One explicitly requested view of another participant's stream (unofficial opcode 20).
+struct WatchAttempt {
+	channel: Id,
+	request: u64,
+	stream_request: u64,
+	streamer: Id,
+	key: String,
+	created: Option<(Id, Id)>,
+}
 
 #[derive(Default)]
 pub(super) struct Calls {
@@ -36,6 +45,7 @@ pub(super) struct Calls {
 	departing_guild: Option<Id>,
 	pub(super) departure_deadline: Option<Instant>,
 	stream: Option<StreamAttempt>,
+	watch: Option<WatchAttempt>,
 	// Only retained between READY and READY_SUPPLEMENTAL, with the roster's item/byte budget.
 	pub(super) users: BTreeMap<Id, User>,
 }
@@ -57,6 +67,7 @@ impl Calls {
 		self.departing = None;
 		self.departure_deadline = None;
 		self.stream = None;
+		self.watch = None;
 		self.users.clear();
 	}
 	pub(super) fn invalidate(&mut self, channel: Id) {
@@ -65,6 +76,7 @@ impl Calls {
 			self.active = None;
 			self.active_guild = None;
 			self.stream = None;
+			self.watch = None;
 			self.camera = false;
 		}
 	}
@@ -202,6 +214,8 @@ impl Calls {
 					mute: false,
 					deaf: false,
 					suppress: false,
+					self_video: false,
+					self_stream: false,
 				},
 				None,
 				owner,
@@ -245,6 +259,7 @@ impl Calls {
 				self.departing_guild = self.active_guild;
 				self.departure_deadline = Some(Instant::now() + Duration::from_secs(10));
 				self.stream = None;
+				self.watch = None;
 				self.muted = true;
 				self.deafened = true;
 				self.camera = false;
@@ -282,6 +297,8 @@ impl Calls {
 			}
 			Command::StartStream { .. }
 			| Command::StopStream { .. }
+			| Command::WatchStream { .. }
+			| Command::StopWatching { .. }
 			| Command::Decline { .. }
 			| Command::Ring { .. } => return Ok(None),
 		};
@@ -323,6 +340,59 @@ impl Calls {
 						.into(),
 				)))
 			}
+			Command::WatchStream {
+				channel,
+				request,
+				stream_request,
+				streamer,
+			} => {
+				// Re-requesting the same stream replaces a stale attempt; a different one
+				// requires stopping first, which the viewer always sends.
+				if self
+					.watch
+					.as_ref()
+					.is_some_and(|watch| watch.streamer != streamer)
+					|| self.active != Some((channel, request))
+					|| self.allowed.get(&channel) != Some(&self.active_guild)
+					|| streamer.0 == 0
+					|| owner == Some(streamer)
+				{
+					return Err(Failure::Forbidden);
+				}
+				let key = self.active_guild.map_or_else(
+					|| format!("call:{channel}:{streamer}"),
+					|guild| format!("guild:{guild}:{channel}:{streamer}"),
+				);
+				let packet = json!({"op":20,"d":{"stream_key":key}});
+				self.watch = Some(WatchAttempt {
+					channel,
+					request,
+					stream_request,
+					streamer,
+					key,
+					created: None,
+				});
+				Ok(Some(Frame::Text(packet.to_string().into())))
+			}
+			Command::StopWatching {
+				channel,
+				request,
+				stream_request,
+			} => {
+				let Some(watch) = &self.watch else {
+					return Ok(None);
+				};
+				if (watch.channel, watch.request, watch.stream_request)
+					!= (channel, request, stream_request)
+				{
+					return Ok(None);
+				}
+				// Viewers leave with the same opcode; later events for the key are ignored.
+				let key = self.watch.take().map(|watch| watch.key);
+				Ok(Some(Frame::Text(
+					json!({"op":19,"d":{"stream_key":key}}).to_string().into(),
+				)))
+			}
 			Command::StopStream {
 				channel,
 				request,
@@ -362,6 +432,104 @@ impl Calls {
 		}
 		Ok(())
 	}
+	/// Emit a watch outcome. A failure also releases the slot so the viewer can retry.
+	fn emit_watch(
+		&mut self,
+		event: screen::Event,
+		emit: &impl Fn(Event) -> Result<(), Failure>,
+	) -> Result<(), Failure> {
+		let failed = matches!(event, screen::Event::Failed(_));
+		if let Some(watch) = &self.watch {
+			emit(Event::Voice(voice::Event::Watch {
+				channel: watch.channel,
+				request: watch.request,
+				stream_request: watch.stream_request,
+				streamer: watch.streamer,
+				event,
+			}))?;
+		}
+		if failed {
+			self.watch = None;
+		}
+		Ok(())
+	}
+	fn watch_dispatch(
+		&mut self,
+		kind: &str,
+		data: &[u8],
+		emit: &impl Fn(Event) -> Result<(), Failure>,
+	) -> Result<(), Failure> {
+		match kind {
+			"STREAM_CREATE" => {
+				let Ok(created) = decode::<stream::Created>(data) else {
+					return self.emit_watch(
+						screen::Event::Failed("Discord sent invalid stream setup"),
+						emit,
+					);
+				};
+				let ids = (
+					created.rtc_server_id,
+					created.rtc_channel_id.unwrap_or(created.rtc_server_id),
+				);
+				match self.watch.as_ref().and_then(|watch| watch.created) {
+					Some(previous) if previous != ids => self.emit_watch(
+						screen::Event::Failed("Discord changed the stream connection identity"),
+						emit,
+					)?,
+					Some(_) => {}
+					None => {
+						self.watch.as_mut().unwrap().created = Some(ids);
+						self.emit_watch(
+							screen::Event::Created {
+								rtc_server: ids.0,
+								rtc_channel: ids.1,
+							},
+							emit,
+						)?;
+					}
+				}
+			}
+			"STREAM_SERVER_UPDATE" => {
+				let Ok(mut server) = decode::<stream::ServerUpdate>(data) else {
+					return self.emit_watch(
+						screen::Event::Failed("Discord sent invalid stream server data"),
+						emit,
+					);
+				};
+				if server.token.len() > 2048
+					|| server
+						.endpoint
+						.as_ref()
+						.is_some_and(|endpoint| endpoint.len() > 512)
+				{
+					return self.emit_watch(
+						screen::Event::Failed("Discord sent oversized stream server data"),
+						emit,
+					);
+				}
+				let token = Zeroizing::new(std::mem::take(&mut server.token));
+				let Ok(token) = Secret::new(token.to_string()) else {
+					return self.emit_watch(
+						screen::Event::Failed("Discord sent invalid stream server data"),
+						emit,
+					);
+				};
+				self.emit_watch(
+					screen::Event::Server {
+						token: Some(token),
+						endpoint: server.endpoint,
+					},
+					emit,
+				)?;
+			}
+			"STREAM_DELETE" => {
+				self.emit_watch(screen::Event::Deleted, emit)?;
+				self.watch = None;
+			}
+			_ => {}
+		}
+		Ok(())
+	}
 	fn stream_dispatch(
 		&mut self,
 		kind: &str,
@@ -371,11 +539,26 @@ impl Calls {
 		let Ok(key) = decode::<stream::Key>(data) else {
 			return Ok(());
 		};
+		if let Some(watch) = &self.watch
+			&& (self.active != Some((watch.channel, watch.request))
+				|| self.allowed.get(&watch.channel) != Some(&self.active_guild))
+		{
+			self.watch = None;
+		}
+		if key.stream_key.len() <= 128
+			&& self
+				.watch
+				.as_ref()
+				.is_some_and(|watch| watch.key == key.stream_key)
+		{
+			return self.watch_dispatch(kind, data, emit);
+		}
 		if let Some(stream) = &self.stream
 			&& (self.active != Some((stream.channel, stream.request))
 				|| self.allowed.get(&stream.channel) != Some(&self.active_guild))
 		{
 			self.stream = None;
+			self.watch = None;
 			return Ok(());
 		}
 		if key.stream_key.len() > 128
@@ -397,7 +580,13 @@ impl Calls {
 						emit,
 					);
 				};
-				let ids = (created.rtc_server_id, created.rtc_channel_id);
+				let Some(rtc_channel) = created.rtc_channel_id else {
+					return self.emit_stream(
+						screen::Event::Failed("Discord sent invalid screen-share setup"),
+						emit,
+					);
+				};
+				let ids = (created.rtc_server_id, rtc_channel);
 				match self.stream.as_ref().and_then(|stream| stream.created) {
 					Some(previous) if previous != ids => self.emit_stream(
 						screen::Event::Failed("Discord changed screen-share connection identity"),
@@ -522,11 +711,14 @@ impl Calls {
 			deafened: participant.deafened,
 			server_muted: participant.server_muted,
 			server_deafened: participant.server_deafened,
+			video: participant.video,
+			streaming: participant.streaming,
 		}))?;
 		if own && self.active.is_some() && !matches_active {
 			self.active = None;
 			self.active_guild = None;
 			self.stream = None;
+			self.watch = None;
 			self.camera = false;
 		}
 		Ok(())
@@ -562,6 +754,7 @@ impl Calls {
 						self.active = None;
 						self.active_guild = None;
 						self.stream = None;
+						self.watch = None;
 						self.camera = false;
 					}
 					emit(Event::Voice(voice::Event::Deleted {
@@ -630,6 +823,8 @@ fn participant(state: &VoiceStateDto) -> Participant {
 		deafened: state.self_deaf || state.deaf,
 		server_muted: state.mute || state.suppress,
 		server_deafened: state.deaf,
+		video: state.self_video,
+		streaming: state.self_stream,
 	}
 }
 

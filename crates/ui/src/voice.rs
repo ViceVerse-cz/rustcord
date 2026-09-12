@@ -293,6 +293,7 @@ impl MessagingUi {
 				self.participant_tiles(&mut body_ui, state, channel, &entries, false);
 			}
 		}
+		self.apply_watch_request(state);
 		let bar = egui::Rect::from_min_max(
 			egui::pos2(rect.left(), rect.bottom() - bottom),
 			rect.right_bottom(),
@@ -310,7 +311,42 @@ impl MessagingUi {
 		}
 	}
 
-	/// Participant tiles in a virtualized grid; only visible rows request avatars.
+	/// Which stage tiles a channel would show, in stage order.
+	fn stage_tiles<'a>(
+		&self,
+		state: &State,
+		channel: Id,
+		entries: &'a [RosterEntry],
+	) -> Vec<Tile<'a>> {
+		let call = state
+			.voice
+			.active
+			.as_ref()
+			.filter(|call| call.channel == channel && call.phase != Phase::Failed);
+		let mut tiles = Vec::with_capacity(entries.len() + 2);
+		if call.is_some_and(|call| {
+			self.screen.context == Some((state.generation, channel, call.request))
+				&& self.screen.busy
+				&& self.screen.preview.is_some()
+		}) {
+			tiles.push(Tile::LocalScreen);
+		}
+		if let Some(streamer) = call.and_then(|call| call.watching) {
+			tiles.push(Tile::Stream(streamer));
+		}
+		tiles.extend(entries.iter().map(Tile::Participant));
+		tiles
+	}
+
+	/// True once any stage tile carries video, so the direct-message stage can grow.
+	pub(super) fn stage_shows_video(&self, state: &State, channel: Id) -> bool {
+		let entries = stage_participants(state, channel);
+		self.stage_tiles(state, channel, &entries)
+			.iter()
+			.any(|tile| self.tile_has_video(state, channel, tile))
+	}
+
+	/// Stage tiles: a best-fit grid, or one enlarged video with the rest in a strip below.
 	///
 	/// `dm` drops the tile plates while no one shares video, matching Discord's
 	/// direct-message calls where idle participants are avatars on the stage.
@@ -322,90 +358,284 @@ impl MessagingUi {
 		entries: &[RosterEntry],
 		dm: bool,
 	) {
-		let screen = state.voice.active.as_ref().is_some_and(|call| {
-			call.channel == channel
-				&& call.phase != Phase::Failed
-				&& self.screen.context == Some((state.generation, channel, call.request))
-				&& self.screen.busy
-				&& self.screen.preview.is_some()
+		let tiles = self.stage_tiles(state, channel, entries);
+		if tiles.is_empty() {
+			return;
+		}
+		// Focus survives only while that tile still shows video; Escape restores the grid.
+		let focus = self.voice_focus.filter(|focus| {
+			tiles
+				.iter()
+				.any(|tile| tile.focus() == *focus && self.tile_has_video(state, channel, tile))
 		});
-		let camera = self.voice_camera_preview.is_some()
-			&& state.voice.active.as_ref().is_some_and(|call| {
-				call.channel == channel && call.camera && call.phase != Phase::Failed
-			});
-		let frameless = dm && !screen && !camera;
-		let count = entries.len() + usize::from(screen);
-		let width = ui.available_width();
-		let max_columns = ((width + TILE_GAP) / (120.0 + TILE_GAP)).floor().max(1.0) as usize;
-		let columns = ((count as f32).sqrt().ceil() as usize)
-			.clamp(1, max_columns)
-			.min(count.max(1));
-		// Avatar-only tiles stay compact so participants read as a group, not a video grid.
-		let cap = if frameless { 148.0 } else { 360.0 };
-		let tile_width = ((width - TILE_GAP * (columns as f32 - 1.0)) / columns as f32).min(cap);
-		let tile_height = (tile_width * 9.0 / 16.0)
-			.max(if frameless { 132.0 } else { 120.0 })
-			.min(ui.available_height().max(80.0));
-		let rows = count.div_ceil(columns);
-		// Centre the grid vertically so avatars sit near the controls, not pinned to the top.
-		let content = tile_height * rows as f32 + TILE_GAP * (rows as f32 - 1.0).max(0.0);
-		ui.add_space(((ui.available_height() - content) * 0.5).max(0.0));
-		egui::ScrollArea::vertical()
-			.id_salt(("voice-tiles", channel))
-			.show_rows(ui, tile_height + TILE_GAP, rows, |ui, range| {
-				for row in range {
-					let in_row = count.saturating_sub(row * columns).min(columns);
-					let row_width =
-						tile_width * in_row as f32 + TILE_GAP * (in_row as f32 - 1.0).max(0.0);
-					ui.horizontal(|ui| {
-						ui.spacing_mut().item_spacing.x = TILE_GAP;
-						ui.add_space(((ui.available_width() - row_width) * 0.5).max(0.0));
-						for index in row * columns..row * columns + in_row {
-							if screen && index == 0 {
-								let texture =
-									self.screen.preview.as_ref().expect("visible preview");
-								let (rect, _) = ui.allocate_exact_size(
-									egui::vec2(tile_width, tile_height),
-									egui::Sense::hover(),
-								);
-								ui.painter().rect_filled(rect, 8, TILE_FILL);
-								let size = texture.size_vec2();
-								let size =
-									size * (rect.width() / size.x).min(rect.height() / size.y);
-								ui.put(
-									egui::Rect::from_center_size(rect.center(), size),
-									egui::Image::new((texture.id(), size)).corner_radius(8),
-								)
-								.on_hover_text("Your screen · local preview");
-								ui.painter().rect_filled(
-									egui::Rect::from_min_max(
-										rect.left_bottom() + egui::vec2(4.0, -28.0),
-										rect.right_bottom() - egui::vec2(4.0, 4.0),
-									),
-									6,
-									egui::Color32::from_black_alpha(160),
-								);
-								ui.painter().text(
-									rect.left_bottom() + egui::vec2(8.0, -8.0),
-									egui::Align2::LEFT_BOTTOM,
-									"Your screen",
-									egui::FontId::proportional(12.0),
-									STAGE_TEXT,
-								);
-								continue;
-							}
-							let entry = &entries[index - usize::from(screen)];
-							self.participant_tile(
-								ui,
-								state,
-								entry,
-								egui::vec2(tile_width, tile_height),
-								frameless,
-							);
-						}
-					});
+		let focus = focus.filter(|_| !ui.input(|input| input.key_pressed(egui::Key::Escape)));
+		self.voice_focus = focus;
+		let video = tiles
+			.iter()
+			.any(|tile| self.tile_has_video(state, channel, tile));
+		let frameless = dm && !video;
+		let area = ui.available_rect_before_wrap();
+		if area.width() < 40.0 || area.height() < 40.0 {
+			return;
+		}
+		let mut toggle = None;
+		if let Some(focus) = focus {
+			let index = tiles
+				.iter()
+				.position(|tile| tile.focus() == focus)
+				.expect("validated focus");
+			// The enlarged tile keeps the stage; everyone else becomes a small strip below it,
+			// only when the pill-bar toggle asks for them.
+			let strip = if tiles.len() > 1 && self.voice_focus_participants {
+				(area.height() * 0.18).clamp(64.0, 124.0)
+			} else {
+				0.0
+			};
+			let main = egui::Rect::from_min_size(
+				area.min,
+				egui::vec2(
+					area.width(),
+					(area.height() - strip - if strip > 0.0 { TILE_GAP } else { 0.0 }).max(80.0),
+				),
+			);
+			toggle = self.tile(ui, state, channel, &tiles[index], main, false, true);
+			if strip > 0.0 {
+				let size = egui::vec2(strip * 16.0 / 9.0, strip);
+				let others = (tiles.len() - 1) as f32;
+				let row = size.x * others + TILE_GAP * (others - 1.0);
+				let mut x = area.center().x - row * 0.5;
+				let top = main.bottom() + TILE_GAP;
+				for (position, tile) in tiles.iter().enumerate() {
+					if position == index {
+						continue;
+					}
+					let rect = egui::Rect::from_min_size(egui::pos2(x, top), size);
+					x += size.x + TILE_GAP;
+					if !area.intersects(rect) {
+						continue;
+					}
+					if let Some(focus) = self.tile(ui, state, channel, tile, rect, false, false) {
+						toggle = Some(focus);
+					}
 				}
-			});
+			}
+		} else {
+			// Pick the column count that makes the tiles largest inside the stage, so two
+			// participants fill the width instead of sitting in a corner.
+			let cap = if frameless { 148.0 } else { 620.0 };
+			let (columns, mut size) = best_fit(tiles.len(), area.size(), cap);
+			if frameless {
+				size.y = size.y.max(132.0).min(area.height());
+			}
+			if size.x < 24.0 || size.y < 24.0 {
+				return;
+			}
+			let rows = tiles.len().div_ceil(columns);
+			let content = size.y * rows as f32 + TILE_GAP * (rows as f32 - 1.0);
+			let top = area.top() + ((area.height() - content) * 0.5).max(0.0);
+			for row in 0..rows {
+				let first = row * columns;
+				let in_row = (tiles.len() - first).min(columns);
+				let width = size.x * in_row as f32 + TILE_GAP * (in_row as f32 - 1.0);
+				let mut x = area.center().x - width * 0.5;
+				let y = top + (size.y + TILE_GAP) * row as f32;
+				for tile in &tiles[first..first + in_row] {
+					let rect = egui::Rect::from_min_size(egui::pos2(x, y), size);
+					x += size.x + TILE_GAP;
+					if let Some(focus) = self.tile(ui, state, channel, tile, rect, frameless, false)
+					{
+						toggle = Some(focus);
+					}
+				}
+			}
+		}
+		if let Some(focus) = toggle {
+			self.voice_focus = (self.voice_focus != Some(focus)).then_some(focus);
+		}
+	}
+
+	fn remote_texture(&self, user: Id) -> Option<&egui::TextureHandle> {
+		self.voice_remote_video
+			.iter()
+			.find(|(id, _)| *id == user)
+			.map(|(_, texture)| texture)
+	}
+
+	fn tile_has_video(&self, state: &State, channel: Id, tile: &Tile<'_>) -> bool {
+		match tile {
+			Tile::LocalScreen => self.screen.preview.is_some(),
+			Tile::Stream(_) => true,
+			Tile::Participant(entry) => {
+				let own = state
+					.user
+					.as_ref()
+					.is_some_and(|user| user.id == entry.participant.user);
+				if own {
+					self.voice_camera_preview.is_some()
+						&& state.voice.active.as_ref().is_some_and(|call| {
+							call.channel == channel && call.camera && call.phase != Phase::Failed
+						})
+				} else {
+					entry.participant.video && self.remote_texture(entry.participant.user).is_some()
+				}
+			}
+		}
+	}
+
+	/// One stage tile. Returns its focus key when a video tile is clicked to enlarge or restore.
+	#[allow(clippy::too_many_arguments)] // Placement and framing flags of one tile.
+	fn tile(
+		&mut self,
+		ui: &mut egui::Ui,
+		state: &State,
+		channel: Id,
+		tile: &Tile<'_>,
+		rect: egui::Rect,
+		frameless: bool,
+		focused: bool,
+	) -> Option<StageFocus> {
+		let has_video = self.tile_has_video(state, channel, tile);
+		let response = ui.interact(
+			rect,
+			ui.id().with(("voice-tile", tile.key())),
+			if has_video {
+				egui::Sense::click()
+			} else {
+				egui::Sense::hover()
+			},
+		);
+		if !ui.is_rect_visible(rect) {
+			return None;
+		}
+		let compact = rect.height() < 132.0;
+		let hint = match tile {
+			Tile::LocalScreen => {
+				self.screen_tile(ui, rect, compact);
+				"Your screen · local preview"
+			}
+			Tile::Stream(streamer) => {
+				self.stream_tile(ui, state, rect, channel, *streamer, compact);
+				"Screen share you are watching"
+			}
+			Tile::Participant(entry) => {
+				self.participant_tile(ui, state, entry, rect, frameless, compact);
+				""
+			}
+		};
+		if has_video {
+			let label = if focused {
+				"Click or press Escape to return to the grid"
+			} else {
+				"Click to enlarge"
+			};
+			response
+				.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+			let hover = if hint.is_empty() {
+				label.to_owned()
+			} else {
+				format!("{hint} · {label}")
+			};
+			if response.clicked() {
+				return Some(tile.focus());
+			}
+			response.on_hover_text(hover);
+		} else if !hint.is_empty() {
+			response.on_hover_text(hint);
+		}
+		None
+	}
+
+	fn screen_tile(&self, ui: &mut egui::Ui, rect: egui::Rect, compact: bool) {
+		let content = self
+			.screen
+			.preview
+			.as_ref()
+			.map(|texture| {
+				let content = fit_rect(rect, texture.size_vec2());
+				ui.put(
+					content,
+					egui::Image::from_texture((texture.id(), content.size())).corner_radius(8),
+				);
+				content
+			})
+			.unwrap_or(rect);
+		if !compact {
+			name_badge(ui, content, "Your screen", None);
+		}
+	}
+
+	/// The screen share this device chose to watch: the latest decoded picture or a status.
+	fn stream_tile(
+		&mut self,
+		ui: &mut egui::Ui,
+		state: &State,
+		rect: egui::Rect,
+		channel: Id,
+		streamer: Id,
+		compact: bool,
+	) {
+		let name = participant_user(state, channel, streamer)
+			.map_or_else(|| "Participant".to_owned(), |user| user.name.clone());
+		let content = match &self.voice_stream_view {
+			Some(texture) => {
+				let content = fit_rect(rect, texture.size_vec2());
+				ui.put(
+					content,
+					egui::Image::from_texture((texture.id(), content.size())).corner_radius(8),
+				);
+				content
+			}
+			None => {
+				ui.painter().rect_filled(rect, 8, TILE_FILL);
+				if !compact {
+					let status = if self.voice_stream_status.is_empty() {
+						"Connecting to the stream…"
+					} else {
+						self.voice_stream_status
+					};
+					let spinner = egui::Rect::from_center_size(
+						rect.center() - egui::vec2(0.0, 18.0),
+						egui::Vec2::splat(24.0),
+					);
+					ui.put(spinner, egui::Spinner::new().color(STAGE_MUTED));
+					ui.painter().text(
+						rect.center() + egui::vec2(0.0, 18.0),
+						egui::Align2::CENTER_CENTER,
+						status,
+						egui::FontId::proportional(13.0),
+						STAGE_MUTED,
+					);
+				}
+				rect
+			}
+		};
+		if compact {
+			return;
+		}
+		name_badge(ui, content, &format!("{name}'s screen"), None);
+		if tile_button(
+			ui,
+			content,
+			"Stop watching",
+			egui::Color32::from_black_alpha(170),
+			design::palette(ui).danger,
+			"Stop receiving this screen share",
+		)
+		.clicked()
+		{
+			self.watch_request = Some(None);
+		}
+	}
+
+	/// Apply a tile's watch click once the stage has mutable state again.
+	fn apply_watch_request(&mut self, state: &mut State) {
+		match self.watch_request.take() {
+			Some(Some(user)) => {
+				let _ = state.watch_stream(user);
+			}
+			Some(None) => state.stop_watching(),
+			None => {}
+		}
 	}
 
 	fn participant_tile(
@@ -413,43 +643,60 @@ impl MessagingUi {
 		ui: &mut egui::Ui,
 		state: &State,
 		entry: &RosterEntry,
-		size: egui::Vec2,
+		rect: egui::Rect,
 		frameless: bool,
+		compact: bool,
 	) {
+		let size = rect.size();
 		let (user, name) = resolve_member(state, entry);
-		let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
-		if !ui.is_rect_visible(rect) {
-			return;
-		}
+		let colors = design::palette(ui);
+		let own = state
+			.user
+			.as_ref()
+			.is_some_and(|user| user.id == entry.participant.user);
+		let call = state
+			.voice
+			.active
+			.as_ref()
+			.filter(|call| call.channel == entry.channel && call.phase != Phase::Failed);
+		// The local preview is mirrored like a webcam; remote cameras fill the tile edge to edge.
+		let video = if own && call.is_some_and(|call| call.camera) {
+			self.voice_camera_preview
+				.as_ref()
+				.map(|texture| (texture.id(), texture.size_vec2(), true))
+		} else if entry.participant.video {
+			self.remote_texture(entry.participant.user)
+				.map(|texture| (texture.id(), texture.size_vec2(), false))
+		} else {
+			None
+		};
 		if !frameless {
 			ui.painter().rect_filled(rect, 8, TILE_FILL);
 		}
-		let preview = state
-			.user
-			.as_ref()
-			.is_some_and(|user| user.id == entry.participant.user)
-			&& state.voice.active.as_ref().is_some_and(|call| {
-				call.channel == entry.channel && call.camera && call.phase != Phase::Failed
-			});
-		if preview && let Some(texture) = &self.voice_camera_preview {
-			let image_size = texture.size_vec2()
-				* (size.x / texture.size_vec2().x).min(size.y / texture.size_vec2().y);
-			ui.put(
-				egui::Rect::from_center_size(rect.center(), image_size),
-				egui::Image::new((texture.id(), image_size)).corner_radius(8),
-			);
+		if let Some((id, image, mirror)) = video {
+			cover_image(ui, rect, id, image, mirror);
 		}
-		let avatar_size = if frameless {
+		let speaking = self.is_speaking(state, entry.channel, &entry.participant);
+		let avatar_size = if compact {
+			(size.y * 0.5).clamp(28.0, 48.0)
+		} else if frameless {
 			(size.y * 0.58).clamp(56.0, 112.0)
 		} else {
-			(size.y * 0.45).clamp(48.0, 80.0)
+			(size.y * 0.42).clamp(48.0, 128.0)
+		};
+		let offset = if compact {
+			0.0
+		} else if frameless {
+			14.0
+		} else {
+			10.0
 		};
 		let avatar_rect = egui::Rect::from_center_size(
-			rect.center() - egui::vec2(0.0, if frameless { 14.0 } else { 10.0 }),
+			rect.center() - egui::vec2(0.0, offset),
 			egui::Vec2::splat(avatar_size),
 		);
 		let mut avatar_ui = ui.new_child(egui::UiBuilder::new().max_rect(avatar_rect));
-		if preview && self.voice_camera_preview.is_some() {
+		if video.is_some() {
 			avatar_ui.set_opacity(0.0);
 		}
 		let avatar = if let Some(user) = user {
@@ -466,8 +713,9 @@ impl MessagingUi {
 		} else {
 			None
 		};
-		if let Some(icon) = silenced {
-			let colors = design::palette(ui);
+		if let Some(icon) = silenced
+			&& video.is_none()
+		{
 			ui.painter().circle_stroke(
 				avatar.rect.center(),
 				avatar.rect.width() * 0.5 + 2.0,
@@ -483,13 +731,15 @@ impl MessagingUi {
 				egui::Color32::WHITE,
 			);
 		}
-		if silenced.is_none() && self.is_speaking(state, entry.channel, &entry.participant) {
-			speaking_avatar(ui, &avatar, name);
+		if silenced.is_none() && speaking {
+			if video.is_none() && frameless {
+				speaking_avatar(ui, &avatar, name);
+			}
 			if !frameless {
 				ui.painter().rect_stroke(
 					rect.shrink(1.0),
 					8,
-					egui::Stroke::new(2.0, design::palette(ui).positive),
+					egui::Stroke::new(2.0, colors.positive),
 					egui::StrokeKind::Inside,
 				);
 			}
@@ -508,36 +758,74 @@ impl MessagingUi {
 		{
 			self.profile = Some(user.clone());
 		}
-		// Name label with mute/deafen glyphs: a bottom-left badge on video tiles,
-		// centred under the avatar once the plates are gone.
-		let font = egui::FontId::new(13.0, design::medium_family(ui.ctx()));
-		let max_text = size.x - 24.0;
-		let galley = ui
-			.painter()
-			.layout(name.to_owned(), font, STAGE_TEXT, max_text.max(20.0));
-		let badge = if frameless {
-			let width = galley.size().x;
-			egui::Rect::from_center_size(
-				egui::pos2(rect.center().x, avatar_rect.bottom() + 20.0),
-				egui::vec2(width, 24.0),
-			)
-		} else {
-			egui::Rect::from_min_size(
-				rect.left_bottom() + egui::vec2(8.0, -8.0 - 24.0),
-				egui::vec2(galley.size().x + 16.0, 24.0),
-			)
-		};
-		if !frameless {
-			ui.painter()
-				.rect_filled(badge, 6, egui::Color32::from_black_alpha(160));
+		// Discord's LIVE pill marks a streamer on every tile size; strip tiles get a small one
+		// so it never covers the avatar.
+		if entry.participant.streaming {
+			let (pill, font) = if compact {
+				(egui::vec2(30.0, 15.0), 9.0)
+			} else {
+				(egui::vec2(40.0, 20.0), 11.0)
+			};
+			let margin = if compact { 5.0 } else { 8.0 };
+			let live = egui::Rect::from_min_size(rect.left_top() + egui::Vec2::splat(margin), pill);
+			ui.painter().rect_filled(live, 4, colors.danger);
+			ui.painter().text(
+				live.center(),
+				egui::Align2::CENTER_CENTER,
+				"LIVE",
+				egui::FontId::new(font, design::medium_family(ui.ctx())),
+				egui::Color32::WHITE,
+			);
 		}
-		let x = badge.left() + if frameless { 0.0 } else { 8.0 };
-		ui.painter().galley(
-			egui::pos2(x, badge.center().y - galley.size().y * 0.5),
-			galley,
-			STAGE_TEXT,
-		);
-		response.on_hover_text(name);
+		if compact {
+			return;
+		}
+		// Name label with the mute glyph: a bottom-left badge on plates, centred under the
+		// avatar once the plates are gone.
+		if frameless {
+			let font = egui::FontId::new(13.0, design::medium_family(ui.ctx()));
+			let galley =
+				ui.painter()
+					.layout(name.to_owned(), font, STAGE_TEXT, (size.x - 24.0).max(20.0));
+			ui.painter().galley(
+				egui::pos2(
+					rect.center().x - galley.size().x * 0.5,
+					avatar_rect.bottom() + 20.0 - galley.size().y * 0.5,
+				),
+				galley,
+				STAGE_TEXT,
+			);
+		} else {
+			name_badge(ui, rect, name, silenced.filter(|_| video.is_some()));
+		}
+		// Watching is an explicit click, never automatic.
+		if entry.participant.streaming
+			&& !own && let Some(call) = call
+			&& matches!(call.phase, Phase::Connected | Phase::Waiting)
+		{
+			let watching = call.watching == Some(entry.participant.user);
+			let (label, fill, hint) = if watching {
+				(
+					"Watching",
+					egui::Color32::from_black_alpha(170),
+					"Stop receiving this screen share",
+				)
+			} else {
+				(
+					"Watch stream",
+					colors.accent,
+					"Receive this participant's screen share",
+				)
+			};
+			let hover = if watching {
+				colors.danger
+			} else {
+				colors.accent.gamma_multiply(1.2)
+			};
+			if tile_button(ui, rect, label, fill, hover, hint).clicked() {
+				self.watch_request = Some((!watching).then_some(entry.participant.user));
+			}
+		}
 	}
 
 	fn stage_notices(&self, state: &State, channel: Id, connected: bool) -> Vec<(String, bool)> {
@@ -545,6 +833,9 @@ impl MessagingUi {
 		if let Some(call) = state.voice.active.as_ref().filter(|c| c.channel == channel) {
 			if !self.voice_camera_status.is_empty() {
 				notices.push((self.voice_camera_status.into(), false));
+			}
+			if call.watching.is_none() && !self.voice_stream_status.is_empty() {
+				notices.push((self.voice_stream_status.into(), false));
 			}
 			if call.server_deafened {
 				notices.push(("Deafened by the server".into(), false));
@@ -1096,7 +1387,9 @@ impl MessagingUi {
 		let can_speak = state.can_speak(channel);
 		let (mut muted, mut deafened) = (call.muted || !can_speak, call.deafened);
 		let controls = self.controls_enabled(state);
-		let width = MEDIA_PILL + BAR_GAP + HANG_UP;
+		let focused = self.voice_focus.is_some();
+		let pill_width = MEDIA_PILL + if focused { 48.0 } else { 0.0 };
+		let width = pill_width + BAR_GAP + HANG_UP;
 		let mut camera_clicked = false;
 		let mut mute_clicked = false;
 		let mut deafen_clicked = false;
@@ -1104,7 +1397,7 @@ impl MessagingUi {
 		ui.horizontal(|ui| {
 			ui.spacing_mut().item_spacing.x = BAR_GAP;
 			ui.add_space(((ui.available_width() - width) * 0.5).max(0.0));
-			pill(ui, MEDIA_PILL, |ui| {
+			pill(ui, pill_width, |ui| {
 				let mic = control(
 					ui,
 					if muted {
@@ -1188,6 +1481,30 @@ impl MessagingUi {
 				)
 				.clicked();
 				self.screen_share_control(ui, state);
+				if focused {
+					let shown = self.voice_focus_participants;
+					if control(
+						ui,
+						crate::icons::Icon::People,
+						48.0,
+						true,
+						if shown { colors.accent } else { STAGE_TEXT },
+						if shown {
+							"Hide participants"
+						} else {
+							"Show participants"
+						},
+						if shown {
+							"Hide the participant strip under the enlarged video"
+						} else {
+							"Show the other participants under the enlarged video"
+						},
+					)
+					.clicked()
+					{
+						self.voice_focus_participants = !shown;
+					}
+				}
 			});
 			let hang_up = {
 				let (rect, response) = ui
@@ -1296,7 +1613,11 @@ impl MessagingUi {
 			.filter(|call| call.guild.is_none() && Some(call.channel) == selected)
 			.map(|call| call.channel)
 		{
-			let height = (ui.available_height() * 0.42).clamp(240.0, 340.0);
+			let height = if self.stage_shows_video(state, channel) {
+				(ui.available_height() * 0.74).clamp(320.0, 900.0)
+			} else {
+				(ui.available_height() * 0.42).clamp(240.0, 340.0)
+			};
 			egui::Panel::top("dm-call")
 				.exact_size(height)
 				.show_separator_line(false)
@@ -1345,6 +1666,7 @@ impl MessagingUi {
 					);
 					self.call_controls(&mut bar_ui, state, channel, commands);
 				});
+			self.apply_watch_request(state);
 		}
 		let existing = selected.filter(|channel| {
 			state.voice.has_dm_call(*channel)
@@ -1756,6 +2078,163 @@ const HANG_UP: f32 = 64.0;
 const BAR_GAP: f32 = 12.0;
 
 /// Green ring like Discord's speaking indicator; the accessible label still names the state.
+/// Which stage tile is enlarged; cleared automatically when it stops showing video.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StageFocus {
+	LocalScreen,
+	Stream(Id),
+	Participant(Id),
+}
+
+enum Tile<'a> {
+	LocalScreen,
+	Stream(Id),
+	Participant(&'a RosterEntry),
+}
+impl Tile<'_> {
+	fn focus(&self) -> StageFocus {
+		match self {
+			Self::LocalScreen => StageFocus::LocalScreen,
+			Self::Stream(streamer) => StageFocus::Stream(*streamer),
+			Self::Participant(entry) => StageFocus::Participant(entry.participant.user),
+		}
+	}
+	/// Stable interaction identity, so a tile keeps its hover while the layout changes.
+	fn key(&self) -> (u8, u64) {
+		match self.focus() {
+			StageFocus::LocalScreen => (0, 0),
+			StageFocus::Stream(user) => (1, user.0),
+			StageFocus::Participant(user) => (2, user.0),
+		}
+	}
+}
+
+/// Column count and tile size that make the tiles largest inside `area`, at 16:9.
+fn best_fit(count: usize, area: egui::Vec2, cap: f32) -> (usize, egui::Vec2) {
+	let mut best = (1, egui::Vec2::ZERO);
+	for columns in 1..=count.max(1) {
+		let rows = count.div_ceil(columns);
+		let width = (area.x - TILE_GAP * (columns - 1) as f32) / columns as f32;
+		let height = (area.y - TILE_GAP * (rows - 1) as f32) / rows as f32;
+		if width <= 0.0 || height <= 0.0 {
+			continue;
+		}
+		let width = width.min(height * 16.0 / 9.0).min(cap);
+		if width > best.1.x {
+			best = (columns, egui::vec2(width, width * 9.0 / 16.0));
+		}
+	}
+	if best.1.x <= 0.0 {
+		best = (count.max(1), egui::Vec2::ZERO);
+	}
+	best
+}
+
+/// The largest centred rectangle of the image's aspect ratio inside `rect`.
+fn fit_rect(rect: egui::Rect, image: egui::Vec2) -> egui::Rect {
+	if image.x <= 0.0 || image.y <= 0.0 {
+		return rect;
+	}
+	let size = image * (rect.width() / image.x).min(rect.height() / image.y);
+	egui::Rect::from_center_size(rect.center(), size)
+}
+
+/// Fill the tile edge to edge, cropping the overflow (Discord's camera framing).
+fn cover_image(
+	ui: &mut egui::Ui,
+	rect: egui::Rect,
+	id: egui::TextureId,
+	image: egui::Vec2,
+	mirror: bool,
+) {
+	if image.x <= 0.0 || image.y <= 0.0 {
+		return;
+	}
+	let scale = (rect.width() / image.x).max(rect.height() / image.y);
+	let shown = egui::vec2(
+		(rect.width() / (image.x * scale)).min(1.0),
+		(rect.height() / (image.y * scale)).min(1.0),
+	);
+	let mut uv = egui::Rect::from_center_size(egui::pos2(0.5, 0.5), shown);
+	if mirror {
+		std::mem::swap(&mut uv.min.x, &mut uv.max.x);
+	}
+	ui.put(
+		rect,
+		egui::Image::from_texture((id, rect.size()))
+			.uv(uv)
+			.corner_radius(8),
+	);
+}
+
+/// Bottom-left translucent name plate, optionally with the mute glyph.
+fn name_badge(ui: &mut egui::Ui, rect: egui::Rect, name: &str, icon: Option<crate::icons::Icon>) {
+	let font = egui::FontId::new(13.0, design::medium_family(ui.ctx()));
+	let icon_width = if icon.is_some() { 20.0 } else { 0.0 };
+	// One line, truncated with an ellipsis; the tile hover text carries the full name.
+	let mut job = egui::text::LayoutJob::simple_singleline(name.to_owned(), font, STAGE_TEXT);
+	job.wrap.max_width = (rect.width() * 0.6 - icon_width).max(20.0);
+	job.wrap.max_rows = 1;
+	job.wrap.break_anywhere = true;
+	let galley = ui.painter().layout_job(job);
+	let badge = egui::Rect::from_min_size(
+		rect.left_bottom() + egui::vec2(8.0, -8.0 - 24.0),
+		egui::vec2(galley.size().x + 16.0 + icon_width, 24.0),
+	);
+	ui.painter()
+		.rect_filled(badge, 6, egui::Color32::from_black_alpha(160));
+	ui.painter().galley(
+		egui::pos2(badge.left() + 8.0, badge.center().y - galley.size().y * 0.5),
+		galley,
+		STAGE_TEXT,
+	);
+	if let Some(icon) = icon {
+		crate::icons::paint(
+			ui.painter(),
+			icon,
+			egui::Rect::from_center_size(
+				egui::pos2(badge.right() - 14.0, badge.center().y),
+				egui::Vec2::splat(14.0),
+			),
+			design::palette(ui).danger,
+		);
+	}
+}
+
+/// Bottom-right pill action on a tile, sized to its label with a hover fill.
+fn tile_button(
+	ui: &mut egui::Ui,
+	rect: egui::Rect,
+	label: &str,
+	fill: egui::Color32,
+	hover_fill: egui::Color32,
+	hint: &str,
+) -> egui::Response {
+	let font = egui::FontId::new(12.0, design::medium_family(ui.ctx()));
+	let galley = ui
+		.painter()
+		.layout_no_wrap(label.to_owned(), font, egui::Color32::WHITE);
+	let size = egui::vec2(galley.size().x + 20.0, 26.0);
+	let button = egui::Rect::from_min_size(
+		egui::pos2(rect.right() - 8.0 - size.x, rect.top() + 8.0),
+		size,
+	);
+	let response = ui.allocate_rect(button, egui::Sense::click());
+	let fill = if response.hovered() || response.has_focus() {
+		hover_fill
+	} else {
+		fill
+	};
+	ui.painter().rect_filled(button, 6, fill);
+	ui.painter().galley(
+		button.center() - galley.size() * 0.5,
+		galley,
+		egui::Color32::WHITE,
+	);
+	response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+	response.on_hover_text(hint)
+}
+
 fn speaking_avatar(ui: &egui::Ui, avatar: &egui::Response, name: &str) {
 	let colors = design::palette(ui);
 	ui.painter().circle_stroke(
@@ -1946,6 +2425,8 @@ fn stage_participants(state: &State, channel: Id) -> Vec<RosterEntry> {
 						deafened: call.deafened,
 						server_muted: call.server_muted,
 						server_deafened: call.server_deafened,
+						video: call.camera,
+						streaming: false,
 					},
 					member: None,
 				},
@@ -2623,6 +3104,8 @@ mod tests {
 					deafened: true,
 					server_muted: false,
 					server_deafened: false,
+					video: false,
+					streaming: false,
 				},
 				member: Some(model::Member {
 					user: model::User {

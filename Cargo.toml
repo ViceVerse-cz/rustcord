@@ -94,6 +94,17 @@ opt-level = 3
 opt-level = 3
 
 # Per-packet media crypto: DAVE frame decryption (AES-GCM) and transport XChaCha20-Poly1305.
+# Software H.264 must keep up with real-time screen share and camera video in dev builds too.
+[profile.dev.package.openh264-sys2]
+opt-level = 3
+
+# Media packetizing, decryption and pixel handling run per frame; keep them optimized in dev.
+[profile.dev.package.discord-voice]
+opt-level = 3
+
+[profile.dev.package.openh264]
+opt-level = 3
+
 [profile.dev.package.davey]
 opt-level = 3
 

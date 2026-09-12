@@ -909,6 +909,8 @@ mod tests {
 				deafened: true,
 				server_muted: false,
 				server_deafened: false,
+				video: false,
+				streaming: false,
 			},
 		}];
 		let mut view = MessagingUi {

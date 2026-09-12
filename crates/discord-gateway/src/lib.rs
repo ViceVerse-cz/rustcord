@@ -639,13 +639,14 @@ async fn run_inner(
 				command=voice_controls.recv(), if voice_open && ready_at.is_some() => {
 					let Some(command)=command else {voice_open=false;continue;};
 					let connect=if let client_core::voice::Command::Join{channel,..}=command {Some(channel)}else{None};
-					let stream=matches!(command,client_core::voice::Command::StartStream{..}|client_core::voice::Command::StopStream{..});
+					let stream=matches!(command,client_core::voice::Command::StartStream{..}|client_core::voice::Command::StopStream{..}|client_core::voice::Command::WatchStream{..}|client_core::voice::Command::StopWatching{..});
 					let packet=match if stream {calls.stream_packet(command,owner_id)} else {calls.packet(command)} {
 						Ok(packet)=>packet,
 						Err(_) => {
 							match command {
 								client_core::voice::Command::Join{channel,request,..} => emit(Event::Voice(client_core::voice::Event::Failed{channel,request,message:"Previous call is still leaving, or the channel is unavailable; wait for departure or reconnect"}))?,
 								client_core::voice::Command::StartStream{channel,request,stream_request} => emit(Event::Voice(client_core::voice::Event::Stream{channel,request,stream_request,event:client_core::screen::Event::Failed("A screen share is already active, stopping, or the call is unavailable")}))?,
+								client_core::voice::Command::WatchStream{channel,request,stream_request,streamer} => emit(Event::Voice(client_core::voice::Event::Watch{channel,request,stream_request,streamer,event:client_core::screen::Event::Failed("Another stream is already being watched, or the call is unavailable")}))?,
 								_=>{}
 							}
 							continue;

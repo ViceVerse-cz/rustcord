@@ -11,7 +11,7 @@ use std::sync::{
 	atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering},
 	mpsc,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct Devices {
@@ -135,6 +135,10 @@ impl Audio {
 			.spawn(move || {
 				let mut metrics = Metrics::new(Scope::Audio);
 				let mut streams: Option<(u64, Streams)> = None;
+				// Unplugged headphones or a changed system default reopen devices instead of
+				// ending the call; only a persistent failure is reported.
+				let mut recovery_attempts = 0u8;
+				let mut next_default_check = Instant::now();
 				'audio: while !worker_gate.stopped.load(Ordering::Acquire) {
 					let revision = worker_gate.revision.load(Ordering::Acquire);
 					let current = selected.borrow_and_update().clone();
@@ -143,6 +147,16 @@ impl Audio {
 						.is_some_and(|(opened, _)| *opened != revision)
 					{
 						streams = None;
+					}
+					if let Some((_, active)) = &streams
+						&& Instant::now() >= next_default_check
+					{
+						next_default_check = Instant::now() + Duration::from_secs(1);
+						if active.default_changed(&current) {
+							worker_gate.revision.fetch_add(1, Ordering::AcqRel);
+							streams = None;
+							continue;
+						}
 					}
 					if !worker_gate.ready.load(Ordering::Acquire) {
 						streams = None;
@@ -158,24 +172,46 @@ impl Audio {
 					if worker_gate.failed_revision.load(Ordering::Acquire) == revision
 						&& worker_gate.revision.load(Ordering::Acquire) == revision
 					{
-						emit(Err(
-							"Audio device stopped or disconnected; choose a device and call again",
-						));
-						break;
+						if recovery_attempts >= MAX_RECOVERY_ATTEMPTS {
+							emit(Err(
+								"Audio device stopped or disconnected; choose a device and call again",
+							));
+							break;
+						}
+						recovery_attempts += 1;
+						worker_gate.revision.fetch_add(1, Ordering::AcqRel);
+						streams = None;
+						std::thread::park_timeout(RECOVERY_DELAY);
+						continue;
 					}
 					if streams.is_none() {
-						match Streams::open(&current, worker_gate.clone(), revision) {
+						// A vanished selection falls back to the system default on odd attempts,
+						// so it is used again as soon as it returns.
+						let settings = if recovery_attempts % 2 == 1 {
+							Devices::default()
+						} else {
+							current.clone()
+						};
+						match Streams::open(&settings, worker_gate.clone(), revision) {
 							Ok(value) => {
 								if !worker_gate.acknowledge(revision) {
 									continue;
 								}
 								streams = Some((revision, value));
+								recovery_attempts = 0;
 								emit(Ok(()));
 							}
 							Err(error) => {
 								if worker_gate.revision.load(Ordering::Acquire) != revision
 									|| !worker_gate.ready.load(Ordering::Acquire)
 								{
+									continue;
+								}
+								if recovery_attempts > 0
+									&& recovery_attempts < MAX_RECOVERY_ATTEMPTS
+								{
+									recovery_attempts += 1;
+									std::thread::park_timeout(RECOVERY_DELAY);
 									continue;
 								}
 								emit(Err(error));
@@ -263,10 +299,9 @@ impl Audio {
 			done: Some(done),
 		})
 	}
+	/// The worker ended. A failing device alone is not final: the worker reopens it first.
 	pub fn is_stopped(&self) -> bool {
 		self.gate.stopped.load(Ordering::Acquire)
-			|| self.gate.failed_revision.load(Ordering::Acquire)
-				== self.gate.revision.load(Ordering::Acquire)
 	}
 	pub fn shutdown(mut self) -> mpsc::Receiver<()> {
 		self.done.take().expect("audio owns completion")
@@ -331,6 +366,10 @@ impl Drop for Audio {
 	}
 }
 
+/// Six seconds of reopen attempts before a device loss ends the call.
+const MAX_RECOVERY_ATTEMPTS: u8 = 24;
+const RECOVERY_DELAY: Duration = Duration::from_millis(250);
+
 struct Streams {
 	_input: Option<cpal::Stream>,
 	_output: cpal::Stream,
@@ -338,8 +377,24 @@ struct Streams {
 	output: rtrb::Producer<Frame>,
 	reference: rtrb::Consumer<Frame>,
 	echo: echo::Echo,
+	/// Devices actually opened, so a changed system default can be followed.
+	output_id: Option<String>,
+	input_id: Option<String>,
 }
 impl Streams {
+	/// True when the call follows the system default and that default now points elsewhere.
+	fn default_changed(&self, settings: &Devices) -> bool {
+		let host = cpal::default_host();
+		let id = |device: Option<cpal::Device>| {
+			device.and_then(|d| d.id().ok()).map(|id| id.to_string())
+		};
+		(settings.output.is_none()
+			&& self.output_id.is_some()
+			&& id(host.default_output_device()) != self.output_id)
+			|| (settings.input.is_none()
+				&& self.input_id.is_some()
+				&& id(host.default_input_device()) != self.input_id)
+	}
 	fn open(settings: &Devices, gate: Arc<Gate>, revision: u64) -> Result<Self, &'static str> {
 		#[cfg(target_os = "macos")]
 		if gate.input_enabled.load(Ordering::Acquire) {
@@ -353,6 +408,8 @@ impl Streams {
 		}
 		let host = cpal::default_host();
 		let output = choose(&host, settings.output.as_deref(), false)?;
+		let output_id = output.id().ok().map(|id| id.to_string());
+		let mut input_id = None;
 		let output_config = config(&output, false)?;
 		let (input_write, input_read) = rtrb::RingBuffer::new(8);
 		let (output_write, output_read) = rtrb::RingBuffer::new(8);
@@ -361,6 +418,7 @@ impl Streams {
 		let echo = echo::Echo::new();
 		let input_stream = if gate.input_enabled.load(Ordering::Acquire) {
 			let input = choose(&host, settings.input.as_deref(), true)?;
+			input_id = input.id().ok().map(|id| id.to_string());
 			let input_config = config(&input, true)?;
 			let capture = Capture::new(input_config.sample_rate(), input_write);
 			Some(match input_config.sample_format() {
@@ -449,6 +507,8 @@ impl Streams {
 			output: output_write,
 			reference: reference_read,
 			echo,
+			output_id,
+			input_id,
 		})
 	}
 }
@@ -765,7 +825,8 @@ mod tests {
 		assert!(audio.gate.acknowledge(third));
 		assert!(audio.is_ready());
 		audio.gate.failed_revision.store(third, Ordering::Release);
-		assert!(audio.is_stopped());
+		// A failing device pauses media for the reopen; only the worker ending is final.
+		assert!(!audio.is_stopped());
 		assert!(!audio.is_ready());
 	}
 

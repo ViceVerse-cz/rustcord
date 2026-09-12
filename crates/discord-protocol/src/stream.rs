@@ -11,7 +11,9 @@ pub struct Key {
 pub struct Created {
 	pub stream_key: String,
 	pub rtc_server_id: Id,
-	pub rtc_channel_id: Id,
+	/// Viewer payloads have been seen without it; the RTC server then stands in.
+	#[serde(default)]
+	pub rtc_channel_id: Option<Id>,
 }
 
 #[derive(Deserialize)]

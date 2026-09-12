@@ -23,6 +23,7 @@ mod toggle_setting;
 mod uploads;
 mod video;
 mod voice;
+mod watch;
 use client_core::{
 	Command, Envelope, Event, State,
 	auth::{AuthState, Failure, SessionSecret},
@@ -589,13 +590,18 @@ impl Desktop {
 					test_support::system_demo_state()
 				} else if std::env::args().any(|arg| arg == "--demo-notifications") {
 					test_support::notification_demo_state()
-				} else if std::env::args()
-					.any(|arg| matches!(arg.as_str(), "--demo-voice" | "--demo-voice-failed"))
-				{
+				} else if std::env::args().any(|arg| {
+					matches!(
+						arg.as_str(),
+						"--demo-voice" | "--demo-voice-failed" | "--demo-voice-video"
+					)
+				}) {
 					test_support::voice_demo_state()
 				} else if std::env::args().any(|arg| arg == "--demo-existing-call") {
 					test_support::existing_call_demo_state()
-				} else if std::env::args().any(|arg| arg == "--demo-call") {
+				} else if std::env::args()
+					.any(|arg| matches!(arg.as_str(), "--demo-call" | "--demo-call-stream"))
+				{
 					test_support::call_demo_state()
 				} else if std::env::args().any(|arg| arg == "--demo-chat") {
 					test_support::chat_demo_state()
@@ -745,6 +751,89 @@ impl Desktop {
 		if demo && std::env::args().any(|arg| arg == "--demo-game-activity") {
 			messaging.share_game_activity = true;
 			messaging.own_game = Some("Playing osu!".into());
+		}
+		// `--demo-call-stream`: the direct-message peer shares a synthetic screen this device is
+		// watching, so the stream stage renders offline without any capture or network.
+		#[cfg(feature = "demo")]
+		if demo && std::env::args().any(|arg| arg == "--demo-call-stream") {
+			let peer = model::Id(2);
+			if let Some(call) = &mut state.voice.active {
+				for participant in &mut call.participants {
+					if participant.user == peer {
+						participant.streaming = true;
+					}
+				}
+			}
+			let _ = state.watch_stream(peer);
+			let (width, height) = (640usize, 360usize);
+			let pixels = (0..width * height)
+				.map(|i| {
+					let (x, y) = (i % width, i / width);
+					let grid = usize::from(x % 80 < 2 || y % 80 < 2) as u8;
+					egui::Color32::from_rgb(
+						24 + grid * 40 + (x * 90 / width) as u8,
+						28 + grid * 40 + (y * 70 / height) as u8,
+						48 + grid * 50,
+					)
+				})
+				.collect();
+			let image = egui::ColorImage {
+				size: [width, height],
+				source_size: egui::vec2(width as f32, height as f32),
+				pixels,
+			};
+			messaging.voice_stream_view = Some(cc.egui_ctx.load_texture(
+				"synthetic-stream",
+				image,
+				egui::TextureOptions::LINEAR,
+			));
+			messaging.voice_stream_status = "Watching the stream";
+			// `--demo-focus` additionally opens the enlarged stage layout.
+			if std::env::args().any(|arg| arg == "--demo-focus") {
+				messaging.voice_focus = Some(ui::StageFocus::Stream(peer));
+			}
+		}
+		// `--demo-voice-video`: Robin's camera is a synthetic gradient and starts enlarged, so the
+		// focused stage layout renders offline without any capture or network.
+		#[cfg(feature = "demo")]
+		if demo && std::env::args().any(|arg| arg == "--demo-voice-video") {
+			let robin = model::Id(2);
+			for entry in &mut state.voice.roster {
+				if entry.participant.user == robin {
+					entry.participant.video = true;
+				}
+			}
+			if let Some(call) = &mut state.voice.active {
+				for participant in &mut call.participants {
+					if participant.user == robin {
+						participant.video = true;
+					}
+				}
+			}
+			let (width, height) = (320usize, 240usize);
+			let pixels = (0..width * height)
+				.map(|i| {
+					let (x, y) = (
+						(i % width) as f32 / width as f32,
+						(i / width) as f32 / height as f32,
+					);
+					egui::Color32::from_rgb((90.0 + 120.0 * x) as u8, (60.0 + 90.0 * y) as u8, 140)
+				})
+				.collect();
+			let image = egui::ColorImage {
+				size: [width, height],
+				source_size: egui::vec2(width as f32, height as f32),
+				pixels,
+			};
+			messaging.voice_remote_video.push((
+				robin,
+				cc.egui_ctx.load_texture(
+					"synthetic-remote-camera",
+					image,
+					egui::TextureOptions::LINEAR,
+				),
+			));
+			messaging.voice_focus = Some(ui::StageFocus::Participant(robin));
 		}
 		messaging.build = ui::design::Build {
 			channel: if cfg!(debug_assertions) {

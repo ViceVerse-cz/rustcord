@@ -19,6 +19,32 @@ mod mp4;
 #[cfg(target_os = "macos")]
 pub use apple::Decoder;
 
+/// Hardware-backed decoding of one live H.264 elementary stream (camera or Go Live).
+/// Windows uses the Media Foundation decoder with a DXGI device manager when available,
+/// macOS uses VideoToolbox, Linux lets GStreamer's `decodebin` pick the installed decoder.
+#[cfg(target_os = "macos")]
+#[path = "live_apple.rs"]
+pub mod live;
+#[cfg(target_os = "windows")]
+#[path = "live_windows.rs"]
+pub mod live;
+#[cfg(target_os = "linux")]
+#[path = "live_gst.rs"]
+pub mod live;
+
+/// Largest live access unit any backend accepts.
+pub const MAX_ACCESS_UNIT: usize = 2 * 1024 * 1024 + 64 * 1024;
+
+/// One decoded live picture, tightly packed RGBA.
+pub struct LiveFrame {
+	pub width: u32,
+	pub height: u32,
+	pub rgba: Vec<u8>,
+}
+
+/// Receives live pictures from the decoder's own thread, in decode order.
+pub type LiveSink = Box<dyn Fn(LiveFrame) + Send + Sync>;
+
 #[cfg(target_os = "linux")]
 mod gst;
 #[cfg(target_os = "linux")]

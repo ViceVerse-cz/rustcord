@@ -3703,6 +3703,8 @@ mod tests {
 				deafened: false,
 				server_muted: false,
 				server_deafened: false,
+				video: false,
+				streaming: false,
 			},
 		});
 		apply(&mut state, Event::Unavailable(Id(1)));

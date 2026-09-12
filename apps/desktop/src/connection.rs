@@ -241,9 +241,27 @@ impl Connection {
 								}
 								continue;
 							}
+							if let Command::Voice(control @ (client_core::voice::Command::WatchStream{..}|client_core::voice::Command::StopWatching{..}))=&command {
+								use client_core::{screen,voice::{Command as V,Event as E}};
+								let control=*control;
+								let (channel,request,stream_request,streamer)=match control {
+									V::WatchStream{channel,request,stream_request,streamer}=>(channel,request,stream_request,Some(streamer)),
+									V::StopWatching{channel,request,stream_request}=>(channel,request,stream_request,None),
+									_=>unreachable!(),
+								};
+								let message=if !*voice_availability.borrow() {
+									Some("Voice signaling is disconnected; the stream request was not sent")
+								} else if voice_send.try_send(control).is_err() {
+									Some("Stream request was not sent; the voice queue is full")
+								} else {None};
+								if let (Some(message),Some(streamer))=(message,streamer) {
+									emit(Event::Voice(E::Watch{channel,request,stream_request,streamer,event:screen::Event::Failed(message)}))?;
+								}
+								continue;
+							}
 							if let Command::Voice(control)=command {
                                 use client_core::voice::{Command as V,Event as E};
-                                let (channel,request)=match control {V::Join{channel,request,..}|V::Ring{channel,request}|V::Leave{channel,request}|V::SetMute{channel,request,..}|V::SetCamera{channel,request,..}=>(channel,request),V::Decline{channel}=>(channel,0),V::Sync{..}|V::StartStream{..}|V::StopStream{..}=>unreachable!("sync and stream actions routed above")};
+                                let (channel,request)=match control {V::Join{channel,request,..}|V::Ring{channel,request}|V::Leave{channel,request}|V::SetMute{channel,request,..}|V::SetCamera{channel,request,..}=>(channel,request),V::Decline{channel}=>(channel,0),V::Sync{..}|V::StartStream{..}|V::StopStream{..}|V::WatchStream{..}|V::StopWatching{..}=>unreachable!("sync and stream actions routed above")};
                                 if !*voice_availability.borrow() {
                                     emit(Event::Voice(E::Failed{channel,request,message:"Voice is disconnected; no call was started"}))?;continue;
                                 }
@@ -523,7 +541,9 @@ fn ring_action(
 			| V::SetMute { .. }
 			| V::SetCamera { .. }
 			| V::StartStream { .. }
-			| V::StopStream { .. } => Ok(None),
+			| V::StopStream { .. }
+			| V::WatchStream { .. }
+			| V::StopWatching { .. } => Ok(None),
 		};
 	}
 	match control {
@@ -558,7 +578,9 @@ fn ring_action(
 		| V::SetMute { .. }
 		| V::SetCamera { .. }
 		| V::StartStream { .. }
-		| V::StopStream { .. } => Ok(None),
+		| V::StopStream { .. }
+		| V::WatchStream { .. }
+		| V::StopWatching { .. } => Ok(None),
 	}
 }
 

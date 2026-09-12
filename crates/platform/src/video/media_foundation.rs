@@ -11,7 +11,14 @@ use std::{
 };
 use windows::{
 	Win32::{
-		Foundation::{E_FAIL, E_INVALIDARG, E_NOTIMPL, E_POINTER, S_FALSE, S_OK},
+		Foundation::{E_FAIL, E_INVALIDARG, E_NOTIMPL, E_POINTER, HMODULE, S_FALSE, S_OK},
+		Graphics::{
+			Direct3D::D3D_DRIVER_TYPE_HARDWARE,
+			Direct3D11::{
+				D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice,
+				ID3D11Device, ID3D11Multithread,
+			},
+		},
 		Media::MediaFoundation::*,
 		System::Com::{
 			COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize, ISequentialStream_Impl, IStream,
@@ -19,7 +26,7 @@ use windows::{
 			STREAM_SEEK_CUR, STREAM_SEEK_END, STREAM_SEEK_SET, StructuredStorage::PROPVARIANT,
 		},
 	},
-	core::{GUID, HRESULT, Ref, implement},
+	core::{GUID, HRESULT, Interface, Ref, implement},
 };
 
 const MAX_BYTES: usize = 16 * 1024 * 1024;
@@ -36,6 +43,8 @@ use super::{Info, ReadSeek, Sample};
 pub struct Decoder {
 	reader: IMFSourceReader,
 	_stream: IMFByteStream,
+	_manager: Option<IMFDXGIDeviceManager>,
+	_device: Option<ID3D11Device>,
 	_runtime: Runtime,
 	info: Info,
 	video_index: u32,
@@ -50,9 +59,52 @@ pub struct Decoder {
 	rotation: u32,
 }
 
-struct Runtime(PhantomData<Rc<()>>);
+/// A negotiated reader before the decoder takes ownership.
+struct Parts {
+	reader: IMFSourceReader,
+	stream: IMFByteStream,
+	info: Info,
+	video_index: u32,
+	audio_index: Option<u32>,
+	width: u32,
+	height: u32,
+	stride: i32,
+	rotation: u32,
+}
+
+/// A D3D11 video device wrapped in a DXGI device manager, the handle Media Foundation needs
+/// for DXVA decoding. `None` leaves the caller in software mode.
+pub(super) unsafe fn dxgi_manager() -> Option<(ID3D11Device, IMFDXGIDeviceManager)> {
+	unsafe {
+		let mut device: Option<ID3D11Device> = None;
+		D3D11CreateDevice(
+			None,
+			D3D_DRIVER_TYPE_HARDWARE,
+			HMODULE::default(),
+			D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+			None,
+			D3D11_SDK_VERSION,
+			Some(&mut device),
+			None,
+			None,
+		)
+		.ok()?;
+		let device = device?;
+		if let Ok(multithread) = device.cast::<ID3D11Multithread>() {
+			let _ = multithread.SetMultithreadProtected(true);
+		}
+		let mut token = 0;
+		let mut manager: Option<IMFDXGIDeviceManager> = None;
+		MFCreateDXGIDeviceManager(&mut token, &mut manager).ok()?;
+		let manager = manager?;
+		manager.ResetDevice(&device, token).ok()?;
+		Some((device, manager))
+	}
+}
+
+pub(super) struct Runtime(PhantomData<Rc<()>>);
 impl Runtime {
-	fn open() -> Result<Self, &'static str> {
+	pub(super) fn open() -> Result<Self, &'static str> {
 		// SAFETY: Called and dropped only on the dedicated decoder thread.
 		unsafe {
 			CoInitializeEx(None, COINIT_MULTITHREADED)
@@ -99,16 +151,78 @@ impl Decoder {
 			length,
 		}
 		.into();
+		// DXVA first when a video-capable GPU device exists; the software reader is the
+		// fallback for anything the accelerated reader rejects.
+		// SAFETY: COM calls on the thread that initialized the runtime.
+		let mut hardware = unsafe { dxgi_manager() };
+		let mut error = UNSUPPORTED;
+		for accelerated in [true, false] {
+			if accelerated && hardware.is_none() {
+				continue;
+			}
+			// SAFETY: Rewinding our own IStream between attempts.
+			unsafe { stream.Seek(0, STREAM_SEEK_SET, None) }.map_err(|_| INVALID)?;
+			let manager = hardware
+				.as_ref()
+				.filter(|_| accelerated)
+				.map(|(_, manager)| manager);
+			match Self::configure(&stream, manager) {
+				Ok(parts) => {
+					let (device, manager) = match (accelerated, hardware.take()) {
+						(true, Some((device, manager))) => (Some(device), Some(manager)),
+						_ => (None, None),
+					};
+					return Ok(Self {
+						reader: parts.reader,
+						_stream: parts.stream,
+						_manager: manager,
+						_device: device,
+						_runtime: runtime,
+						info: parts.info,
+						video_index: parts.video_index,
+						audio_index: parts.audio_index,
+						video_done: false,
+						audio_done: parts.audio_index.is_none(),
+						width: parts.width,
+						height: parts.height,
+						stride: parts.stride,
+						buffer_height: parts.height,
+						crop: (0, 0),
+						rotation: parts.rotation,
+					});
+				}
+				Err(failure) => error = failure,
+			}
+		}
+		Err(error)
+	}
+
+	fn configure(
+		source: &IStream,
+		manager: Option<&IMFDXGIDeviceManager>,
+	) -> Result<Parts, &'static str> {
 		// SAFETY: COM inputs remain live; out parameters are initialized. The OS
 		// wrapper implements asynchronous IMFByteStream reads around our synchronized IStream.
 		unsafe {
-			let stream = MFCreateMFByteStreamOnStream(&stream).map_err(|_| UNSUPPORTED)?;
+			let stream = MFCreateMFByteStreamOnStream(source).map_err(|_| UNSUPPORTED)?;
 			let mut attributes = None;
-			MFCreateAttributes(&mut attributes, 1).map_err(|_| UNSUPPORTED)?;
+			MFCreateAttributes(&mut attributes, 3).map_err(|_| UNSUPPORTED)?;
 			let attributes = attributes.ok_or(INVALID)?;
-			attributes
-				.SetUINT32(&MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, 1)
-				.map_err(|_| UNSUPPORTED)?;
+			if let Some(manager) = manager {
+				attributes
+					.SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1)
+					.map_err(|_| UNSUPPORTED)?;
+				attributes
+					.SetUINT32(&MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, 1)
+					.map_err(|_| UNSUPPORTED)?;
+				attributes
+					.SetUnknown(&MF_SOURCE_READER_D3D_MANAGER, manager)
+					.map_err(|_| UNSUPPORTED)?;
+			} else {
+				attributes
+					.SetUINT32(&MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, 1)
+					.map_err(|_| UNSUPPORTED)?;
+			}
 			let reader = MFCreateSourceReaderFromByteStream(&stream, &attributes)
 				.map_err(|_| UNSUPPORTED)?;
 			reader.SetStreamSelection(ALL, false).map_err(|_| INVALID)?;
@@ -215,10 +329,9 @@ impl Decoder {
 			} else {
 				(width, height)
 			};
-			Ok(Self {
+			Ok(Parts {
 				reader,
-				_stream: stream,
-				_runtime: runtime,
+				stream,
 				info: Info {
 					width: display_width,
 					height: display_height,
@@ -228,13 +341,9 @@ impl Decoder {
 				},
 				video_index,
 				audio_index,
-				video_done: false,
-				audio_done: audio_index.is_none(),
 				width,
 				height,
 				stride,
-				buffer_height: height,
-				crop: (0, 0),
 				rotation,
 			})
 		}

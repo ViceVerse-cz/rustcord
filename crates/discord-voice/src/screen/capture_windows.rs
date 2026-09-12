@@ -170,6 +170,7 @@ impl Capture {
 	pub(crate) fn start(
 		settings: CaptureSettings,
 		frames: SyncSender<RawFrame>,
+		_audio: Option<tokio::sync::mpsc::Sender<Vec<f32>>>,
 		stop: Arc<AtomicBool>,
 	) -> Result<Self, &'static str> {
 		if settings.width == 0

@@ -25,6 +25,7 @@ pub struct ScreenUi {
 	height: u32,
 	fps: u32,
 	cursor: bool,
+	audio: bool,
 }
 impl Default for ScreenUi {
 	fn default() -> Self {
@@ -42,6 +43,7 @@ impl Default for ScreenUi {
 			height: 1080,
 			fps: 30,
 			cursor: true,
+			audio: true,
 		}
 	}
 }
@@ -86,6 +88,7 @@ impl ScreenUi {
 			height: self.height,
 			fps: self.fps,
 			cursor: self.cursor,
+			audio: self.audio && cfg!(target_os = "macos"),
 		};
 		settings.valid().then_some(settings)
 	}
@@ -274,12 +277,25 @@ impl ScreenUi {
 			Some("Include the pointer in the shared video."),
 			&mut self.cursor,
 		);
+		if cfg!(target_os = "macos") {
+			ui.add_space(6.0);
+			crate::design::switch(
+				ui,
+				"Share system audio",
+				Some(
+					"Send what your Mac plays along with the screen. Serein's own call audio is left out.",
+				),
+				&mut self.audio,
+			);
+		}
 		ui.add_space(4.0);
 		ui.add(
 			egui::Label::new(
-				egui::RichText::new(
-					"Screen video only. Your call microphone keeps its current settings.",
-				)
+				egui::RichText::new(if cfg!(target_os = "macos") {
+					"Your call microphone keeps its current settings."
+				} else {
+					"Screen video only. Your call microphone keeps its current settings."
+				})
 				.size(12.0)
 				.color(colors.muted),
 			)

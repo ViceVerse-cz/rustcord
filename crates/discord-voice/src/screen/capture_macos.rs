@@ -88,6 +88,72 @@ struct Handler {
 	stop: Arc<AtomicBool>,
 }
 
+/// System audio as interleaved 48 kHz stereo `f32`, bounded per buffer and never stored.
+struct AudioHandler {
+	audio: tokio::sync::mpsc::Sender<Vec<f32>>,
+	stop: Arc<AtomicBool>,
+}
+
+impl SCStreamOutputTrait for AudioHandler {
+	fn did_output_sample_buffer(&self, sample: CMSampleBuffer, kind: SCStreamOutputType) {
+		if kind != SCStreamOutputType::Audio || self.stop.load(Ordering::Acquire) {
+			return;
+		}
+		let Some(list) = sample.audio_buffer_list() else {
+			return;
+		};
+		fn samples(bytes: &[u8]) -> impl Iterator<Item = f32> + '_ {
+			bytes
+				.as_chunks::<4>()
+				.0
+				.iter()
+				.map(|b| f32::from_ne_bytes(*b))
+				.map(|s| {
+					if s.is_finite() {
+						s.clamp(-1.0, 1.0)
+					} else {
+						0.0
+					}
+				})
+		}
+
+		let interleaved: Vec<f32> = match list.num_buffers() {
+			// Planar: one buffer per channel.
+			2 => {
+				let (Some(left), Some(right)) = (list.buffer(0), list.buffer(1)) else {
+					return;
+				};
+				samples(left.data())
+					.zip(samples(right.data()))
+					.take(crate::screen::MAX_AUDIO_SAMPLES / 2)
+					.flat_map(|(l, r)| [l, r])
+					.collect()
+			}
+			1 => {
+				let Some(buffer) = list.buffer(0) else {
+					return;
+				};
+				if buffer.number_channels() == 2 {
+					samples(buffer.data())
+						.take(crate::screen::MAX_AUDIO_SAMPLES)
+						.collect()
+				} else {
+					samples(buffer.data())
+						.take(crate::screen::MAX_AUDIO_SAMPLES / 2)
+						.flat_map(|s| [s, s])
+						.collect()
+				}
+			}
+			_ => return,
+		};
+		if interleaved.is_empty() || !interleaved.len().is_multiple_of(2) {
+			return;
+		}
+		// A full queue drops audio rather than blocking the capture callback.
+		let _ = self.audio.try_send(interleaved);
+	}
+}
+
 impl SCStreamOutputTrait for Handler {
 	fn did_output_sample_buffer(&self, sample: CMSampleBuffer, kind: SCStreamOutputType) {
 		if kind != SCStreamOutputType::Screen
@@ -175,6 +241,7 @@ impl Capture {
 	pub(crate) fn start(
 		settings: Settings,
 		frames: SyncSender<RawFrame>,
+		audio: Option<tokio::sync::mpsc::Sender<Vec<f32>>>,
 		stop: Arc<AtomicBool>,
 	) -> Result<Self, &'static str> {
 		initialize();
@@ -224,7 +291,7 @@ impl Capture {
 				SCContentFilter::create().with_window(&window).build()
 			}
 		};
-		let config = SCStreamConfiguration::new()
+		let mut config = SCStreamConfiguration::new()
 			.with_width(settings.width)
 			.with_height(settings.height)
 			.with_pixel_format(PixelFormat::BGRA)
@@ -232,6 +299,14 @@ impl Capture {
 			.with_shows_cursor(settings.cursor)
 			.with_fps(settings.fps)
 			.with_queue_depth(3);
+		if audio.is_some() {
+			// Serein's own playback is excluded so the call is not echoed into the stream.
+			config = config
+				.with_captures_audio(true)
+				.with_sample_rate(48_000)
+				.with_channel_count(2)
+				.with_excludes_current_process_audio(true);
+		}
 		if !config.preserves_aspect_ratio() {
 			return Err("Screen sharing requires macOS 14 or newer");
 		}
@@ -247,6 +322,19 @@ impl Capture {
 			.is_none()
 		{
 			return Err("Screen capture frame callback could not be registered");
+		}
+		if let Some(audio) = audio
+			&& stream
+				.add_output_handler(
+					AudioHandler {
+						audio,
+						stop: stop.clone(),
+					},
+					SCStreamOutputType::Audio,
+				)
+				.is_none()
+		{
+			return Err("System audio callback could not be registered");
 		}
 		stream
 			.start_capture()

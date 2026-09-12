@@ -549,6 +549,8 @@ pub fn voice_demo_state() -> State {
 			deafened,
 			server_muted: false,
 			server_deafened: false,
+			video: false,
+			streaming: false,
 		},
 		member: Some(Member {
 			roles: vec![],
@@ -567,8 +569,11 @@ pub fn voice_demo_state() -> State {
 		}),
 	})
 	.collect();
+	// Fern streams in the fixture so the LIVE pill and watch action render offline.
+	state.voice.roster[2].participant.streaming = true;
 	state.voice.active = Some(Call {
 		camera: false,
+		watching: None,
 		channel: Id(25),
 		guild: Some(Id(10)),
 		request: 0,
@@ -603,9 +608,12 @@ pub fn call_demo_state() -> State {
 		deafened: false,
 		server_muted: false,
 		server_deafened: false,
+		video: false,
+		streaming: false,
 	};
 	state.voice.active = Some(Call {
 		camera: false,
+		watching: None,
 		channel: Id(22),
 		guild: None,
 		request: 0,

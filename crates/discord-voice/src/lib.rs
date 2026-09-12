@@ -10,8 +10,10 @@ mod mixer;
 pub mod screen;
 mod transport;
 mod video;
+mod video_receive;
 pub use crypto::Identity;
-pub use transport::{run, run_stream, run_with_identity};
+pub use transport::{run, run_stream, run_with_identity, watch_stream};
+pub use video_receive::{RemoteFrame, VideoSink};
 pub mod camera_video;
 
 pub type Frame = [f32; 960];

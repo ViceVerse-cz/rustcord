@@ -1502,6 +1502,7 @@ dependencies = [
  "openmls_basic_credential",
  "openmls_rust_crypto",
  "opus2",
+ "platform",
  "rtrb",
  "screencapturekit",
  "serde_json",

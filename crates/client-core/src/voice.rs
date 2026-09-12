@@ -79,6 +79,10 @@ pub struct Participant {
 	pub deafened: bool,
 	pub server_muted: bool,
 	pub server_deafened: bool,
+	/// Camera on (`self_video`); frames arrive on the call transport.
+	pub video: bool,
+	/// Go Live screen share announced (`self_stream`); viewing needs an explicit watch.
+	pub streaming: bool,
 }
 #[derive(Clone)]
 pub struct RosterEntry {
@@ -104,6 +108,8 @@ pub struct Call {
 	pub deafened: bool,
 	pub participants: Vec<Participant>,
 	pub camera: bool,
+	/// Participant whose screen share this device explicitly chose to watch.
+	pub watching: Option<Id>,
 	pub error: Option<&'static str>,
 }
 #[derive(Default)]
@@ -161,6 +167,17 @@ pub enum Command {
 		request: u64,
 		enabled: bool,
 	},
+	WatchStream {
+		channel: Id,
+		request: u64,
+		stream_request: u64,
+		streamer: Id,
+	},
+	StopWatching {
+		channel: Id,
+		request: u64,
+		stream_request: u64,
+	},
 	Decline {
 		channel: Id,
 	},
@@ -191,6 +208,8 @@ pub enum Event {
 		session: Option<Secret>,
 		muted: bool,
 		deafened: bool,
+		video: bool,
+		streaming: bool,
 	},
 	Server {
 		request: u64,
@@ -212,6 +231,14 @@ pub enum Event {
 		channel: Id,
 		request: u64,
 		stream_request: u64,
+		event: screen::Event,
+	},
+	/// Negotiation for watching another participant's screen share.
+	Watch {
+		channel: Id,
+		request: u64,
+		stream_request: u64,
+		streamer: Id,
 		event: screen::Event,
 	},
 }
@@ -246,7 +273,7 @@ impl Event {
 				token.as_ref().map_or(0, Secret::bytes)
 					+ endpoint.as_ref().map_or(0, String::capacity)
 			}
-			Self::Stream { event, .. } => event.bytes(),
+			Self::Stream { event, .. } | Self::Watch { event, .. } => event.bytes(),
 			_ => 0,
 		}
 	}
@@ -316,6 +343,7 @@ impl ClientState {
 			muted,
 			deafened: false,
 			camera: false,
+			watching: None,
 			participants,
 			error: None,
 		});
@@ -375,6 +403,29 @@ impl ClientState {
 			request: call.request,
 			enabled,
 		}))
+	}
+	/// Choose one streaming participant of the connected call to watch. Nothing connects
+	/// until the desktop negotiates the stream; `None` when the choice is not possible.
+	pub fn watch_stream(&mut self, streamer: Id) -> Option<()> {
+		let own = self.user.as_ref().map(|user| user.id);
+		let call = self.voice.active.as_mut()?;
+		if !matches!(call.phase, Phase::Connected | Phase::Waiting)
+			|| call.watching == Some(streamer)
+			|| own == Some(streamer)
+			|| !call
+				.participants
+				.iter()
+				.any(|p| p.user == streamer && p.streaming)
+		{
+			return None;
+		}
+		call.watching = Some(streamer);
+		Some(())
+	}
+	pub fn stop_watching(&mut self) {
+		if let Some(call) = &mut self.voice.active {
+			call.watching = None;
+		}
 	}
 	pub fn apply_voice(&mut self, event: Event) {
 		match event {
@@ -464,6 +515,8 @@ impl ClientState {
 				user,
 				muted,
 				deafened,
+				video,
+				streaming,
 				..
 			} => {
 				let participant = Participant {
@@ -472,6 +525,8 @@ impl ClientState {
 					deafened,
 					server_muted,
 					server_deafened,
+					video,
+					streaming,
 				};
 				if let Some(guild) = guild {
 					let previous = self
@@ -542,6 +597,9 @@ impl ClientState {
 					}
 					call.participants.push(participant);
 				}
+				if call.watching == Some(user) && (channel != Some(call.channel) || !streaming) {
+					call.watching = None;
+				}
 			}
 			Event::Progress {
 				channel,
@@ -575,11 +633,12 @@ impl ClientState {
 				{
 					call.phase = Phase::Failed;
 					call.camera = false;
+					call.watching = None;
 					call.error.get_or_insert(message);
 					call.participants.clear();
 				}
 			}
-			Event::Server { .. } | Event::Stream { .. } => {} // The desktop consumes negotiation material; core never retains it.
+			Event::Server { .. } | Event::Stream { .. } | Event::Watch { .. } => {} // The desktop consumes negotiation material; core never retains it.
 		}
 	}
 	fn update_roster(&mut self, entry: RosterEntry) -> bool {
@@ -630,6 +689,12 @@ impl ClientState {
 				call.server_muted = own.server_muted;
 				call.server_deafened = own.server_deafened;
 			}
+			if call
+				.watching
+				.is_some_and(|w| !call.participants.iter().any(|p| p.user == w && p.streaming))
+			{
+				call.watching = None;
+			}
 			if call.participants.len() > MAX_PARTICIPANTS {
 				self.disconnect_voice("Voice channel exceeds the 64 participant limit");
 			}
@@ -669,6 +734,7 @@ impl ClientState {
 		if let Some(call) = &mut self.voice.active {
 			call.phase = Phase::Failed;
 			call.camera = false;
+			call.watching = None;
 			call.error.get_or_insert(reason);
 			call.participants.clear();
 		}
@@ -727,6 +793,8 @@ mod tests {
 				deafened: false,
 				server_muted: true,
 				server_deafened: false,
+				video: false,
+				streaming: false,
 			},
 			member: None,
 		};
@@ -781,6 +849,8 @@ mod tests {
 			deafened: true,
 			server_muted: false,
 			server_deafened: true,
+			video: false,
+			streaming: false,
 		});
 		assert!(state.voice.active.as_ref().unwrap().participants.is_empty());
 		assert_eq!(
@@ -992,6 +1062,8 @@ mod tests {
 				deafened: false,
 				server_muted: false,
 				server_deafened: false,
+				video: false,
+				streaming: false,
 			},
 			member: None,
 		};
@@ -1043,6 +1115,8 @@ mod tests {
 			deafened: false,
 			server_muted: false,
 			server_deafened: false,
+			video: false,
+			streaming: false,
 		});
 		assert_eq!(state.voice.roster.len(), 1);
 		state.apply(Envelope {
@@ -1104,6 +1178,8 @@ mod tests {
 			deafened: false,
 			server_muted: false,
 			server_deafened: false,
+			video: false,
+			streaming: false,
 		};
 		// CALL_CREATE arrives before this device joins; the caller must not be forgotten.
 		state.apply_voice(Event::Call {
@@ -1129,6 +1205,8 @@ mod tests {
 			deafened: false,
 			server_muted: false,
 			server_deafened: false,
+			video: false,
+			streaming: false,
 		});
 		let call = state.voice.active.as_ref().unwrap();
 		assert!(call.participants.is_empty());
@@ -1146,6 +1224,8 @@ mod tests {
 			deafened: false,
 			server_muted: false,
 			server_deafened: false,
+			video: false,
+			streaming: false,
 		});
 		assert!(state.start_call(Id(2), false).is_some());
 		let seeded = &state.voice.active.as_ref().unwrap().participants;

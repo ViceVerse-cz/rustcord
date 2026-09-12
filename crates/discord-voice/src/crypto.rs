@@ -37,6 +37,15 @@ pub(crate) struct Encryption {
 	cipher: XChaCha20Poly1305,
 	counter: u32,
 }
+/// One authenticated, transport-decrypted RTP packet; the payload is still DAVE ciphertext.
+pub struct Rtp {
+	pub ssrc: u32,
+	pub sequence: u16,
+	pub timestamp: u32,
+	pub marker: bool,
+	pub payload_type: u8,
+	pub payload: Vec<u8>,
+}
 impl Encryption {
 	pub fn new(key: &[u8; 32]) -> Self {
 		Self {
@@ -67,11 +76,37 @@ impl Encryption {
 		packet.extend_from_slice(&nonce[..4]);
 		Ok(packet)
 	}
-	pub fn open(&self, packet: &[u8]) -> Option<(u32, u16, Vec<u8>)> {
+	/// Encrypt one RTCP packet: the eight-byte header stays clear as associated data, the
+	/// rest is sealed and the four-byte nonce trails, as in the `rtpsize` RTP framing.
+	pub fn seal_rtcp(&mut self, header: &[u8; 8], body: &[u8]) -> Result<Vec<u8>, &'static str> {
+		self.counter = self
+			.counter
+			.checked_add(1)
+			.ok_or("Voice transport nonce exhausted; rejoin the call")?;
+		let mut nonce = [0; 24];
+		nonce[..4].copy_from_slice(&self.counter.to_be_bytes());
+		let data = self
+			.cipher
+			.encrypt(
+				XNonce::from_slice(&nonce),
+				Payload {
+					msg: body,
+					aad: header,
+				},
+			)
+			.map_err(|_| "Voice transport encryption failed")?;
+		let mut packet = Vec::with_capacity(header.len() + data.len() + 4);
+		packet.extend_from_slice(header);
+		packet.extend_from_slice(&data);
+		packet.extend_from_slice(&nonce[..4]);
+		Ok(packet)
+	}
+	/// Authenticate and decrypt one Opus (120), H264 (101) or H264 RTX (102) RTP packet.
+	pub fn open(&self, packet: &[u8]) -> Option<Rtp> {
 		if packet.len() < 32
 			|| packet.len() > MAX_PACKET
 			|| packet[0] >> 6 != 2
-			|| packet[1] & 0x7f != 120
+			|| !matches!(packet[1] & 0x7f, 120 | 101 | 102)
 		{
 			return None;
 		}
@@ -109,11 +144,14 @@ impl Encryption {
 			}
 			frame.truncate(frame.len() - padding);
 		}
-		Some((
-			u32::from_be_bytes(packet[8..12].try_into().ok()?),
-			u16::from_be_bytes(packet[2..4].try_into().ok()?),
-			frame,
-		))
+		Some(Rtp {
+			ssrc: u32::from_be_bytes(packet[8..12].try_into().ok()?),
+			sequence: u16::from_be_bytes(packet[2..4].try_into().ok()?),
+			timestamp: u32::from_be_bytes(packet[4..8].try_into().ok()?),
+			marker: packet[1] & 0x80 != 0,
+			payload_type: packet[1] & 0x7f,
+			payload: frame,
+		})
 	}
 }
 
@@ -465,10 +503,26 @@ mod tests {
 		let packet = crypto
 			.seal(&header, b"synthetic encrypted DAVE frame")
 			.unwrap();
+		let opened = crypto.open(&packet).unwrap();
 		assert_eq!(
-			crypto.open(&packet).unwrap(),
-			(9, 1, b"synthetic encrypted DAVE frame".to_vec())
+			(
+				opened.ssrc,
+				opened.sequence,
+				opened.payload_type,
+				opened.marker
+			),
+			(9, 1, 120, false)
 		);
+		assert_eq!(opened.payload, b"synthetic encrypted DAVE frame".to_vec());
+		let mut video = header;
+		video[1] = 101 | 0x80;
+		let sealed = crypto.seal(&video, b"h264").unwrap();
+		let opened = crypto.open(&sealed).unwrap();
+		assert!(opened.marker && opened.payload_type == 101 && opened.timestamp == 1);
+		let mut other = header;
+		other[1] = 96;
+		let sealed = crypto.seal(&other, b"x").unwrap();
+		assert!(crypto.open(&sealed).is_none());
 		for i in 0..packet.len() {
 			let mut corrupt = packet.clone();
 			corrupt[i] ^= 0x40;
@@ -495,7 +549,10 @@ mod tests {
 		let mut extension_packet = extension_header;
 		extension_packet.extend(encrypted);
 		extension_packet.extend([0; 4]);
-		assert_eq!(crypto.open(&extension_packet).unwrap().2, vec![9, 8, 7]);
+		assert_eq!(
+			crypto.open(&extension_packet).unwrap().payload,
+			vec![9, 8, 7]
+		);
 		crypto.counter = u32::MAX;
 		assert!(crypto.seal(&header, b"x").is_err());
 		let mut dave = Dave::new(1, Some(2), 3).unwrap();

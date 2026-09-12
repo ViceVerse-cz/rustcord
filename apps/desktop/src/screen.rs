@@ -538,6 +538,7 @@ mod tests {
 				height: 720,
 				fps: 30,
 				cursor: true,
+				audio: false,
 			}));
 			let call = Call {
 				generation: state.generation,
@@ -597,6 +598,7 @@ mod tests {
 					height: 1,
 					fps: 30,
 					cursor: true,
+					audio: false,
 				},
 			)),
 			..Screen::default()
@@ -625,6 +627,7 @@ mod tests {
 			participants: vec![],
 			error: None,
 			camera: false,
+			watching: None,
 		});
 		let mut screen = Screen {
 			pending: Some(Pending {
@@ -638,6 +641,7 @@ mod tests {
 						height: 720,
 						fps: 30,
 						cursor: true,
+						audio: false,
 					},
 				)
 			}),

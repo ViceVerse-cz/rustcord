@@ -90,10 +90,17 @@ struct Live {
 	camera_frames: mpsc::SyncSender<discord_voice::camera_video::Frame>,
 	camera_negotiated: bool,
 	camera_clock: Instant,
+	/// Latest decoded camera picture per remote user, replaced (never queued) by the decoder.
+	remote_video: Arc<std::sync::Mutex<Vec<(u64, egui::ColorImage)>>>,
+	/// Decoded audio of a watched stream, mixed into this call's playback.
+	stream_audio: mpsc::SyncSender<discord_voice::Frame>,
 }
+/// Remote cameras kept as textures at once; matches the transport's source limit.
+const MAX_REMOTE_VIDEO: usize = 16;
 #[derive(Default)]
 pub struct Voice {
 	screen: crate::screen::Screen,
+	watch: crate::watch::Watch,
 	camera: Option<discord_voice::camera::Camera>,
 	camera_generation: u64,
 	camera_preview: Option<std::sync::Arc<std::sync::Mutex<Option<egui::ColorImage>>>>,
@@ -105,6 +112,7 @@ pub struct Voice {
 impl Voice {
 	pub fn stop(&mut self) {
 		self.screen.stop();
+		self.watch.stop();
 		self.pending = None;
 		self.stop_camera();
 		if let Some(live) = self.live.take() {
@@ -183,6 +191,7 @@ impl Voice {
 	/// Take negotiation secrets before reducing the UI event. Nothing is persisted.
 	pub fn observe(&mut self, state: &State, event: &mut Event) -> Option<&'static str> {
 		self.screen.observe(state, event);
+		self.watch.observe(state, event);
 		let Event::Voice(event) = event else {
 			return None;
 		};
@@ -335,6 +344,7 @@ impl Voice {
 			ui.voice_camera_preview = None;
 			ui.voice_camera_status = "";
 			ui.voice_privacy_code = None;
+			ui.voice_remote_video.clear();
 		}
 		let current = self
 			.live
@@ -501,6 +511,43 @@ impl Voice {
 			}
 			// A worker can finish between draining notices and checking its lifecycle.
 			failure = live.failure.get().copied().or(failure);
+			let pictures = live
+				.remote_video
+				.try_lock()
+				.map(|mut slot| std::mem::take(&mut *slot))
+				.unwrap_or_default();
+			for (user, image) in pictures {
+				if let Some((_, texture)) = ui
+					.voice_remote_video
+					.iter_mut()
+					.find(|(id, _)| id.0 == user)
+				{
+					texture.set(image, egui::TextureOptions::LINEAR);
+				} else if ui.voice_remote_video.len() < MAX_REMOTE_VIDEO {
+					ui.voice_remote_video.push((
+						Id(user),
+						ctx.load_texture(
+							format!("remote-camera-{user}"),
+							image,
+							egui::TextureOptions::LINEAR,
+						),
+					));
+				}
+			}
+			// Cameras announced off, or participants who left, release their textures.
+			let visible: Vec<Id> = state
+				.voice
+				.active
+				.as_ref()
+				.map(|call| {
+					call.participants
+						.iter()
+						.filter(|participant| participant.video)
+						.map(|participant| participant.user)
+						.collect()
+				})
+				.unwrap_or_default();
+			ui.voice_remote_video.retain(|(id, _)| visible.contains(id));
 		}
 		if failure.is_none()
 			&& let Some(live) = &self.live
@@ -540,7 +587,21 @@ impl Voice {
 			session: live.session.as_str(),
 			identity: live.identity.clone(),
 		});
-		self.screen.poll(runtime, state, ui, ctx, call)
+		let watched = self.live.as_ref().map(|live| crate::screen::Call {
+			generation: live.generation,
+			channel: live.channel,
+			request: live.request,
+			user: live.user,
+			peer: live.peer,
+			session: live.session.as_str(),
+			identity: live.identity.clone(),
+		});
+		let stream_audio = self.live.as_ref().map(|live| live.stream_audio.clone());
+		if let Some(command) = self.screen.poll(runtime, state, ui, ctx, call) {
+			return Some(command);
+		}
+		self.watch
+			.poll(runtime, state, ui, ctx, watched, stream_audio)
 	}
 	fn poll_camera(
 		&mut self,
@@ -643,6 +704,7 @@ impl Voice {
 	) -> Result<(), &'static str> {
 		let (capture_send, capture) = mpsc::sync_channel(8);
 		let (camera_frames, camera_receive) = mpsc::sync_channel(1);
+		let (stream_audio, stream_audio_receive) = mpsc::sync_channel(8);
 		let (playback, playback_receive) = mpsc::sync_channel(8);
 		let (send, events) = mpsc::sync_channel(8);
 		let failure = Arc::new(OnceLock::new());
@@ -674,6 +736,27 @@ impl Voice {
 			muted: listen_only || ui.voice_push_to_talk,
 			camera: 0,
 			deafened: false,
+		});
+		let remote_video: Arc<std::sync::Mutex<Vec<(u64, egui::ColorImage)>>> =
+			Arc::new(std::sync::Mutex::new(Vec::new()));
+		let pictures = remote_video.clone();
+		let picture_wake = ctx.clone();
+		let sink: discord_voice::VideoSink = Arc::new(move |frame: discord_voice::RemoteFrame| {
+			if frame.rgba.len() != frame.width as usize * frame.height as usize * 4 {
+				return;
+			}
+			let image = egui::ColorImage::from_rgba_unmultiplied(
+				[frame.width as usize, frame.height as usize],
+				&frame.rgba,
+			);
+			if let Ok(mut slot) = pictures.lock() {
+				if let Some(entry) = slot.iter_mut().find(|(user, _)| *user == frame.user) {
+					entry.1 = image;
+				} else if slot.len() < MAX_REMOTE_VIDEO {
+					slot.push((frame.user, image));
+				}
+			}
+			picture_wake.request_repaint();
 		});
 		audio.set_controls(listen_only || ui.voice_push_to_talk, false);
 		audio.set_input_enabled(input_enabled);
@@ -709,6 +792,8 @@ impl Voice {
 				} else {
 					None
 				},
+				Some(sink),
+				Some(stream_audio_receive),
 				move |event| {
 					let notice = match event {
 						Status::TransportReady => Notice::TransportReady,
@@ -762,6 +847,8 @@ impl Voice {
 			camera_frames,
 			camera_negotiated: false,
 			camera_clock: Instant::now(),
+			remote_video,
+			stream_audio,
 		});
 		Ok(())
 	}
@@ -1013,6 +1100,8 @@ mod tests {
 				session: Some(Secret::new(id.into()).unwrap()),
 				muted: false,
 				deafened: false,
+				video: false,
+				streaming: false,
 			})
 		};
 		assert!(
