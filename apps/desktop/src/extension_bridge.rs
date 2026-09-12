@@ -216,9 +216,8 @@ impl Bridge {
 						.map(|entry| (entry.manifest.id.clone(), entry))
 						.collect();
 					self.entries(messaging);
-					messaging.extensions.status =
-						"Catalog refreshed. Updates are installed only when you choose them."
-							.into();
+					// A finished refresh is visible in the grid; only failures need a status line.
+					messaging.extensions.status.clear();
 				}
 				Ok(Event::Imported {
 					manifest,

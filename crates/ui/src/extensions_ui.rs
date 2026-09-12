@@ -1,5 +1,5 @@
 //! Native community extensions UI. The desktop owns all package IO and execution.
-use crate::design;
+use crate::{design, icons};
 use client_core::{MAX_CONTENT, MAX_DRAFT_BYTES, State};
 use extensions::{Capability, Element, ExtensionKind, Invocation, Manifest, Output, Surface};
 use model::Id;
@@ -105,6 +105,11 @@ struct ResultPanel {
 	output: Output,
 	values: BTreeMap<String, String>,
 }
+
+/// Card chrome under the 16:9 preview: badges, title, blurb and the action row.
+const CARD_BODY: f32 = 168.0;
+const CARD_RADIUS: u8 = 12;
+const FOOTER_HEIGHT: f32 = 34.0;
 
 // Eight 640x360 RGBA thumbnails: at most 7,372,800 bytes of image pixels.
 const MAX_PREVIEWS: usize = 8;
@@ -222,7 +227,12 @@ impl ExtensionUi {
 		);
 		true
 	}
-	fn preview_image(&mut self, ui: &mut egui::Ui, entry: &ExtensionEntry) {
+	fn preview_image(
+		&mut self,
+		ui: &mut egui::Ui,
+		entry: &ExtensionEntry,
+		radius: egui::CornerRadius,
+	) {
 		let colors = design::palette(ui);
 		let size = egui::vec2(ui.available_width(), ui.available_width() * 9.0 / 16.0);
 		let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
@@ -235,7 +245,7 @@ impl ExtensionUi {
 				.capabilities
 				.contains(&Capability::DeletedMessages)
 		{
-			draw_native_preview(ui, rect, entry);
+			draw_native_preview(ui, rect, entry, radius);
 			let response = ui.interact(rect, ui.id().with("enlarge-preview"), egui::Sense::click());
 			if response
 				.on_hover_text(format!("Preview {}", entry.manifest.name))
@@ -269,12 +279,12 @@ impl ExtensionUi {
 				));
 			}
 			if let Some(texture) = &preview.texture {
-				ui.painter().rect_filled(rect, 6, colors.base);
+				ui.painter().rect_filled(rect, radius, colors.base);
 				let fit = texture.size_vec2()
 					* (rect.width() / texture.size_vec2().x)
 						.min(rect.height() / texture.size_vec2().y);
 				egui::Image::new(texture)
-					.corner_radius(6)
+					.corner_radius(radius)
 					.paint_at(ui, egui::Rect::from_center_size(rect.center(), fit));
 				let response =
 					ui.interact(rect, ui.id().with("enlarge-preview"), egui::Sense::click());
@@ -291,7 +301,7 @@ impl ExtensionUi {
 				return;
 			}
 		}
-		ui.painter().rect_filled(rect, 6, colors.sidebar);
+		ui.painter().rect_filled(rect, radius, colors.sidebar);
 		let inset = rect.shrink(18.0);
 		let icon = egui::Rect::from_center_size(
 			inset.center() - egui::vec2(0.0, 14.0),
@@ -349,7 +359,7 @@ impl ExtensionUi {
 					egui::vec2(width, width * 9.0 / 16.0),
 					egui::Sense::hover(),
 				);
-				draw_native_preview(ui, rect, entry);
+				draw_native_preview(ui, rect, entry, egui::CornerRadius::same(8));
 				ui.weak(if entry.theme_preview.is_some() {
 					"Theme palette preview"
 				} else {
@@ -521,53 +531,137 @@ impl ExtensionUi {
 			);
 		}
 	}
-	pub(crate) fn settings(&mut self, ui: &mut egui::Ui, state: &State) {
-		self.preview_clock = self.preview_clock.saturating_add(1);
-
-		let colors = design::palette(ui);
-		ui.horizontal_wrapped(|ui| {
-			let search_width = (ui.available_width() - 260.0).max(120.0);
-			ui.add_sized(
-				[search_width, 40.0],
-				egui::TextEdit::singleline(&mut self.query)
-					.hint_text(if self.themes {
-						"Search themes"
-					} else {
-						"Search extensions"
-					})
-					.char_limit(128)
-					.margin(egui::vec2(12.0, 8.0))
-					.align(egui::Align2::LEFT_CENTER),
-			);
+	fn toolbar(&mut self, ui: &mut egui::Ui, colors: &design::Palette) {
+		let height = 38.0;
+		ui.horizontal(|ui| {
+			ui.spacing_mut().item_spacing.x = 8.0;
+			let field = (ui.available_width() - 244.0).max(140.0);
+			egui::Frame::new()
+				.fill(colors.base)
+				.corner_radius(9)
+				.stroke(egui::Stroke::new(1.0, colors.border))
+				.inner_margin(egui::Margin::symmetric(10, 0))
+				.show(ui, |ui| {
+					ui.set_height(height);
+					ui.horizontal_centered(|ui| {
+						ui.spacing_mut().item_spacing.x = 8.0;
+						let (icon, _) =
+							ui.allocate_exact_size(egui::Vec2::splat(15.0), egui::Sense::hover());
+						icons::paint(ui.painter(), icons::Icon::Search, icon, colors.muted);
+						ui.add(
+							egui::TextEdit::singleline(&mut self.query)
+								.hint_text(if self.themes {
+									"Search themes"
+								} else {
+									"Search extensions"
+								})
+								.char_limit(128)
+								.frame(egui::Frame::NONE)
+								.desired_width((field - 62.0).max(60.0)),
+						);
+						if !self.query.is_empty() {
+							let (rect, response) = ui
+								.allocate_exact_size(egui::Vec2::splat(16.0), egui::Sense::click());
+							icons::paint(
+								ui.painter(),
+								icons::Icon::Close,
+								rect,
+								if response.hovered() {
+									colors.text_strong
+								} else {
+									colors.muted
+								},
+							);
+							if response.on_hover_text("Clear search").clicked() {
+								self.query.clear();
+							}
+						}
+					});
+				});
 			if ui
 				.add_enabled(
 					!self.busy,
-					egui::Button::new("Refresh").min_size(egui::vec2(0.0, 40.0)),
+					egui::Button::new("Refresh")
+						.min_size(egui::vec2(92.0, height))
+						.corner_radius(9),
 				)
+				.on_hover_text("Look for new packages and updates. Nothing installs on its own.")
 				.clicked()
 			{
 				self.previews.clear();
+				self.status.clear();
 				self.queue(ui.ctx(), ExtensionRequest::RefreshCatalog);
 			}
 			if ui
 				.add_enabled(
 					!self.busy,
-					egui::Button::new("Import package...").min_size(egui::vec2(0.0, 40.0)),
+					egui::Button::new("Import package…")
+						.min_size(egui::vec2(0.0, height))
+						.corner_radius(9),
 				)
+				.on_hover_text("Open a package file from this computer.")
 				.clicked()
 			{
+				self.status.clear();
 				self.queue(ui.ctx(), ExtensionRequest::Import);
 			}
+			if self.busy {
+				ui.add(egui::Spinner::new().size(16.0));
+			}
 		});
-		if self.busy {
-			ui.weak("Loading extensions...");
-		}
 		if !self.status.is_empty() {
-			ui.label(&self.status);
+			ui.add_space(10.0);
+			let mut dismiss = false;
+			egui::Frame::new()
+				.fill(colors.raised)
+				.corner_radius(9)
+				.stroke(egui::Stroke::new(1.0, colors.border))
+				.inner_margin(egui::Margin::symmetric(12, 9))
+				.show(ui, |ui| {
+					ui.set_width((ui.available_width() - 24.0).max(1.0));
+					ui.horizontal_top(|ui| {
+						ui.spacing_mut().item_spacing.x = 8.0;
+						let text = (ui.available_width() - 24.0).max(1.0);
+						ui.allocate_ui(egui::vec2(text, 0.0), |ui| {
+							ui.add(
+								egui::Label::new(
+									egui::RichText::new(&self.status)
+										.size(12.5)
+										.color(colors.text),
+								)
+								.wrap(),
+							);
+						});
+						let (rect, response) =
+							ui.allocate_exact_size(egui::Vec2::splat(16.0), egui::Sense::click());
+						icons::paint(
+							ui.painter(),
+							icons::Icon::Close,
+							rect,
+							if response.hovered() {
+								colors.text_strong
+							} else {
+								colors.muted
+							},
+						);
+						dismiss = response.on_hover_text("Dismiss").clicked();
+					});
+				});
+			if dismiss {
+				self.status.clear();
+			}
 		}
+	}
+	pub(crate) fn settings(&mut self, ui: &mut egui::Ui, state: &State) {
+		self.preview_clock = self.preview_clock.saturating_add(1);
+
+		let colors = design::palette(ui);
+		self.toolbar(ui, &colors);
 		if self.themes {
+			ui.add_space(10.0);
 			self.reset_theme_button(ui);
 		}
+		ui.add_space(14.0);
 		let mut enable = None;
 		let mut disable = None;
 		let mut invoke = None;
@@ -589,199 +683,78 @@ impl ExtensionUi {
 			})
 			.map(|(index, _)| index)
 			.collect();
-		let columns = if ui.available_width() >= 540.0 { 2 } else { 1 };
+		let columns = if ui.available_width() >= 560.0 { 2 } else { 1 };
 		let gap = 16.0;
-		let width = (ui.available_width() - gap * (columns - 1) as f32) / columns as f32;
+		let width = ((ui.available_width() - gap * (columns - 1) as f32) / columns as f32).max(1.0);
+		let card = (width - 2.0).max(1.0);
+		let body = (card - 28.0).max(1.0);
+		let card_height = card * 9.0 / 16.0 + CARD_BODY;
+		let top_radius = egui::CornerRadius {
+			nw: CARD_RADIUS,
+			ne: CARD_RADIUS,
+			sw: 0,
+			se: 0,
+		};
 		let mut visible = Vec::new();
-		let row_height = (width - 30.0).max(1.0) * 9.0 / 16.0 + 232.0;
-		for row in entries.chunks(columns) {
-			let row_rect = egui::Rect::from_min_size(
-				ui.cursor().min,
-				egui::vec2(ui.available_width(), row_height),
-			);
-			if !ui.is_rect_visible(row_rect) {
-				ui.allocate_space(row_rect.size());
-				continue;
-			}
-			visible.extend_from_slice(row);
-			ui.horizontal_top(|ui| {
-				ui.spacing_mut().item_spacing.x = gap;
-				for index in row {
-					let entry = self.entries[*index].clone();
-					ui.push_id(&entry.manifest.id, |ui| {
-						ui.allocate_ui_with_layout(
-							egui::vec2(width, 0.0),
-							egui::Layout::top_down(egui::Align::Min),
-							|ui| {
-								egui::Frame::new()
-									.fill(colors.raised)
-									.corner_radius(10)
-									.stroke(egui::Stroke::new(1.0, colors.border))
-									.inner_margin(14)
-									.show(ui, |ui| {
-										ui.set_width((width - 30.0).max(1.0));
-										ui.set_min_height(row_height - 30.0);
-										ui.spacing_mut().item_spacing = egui::vec2(6.0, 8.0);
-										self.preview_image(ui, &entry);
-										ui.horizontal(|ui| {
-											ui.label(design::eyebrow(
-												ui,
-												if self.themes { "Theme" } else { "Plugin" },
-												colors.muted,
-											));
-											ui.with_layout(
-												egui::Layout::right_to_left(egui::Align::Center),
-												|ui| {
-													ui.label(
-														egui::RichText::new(
-															if entry.enabled && self.themes {
-																"Installed"
-															} else if entry.enabled {
-																"Enabled"
-															} else {
-																"Free"
-															},
-														)
-														.size(12.0)
-														.color(if entry.enabled {
-															colors.positive
-														} else {
-															colors.muted
-														}),
-													);
-												},
-											);
-										});
-										ui.add(
-											egui::Label::new(
-												design::semibold(ui, &entry.manifest.name, 18.0)
-													.color(colors.text_strong),
-											)
-											.truncate(),
-										)
-										.on_hover_text(&entry.manifest.name);
-										ui.add(
-											egui::Label::new(
-												egui::RichText::new(format!(
-													"by {}",
-													entry.manifest.author
-												))
-												.size(12.0)
-												.color(colors.muted),
-											)
-											.truncate(),
-										)
-										.on_hover_text(&entry.manifest.author);
-										let description = if entry.description.is_empty() {
-											if self.themes {
-												"Give your conversations a different look."
-											} else {
-												"Add a new tool to your conversations."
-											}
-										} else {
-											&entry.description
-										};
-										ui.allocate_ui(
-											egui::vec2(ui.available_width(), 38.0),
-											|ui| {
-												let mut text = egui::text::LayoutJob::simple(
-													description.into(),
-													egui::FontId::proportional(13.0),
-													colors.text,
-													ui.available_width(),
-												);
-												text.wrap.max_rows = 2;
-												ui.label(text).on_hover_text(description);
-											},
-										);
-										ui.add_space(
-											(ui.min_rect().top() + row_height
-												- 92.0 - ui.cursor().top())
-											.max(0.0),
-										);
-										ui.horizontal_wrapped(|ui| {
-											if entry.cleanup_pending {
-												if ui.button("Retry cleanup").clicked() {
-													disable = Some(entry.manifest.id.clone());
-												}
-											} else if entry.enabled {
-												if ui.button("Disable & delete data").clicked() {
-													disable = Some(entry.manifest.id.clone());
-												}
-												if entry.update_available
-													&& ui
-														.add_enabled(
-															!self.busy,
-															egui::Button::new("Review update"),
-														)
-														.clicked()
-												{
-													let mut update = entry.clone();
-													if let Some(manifest) = &entry.update_manifest {
-														update.manifest = manifest.clone();
-														update.reviewed = true;
-													}
-													enable = Some(update);
-												}
-												if entry
-													.manifest
-													.actions
-													.iter()
-													.any(|action| action.surface == Surface::Panel)
-												{
-													ui.menu_button("Open tool", |ui| {
-														for action in
-															entry.manifest.actions.iter().filter(
-																|action| {
-																	action.surface == Surface::Panel
-																},
-															) {
-															if ui
-																.add_enabled(
-																	!self.busy,
-																	egui::Button::new(
-																		&action.label,
-																	),
-																)
-																.clicked()
-															{
-																invoke = Some((
-																	entry.manifest.id.clone(),
-																	action.id.clone(),
-																));
-																ui.close();
-															}
-														}
-													});
-												}
-											} else if ui
-												.add_enabled(
-													!self.busy,
-													egui::Button::new(
-														egui::RichText::new("Review & enable")
-															.color(colors.accent_text),
-													)
-													.fill(colors.accent)
-													.min_size(egui::vec2(
-														ui.available_width(),
-														32.0,
-													)),
-												)
-												.clicked()
-											{
-												enable = Some(entry.clone());
-											}
-										});
-										if entry.cleanup_pending {
-											ui.weak("Disabled - cleanup pending");
-										}
-									});
-							},
-						);
-					});
+		ui.vertical(|ui| {
+			ui.spacing_mut().item_spacing.y = gap;
+			for row in entries.chunks(columns) {
+				let row_rect = egui::Rect::from_min_size(
+					ui.cursor().min,
+					egui::vec2(ui.available_width(), card_height),
+				);
+				if !ui.is_rect_visible(row_rect) {
+					ui.allocate_space(row_rect.size());
+					continue;
 				}
-			});
-		}
+				visible.extend_from_slice(row);
+				ui.horizontal_top(|ui| {
+					ui.spacing_mut().item_spacing.x = gap;
+					for index in row {
+						let entry = self.entries[*index].clone();
+						ui.push_id(&entry.manifest.id, |ui| {
+							ui.allocate_ui_with_layout(
+								egui::vec2(width, card_height),
+								egui::Layout::top_down(egui::Align::Min),
+								|ui| {
+									egui::Frame::new()
+										.fill(colors.raised)
+										.corner_radius(CARD_RADIUS)
+										.stroke(egui::Stroke::new(1.0, colors.border))
+										.show(ui, |ui| {
+											ui.set_width(card);
+											ui.set_min_height(card_height);
+											ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+											self.preview_image(ui, &entry, top_radius);
+											egui::Frame::new()
+												.inner_margin(egui::Margin {
+													left: 14,
+													right: 14,
+													top: 12,
+													bottom: 12,
+												})
+												.show(ui, |ui| {
+													ui.set_width(body);
+													ui.set_min_height(CARD_BODY - 24.0);
+													ui.spacing_mut().item_spacing =
+														egui::vec2(6.0, 6.0);
+													self.card_body(
+														ui,
+														&colors,
+														&entry,
+														&mut enable,
+														&mut disable,
+														&mut invoke,
+													);
+												});
+										});
+								},
+							);
+						});
+					}
+				});
+			}
+		});
 		if self
 			.previews
 			.values()
@@ -801,21 +774,53 @@ impl ExtensionUi {
 			ui.ctx().request_repaint();
 		}
 		if entries.is_empty() {
-			ui.add_space(20.0);
-			ui.label(design::semibold(
-				ui,
-				if query.is_empty() {
-					"Find your next favorite"
-				} else {
-					"No matches"
-				},
-				18.0,
-			));
-			ui.weak(if query.is_empty() {
-				"Refresh the catalog or import a creator's package to get started."
-			} else {
-				"Try a different name or creator."
-			});
+			egui::Frame::new()
+				.fill(colors.raised)
+				.corner_radius(CARD_RADIUS)
+				.stroke(egui::Stroke::new(1.0, colors.border))
+				.inner_margin(28)
+				.show(ui, |ui| {
+					ui.set_width((ui.available_width() - 58.0).max(1.0));
+					ui.vertical_centered(|ui| {
+						let (rect, _) =
+							ui.allocate_exact_size(egui::Vec2::splat(46.0), egui::Sense::hover());
+						ui.painter()
+							.circle_filled(rect.center(), 23.0, colors.sidebar);
+						icons::paint(
+							ui.painter(),
+							if query.is_empty() {
+								icons::Icon::Sparkle
+							} else {
+								icons::Icon::Search
+							},
+							egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(22.0)),
+							colors.muted,
+						);
+						ui.add_space(12.0);
+						ui.label(
+							design::semibold(
+								ui,
+								match (query.is_empty(), self.themes) {
+									(false, _) => "No matches",
+									(true, true) => "No themes yet",
+									(true, false) => "No extensions yet",
+								},
+								17.0,
+							)
+							.color(colors.text_strong),
+						);
+						ui.add_space(3.0);
+						ui.label(
+							egui::RichText::new(if query.is_empty() {
+								"Refresh the catalog or import a creator's package to get started."
+							} else {
+								"Try a different name or creator."
+							})
+							.size(13.0)
+							.color(colors.muted),
+						);
+					});
+				});
 		}
 		self.preview_modal(ui.ctx());
 		if let Some(entry) = enable {
@@ -838,73 +843,440 @@ impl ExtensionUi {
 				},
 			);
 		}
-		if let Some(mut consent) = self.consent.take() {
-			let mut close = false;
-			let ctx = ui.ctx().clone();
-			let modal = egui::Modal::new(egui::Id::unique("extension-consent"))
-				.frame(
-					egui::Frame::new()
-						.fill(colors.chat.to_opaque())
-						.corner_radius(12)
-						.stroke(egui::Stroke::new(1.0, colors.border))
-						.inner_margin(24),
+		self.consent_modal(ui.ctx(), &colors);
+	}
+	fn card_body(
+		&mut self,
+		ui: &mut egui::Ui,
+		colors: &design::Palette,
+		entry: &ExtensionEntry,
+		enable: &mut Option<ExtensionEntry>,
+		disable: &mut Option<String>,
+		invoke: &mut Option<(String, String)>,
+	) {
+		let active = self.active_theme.as_deref() == Some(entry.manifest.id.as_str());
+		ui.horizontal(|ui| {
+			ui.label(design::eyebrow(
+				ui,
+				if self.themes { "Theme" } else { "Plugin" },
+				colors.muted,
+			));
+			ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+				ui.spacing_mut().item_spacing.x = 6.0;
+				if entry.cleanup_pending {
+					badge(
+						ui,
+						"Cleanup pending",
+						colors.warning,
+						design::mix(colors.raised, colors.warning, 0.16),
+					);
+				} else if entry.enabled {
+					badge(
+						ui,
+						if active {
+							"Active"
+						} else if self.themes {
+							"Installed"
+						} else {
+							"Enabled"
+						},
+						colors.positive,
+						design::mix(colors.raised, colors.positive, 0.16),
+					);
+					if entry.update_available {
+						badge(
+							ui,
+							"Update",
+							colors.accent,
+							design::mix(colors.raised, colors.accent, 0.2),
+						);
+					}
+				}
+			});
+		});
+		ui.add(
+			egui::Label::new(
+				design::semibold(ui, &entry.manifest.name, 17.0).color(colors.text_strong),
+			)
+			.truncate(),
+		)
+		.on_hover_text(&entry.manifest.name);
+		ui.spacing_mut().item_spacing.y = 2.0;
+		ui.add(
+			egui::Label::new(
+				egui::RichText::new(format!("by {}", entry.manifest.author))
+					.size(12.0)
+					.color(colors.muted),
+			)
+			.truncate(),
+		)
+		.on_hover_text(&entry.manifest.author);
+		ui.spacing_mut().item_spacing.y = 8.0;
+		let description = if entry.description.is_empty() {
+			if self.themes {
+				"Give your conversations a different look."
+			} else {
+				"Add a new tool to your conversations."
+			}
+		} else {
+			&entry.description
+		};
+		ui.allocate_ui(egui::vec2(ui.available_width(), 36.0), |ui| {
+			let mut text = egui::text::LayoutJob::simple(
+				description.into(),
+				egui::FontId::proportional(13.0),
+				colors.text,
+				ui.available_width(),
+			);
+			text.wrap.max_rows = 2;
+			ui.label(text).on_hover_text(description);
+		});
+		let footer = ui.min_rect().top() + CARD_BODY - 24.0 - FOOTER_HEIGHT;
+		ui.add_space((footer - ui.cursor().top()).max(0.0));
+		let neutral = design::mix(colors.raised, colors.text, 0.1);
+		let outline = egui::Stroke::new(1.0, colors.border);
+		ui.horizontal(|ui| {
+			ui.spacing_mut().item_spacing.x = 8.0;
+			if entry.cleanup_pending {
+				if card_button(
+					ui,
+					"Retry cleanup",
+					egui::vec2(ui.available_width(), FOOTER_HEIGHT),
+					neutral,
+					outline,
+					colors.text_strong,
 				)
-				.show(&ctx, |ui| {
-					ui.set_width((ctx.content_rect().width() - 80.0).clamp(180.0, 420.0));
-					egui::ScrollArea::vertical()
-						.max_height((ctx.content_rect().height() - 180.0).max(100.0))
-						.show(ui, |ui| {
-							ui.label(
-								design::semibold(ui, "Enable extension", 22.0)
-									.color(colors.text_strong),
-							);
-							ui.add_space(12.0);
-							ui.label(
-								design::semibold(ui, &consent.entry.manifest.name, 17.0)
-									.color(colors.text_strong),
-							);
-							ui.label(
-								egui::RichText::new(format!(
-									"by {}",
-									consent.entry.manifest.author
-								))
-								.size(13.0)
-								.color(colors.muted),
-							);
-							ui.horizontal_wrapped(|ui| {
-								ui.label(
-									egui::RichText::new(if consent.entry.reviewed {
-										"Reviewed release"
+				.on_hover_text("Finish removing this extension and its local data.")
+				.clicked()
+				{
+					*disable = Some(entry.manifest.id.clone());
+				}
+				return;
+			}
+			if !entry.enabled {
+				if ui
+					.add_enabled_ui(!self.busy, |ui| {
+						card_button(
+							ui,
+							"Review & enable",
+							egui::vec2(ui.available_width(), FOOTER_HEIGHT),
+							colors.accent,
+							egui::Stroke::NONE,
+							colors.accent_text,
+						)
+					})
+					.inner
+					.clicked()
+				{
+					*enable = Some(entry.clone());
+				}
+				return;
+			}
+			let panel_actions: Vec<_> = entry
+				.manifest
+				.actions
+				.iter()
+				.filter(|action| action.surface == Surface::Panel)
+				.collect();
+			let count =
+				1 + usize::from(entry.update_available) + usize::from(!panel_actions.is_empty());
+			let each = ((ui.available_width() - 8.0 * (count - 1) as f32) / count as f32).max(1.0);
+			if entry.update_available
+				&& ui
+					.add_enabled_ui(!self.busy, |ui| {
+						card_button(
+							ui,
+							"Update",
+							egui::vec2(each, FOOTER_HEIGHT),
+							colors.accent,
+							egui::Stroke::NONE,
+							colors.accent_text,
+						)
+						.on_hover_text("Review the new release before it replaces this version.")
+					})
+					.inner
+					.clicked()
+			{
+				let mut update = entry.clone();
+				if let Some(manifest) = &entry.update_manifest {
+					update.manifest = manifest.clone();
+					update.reviewed = true;
+				}
+				*enable = Some(update);
+			}
+			if !panel_actions.is_empty() {
+				ui.scope(|ui| {
+					let visuals = ui.visuals_mut();
+					visuals.widgets.inactive.weak_bg_fill = neutral;
+					visuals.widgets.hovered.weak_bg_fill = neutral.linear_multiply(1.12);
+					visuals.widgets.active.weak_bg_fill = neutral.gamma_multiply(0.85);
+					visuals.widgets.open.weak_bg_fill = neutral.linear_multiply(1.12);
+					ui.spacing_mut().button_padding.x = (each / 2.0 - 30.0).max(6.0);
+					ui.menu_button("Open tool", |ui| {
+						for action in &panel_actions {
+							if ui
+								.add_enabled(!self.busy, egui::Button::new(&action.label))
+								.clicked()
+							{
+								*invoke = Some((entry.manifest.id.clone(), action.id.clone()));
+								ui.close();
+							}
+						}
+					});
+				});
+			}
+			if card_button(
+				ui,
+				if count == 1 {
+					"Disable & delete data"
+				} else {
+					"Disable"
+				},
+				egui::vec2(ui.available_width().max(1.0), FOOTER_HEIGHT),
+				neutral,
+				outline,
+				colors.text_strong,
+			)
+			.on_hover_text("Removes this extension and deletes its local data.")
+			.clicked()
+			{
+				*disable = Some(entry.manifest.id.clone());
+			}
+		});
+	}
+	fn consent_modal(&mut self, ctx: &egui::Context, colors: &design::Palette) {
+		let Some(mut consent) = self.consent.take() else {
+			return;
+		};
+		let mut close = false;
+		let theme = consent.entry.manifest.kind == ExtensionKind::Theme;
+		let illustrated = consent.entry.theme_preview.is_some()
+			|| consent
+				.entry
+				.manifest
+				.capabilities
+				.contains(&Capability::DeletedMessages);
+		let modal = egui::Modal::new(egui::Id::unique("extension-consent"))
+			.frame(
+				egui::Frame::new()
+					.fill(colors.chat.to_opaque())
+					.corner_radius(14)
+					.stroke(egui::Stroke::new(1.0, colors.border))
+					.inner_margin(20),
+			)
+			.show(ctx, |ui| {
+				ui.set_width((ctx.content_rect().width() - 80.0).clamp(180.0, 460.0));
+				ui.label(
+					design::semibold(
+						ui,
+						if theme {
+							"Enable this theme"
+						} else {
+							"Enable this extension"
+						},
+						20.0,
+					)
+					.color(colors.text_strong),
+				);
+				ui.add_space(3.0);
+				ui.label(
+					egui::RichText::new("Everything it may touch is listed below.")
+						.size(13.0)
+						.color(colors.muted),
+				);
+				ui.add_space(16.0);
+				egui::ScrollArea::vertical()
+					.max_height((ctx.content_rect().height() - 260.0).max(120.0))
+					.show(ui, |ui| {
+						ui.set_width(ui.available_width());
+						ui.spacing_mut().item_spacing.y = 10.0;
+						egui::Frame::new()
+							.fill(colors.raised)
+							.corner_radius(10)
+							.stroke(egui::Stroke::new(1.0, colors.border))
+							.inner_margin(12)
+							.show(ui, |ui| {
+								ui.set_width((ui.available_width() - 26.0).max(1.0));
+								ui.horizontal_top(|ui| {
+									ui.spacing_mut().item_spacing.x = 12.0;
+									let (rect, _) = ui.allocate_exact_size(
+										egui::vec2(84.0, 47.0),
+										egui::Sense::hover(),
+									);
+									if illustrated {
+										draw_native_preview(
+											ui,
+											rect,
+											&consent.entry,
+											egui::CornerRadius::same(6),
+										);
 									} else {
-										"Unreviewed"
-									})
-									.size(12.0)
-									.color(colors.muted),
-								);
-								ui.hyperlink_to(
-									egui::RichText::new("View source").size(12.0),
-									&consent.entry.manifest.source,
-								);
+										ui.painter().rect_filled(rect, 6, colors.sidebar);
+										icons::paint(
+											ui.painter(),
+											icons::Icon::Sparkle,
+											egui::Rect::from_center_size(
+												rect.center(),
+												egui::Vec2::splat(20.0),
+											),
+											colors.muted,
+										);
+									}
+									ui.vertical(|ui| {
+										ui.spacing_mut().item_spacing.y = 3.0;
+										ui.add(
+											egui::Label::new(
+												design::semibold(
+													ui,
+													&consent.entry.manifest.name,
+													16.0,
+												)
+												.color(colors.text_strong),
+											)
+											.truncate(),
+										);
+										ui.add(
+											egui::Label::new(
+												egui::RichText::new(format!(
+													"by {}",
+													consent.entry.manifest.author
+												))
+												.size(12.0)
+												.color(colors.muted),
+											)
+											.truncate(),
+										);
+										ui.horizontal_wrapped(|ui| {
+											ui.spacing_mut().item_spacing = egui::vec2(6.0, 4.0);
+											if consent.entry.reviewed {
+												badge(
+													ui,
+													"Reviewed",
+													colors.positive,
+													design::mix(
+														colors.raised,
+														colors.positive,
+														0.16,
+													),
+												);
+											} else {
+												badge(
+													ui,
+													"Unreviewed",
+													colors.warning,
+													design::mix(
+														colors.raised,
+														colors.warning,
+														0.16,
+													),
+												);
+											}
+											badge(
+												ui,
+												&format!("v{}", consent.entry.manifest.version),
+												colors.muted,
+												colors.sidebar.to_opaque(),
+											);
+											badge(
+												ui,
+												&consent.entry.manifest.license,
+												colors.muted,
+												colors.sidebar.to_opaque(),
+											);
+											badge(
+												ui,
+												&format!(
+													"{:.1} KiB",
+													consent.entry.download_bytes as f64 / 1024.0
+												),
+												colors.muted,
+												colors.sidebar.to_opaque(),
+											);
+										});
+										ui.hyperlink_to(
+											egui::RichText::new("View source").size(12.0),
+											&consent.entry.manifest.source,
+										);
+									});
+								});
 							});
-							ui.add_space(16.0);
-							if !consent.entry.reviewed {
-								ui.colored_label(
-									colors.warning,
-									"Unreviewed package — its source has not been reviewed for the catalog.",
-								);
-							}
-							if !consent.entry.manifest.capabilities.is_empty() {
-								ui.label(design::semibold(ui, "Allow this extension to", 13.0));
-								ui.add_space(6.0);
-							}
+						if !consent.entry.reviewed {
+							egui::Frame::new()
+								.fill(design::mix(colors.chat, colors.warning, 0.14))
+								.corner_radius(10)
+								.inner_margin(12)
+								.show(ui, |ui| {
+									ui.set_width((ui.available_width() - 26.0).max(1.0));
+									ui.horizontal_top(|ui| {
+										ui.spacing_mut().item_spacing.x = 10.0;
+										let (rect, _) = ui.allocate_exact_size(
+											egui::Vec2::splat(18.0),
+											egui::Sense::hover(),
+										);
+										icons::paint(
+											ui.painter(),
+											icons::Icon::ShieldWarning,
+											rect,
+											colors.warning,
+										);
+										ui.label(
+											egui::RichText::new(
+												"Unreviewed package — its source has not been reviewed for the catalog.",
+											)
+											.size(12.5)
+											.color(colors.text),
+										);
+									});
+								});
+						}
+						if consent.entry.manifest.capabilities.is_empty() {
+							egui::Frame::new()
+								.fill(colors.raised)
+								.corner_radius(10)
+								.stroke(egui::Stroke::new(1.0, colors.border))
+								.inner_margin(12)
+								.show(ui, |ui| {
+									ui.set_width((ui.available_width() - 26.0).max(1.0));
+									ui.horizontal_top(|ui| {
+										ui.spacing_mut().item_spacing.x = 10.0;
+										let (rect, _) = ui.allocate_exact_size(
+											egui::Vec2::splat(18.0),
+											egui::Sense::hover(),
+										);
+										icons::paint(
+											ui.painter(),
+											icons::Icon::Check,
+											rect,
+											colors.positive,
+										);
+										ui.label(
+											egui::RichText::new(
+												"No access to conversations or composer text.",
+											)
+											.size(13.0)
+											.color(colors.text),
+										);
+									});
+								});
+						} else {
+							ui.label(design::eyebrow(ui, "Allow this extension to", colors.muted));
+							ui.spacing_mut().item_spacing.y = 8.0;
 							for capability in &consent.entry.manifest.capabilities {
 								let mut granted = consent.grants.contains(capability);
 								let changed = egui::Frame::new()
-									.fill(colors.sidebar.to_opaque())
-									.corner_radius(8)
+									.fill(colors.raised)
+									.corner_radius(10)
+									.stroke(egui::Stroke::new(
+										1.0,
+										if granted {
+											colors.accent
+										} else {
+											colors.border
+										},
+									))
 									.inner_margin(12)
 									.show(ui, |ui| {
-										ui.set_width(ui.available_width());
+										ui.set_width((ui.available_width() - 26.0).max(1.0));
 										ui.spacing_mut().icon_width = 20.0;
 										ui.spacing_mut().icon_spacing = 10.0;
 										ui.visuals_mut().widgets.inactive.bg_stroke =
@@ -912,7 +1284,7 @@ impl ExtensionUi {
 										ui.checkbox(
 											&mut granted,
 											egui::RichText::new(capability_label(*capability))
-												.size(14.0),
+												.size(13.5),
 										)
 										.changed()
 									})
@@ -925,70 +1297,51 @@ impl ExtensionUi {
 									}
 								}
 							}
-							if consent.entry.manifest.capabilities.is_empty() {
-								ui.weak("No access to conversations or composer text.");
-							}
-							ui.add_space(12.0);
-							ui.label(
-								egui::RichText::new(
-									"Disabling removes the extension and its local data. Re-enabling starts fresh.",
-								)
-								.size(12.0)
-								.color(colors.muted),
-							);
-							ui.add_space(4.0);
-							ui.collapsing(
-								egui::RichText::new("Package details").size(12.0),
-								|ui| {
-									ui.label(
-										egui::RichText::new(format!(
-											"Version {} / {} / {:.1} KiB",
-											consent.entry.manifest.version,
-											consent.entry.manifest.license,
-											consent.entry.download_bytes as f64 / 1024.0
-										))
-										.size(12.0)
-										.color(colors.muted),
-									);
-								},
-							);
-						});
-					ui.add_space(16.0);
-					ui.separator();
-					ui.add_space(12.0);
-					let ready = consent
-						.entry
-						.manifest
-						.capabilities
-						.iter()
-						.all(|capability| consent.grants.contains(capability));
-					ui.columns(2, |columns| {
-						if design::secondary_button(&mut columns[0], "Cancel").clicked() {
-							close = true;
 						}
-						if columns[1]
-							.add_enabled_ui(ready && !self.busy, |ui| {
-								design::primary_button(ui, "Enable")
-							})
-							.inner
-							.clicked()
-						{
-							self.queue(
-								&ctx,
-								ExtensionRequest::Enable {
-									id: consent.entry.manifest.id.clone(),
-									grants: consent.grants.clone(),
-									sha256: consent.entry.sha256.clone(),
-									reviewed: consent.entry.reviewed,
-								},
-							);
-							close = true;
-						}
+						ui.label(
+							egui::RichText::new(
+								"Disabling removes the extension and its local data. Re-enabling starts fresh.",
+							)
+							.size(12.0)
+							.color(colors.muted),
+						);
 					});
+				ui.add_space(16.0);
+				ui.separator();
+				ui.add_space(12.0);
+				let ready = consent
+					.entry
+					.manifest
+					.capabilities
+					.iter()
+					.all(|capability| consent.grants.contains(capability));
+				ui.columns(2, |columns| {
+					if design::secondary_button(&mut columns[0], "Cancel").clicked() {
+						close = true;
+					}
+					let enable = columns[1]
+						.add_enabled_ui(ready && !self.busy, |ui| {
+							design::primary_button(ui, "Enable")
+						})
+						.inner;
+					if !ready {
+						enable.on_hover_text("Allow every listed permission to continue.");
+					} else if enable.clicked() {
+						self.queue(
+							ctx,
+							ExtensionRequest::Enable {
+								id: consent.entry.manifest.id.clone(),
+								grants: consent.grants.clone(),
+								sha256: consent.entry.sha256.clone(),
+								reviewed: consent.entry.reviewed,
+							},
+						);
+						close = true;
+					}
 				});
-			if !close && !modal.should_close() {
-				self.consent = Some(consent);
-			}
+			});
+		if !close && !modal.should_close() {
+			self.consent = Some(consent);
 		}
 	}
 	pub(crate) fn reset_theme_shortcut(&mut self, ctx: &egui::Context) {
@@ -1032,12 +1385,18 @@ impl ExtensionUi {
 		}) {
 			return;
 		}
+		let colors = design::palette(ui);
 		if ui
 			.add(
 				egui::Button::new(
-					egui::RichText::new("Reset community theme").color(egui::Color32::WHITE),
+					egui::RichText::new("Reset community theme")
+						.size(13.0)
+						.color(colors.text_strong),
 				)
-				.fill(egui::Color32::from_rgb(40, 40, 48)),
+				.fill(colors.raised)
+				.stroke(egui::Stroke::new(1.0, colors.border))
+				.corner_radius(8)
+				.min_size(egui::vec2(0.0, 32.0)),
 			)
 			.on_hover_text("Reset anytime with Ctrl+Shift+F12, even if a theme is unreadable.")
 			.clicked()
@@ -1170,7 +1529,12 @@ fn request_bytes(request: &ExtensionRequest) -> usize {
 }
 
 /// Draw a small native conversation using the package's real palette, without image IO.
-fn draw_native_preview(ui: &egui::Ui, rect: egui::Rect, entry: &ExtensionEntry) {
+fn draw_native_preview(
+	ui: &egui::Ui,
+	rect: egui::Rect,
+	entry: &ExtensionEntry,
+	radius: egui::CornerRadius,
+) {
 	let colors = entry.theme_preview.as_ref().map_or_else(
 		|| design::palette(ui),
 		|theme| design::theme_preview_palette(ui, theme),
@@ -1184,17 +1548,43 @@ fn draw_native_preview(ui: &egui::Ui, rect: egui::Rect, entry: &ExtensionEntry) 
 			color,
 		);
 	};
-	panel(0.0, 0.0, 1.0, 1.0, colors.base);
+	let plate = |x: f32, y: f32, w: f32, h: f32, color, radius: egui::CornerRadius| {
+		painter.rect_filled(
+			egui::Rect::from_min_max(at(x, y), at(x + w, y + h)),
+			radius,
+			color,
+		);
+	};
+	// Only the outer plates carry the card's rounding so the preview can sit flush.
+	plate(0.0, 0.0, 1.0, 1.0, colors.base, radius);
 	panel(0.08, 0.0, 0.22, 1.0, colors.sidebar);
-	panel(0.30, 0.0, 0.70, 1.0, colors.chat);
-	let font = egui::FontId::proportional((rect.width() / 29.0).clamp(9.0, 20.0));
-	painter.text(
-		at(0.35, 0.09),
-		egui::Align2::LEFT_CENTER,
-		"# general",
-		font.clone(),
-		colors.text_strong,
+	plate(
+		0.30,
+		0.0,
+		0.70,
+		1.0,
+		colors.chat,
+		egui::CornerRadius {
+			nw: 0,
+			ne: radius.ne,
+			sw: 0,
+			se: radius.se,
+		},
 	);
+	// Below thumbnail width the glyphs would collide, so the layout reads as bars alone.
+	let labelled = rect.width() >= 150.0;
+	let font = egui::FontId::proportional((rect.width() / 29.0).clamp(9.0, 20.0));
+	if labelled {
+		painter.text(
+			at(0.35, 0.09),
+			egui::Align2::LEFT_CENTER,
+			"# general",
+			font.clone(),
+			colors.text_strong,
+		);
+	} else {
+		panel(0.35, 0.07, 0.22, 0.04, colors.text_strong);
+	}
 	for i in 0..3 {
 		let y = 0.25 + i as f32 * 0.20;
 		let deleted = i == 1
@@ -1220,21 +1610,35 @@ fn draw_native_preview(ui: &egui::Ui, rect: egui::Rect, entry: &ExtensionEntry) 
 				colors.accent
 			},
 		);
-		painter.text(
-			at(0.41, y),
-			egui::Align2::LEFT_CENTER,
-			if deleted {
-				"Deleted message"
-			} else {
-				["Robin", "Alex", "You"][i]
-			},
-			font.clone(),
-			if deleted {
-				colors.danger
-			} else {
-				colors.text_strong
-			},
-		);
+		if labelled {
+			painter.text(
+				at(0.41, y),
+				egui::Align2::LEFT_CENTER,
+				if deleted {
+					"Deleted message"
+				} else {
+					["Robin", "Alex", "You"][i]
+				},
+				font.clone(),
+				if deleted {
+					colors.danger
+				} else {
+					colors.text_strong
+				},
+			);
+		} else {
+			panel(
+				0.41,
+				y - 0.015,
+				if deleted { 0.30 } else { 0.18 },
+				0.035,
+				if deleted {
+					colors.danger
+				} else {
+					colors.text_strong
+				},
+			);
+		}
 		panel(
 			0.41,
 			y + 0.06,
@@ -1247,6 +1651,62 @@ fn draw_native_preview(ui: &egui::Ui, rect: egui::Rect, entry: &ExtensionEntry) 
 	}
 	panel(0.33, 0.86, 0.64, 0.09, colors.raised);
 	panel(0.89, 0.88, 0.05, 0.05, colors.accent);
+}
+
+/// Card action button: fixed size, hover feedback and the shared button typography.
+fn card_button(
+	ui: &mut egui::Ui,
+	label: &str,
+	size: egui::Vec2,
+	fill: egui::Color32,
+	stroke: egui::Stroke,
+	text: egui::Color32,
+) -> egui::Response {
+	let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+	response.widget_info(|| {
+		egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+	});
+	let enabled = ui.is_enabled();
+	let fill = if !enabled {
+		fill.gamma_multiply(0.5)
+	} else if response.is_pointer_button_down_on() {
+		fill.gamma_multiply(0.85)
+	} else if response.hovered() {
+		fill.linear_multiply(1.12)
+	} else {
+		fill
+	};
+	let text = if enabled {
+		text
+	} else {
+		text.gamma_multiply(0.6)
+	};
+	let painter = ui.painter();
+	painter.rect(rect, 8, fill, stroke, egui::StrokeKind::Inside);
+	let galley = painter.layout_no_wrap(
+		label.to_owned(),
+		egui::FontId::new(13.5, design::medium_family(ui.ctx())),
+		text,
+	);
+	painter.galley(rect.center() - galley.size() / 2.0, galley, text);
+	if enabled && response.hovered() {
+		ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+	}
+	response
+}
+
+/// Small rounded status chip used on cards and in the consent modal.
+fn badge(ui: &mut egui::Ui, text: &str, foreground: egui::Color32, background: egui::Color32) {
+	let galley = ui.painter().layout_no_wrap(
+		text.to_owned(),
+		egui::FontId::proportional(11.0),
+		foreground,
+	);
+	let (rect, _) =
+		ui.allocate_exact_size(galley.size() + egui::vec2(16.0, 6.0), egui::Sense::hover());
+	ui.painter().rect_filled(rect, 7, background);
+	ui.painter()
+		.galley(rect.center() - galley.size() / 2.0, galley, foreground);
 }
 
 fn capability_label(capability: Capability) -> &'static str {
@@ -1540,6 +2000,32 @@ mod tests {
 					[ExtensionRequest::Disable { .. }]
 				));
 			}
+		}
+	}
+
+	#[test]
+	fn status_banner_wraps_and_clears_on_refresh() {
+		for width in [320.0, 900.0] {
+			let ctx = egui::Context::default();
+			let mut extensions = ExtensionUi::default();
+			extensions.set_entries(vec![entry()]);
+			extensions.status = "Disabled. Downloaded code and extension data were removed.".into();
+			let labels = frame(&ctx, &mut extensions, width, vec![]);
+			assert!(
+				labels
+					.iter()
+					.any(|(text, rect)| text.starts_with("Disabled.") && rect.right() <= width),
+				"the status banner must stay inside the page at {width}"
+			);
+			click(&ctx, &mut extensions, width, &labels, "Refresh");
+			assert!(
+				extensions.status.is_empty()
+					&& matches!(
+						extensions.requests.as_slice(),
+						[ExtensionRequest::RefreshCatalog]
+					),
+				"refreshing clears the previous status instead of reporting itself"
+			);
 		}
 	}
 
