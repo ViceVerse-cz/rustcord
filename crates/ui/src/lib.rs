@@ -34,6 +34,7 @@ mod profiles;
 pub fn synthetic_own_profile(user: &model::User) -> model::UserProfile {
 	profiles::synthetic(user, None)
 }
+mod join_server;
 mod profile_edit;
 mod reactions;
 mod reading;
@@ -84,6 +85,7 @@ pub struct MessagingUi {
 	pub own_presence_status: &'static str,
 	group_menu: group_menu::GroupMenu,
 	server_menu: server_menu::ServerMenu,
+	join_server: join_server::JoinDialog,
 	folder_ui: guild_folders::FolderUi,
 	member_cache_key: Option<(u64, u64, Option<Id>, bool)>,
 	member_cache: Vec<MemberRow>,
@@ -2547,6 +2549,7 @@ impl MessagingUi {
 		}
 		self.search
 			.overlays(&ctx, state, &mut self.avatars, &mut commands);
+		self.join_server.show(&ctx, state, &mut commands);
 		if let Some(anchor) = self.pins_anchor {
 			let dm = state
 				.channels

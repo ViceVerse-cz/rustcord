@@ -665,6 +665,15 @@ invites and uncertain writes show errors. Challenges, membership screening, and 
 requirements remain unsupported in the native join flow. No challenge bypass or automatic retry.
 Live acceptance and restricted-server flows remain unverified; offline demo cannot join.
 
+Standalone joining (September 12): the server-rail **+** opens **Join a Server**,
+including when no conversation is selected. Paste a bare code or a supported Discord
+invite URL, choose **Check Invite**, review the server, then choose **Join Server**.
+The explicit lookup reuses the 32-entry/4-KiB-per-preview/five-minute cache and
+single in-flight lookup guard; automatic message cards still require readable history.
+Input is limited to 512 characters/2048 bytes, with invite codes limited to 100 ASCII
+characters. Dialog state clears across account generations. Discovery opens Discord's
+public server directory in the browser; native Discovery is not implemented.
+
 
 ### Account activity sharing and server observations (September 11, 2026)
 
