@@ -238,6 +238,8 @@ struct Desktop {
 	uploads: uploads::Uploads,
 	group_icon: group_icon::GroupIcon,
 	server_icon: group_icon::GroupIcon,
+	role_icon: group_icon::GroupIcon,
+	role_icon_scope: Option<(u64, model::Id, model::Id, u64)>,
 	emoji_upload: emoji_upload::EmojiUpload,
 	clipboard: Option<clipboard::Paste>,
 	download_close_pending: bool,
@@ -932,6 +934,8 @@ impl Desktop {
 			uploads: uploads::Uploads::default(),
 			group_icon: group_icon::GroupIcon::default(),
 			server_icon: group_icon::GroupIcon::default(),
+			role_icon: group_icon::GroupIcon::default(),
+			role_icon_scope: None,
 			emoji_upload: emoji_upload::EmojiUpload::default(),
 			clipboard: None,
 			download_close_pending: false,
@@ -987,6 +991,8 @@ impl Desktop {
 		})
 	}
 	fn connect(&mut self, secret: SessionSecret, save: bool, ctx: &egui::Context) {
+		self.role_icon.cancel();
+		self.role_icon_scope = None;
 		self.group_icon.cancel();
 		self.server_icon.cancel();
 		self.emoji_upload.cancel();
@@ -1027,6 +1033,8 @@ impl Desktop {
 	}
 	fn logout(&mut self, ctx: &egui::Context) {
 		let extension_logout = self.extensions.logout(ctx);
+		self.role_icon.cancel();
+		self.role_icon_scope = None;
 		self.group_icon.cancel();
 		self.server_icon.cancel();
 		self.emoji_upload.cancel();
@@ -3206,6 +3214,17 @@ impl eframe::App for Desktop {
 		if let Some((scope, result)) = self.server_icon.poll_server(&self.state) {
 			self.messaging.accept_server_icon(&ctx, scope, result);
 		}
+		if let Some((_, result)) = self.role_icon.poll_scoped(self.state.generation, |guild| {
+			self.role_icon_scope.is_some_and(|scope| {
+				scope.1 == guild
+					&& self.state.server_admin.guild == Some(guild)
+					&& self.state.can_edit_role_icon(guild, scope.2)
+			})
+		}) && let Some(scope) = self.role_icon_scope.take()
+		{
+			self.messaging.accept_server_role_icon(&ctx, scope, result);
+		}
+
 		if let Some((scope, result)) = self.emoji_upload.poll(self.state.generation, |guild| {
 			self.state.server_admin.guild == Some(guild) && self.state.can_create_guild_emoji(guild)
 		}) {
@@ -3472,6 +3491,28 @@ impl eframe::App for Desktop {
 				};
 				if let Err(error) = result {
 					self.messaging.accept_group_icon(&ctx, scope, Err(error));
+				}
+			}
+			if let Some(scope) = self.messaging.take_server_role_icon_request() {
+				let result = if scope.0 != self.state.generation
+					|| !self.state.can_edit_role_icon(scope.1, scope.2)
+				{
+					Err("You can no longer change this role icon")
+				} else {
+					self.role_icon.start(
+						(scope.0, scope.1, scope.3),
+						self.runtime.handle(),
+						&ctx,
+						self.window.clone(),
+						"Choose role icon",
+						128,
+					)
+				};
+				match result {
+					Ok(()) => self.role_icon_scope = Some(scope),
+					Err(error) => self
+						.messaging
+						.accept_server_role_icon(&ctx, scope, Err(error)),
 				}
 			}
 			if let Some(scope) = self.messaging.take_server_icon_request() {

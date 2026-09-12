@@ -149,6 +149,12 @@ fn clear_directory(root: Option<&Path>) -> Result<(), &'static str> {
 
 // Build, rather than accept, URLs. Even malformed service metadata cannot choose a host/path.
 fn cdn_url(key: &str) -> Option<String> {
+	if let Some(value) = key.strip_prefix("role-icon-") {
+		let (role, hash) = value.split_once('-')?;
+		let role: Id = role.parse().ok()?;
+		return (role.0 != 0 && model::valid_avatar_hash(hash))
+			.then(|| format!("https://cdn.discordapp.com/role-icons/{role}/{hash}.png?size=128"));
+	}
 	if let Some(value) = key.strip_prefix("group-icon-") {
 		let (channel, hash) = value.split_once('-')?;
 		let channel: Id = channel.parse().ok()?;
@@ -766,6 +772,23 @@ impl Disk {
 
 #[cfg(test)]
 mod tests {
+	#[test]
+	fn role_icon_urls_are_confined_to_the_role_cdn_path() {
+		assert_eq!(
+			super::cdn_url("role-icon-7-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").as_deref(),
+			Some(
+				"https://cdn.discordapp.com/role-icons/7/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png?size=128"
+			)
+		);
+		for key in [
+			"role-icon-0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"role-icon-7-../private",
+			"role-icon-7-a.png?token=secret",
+			"role-icon-7-https://example.com",
+		] {
+			assert!(super::cdn_url(key).is_none());
+		}
+	}
 	#[test]
 	fn group_icon_urls_accept_only_channel_ids_and_hashes() {
 		assert_eq!(

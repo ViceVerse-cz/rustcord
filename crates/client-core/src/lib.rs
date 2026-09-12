@@ -24,6 +24,7 @@ pub mod screen;
 pub mod search;
 pub mod server_actions;
 pub mod server_admin;
+pub mod server_roles;
 pub mod server_settings;
 mod threads;
 pub mod typing;
@@ -1265,6 +1266,7 @@ impl State {
 				// Retire both snapshots and in-flight profiles before applying them.
 				self.clear_profile();
 				self.profile_cache.clear();
+				self.server_admin.permissions_changed(&event);
 				let result = self.permissions.update(event);
 				if result.is_err() {
 					self.permissions = permissions::Permissions::default();
@@ -2111,7 +2113,10 @@ impl State {
 				.retain(|id, _| guilds.contains(id));
 		}
 		if let Some(guild) = self.server_admin.guild {
-			if !self.can_open_emoji_settings(guild) && !self.can_open_member_settings(guild) {
+			if !self.can_open_emoji_settings(guild)
+				&& !self.can_open_member_settings(guild)
+				&& !self.can_open_role_settings(guild)
+			{
 				self.server_admin.reset();
 			} else {
 				if !self.can_open_emoji_settings(guild) {
@@ -2119,6 +2124,10 @@ impl State {
 				}
 				if !self.can_open_member_settings(guild) {
 					self.server_admin.members = None;
+				}
+				if !self.can_open_role_settings(guild) {
+					self.server_admin.roles = None;
+					self.server_admin.selected_role = None;
 				}
 			}
 		}
@@ -2246,6 +2255,11 @@ impl Event {
 			}) | Event::ServerAction(server_actions::Event::Written {
 				action: server_actions::Action::Leave(_),
 				result: Ok(None),
+				..
+			}) | Event::ServerAdmin(server_admin::Event {
+				result: Ok(model::server_admin::Result::Roles(
+					model::server_roles::Result::Catalog { .. }
+				) | model::server_admin::Result::Member(_)),
 				..
 			}) | Event::Permissions(_)
 				| Event::Resync

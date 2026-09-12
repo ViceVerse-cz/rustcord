@@ -51,7 +51,7 @@ pub(crate) fn member_roles<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Id>, D
 }
 #[derive(Deserialize)]
 struct Bits(#[serde(deserialize_with = "bits")] u128);
-fn bits<'de, D: Deserializer<'de>>(d: D) -> Result<u128, D::Error> {
+pub(crate) fn bits<'de, D: Deserializer<'de>>(d: D) -> Result<u128, D::Error> {
 	let value = String::deserialize(d)?;
 	if value.is_empty() || value.len() > 39 || !value.bytes().all(|b| b.is_ascii_digit()) {
 		return Err(serde::de::Error::custom("Invalid permission bits"));

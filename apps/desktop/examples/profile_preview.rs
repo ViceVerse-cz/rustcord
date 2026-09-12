@@ -33,8 +33,26 @@ impl eframe::App for Preview {
 	fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
 		let ctx = ui.ctx().clone();
 		ui::design::paint_backdrop(&ctx);
-		// The fixture is already loaded. Commands are deliberately never sent to adapters.
-		let _ = self.messaging.show(ui, &mut self.state);
+		// Only synthetic fixtures execute these commands; no service adapters exist here.
+		for command in self.messaging.show(ui, &mut self.state) {
+			let event = match command {
+				client_core::Command::ServerAdmin {
+					guild,
+					request,
+					action,
+				} => server_settings_demo::execute_admin(&self.state, guild, request, *action),
+				client_core::Command::ServerSettings {
+					guild,
+					request,
+					edit,
+				} => server_settings_demo::execute(&self.state, guild, request, edit),
+				_ => continue,
+			};
+			self.state.apply(client_core::Envelope {
+				generation: self.state.generation,
+				event,
+			});
+		}
 		if self.requested && self.writer.is_none() {
 			let screenshot = self
 				.screenshot
@@ -206,7 +224,8 @@ fn seed_catalog(extensions: &mut ui::ExtensionUi) {
 			.collect(),
 	);
 	let previews = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../extensions/previews");
-	for (id, filename) in [("serein-ocean", "ocean.png")] {
+	{
+		let (id, filename) = ("serein-ocean", "ocean.png");
 		let image = image::open(previews.join(filename))
 			.expect("valid fixture preview")
 			.to_rgba8();

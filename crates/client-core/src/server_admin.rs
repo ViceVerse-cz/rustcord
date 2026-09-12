@@ -15,6 +15,9 @@ pub struct Event {
 }
 #[derive(Default)]
 pub struct View {
+	pub roles: Option<model::server_roles::Catalog>,
+	pub selected_role: Option<Id>,
+	pub member_role_filter: Option<Id>,
 	pub guild: Option<Id>,
 	pub emojis: Option<Emojis>,
 	pub members: Option<Members>,
@@ -25,11 +28,33 @@ pub struct View {
 	pub revision: u64,
 	pub pruned: Option<u64>,
 	pub needs_refresh: bool,
+	permission_revision: u64,
+	requested_permission_revision: u64,
 	sequence: u64,
 	action: Option<Action>,
 	prune_days: Option<u8>,
 }
 impl View {
+	pub(crate) fn permissions_changed(&mut self, event: &crate::permissions::Event) {
+		use crate::permissions::Event;
+		let Some(active) = self.guild else {
+			return;
+		};
+		let relevant = match event {
+			Event::Snapshot(_) => true,
+			Event::Guild(guild) => guild.id == active,
+			Event::Role { guild, .. }
+			| Event::RoleRemoved { guild, .. }
+			| Event::Member { guild, .. }
+			| Event::Owner { guild, .. }
+			| Event::UnavailableGuild(guild) => *guild == active,
+			Event::Members(members) => members.iter().any(|(guild, ..)| *guild == active),
+			Event::Channel { .. } => false,
+		};
+		if relevant {
+			self.permission_revision = self.permission_revision.wrapping_add(1);
+		}
+	}
 	pub(crate) fn reset(&mut self) {
 		*self = Self {
 			sequence: self.sequence.wrapping_add(1),
@@ -166,6 +191,13 @@ impl State {
 		let Some(metadata) = self.permissions.guilds.get(&guild) else {
 			return false;
 		};
+		let Some(current_role) = metadata
+			.roles
+			.as_ref()
+			.and_then(|roles| roles.iter().find(|current| current.id == role))
+		else {
+			return false;
+		};
 		if self
 			.user
 			.as_ref()
@@ -180,7 +212,7 @@ impl State {
 			roles
 				.iter()
 				.filter(|role| own.roles.contains(&role.id))
-				.any(|role| role.cmp_hierarchy(&row.role).is_gt())
+				.any(|role| role.cmp_hierarchy(current_role).is_gt())
 		})
 	}
 	pub fn can_prune_guild(&self, guild: Id) -> bool {
@@ -218,6 +250,7 @@ impl State {
 			return false;
 		}
 		match action {
+			Action::Roles(action) => self.role_action_allowed(guild, action),
 			Action::LoadEmojis => self.can_open_emoji_settings(guild),
 			Action::CreateEmoji { .. } => self.can_create_guild_emoji(guild),
 			Action::RenameEmoji { id, .. } | Action::DeleteEmoji { id } => {
@@ -238,6 +271,7 @@ impl State {
 	}
 	pub fn request_server_admin(&mut self, guild: Id, mut action: Action) -> Option<Command> {
 		match &mut action {
+			Action::Roles(action) => action.normalize(),
 			Action::LoadMembers(query) => query.search.shrink_to_fit(),
 			Action::SetNickname { nick, .. } => nick.shrink_to_fit(),
 			Action::CreateEmoji { name, image } => {
@@ -260,15 +294,27 @@ impl State {
 		}
 		if let Action::LoadMembers(query) = &action {
 			self.server_admin.query = query.clone();
+			self.server_admin.member_role_filter = None;
+		} else if let Action::Roles(model::server_roles::Action::Members { role, query }) = &action
+		{
+			self.server_admin.query = query.clone();
+			self.server_admin.member_role_filter = *role;
 		}
 		self.server_admin.guild = Some(guild);
 		self.server_admin.sequence = self.server_admin.sequence.wrapping_add(1);
 		self.server_admin.pending = true;
+		self.server_admin.requested_permission_revision = self.server_admin.permission_revision;
 		self.server_admin.saving = action.write();
 		self.server_admin.error = None;
 		let mut retained = action.clone();
 		if let Action::CreateEmoji { image, .. } = &mut retained {
 			*image = String::new();
+		} else if let Action::Roles(
+			model::server_roles::Action::Create(edit)
+			| model::server_roles::Action::Edit { edit, .. },
+		) = &mut retained
+		{
+			edit.icon = model::Patch::Absent;
 		}
 		self.server_admin.action = Some(retained);
 		Some(Command::ServerAdmin {
@@ -313,7 +359,13 @@ impl State {
 		self.server_admin.pending = false;
 		self.server_admin.saving = false;
 		if action.as_ref().is_none_or(|action| {
-			if action.emoji() {
+			if matches!(action, Action::Roles(_)) {
+				!self.can_open_role_settings(event.guild)
+					|| matches!(
+						action,
+						Action::Roles(model::server_roles::Action::Members { .. })
+					) && !self.can_open_member_settings(event.guild)
+			} else if action.emoji() {
 				!self.can_open_emoji_settings(event.guild)
 			} else {
 				!self.can_open_member_settings(event.guild)
@@ -340,6 +392,16 @@ impl State {
 				return Ok(());
 			}
 		};
+		if matches!(action, Some(Action::Roles(_)))
+			&& self.server_admin.requested_permission_revision
+				!= self.server_admin.permission_revision
+			&& !matches!(&result, Outcome::Roles(model::server_roles::Result::Catalog { catalog, .. }) if self.roles_catalog_matches_permissions(catalog))
+		{
+			self.server_admin.error =
+				Some("Server roles or permissions changed; reload before continuing");
+			self.server_admin.needs_refresh = true;
+			return Ok(());
+		}
 		let expected = matches!(
 			(&action, &result),
 			(
@@ -354,6 +416,30 @@ impl State {
 				| (Some(Action::Prune { .. }), Outcome::Pruned(_))
 				| (Some(Action::ShowMembers { .. }), Outcome::ChannelList(_))
 		) || match (&action, &result) {
+			(Some(Action::Roles(action)), Outcome::Roles(result)) => match (action, result) {
+				(
+					model::server_roles::Action::Members { role, .. },
+					model::server_roles::Result::Members {
+						role: returned,
+						page,
+					},
+				) => {
+					role == returned
+						&& role.is_none_or(|role| {
+							role == event.guild
+								|| page.items.iter().all(|member| member.roles.contains(&role))
+						})
+				}
+				(
+					model::server_roles::Action::Load
+					| model::server_roles::Action::Create(_)
+					| model::server_roles::Action::Edit { .. }
+					| model::server_roles::Action::Delete(_)
+					| model::server_roles::Action::Move { .. },
+					model::server_roles::Result::Catalog { catalog, .. },
+				) => catalog.guild == event.guild,
+				_ => false,
+			},
 			(
 				Some(Action::SetRole { user, .. } | Action::SetNickname { user, .. }),
 				Outcome::Member(member),
@@ -368,6 +454,15 @@ impl State {
 			return Ok(());
 		}
 		match result {
+			Outcome::Roles(result) => match result {
+				model::server_roles::Result::Catalog { catalog, selected } => {
+					self.apply_roles_catalog(catalog, selected)
+				}
+				model::server_roles::Result::Members { role, page } => {
+					self.server_admin.member_role_filter = role;
+					self.server_admin.members = Some(page);
+				}
+			},
 			Outcome::Emojis(page) => {
 				if let Some(guild) = self.guilds.iter_mut().find(|guild| guild.id == event.guild) {
 					guild.emojis = Some(page.items.iter().map(|row| row.emoji.clone()).collect());
@@ -388,6 +483,42 @@ impl State {
 				self.server_admin.members = Some(page);
 			}
 			Outcome::Member(mut member) => {
+				if matches!(action, Some(Action::SetRole { .. }))
+					&& self
+						.user
+						.as_ref()
+						.is_some_and(|own| own.id == member.user.id)
+					&& self.server_admin.requested_permission_revision
+						== self.server_admin.permission_revision
+				{
+					if let Some(own) = self
+						.permissions
+						.guilds
+						.get_mut(&event.guild)
+						.and_then(|guild| guild.member.as_mut())
+					{
+						own.roles.clone_from(&member.roles);
+					}
+					self.permissions.clear_cache();
+					self.invalidate_navigation();
+				}
+				if let Some(Action::SetRole { role, assigned, .. }) = &action {
+					if let Some(row) =
+						self.server_admin.roles.as_mut().and_then(|catalog| {
+							catalog.items.iter_mut().find(|row| row.id == *role)
+						}) {
+						row.member_count = None;
+					}
+					if self.server_admin.member_role_filter == Some(*role)
+						&& !assigned && let Some(page) = &mut self.server_admin.members
+					{
+						let before = page.items.len();
+						page.items.retain(|row| row.user.id != member.user.id);
+						page.total = page
+							.total
+							.saturating_sub((before - page.items.len()) as u64);
+					}
+				}
 				if let Some(row) = self.server_admin.members.as_mut().and_then(|page| {
 					page.items
 						.iter_mut()
@@ -425,7 +556,14 @@ impl State {
 				}
 			}
 		}
-		if matches!(action, Some(Action::LoadEmojis | Action::LoadMembers(_))) {
+		if matches!(
+			action,
+			Some(
+				Action::LoadEmojis
+					| Action::LoadMembers(_)
+					| Action::Roles(model::server_roles::Action::Load)
+			)
+		) {
 			self.server_admin.needs_refresh = false;
 		}
 		self.server_admin.revision = self.server_admin.revision.wrapping_add(1);

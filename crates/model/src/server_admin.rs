@@ -78,6 +78,7 @@ impl Query {
 }
 #[derive(Clone)]
 pub enum Action {
+	Roles(crate::server_roles::Action),
 	LoadEmojis,
 	CreateEmoji { name: String, image: String },
 	RenameEmoji { id: Id, name: String },
@@ -91,6 +92,9 @@ pub enum Action {
 }
 impl Action {
 	pub fn write(&self) -> bool {
+		if let Self::Roles(action) = self {
+			return action.write();
+		}
 		!matches!(
 			self,
 			Self::LoadEmojis | Self::LoadMembers(_) | Self::Prune { execute: false, .. }
@@ -107,6 +111,7 @@ impl Action {
 	}
 	pub fn valid(&self) -> bool {
 		match self {
+			Self::Roles(action) => action.valid(),
 			Self::CreateEmoji { name, image } => {
 				name.capacity() <= 128
 					&& valid_emoji_name(name)
@@ -133,6 +138,7 @@ impl Action {
 	}
 }
 pub enum Result {
+	Roles(crate::server_roles::Result),
 	Emojis(Emojis),
 	Members(Members),
 	Member(Member),
@@ -174,6 +180,7 @@ impl Result {
 	pub fn bytes(&self) -> usize {
 		size_of::<Self>()
 			+ match self {
+				Self::Roles(result) => result.bytes(),
 				Self::Emojis(page) => {
 					page.items.capacity() * size_of::<Emoji>()
 						+ page
@@ -185,18 +192,7 @@ impl Result {
 							})
 							.sum::<usize>()
 				}
-				Self::Members(page) => {
-					page.items.iter().map(Member::bytes).sum::<usize>()
-						+ page.items.capacity().saturating_sub(page.items.len())
-							* size_of::<Member>()
-						+ page.roles.capacity() * size_of::<Role>()
-						+ page
-							.roles
-							.iter()
-							.map(|role| role.role.name.capacity())
-							.sum::<usize>() + page.features.capacity() * size_of::<String>()
-						+ page.features.iter().map(String::capacity).sum::<usize>()
-				}
+				Self::Members(page) => page.bytes(),
 				Self::Member(member) => member.bytes(),
 				_ => 0,
 			}
@@ -204,6 +200,7 @@ impl Result {
 	pub fn valid(&self) -> bool {
 		self.bytes() <= MAX_BYTES
 			&& match self {
+				Self::Roles(result) => result.valid(),
 				Self::Emojis(page) => {
 					page.items.len() <= crate::MAX_GUILD_EMOJIS
 						&& page.items.capacity() * size_of::<CustomEmoji>()
@@ -220,20 +217,37 @@ impl Result {
 									.is_none_or(|user| user.id.0 != 0 && user.heap_bytes() <= 1024)
 						})
 				}
-				Self::Members(page) => {
-					page.items.len() <= PAGE_SIZE
-						&& page.items.iter().all(Member::valid)
-						&& page.roles.len() <= permissions::MAX_ROLES
-						&& page
-							.roles
-							.iter()
-							.all(|role| role.role.id.0 != 0 && role.role.name.len() <= 400)
-						&& page.features.len() <= 256
-						&& page.features.iter().all(|value| value.len() <= 128)
-				}
+				Self::Members(page) => page.valid(),
 				Self::Member(member) => member.valid(),
 				Self::Kicked(id) => id.0 != 0,
 				_ => true,
 			}
+	}
+}
+
+impl Members {
+	pub fn bytes(&self) -> usize {
+		self.items.iter().map(Member::bytes).sum::<usize>()
+			+ self.items.capacity().saturating_sub(self.items.len()) * size_of::<Member>()
+			+ self.roles.capacity() * size_of::<Role>()
+			+ self
+				.roles
+				.iter()
+				.map(|role| role.role.name.capacity())
+				.sum::<usize>()
+			+ self.features.capacity() * size_of::<String>()
+			+ self.features.iter().map(String::capacity).sum::<usize>()
+	}
+	pub fn valid(&self) -> bool {
+		self.bytes() <= MAX_BYTES
+			&& self.items.len() <= PAGE_SIZE
+			&& self.items.iter().all(Member::valid)
+			&& self.roles.len() <= permissions::MAX_ROLES
+			&& self
+				.roles
+				.iter()
+				.all(|role| role.role.id.0 != 0 && role.role.name.len() <= 400)
+			&& self.features.len() <= 256
+			&& self.features.iter().all(|value| value.len() <= 128)
 	}
 }

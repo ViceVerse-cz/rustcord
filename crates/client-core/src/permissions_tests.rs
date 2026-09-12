@@ -186,6 +186,117 @@ fn state() -> State {
 }
 
 #[test]
+fn role_rest_catalog_and_self_membership_revoke_selected_history_immediately() {
+	use model::{server_admin as admin, server_roles as roles};
+	for self_assignment in [false, true] {
+		let mut state = state();
+		state.auth = crate::auth::AuthState::Authenticated;
+		state.gateway_connected = true;
+		let mut metadata = snapshot().guilds.remove(0);
+		let list = metadata.roles.as_mut().unwrap();
+		list[0].name = "@everyone".into();
+		list[0].bits = 0;
+		list[1].name = "History access".into();
+		list[1].bits = BITS;
+		list[1].position = 1;
+		list.push(p::Role {
+			id: Id(13),
+			name: "Manager".into(),
+			bits: p::MANAGE_ROLES | p::MANAGE_GUILD,
+			color: 0,
+			position: 3,
+			hoist: false,
+		});
+		metadata.member.as_mut().unwrap().roles = vec![Id(11), Id(13)];
+		permission(&mut state, PermissionEvent::Guild(metadata.clone()));
+		assert!(state.can_read_history(Id(20)) && !state.timeline.is_empty());
+		state.server_admin.guild = Some(Id(10));
+		let mut member = admin::Member {
+			user: user(),
+			nick: None,
+			roles: vec![Id(11), Id(13)],
+			joined_at: None,
+			join_source: None,
+			invite_code: None,
+			flags: None,
+			unusual_dm_until: None,
+			timeout_until: None,
+		};
+		state.server_admin.members = Some(admin::Members {
+			items: vec![member.clone()],
+			roles: metadata
+				.roles
+				.as_ref()
+				.unwrap()
+				.iter()
+				.map(|role| admin::Role {
+					role: role.clone(),
+					managed: false,
+				})
+				.collect(),
+			total: 1,
+			..Default::default()
+		});
+		let action = if self_assignment {
+			admin::Action::SetRole {
+				user: Id(2),
+				role: Id(11),
+				assigned: false,
+			}
+		} else {
+			admin::Action::Roles(roles::Action::Load)
+		};
+		let Command::ServerAdmin { guild, request, .. } =
+			state.request_server_admin(Id(10), action).unwrap()
+		else {
+			panic!()
+		};
+		let result = if self_assignment {
+			member.roles = vec![Id(13)];
+			admin::Result::Member(member)
+		} else {
+			let items = metadata
+				.roles
+				.unwrap()
+				.into_iter()
+				.map(|role| roles::Role {
+					id: role.id,
+					name: role.name,
+					permissions: if role.id == Id(11) { 0 } else { role.bits },
+					position: role.position,
+					..Default::default()
+				})
+				.collect();
+			admin::Result::Roles(roles::Result::Catalog {
+				catalog: roles::Catalog {
+					guild,
+					items,
+					features: vec![],
+				},
+				selected: None,
+			})
+		};
+		apply(
+			&mut state,
+			Event::ServerAdmin(crate::server_admin::Event {
+				guild,
+				request,
+				result: Ok(result),
+			}),
+		);
+		assert!(
+			!state.can_view(Id(20)),
+			"self assignment: {self_assignment}"
+		);
+		assert!(
+			state.timeline.is_empty(),
+			"self assignment: {self_assignment}"
+		);
+		assert_eq!(state.freshness, Freshness::Unavailable);
+	}
+}
+
+#[test]
 fn message_deletion_uses_manage_messages_without_granting_edit_or_requiring_send() {
 	let mut state = state();
 	let mut other = message(101, Id(20));

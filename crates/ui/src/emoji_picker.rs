@@ -173,20 +173,16 @@ impl Picker {
 					.min_size(egui::Vec2::splat(28.0)),
 			)
 		} else if selected.is_none() {
-			crate::icons::button(ui, crate::icons::Icon::Smile, 28.0, "Choose trait emoji")
+			crate::icons::button(ui, crate::icons::Icon::Smile, 28.0, "Choose emoji")
 		} else {
 			ui.add_sized(
 				[28.0, 28.0],
 				egui::Button::new(selected.as_deref().unwrap_or("☺")).frame(false),
 			)
 		}
-		.on_hover_text("Choose trait emoji");
+		.on_hover_text("Choose emoji");
 		button.widget_info(|| {
-			egui::WidgetInfo::labeled(
-				egui::WidgetType::Button,
-				ui.is_enabled(),
-				"Choose trait emoji",
-			)
+			egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Choose emoji")
 		});
 		if button.clicked() {
 			self.query.clear();

@@ -14,6 +14,7 @@ enum Page {
 	Engagement,
 	Emoji,
 	Members,
+	Roles,
 }
 impl Page {
 	fn allowed(self, state: &State, guild: Id) -> bool {
@@ -21,6 +22,7 @@ impl Page {
 			Self::Profile | Self::Engagement => state.can_manage_guild(guild),
 			Self::Emoji => state.can_open_emoji_settings(guild),
 			Self::Members => state.can_open_member_settings(guild),
+			Self::Roles => state.can_open_role_settings(guild),
 		}
 	}
 	fn label(self) -> &'static str {
@@ -29,6 +31,7 @@ impl Page {
 			Self::Engagement => "Engagement",
 			Self::Emoji => "Emoji",
 			Self::Members => "Members",
+			Self::Roles => "Roles",
 		}
 	}
 }
@@ -51,6 +54,7 @@ pub(super) struct Editor {
 	form_error: Option<&'static str>,
 	emoji_picker: crate::emoji_picker::Picker,
 	pub(super) admin: crate::server_admin::Admin,
+	roles: crate::server_roles::RolesUi,
 }
 
 impl MessagingUi {
@@ -58,12 +62,58 @@ impl MessagingUi {
 	pub fn preview_server_engagement(&mut self) {
 		self.server_settings.page = Page::Engagement;
 	}
+	pub fn preview_server_roles(
+		&mut self,
+		state: &mut State,
+		guild: Id,
+		role: Option<Id>,
+	) -> Option<Command> {
+		if !state.can_open_role_settings(guild) {
+			return None;
+		}
+		self.settings.open = false;
+		self.server_settings = Editor {
+			scope: Some((state.generation, guild)),
+			page: Page::Roles,
+			..Editor::default()
+		};
+		self.server_settings.roles.select(role, guild);
+		self.server_settings.roles.load(state, guild)
+	}
+	pub fn take_server_role_icon_request(&mut self) -> Option<(u64, Id, Id, u64)> {
+		let (generation, guild) = self.server_settings.scope?;
+		let role = self.server_settings.roles.take_icon_request()?;
+		self.server_role_icon_sequence = self.server_role_icon_sequence.wrapping_add(1);
+		self.server_settings.roles.icon_request = self.server_role_icon_sequence;
+		Some((generation, guild, role, self.server_role_icon_sequence))
+	}
+	pub fn accept_server_role_icon(
+		&mut self,
+		ctx: &egui::Context,
+		scope: (u64, Id, Id, u64),
+		result: Result<Option<(String, egui::ColorImage)>, &'static str>,
+	) {
+		if self.server_settings.scope == Some((scope.0, scope.1)) {
+			self.server_settings
+				.roles
+				.accept_icon(ctx, scope.2, scope.3, result);
+		}
+	}
 	pub fn preview_server_admin(
 		&mut self,
 		state: &mut State,
 		guild: Id,
 		page: &str,
 	) -> Option<Command> {
+		if matches!(page, "roles" | "role-editor" | "role-permissions") {
+			let command = self.preview_server_roles(state, guild, None);
+			if page != "roles" {
+				self.server_settings
+					.roles
+					.preview_editor(page == "role-permissions");
+			}
+			return command;
+		}
 		let page = if page == "members" {
 			Page::Members
 		} else {
@@ -115,10 +165,14 @@ impl MessagingUi {
 				|| self.server_settings.submitted
 				|| self.server_settings.icon_pending)
 			|| self.server_settings.admin.has_changes()
+			|| self.server_settings.roles.has_changes()
 	}
 	/// Opens the same permission-checked editor used by the server menu.
 	pub fn preview_server_settings(&mut self, state: &mut State, guild: Id) -> Option<Command> {
 		if !state.can_manage_guild(guild) {
+			if state.can_open_role_settings(guild) {
+				return self.preview_server_roles(state, guild, None);
+			}
 			if state.can_open_emoji_settings(guild) {
 				return self.preview_server_admin(state, guild, "emoji");
 			}
@@ -191,7 +245,8 @@ impl Editor {
 		if !self.is_open() {
 			return true;
 		}
-		if self.dirty()
+		if self.roles.has_changes()
+			|| self.dirty()
 			|| self.admin.has_changes()
 			|| state.server_admin.saving
 			|| state.server_settings.saving
@@ -232,7 +287,8 @@ impl Editor {
 		if generation != state.generation
 			|| !(state.can_manage_guild(guild)
 				|| state.can_open_emoji_settings(guild)
-				|| state.can_open_member_settings(guild))
+				|| state.can_open_member_settings(guild)
+				|| state.can_open_role_settings(guild))
 			|| !state.guilds.iter().any(|known| known.id == guild)
 		{
 			*self = Self::default();
@@ -251,11 +307,19 @@ impl Editor {
 			}
 			self.page = if state.can_manage_guild(guild) {
 				Page::Profile
+			} else if state.can_open_role_settings(guild) {
+				Page::Roles
 			} else {
 				Page::Emoji
 			};
 			self.admin = crate::server_admin::Admin::default();
+			self.roles = crate::server_roles::RolesUi::default();
 			state.close_server_admin();
+		}
+		if self.page == Page::Roles
+			&& let Some(command) = self.roles.load(state, guild)
+		{
+			commands.push(command);
 		}
 		if matches!(self.page, Page::Emoji | Page::Members)
 			&& let Some(command) = self.admin.load(state, guild, self.page == Page::Members)
@@ -316,18 +380,28 @@ impl Editor {
 								.inner_margin(egui::Margin::symmetric(12, 40)),
 						)
 						.show(ui, |ui| {
+							if self.page == Page::Roles && self.roles.editing() {
+								self.roles.navigation(ui, state, guild, commands);
+								return;
+							}
 							let name = state
 								.guild(guild)
 								.map_or("Server", |known| known.name.as_str());
 							ui.label(design::eyebrow(ui, name, colors.muted));
 							ui.add_space(12.0);
-							for page in
-								[Page::Profile, Page::Engagement, Page::Emoji, Page::Members]
-							{
+							for page in [
+								Page::Profile,
+								Page::Engagement,
+								Page::Emoji,
+								Page::Members,
+								Page::Roles,
+							] {
 								if !page.allowed(state, guild) {
 									continue;
 								}
-								if matches!(page, Page::Emoji | Page::Members) {
+								if matches!(page, Page::Emoji | Page::Members)
+									|| (page == Page::Roles && !Page::Members.allowed(state, guild))
+								{
 									ui.add_space(16.0);
 									ui.separator();
 									ui.add_space(12.0);
@@ -383,9 +457,13 @@ impl Editor {
 						}
 						if !wide {
 							ui.horizontal_wrapped(|ui| {
-								for page in
-									[Page::Profile, Page::Engagement, Page::Emoji, Page::Members]
-								{
+								for page in [
+									Page::Profile,
+									Page::Engagement,
+									Page::Emoji,
+									Page::Members,
+									Page::Roles,
+								] {
 									if !page.allowed(state, guild) {
 										continue;
 									}
@@ -404,11 +482,25 @@ impl Editor {
 								)
 								.show(ui, |ui| self.save_bar(ui, state, commands));
 						}
+						if self.page == Page::Roles && self.roles.has_changes() {
+							egui::Panel::bottom("role-settings-save")
+								.frame(
+									egui::Frame::new()
+										.fill(colors.raised)
+										.corner_radius(8)
+										.inner_margin(12),
+								)
+								.show(ui, |ui| self.roles.save_bar(ui, state, guild, commands));
+						}
 						egui::ScrollArea::vertical()
 							.id_salt(("server-settings-content", self.page as u8))
 							.auto_shrink([false, false])
 							.show(ui, |ui| {
 								ui.set_width(ui.available_width());
+								if self.page == Page::Roles {
+									self.roles.show(ui, state, guild, avatars, commands);
+									return;
+								}
 								if matches!(self.page, Page::Emoji | Page::Members) {
 									self.admin.show(
 										ui,
@@ -457,11 +549,13 @@ impl Editor {
 			if self.dirty()
 				|| state.server_settings.saving
 				|| self.admin.has_changes()
+				|| self.roles.has_changes()
 				|| state.server_admin.saving
 			{
 				self.discard = true;
 			} else {
 				self.scope = None;
+				self.roles = crate::server_roles::RolesUi::default();
 				state.close_server_settings();
 				state.close_server_admin();
 			}
