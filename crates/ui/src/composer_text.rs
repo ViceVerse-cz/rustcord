@@ -491,8 +491,19 @@ mod tests {
 			let mut layout = Layout::default();
 			let mut avatars = Avatars::default();
 			let mut text = "<:serein_leaf:9001>".to_owned();
+			let message = crate::markdown::Formatted::parse(&text);
 			let mut output = ctx.run_ui(Default::default(), |ui| {
-				emoji::selectable(ui, &text, |_| Some(image.clone()), 24.0, false);
+				ui.style_mut()
+					.text_styles
+					.insert(egui::TextStyle::Body, egui::FontId::proportional(15.0));
+				// The timeline resolves custom artwork through the avatar cache.
+				avatars.custom_image(ui.ctx(), model::Id(9001), 24.0, false);
+				avatars.accept(
+					ui.ctx(),
+					"emoji-9001".into(),
+					Some(egui::ColorImage::filled(dimensions, Color32::WHITE)),
+				);
+				message.show_with_images(ui, &mut None, &[], &mut None, &mut avatars, false);
 				let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, width| {
 					layout.galley(ui, buffer.as_str(), width, &[], &mut avatars, true)
 				};
@@ -507,7 +518,9 @@ mod tests {
 				.shapes
 				.iter()
 				.filter_map(|shape| match &shape.shape {
-					egui::Shape::Rect(rect) if rect.fill_texture_id() == texture.id() => {
+					egui::Shape::Rect(rect)
+						if rect.fill_texture_id() != egui::TextureId::default() =>
+					{
 						Some(rect.rect.size())
 					}
 					_ => None,

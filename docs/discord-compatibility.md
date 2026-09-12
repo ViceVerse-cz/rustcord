@@ -744,13 +744,25 @@ Synthetic tests exercise UI actions, bounds, coalescing, clearing and reconnect.
 
 ### Inline attachment video (September 12, 2026)
 
-MOV/MP4 attachments expose explicit Play/Pause, seek and volume controls on Windows.
-Media Foundation decodes through a credential-free, validated Discord CDN range reader;
-no attachment is opened as an OS URL and no webview is involved. Windows codec availability
-controls playback (including HEVC); unsupported containers/codecs show an error with the
-existing download/open fallback. Linux/macOS inline playback is not implemented.
-Limits are 100 MiB encoded, two hours, 1920 pixels per side and 1920x1080 total pixels,
-and mono/stereo audio up to 96 kHz. Rotated portrait video uses the same pixel budget.
+MOV/MP4 attachments play inside the message with Discord-style overlay controls: a
+centered play button on the picture, and a translucent bar over its lower edge with seek,
+elapsed/total time and volume that hides while playing until the pointer or keyboard focus
+returns. Every platform decodes through the same credential-free, validated Discord CDN
+range reader; no attachment is opened as an OS URL and no webview is involved.
+
+* Windows: Media Foundation. Windows codec availability controls playback (including HEVC).
+* macOS: a bounded Rust MPEG-4 demuxer feeds VideoToolbox (H.264 and HEVC, including
+  B-frame reordering) and Symphonia's pure-Rust AAC-LC decoder. HE-AAC, MP3-in-MP4,
+  fragmented files, external data references and encrypted tracks are rejected.
+* Linux: GStreamer `decodebin` pulls bounded byte ranges from that reader through
+  `appsrc`; the installed plugins (base, good and libav are recommended by the package)
+  decide which codecs play. Output is 48 kHz stereo PCM and RGBA pictures with
+  orientation tags applied.
+
+Unsupported containers/codecs show an error inside the player with the existing
+download/open fallback. Limits are 100 MiB encoded, two hours, 1920 pixels per side and
+1920x1080 total pixels, and mono/stereo audio up to 96 kHz. Rotated portrait video uses
+the same pixel budget.
 Only an explicit attachment Play starts decoding; leaving its visible message/channel,
 hiding the app, logout, replacement or cancellation stops that player. Embeds with web
 video pages continue using their external link action. No live Discord media was tested.

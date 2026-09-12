@@ -124,6 +124,8 @@ struct Desktop {
 	downloads: downloads::Downloads,
 	audio: audio::Audio,
 	video: video::Video,
+	/// Offline fixture flags start (and optionally pause) the demo attachment without input.
+	demo_video_autoplay: Option<bool>,
 	notifications: platform::notifications::Notifications,
 	uploads: uploads::Uploads,
 	group_icon: group_icon::GroupIcon,
@@ -428,7 +430,12 @@ impl Desktop {
 					.any(|arg| arg == "--demo-audio" || arg == "--demo-voice-messages")
 				{
 					test_support::audio_demo_state()
-				} else if std::env::args().any(|arg| arg == "--demo-video") {
+				} else if std::env::args().any(|arg| {
+					matches!(
+						arg.as_str(),
+						"--demo-video" | "--demo-video-playing" | "--demo-video-paused"
+					)
+				}) {
 					test_support::video_demo_state()
 				} else if std::env::args().any(|arg| arg == "--demo-friends") {
 					test_support::friends_demo_state()
@@ -769,6 +776,13 @@ impl Desktop {
 			downloads: downloads::Downloads::default(),
 			audio: audio::Audio::default(),
 			video: video::Video::default(),
+			demo_video_autoplay: if std::env::args().any(|arg| arg == "--demo-video-paused") {
+				Some(true)
+			} else if std::env::args().any(|arg| arg == "--demo-video-playing") {
+				Some(false)
+			} else {
+				None
+			},
 			notifications: {
 				let wake = cc.egui_ctx.clone();
 				platform::notifications::Notifications::new(move || wake.request_repaint())
@@ -1718,6 +1732,10 @@ impl Desktop {
 				} => {
 					let mut hits = Vec::new();
 					let mut total = 0;
+					let (content, filters) = match model::search_terms(&query) {
+						Ok(terms) => terms,
+						Err(_) => return,
+					};
 					for id in (1..=500)
 						.rev()
 						.filter(|id| before.is_none_or(|b| *id < b.0))
@@ -1726,8 +1744,42 @@ impl Desktop {
 						if message
 							.content
 							.to_lowercase()
-							.contains(&query.to_lowercase())
-						{
+							.contains(&content.to_lowercase())
+							&& filters.iter().all(|(key, value)| match *key {
+								"author_id" => message.author.id.to_string() == *value,
+								"mentions" => message
+									.mentions
+									.iter()
+									.any(|user| user.id.to_string() == *value),
+								"min_id" => {
+									value.parse::<u64>().is_ok_and(|min| message.id.0 > min)
+								}
+								"max_id" => {
+									value.parse::<u64>().is_ok_and(|max| message.id.0 < max)
+								}
+								"author_type" => match value.as_str() {
+									"webhook" => message.author.webhook,
+									"user" => !message.author.webhook,
+									_ => false, // The offline fixture contains no bot authors.
+								},
+								"has" => match value.as_str() {
+									"link" => {
+										message.content.contains("https://")
+											|| message.content.contains("http://")
+									}
+									"embed" => !message.embeds.is_empty(),
+									"file" => !message.attachments.is_empty(),
+									"image" => message.attachments.iter().any(|a| {
+										a.content_type
+											.as_deref()
+											.is_some_and(|mime| mime.starts_with("image/"))
+									}),
+									"video" => message.attachments.iter().any(|a| a.is_video()),
+									"sound" => message.attachments.iter().any(|a| a.is_audio()),
+									_ => false,
+								},
+								_ => false,
+							}) {
 							total += 1;
 							if hits.len() < model::SEARCH_PAGE_SIZE {
 								hits.push(model::SearchHit {
@@ -3039,6 +3091,23 @@ impl eframe::App for Desktop {
 				}
 			}
 			let player = self.messaging.video();
+			if self.state.demo
+				&& let Some(pause) = self.demo_video_autoplay
+				&& let Some(message) = self.state.timeline.get(model::Id(601))
+				&& let Some(attachment) = message.attachments.first().cloned()
+			{
+				if player.active.is_none() {
+					player.active = Some((message.channel, message.id, attachment.clone()));
+					player.state = ui::VideoState::Loading;
+					player.seen = true;
+					player.command = Some(ui::VideoCommand::Play(attachment));
+				} else if player.state == ui::VideoState::Playing && player.position > 1.0 {
+					if pause {
+						player.command = Some(ui::VideoCommand::Pause(true));
+					}
+					self.demo_video_autoplay = None;
+				}
+			}
 			if !player.seen
 				|| player.active.is_none()
 				|| (!self.state.demo && self.state.auth != AuthState::Authenticated)

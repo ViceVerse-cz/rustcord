@@ -36,12 +36,13 @@ pub fn show(
 		&mut Option<String>,
 		&mut Option<model::User>,
 		&mut Option<model::Id>,
+		&mut crate::markdown::FormatCache,
 	),
 	upload: Option<&Upload>,
 	(restore, cancel): (&mut Option<String>, &mut bool),
 ) {
 	let colors = design::palette(ui);
-	let (avatars, opening, profile, channel) = media;
+	let (avatars, opening, profile, channel, formats) = media;
 	let upload = upload.filter(|upload| upload.nonce == pending.nonce);
 	let sending = pending.delivery == Delivery::Sending;
 	let status = match pending.delivery {
@@ -108,7 +109,11 @@ pub fn show(
 								} else {
 									colors.muted
 								});
-							let formatted = crate::markdown::Formatted::parse(&pending.content);
+							// Source equality in FormatCache also handles a nonce hash collision.
+							let formatted = formats.get(
+								model::Id(egui::Id::unique(&pending.nonce).value()),
+								&pending.content,
+							);
 							let id = ui.id().with("spoilers");
 							let mut revealed =
 								ui.data_mut(|data| data.get_temp::<u32>(id).unwrap_or(0));
@@ -413,6 +418,7 @@ mod tests {
 								&mut None,
 								&mut None,
 								&mut None,
+								&mut crate::markdown::FormatCache::default(),
 							),
 							Some(&upload),
 							(&mut None, &mut false),

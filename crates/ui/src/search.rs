@@ -5,6 +5,22 @@ use model::Id;
 
 /// Width of the results pane when the window is wide enough to keep the timeline readable.
 pub const PANE_WIDTH: f32 = 420.0;
+const FILTER_WIDTH: f32 = 444.0;
+
+fn date_id(value: &str) -> Result<Option<u64>, ()> {
+	if value.is_empty() {
+		return Ok(None);
+	}
+	let format =
+		time::format_description::parse_borrowed::<2>("[year]-[month]-[day]").map_err(|_| ())?;
+	let date = time::Date::parse(value, &format).map_err(|_| ())?;
+	let millis = date.midnight().assume_utc().unix_timestamp_nanos() / 1_000_000;
+	let delta = u64::try_from(millis - 1_420_070_400_000).map_err(|_| ())?;
+	if delta == 0 || delta > (u64::MAX >> 22) {
+		return Err(());
+	}
+	Ok(Some(delta << 22))
+}
 
 #[derive(Default)]
 pub struct SearchUi {
@@ -16,6 +32,12 @@ pub struct SearchUi {
 	composing: bool,
 	ime_frame: bool,
 	pending_submit: bool,
+	filters_open: bool,
+	oldest_first: bool,
+	hide_highlight: bool,
+	before_date: String,
+	after_date: String,
+	filter_error: Option<&'static str>,
 }
 
 impl SearchUi {
@@ -23,6 +45,7 @@ impl SearchUi {
 		self.open = !self.open || self.pins != pins;
 		self.pins = pins;
 		self.focus = self.open;
+		self.filters_open = self.open && !pins;
 		self.open
 	}
 	/// Fixture-only: open a text search for `query` and submit it on the next frame.
@@ -32,6 +55,7 @@ impl SearchUi {
 		self.pins = false;
 		self.query = query.to_owned();
 		self.pending_submit = true;
+		self.filters_open = false;
 	}
 	/// Fixture-only: open the pins popout and request the first page on the next frame.
 	#[cfg(any(test, feature = "demo"))]
@@ -48,16 +72,21 @@ impl SearchUi {
 	pub fn sync(&mut self, ctx: &egui::Context, state: &mut State, commands: &mut Vec<Command>) {
 		if self.open && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
 			self.open = false;
+			self.filters_open = false;
 		}
 		if self.channel != state.selected {
 			self.channel = state.selected;
 			// A fixture preview adopts the initial selection instead of closing.
 			if !self.pending_submit {
 				self.query.clear();
+				self.before_date.clear();
+				self.after_date.clear();
+				self.filter_error = None;
 				self.open = false;
 			}
 		}
 		if !self.open {
+			self.filters_open = false;
 			if state.search.is_some() {
 				commands.push(state.clear_search());
 			}
@@ -92,22 +121,21 @@ impl SearchUi {
 		let colors = design::palette(ui);
 		let allowed = state.can_search();
 		let mut submit = false;
-		egui::Frame::new()
-			.fill(colors.raised)
+		let frame = egui::Frame::new()
+			.fill(colors.base)
 			.corner_radius(6)
-			.stroke(egui::Stroke::new(1.0, colors.accent))
+			.stroke(egui::Stroke::new(1.0, colors.border))
 			.inner_margin(egui::Margin::symmetric(8, 0))
 			.show(ui, |ui| {
 				ui.set_height(28.0);
 				ui.horizontal_centered(|ui| {
 					ui.spacing_mut().item_spacing.x = 6.0;
-					let clear = icons::button(ui, icons::Icon::Close, 22.0, "Close search");
 					let input = ui.add(
 						egui::TextEdit::singleline(&mut self.query)
 							.char_limit(256)
 							.frame(egui::Frame::NONE)
 							.hint_text("Search")
-							.desired_width(ui.available_width().max(60.0)),
+							.desired_width((ui.available_width() - 28.0).max(30.0)),
 					);
 					input.widget_info(|| {
 						egui::WidgetInfo::labeled(
@@ -120,18 +148,204 @@ impl SearchUi {
 						input.request_focus();
 						self.focus = false;
 					}
-					let valid = allowed && model::valid_search_query(&self.query);
+					if input.clicked() || input.changed() {
+						self.filters_open = true;
+					}
+					let valid = allowed && model::search_terms(&self.query).is_ok();
 					submit = valid
 						&& input.lost_focus()
 						&& ui.input(|i| i.key_pressed(egui::Key::Enter))
 						&& !self.ime_frame;
-					if clear.clicked() {
+					if icons::button(ui, icons::Icon::Close, 22.0, "Close search").clicked() {
 						self.open = false;
+						self.filters_open = false;
 					}
 				});
 			});
+		if self.filters_open {
+			submit |= self.filter_popover(ui.ctx(), frame.response.rect, state);
+		}
 		if submit && let Some(command) = state.request_search(self.query.trim().into(), None) {
 			commands.push(command);
+			self.filters_open = false;
+		}
+	}
+	pub fn results_visible(&self, state: &State) -> bool {
+		self.open && !self.pins && (self.pending_submit || state.search.is_some())
+	}
+	fn filter_popover(&mut self, ctx: &egui::Context, anchor: egui::Rect, state: &State) -> bool {
+		let allowed = state.can_search();
+		let colors = design::palette_for(ctx);
+		let bounds = ctx.content_rect().shrink(8.0);
+		let width = FILTER_WIDTH.min(bounds.width());
+		let x = (anchor.right() - width).max(bounds.left());
+		let mut submit = false;
+		let popup = egui::Area::new(egui::Id::unique("search-filters"))
+			.order(egui::Order::Foreground)
+			.fixed_pos(egui::pos2(x, anchor.bottom() + 8.0))
+			.constrain_to(bounds)
+			.show(ctx, |ui| {
+				egui::Frame::new()
+					.fill(colors.base)
+					.stroke(egui::Stroke::new(1.0, colors.border))
+					.corner_radius(8)
+					.inner_margin(16)
+					.show(ui, |ui| {
+						ui.set_width((width - 32.0).max(0.0));
+						ui.spacing_mut().item_spacing.y = 12.0;
+						ui.horizontal(|ui| {
+							icons::inline(ui, icons::Icon::Search, 22.0, colors.muted);
+							submit = ui
+								.add_enabled(
+									allowed && model::search_terms(&self.query).is_ok(),
+									egui::Button::new(format!("Search for {}", self.query))
+										.frame(false),
+								)
+								.clicked();
+						});
+						ui.separator();
+						if let Err(error) = model::search_terms(&self.query) {
+							ui.colored_label(colors.muted, error);
+						}
+						ui.label(design::semibold(ui, "Filters", 13.0).color(colors.muted));
+						for (key, title) in [
+							("from", "From a specific user"),
+							("mentions", "Mentions a specific user"),
+						] {
+							ui.menu_button(title, |ui| {
+								let mut users = std::collections::BTreeMap::new();
+								for user in state
+									.user
+									.iter()
+									.chain(
+										state
+											.channels
+											.iter()
+											.filter(|c| Some(c.id) == state.selected)
+											.flat_map(|c| &c.recipients),
+									)
+									.chain(state.timeline.iter().map(|m| &m.author))
+									.take(500)
+								{
+									users.entry(user.id).or_insert(user);
+								}
+								egui::ScrollArea::vertical()
+									.max_height(200.0)
+									.show(ui, |ui| {
+										for user in users.values().take(100) {
+											if ui.button(&user.name).clicked() {
+												self.set_filter(key, &user.id.to_string());
+												ui.close();
+											}
+										}
+									});
+								ui.label("Or type from:ID / mentions:ID in search.");
+							});
+						}
+						ui.menu_button("Includes a specific type of data", |ui| {
+							for kind in ["link", "embed", "file", "image", "video", "sound"] {
+								if ui.button(kind).clicked() {
+									self.set_filter("has", kind);
+									ui.close();
+								}
+							}
+						});
+						ui.collapsing("More filters", |ui| {
+							ui.horizontal(|ui| {
+								ui.label("After");
+								ui.add(
+									egui::TextEdit::singleline(&mut self.after_date)
+										.char_limit(10)
+										.hint_text("YYYY-MM-DD")
+										.desired_width(110.0),
+								);
+							});
+							ui.horizontal(|ui| {
+								ui.label("Before");
+								ui.add(
+									egui::TextEdit::singleline(&mut self.before_date)
+										.char_limit(10)
+										.hint_text("YYYY-MM-DD")
+										.desired_width(110.0),
+								);
+							});
+							if ui.button("Apply dates").clicked() {
+								match (date_id(&self.after_date), date_id(&self.before_date)) {
+									(Ok(after), Ok(before))
+										if after.zip(before).is_none_or(|(a, b)| a < b) =>
+									{
+										self.set_filter(
+											"after_id",
+											&after.map(|v| v.to_string()).unwrap_or_default(),
+										);
+										self.set_filter(
+											"before_id",
+											&before.map(|v| v.to_string()).unwrap_or_default(),
+										);
+									}
+									_ => {
+										self.filter_error = Some(
+											"Use valid dates from 2015 onward, with After earlier than Before.",
+										)
+									}
+								}
+							}
+							ui.menu_button("Author type", |ui| {
+								for kind in ["user", "bot", "webhook"] {
+									if ui.button(kind).clicked() {
+										self.set_filter("author_type", kind);
+										ui.close();
+									}
+								}
+							});
+						});
+						if let Ok((content, filters)) = model::search_terms(&self.query) {
+							for (key, value) in filters {
+								ui.label(format!("{key}: {value}"));
+							}
+							if ui.button("Clear filters").clicked() {
+								self.query = content;
+								self.before_date.clear();
+								self.after_date.clear();
+								self.filter_error = None;
+							}
+						}
+						if let Some(error) = self.filter_error {
+							ui.colored_label(colors.danger, error);
+						}
+					});
+			});
+		// Context accessors lock internally; never read popup memory inside input().
+		let submenu_open = egui::Popup::is_any_open(ctx);
+		if ctx.input(|i| {
+			i.pointer.any_pressed()
+				&& !submenu_open
+				&& i.pointer
+					.interact_pos()
+					.is_some_and(|pos| !anchor.contains(pos) && !popup.response.rect.contains(pos))
+		}) {
+			self.filters_open = false;
+		}
+		submit
+	}
+	fn set_filter(&mut self, key: &str, value: &str) {
+		let mut query = self
+			.query
+			.split_whitespace()
+			.filter(|token| token.split_once(':').is_none_or(|(name, _)| name != key))
+			.collect::<Vec<_>>()
+			.join(" ");
+		if !value.is_empty() {
+			if !query.is_empty() {
+				query.push(' ');
+			}
+			query.push_str(&format!("{key}:{value}"));
+		}
+		if query.is_empty() || model::search_terms(&query).is_ok() {
+			self.query = query;
+			self.filter_error = None;
+		} else {
+			self.filter_error = Some("The search is too long or contains an invalid filter.");
 		}
 	}
 	/// Anchored pinned-messages popout under the header pin button, like Discord's.
@@ -481,14 +695,33 @@ impl SearchUi {
 			} else {
 				match state.search.as_ref().and_then(|view| view.page.as_ref()) {
 					Some(page) if !state.search.as_ref().is_some_and(|v| v.loading) => {
-						format!("{} Results", page.total)
+						format!(
+							"{} Result{}",
+							page.total,
+							if page.total == 1 { "" } else { "s" }
+						)
 					}
 					_ => "Search".to_owned(),
 				}
 			};
 			ui.label(design::semibold(ui, title, 16.0).color(colors.text_strong));
 			ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-				if icons::button(ui, icons::Icon::Close, 28.0, "Close").clicked() {
+				if !self.pins {
+					ui.menu_button("⚙", |ui| {
+						ui.checkbox(&mut self.hide_highlight, "Hide matching-text highlight");
+					})
+					.response
+					.on_hover_text("Search settings");
+					ui.menu_button("↕ Sort", |ui| {
+						ui.label("Order on this results page");
+						ui.radio_value(&mut self.oldest_first, false, "Newest first");
+						ui.radio_value(&mut self.oldest_first, true, "Oldest first");
+					});
+					if ui.button("Filters").clicked() {
+						self.filters_open = !self.filters_open;
+					}
+				}
+				if self.pins && icons::button(ui, icons::Icon::Close, 28.0, "Close").clicked() {
 					self.open = false;
 				}
 				if self.pins {
@@ -498,7 +731,13 @@ impl SearchUi {
 						self.focus = false;
 					}
 					submit = reload.clicked();
-				} else if let Some(view) = &state.search
+				}
+			});
+		});
+		ui.separator();
+		if !self.pins {
+			ui.horizontal(|ui| {
+				if let Some(view) = &state.search
 					&& let Some(page) = &view.page
 				{
 					if let Some(last) = page.hits.last()
@@ -518,7 +757,7 @@ impl SearchUi {
 					}
 				}
 			});
-		});
+		}
 		if self.pins {
 			if submit && let Some(command) = state.request_pins() {
 				commands.push(command);
@@ -562,17 +801,33 @@ impl SearchUi {
 						RichText::new("No matching messages in this page.").color(colors.muted),
 					);
 				}
+				let content_query = model::search_terms(&view.query)
+					.map(|(content, _)| content)
+					.unwrap_or_default();
 				egui::ScrollArea::vertical()
 					.id_salt(("search-results", view.request))
 					.auto_shrink([false, false])
 					.show(ui, |ui| {
 						ui.spacing_mut().item_spacing.y = 8.0;
-						for hit in &page.hits {
-							if view.pins && !state.is_pinned(hit.channel, hit.id) {
-								continue;
-							}
+						for index in 0..page.hits.len() {
+							let hit = &page.hits[if self.oldest_first {
+								page.hits.len() - 1 - index
+							} else {
+								index
+							}];
 							ui.push_id(hit.id, |ui| {
-								Self::hit_card(ui, hit, allowed, &mut target);
+								Self::result_card(
+									ui,
+									state,
+									hit,
+									if self.hide_highlight {
+										""
+									} else {
+										&content_query
+									},
+									allowed,
+									&mut target,
+								);
 							});
 						}
 					});
@@ -591,6 +846,115 @@ impl SearchUi {
 		{
 			commands.push(command);
 			self.open = false;
+		}
+	}
+	fn result_card(
+		ui: &mut egui::Ui,
+		state: &State,
+		hit: &model::SearchHit,
+		query: &str,
+		allowed: bool,
+		target: &mut Option<Id>,
+	) {
+		let colors = design::palette(ui);
+		if let Some(channel) = state.channels.iter().find(|c| c.id == hit.channel) {
+			ui.label(
+				design::semibold(
+					ui,
+					format!(
+						"{} {}",
+						if channel.guild.is_none() { "@" } else { "#" },
+						channel.name
+					),
+					14.0,
+				)
+				.color(colors.text_strong),
+			);
+		}
+		let card = egui::Frame::new()
+			.fill(colors.base)
+			.stroke(egui::Stroke::new(1.0, colors.border))
+			.corner_radius(10)
+			.inner_margin(12)
+			.show(ui, |ui| {
+				ui.set_width(ui.available_width());
+				ui.horizontal_top(|ui| {
+					let (avatar, _) =
+						ui.allocate_exact_size(egui::vec2(36.0, 36.0), egui::Sense::hover());
+					ui.painter()
+						.circle_filled(avatar.center(), 18.0, colors.accent);
+					ui.painter().text(
+						avatar.center(),
+						egui::Align2::CENTER_CENTER,
+						hit.author.chars().next().unwrap_or('?'),
+						egui::FontId::proportional(16.0),
+						egui::Color32::WHITE,
+					);
+					ui.vertical(|ui| {
+						ui.set_width(ui.available_width());
+						ui.horizontal_wrapped(|ui| {
+							ui.label(
+								design::semibold(ui, &hit.author, 15.0).color(colors.text_strong),
+							);
+							// Fixture IDs do not encode a real creation timestamp.
+							if hit.id.0 >= (1 << 22) {
+								let seconds = ((hit.id.0 >> 22) + 1_420_070_400_000) / 1000;
+								if let Ok(utc) =
+									time::OffsetDateTime::from_unix_timestamp(seconds as i64)
+								{
+									let local = crate::local_time::local(utc);
+									ui.label(
+										RichText::new(format!(
+											"{:02}:{:02}",
+											local.hour(),
+											local.minute()
+										))
+										.size(11.0)
+										.color(colors.muted),
+									);
+								}
+							}
+						});
+						let mut job = egui::text::LayoutJob::default();
+						let normal = egui::TextFormat {
+							font_id: egui::FontId::proportional(14.0),
+							color: colors.text,
+							..Default::default()
+						};
+						let mut rest = hit.excerpt.as_str();
+						if !query.is_empty() {
+							while let Some(index) = rest.find(query) {
+								job.append(&rest[..index], 0.0, normal.clone());
+								job.append(
+									&rest[index..index + query.len()],
+									0.0,
+									egui::TextFormat {
+										background: egui::Color32::from_rgba_unmultiplied(
+											200, 160, 30, 85,
+										),
+										..normal.clone()
+									},
+								);
+								rest = &rest[index + query.len()..];
+							}
+						}
+						job.append(rest, 0.0, normal);
+						ui.add(egui::Label::new(job).wrap().selectable(true));
+					});
+				});
+			});
+		let jump = ui
+			.interact(
+				card.response.rect,
+				ui.id().with("jump-result"),
+				egui::Sense::click(),
+			)
+			.on_hover_text("Jump to this message");
+		jump.widget_info(|| {
+			egui::WidgetInfo::labeled(egui::WidgetType::Button, allowed, "Jump to message")
+		});
+		if allowed && hit.id.0 < u64::MAX && jump.clicked() {
+			*target = Some(hit.id);
 		}
 	}
 }

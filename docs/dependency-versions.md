@@ -8,6 +8,10 @@ locked `libc 0.2.189` V4L2 interface and `image 0.25.10` JPEG decoder. No packag
 versions, codec binaries or helper processes were added; existing dependency
 notices apply. Camera encoding reuses `openh264 0.9.8` on all three platforms.
 
+September 12 link-opening fix: enable eframe's `links` feature, adding webbrowser 1.2.4
+(MIT OR Apache-2.0) to launch the default browser. No existing dependency versions change.
+The registry release's MIT license is bundled in `assets/licenses/files/webbrowser-1.2.4-LICENSE-MIT`.
+
 September 10 egui main experiment: `egui` and `eframe` are pinned to upstream
 `65e7db3c06d779c60ac56647bdd3011ed8ba1cbd`, the `main` tip returned by
 `git ls-remote https://github.com/emilk/egui.git refs/heads/main` during this task.
@@ -564,3 +568,21 @@ See `assets/licenses/dependencies/PROVENANCE.md` for hashes and known upstream o
 when selected; source archives and a labeled MIT reference do not close those omissions.
 New unreviewed missing texts fail packaging. Native system-library redistribution and a
 complete transitive notice review remain separate release gates.
+
+
+## Inline attachment video on macOS and Linux (September 12, 2026)
+
+Pinned direct additions in `platform`: objc2-video-toolbox 0.3.2 (MIT, macOS, only the
+`VTDecompressionSession`, `VTErrors`, `VTSession` and `VTBase` features), plus the already
+resolved objc2-core-media, objc2-core-video and objc2-core-foundation 0.3.2 with their
+decoding features; symphonia 0.6.1 with the `aac` feature (MPL-2.0, pure Rust, resolves the new
+symphonia-codec-aac 0.6.1); gstreamer 0.25.3, gstreamer-app 0.25.2 and gstreamer-video 0.25.3
+(MIT OR Apache-2.0, Linux only, dynamically linked against the distribution's GStreamer
+1.x; CI and packaging install `libgstreamer1.0-dev` and `libgstreamer-plugins-base1.0-dev`).
+New support crates: gstreamer-sys 0.25.2, gstreamer-base 0.25.3, gstreamer-base-sys 0.25.3,
+gstreamer-app-sys 0.25.0, gstreamer-video-sys 0.25.3, atomic_refcell 0.1.14, kstring 2.0.4,
+muldiv 1.0.1, option-operations 0.6.1 and pastey 0.2.3. No existing locked package version
+changes. The Debian package recommends `gstreamer1.0-plugins-base`, `gstreamer1.0-plugins-good`
+and `gstreamer1.0-libav`, which `dpkg-shlibdeps` cannot see because plugins are loaded at run
+time. `platform` keeps `unsafe_code = deny`; the VideoToolbox module is the only new allowance
+and mirrors the audited Media Foundation module.

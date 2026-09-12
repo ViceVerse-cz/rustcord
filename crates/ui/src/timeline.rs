@@ -45,6 +45,7 @@ pub struct TimelineView {
 	anchor: Option<(Id, f32)>,
 	following: bool,
 	formatted: FormatCache,
+	pending_formatted: FormatCache,
 	// Exact revealed content prevents a reload that resets model revisions from revealing edits.
 	// Pruned with the active window: at most its 500 records / 4 MiB content budget.
 	revealed: BTreeMap<Id, Revealed>,
@@ -888,8 +889,14 @@ impl TimelineView {
 															.display_text()
 															.chars()
 															.take(120)
+															.map(|c| {
+																if matches!(c, '\n' | '\r') {
+																	' '
+																} else {
+																	c
+																}
+															})
 															.collect::<String>()
-															.replace(['\n', '\r'], " ")
 													}
 												} else {
 													"Earlier message · View original".into()
@@ -1423,6 +1430,7 @@ impl TimelineView {
 							&mut self.opening,
 							profile,
 							&mut self.channel_reference,
+							&mut self.pending_formatted,
 						),
 						upload,
 						(&mut self.restore_pending, &mut self.cancel_upload),
@@ -1644,9 +1652,13 @@ impl TimelineView {
 				self.browse_away();
 			}
 		}
+		// Older pages appended to the live timeline keep their cursor after loading; that
+		// alone must not raise the bar the moment a reader nudges upward. Only pages that are
+		// detached from the live edge (targeted or forward history) show it immediately.
+		let detached_page = state.history_targeted || state.history_after.is_some();
 		if (!self.following && distance_from_bottom > 3.0 * area.height())
 			|| self.target_browsing
-			|| browsing_history
+			|| detached_page
 		{
 			let unread = state
 				.selected

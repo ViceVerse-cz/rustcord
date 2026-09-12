@@ -61,10 +61,13 @@ pub(crate) fn lookup(text: &str) -> Option<usize> {
 	if text.is_ascii() || text.contains('\u{fe0e}') || text.len() > 128 {
 		return None;
 	}
-	let normalized;
+	let mut normalized = [0; 128];
 	let key = if text.contains('\u{fe0f}') {
-		normalized = text.replace('\u{fe0f}', "");
-		normalized.as_str()
+		let mut len = 0;
+		for c in text.chars().filter(|c| *c != '\u{fe0f}') {
+			len += c.encode_utf8(&mut normalized[len..]).len();
+		}
+		std::str::from_utf8(&normalized[..len]).expect("normalized UTF-8")
 	} else {
 		text
 	};
@@ -97,97 +100,6 @@ pub(crate) fn button(ctx: &Context, emoji: &str, text: String) -> egui::Button<'
 	} else {
 		egui::Button::new(format!("{emoji} {text}"))
 	}
-}
-
-/// Keep original text in egui's selection model while drawing artwork in its place.
-pub(crate) fn selectable(
-	ui: &mut egui::Ui,
-	text: &str,
-	image: impl FnOnce(&mut egui::Ui) -> Option<Image<'static>>,
-	size: f32,
-	link: bool,
-) -> egui::Response {
-	type Cache = std::sync::Arc<
-		std::sync::Mutex<std::collections::HashMap<egui::Id, std::sync::Arc<egui::Galley>>>,
-	>;
-	let key = egui::Id::unique((
-		"emoji-selectable",
-		text,
-		size.to_bits(),
-		ui.ctx().pixels_per_point().to_bits(),
-		ui.ctx().fonts(|fonts| fonts.definitions().font_data.len()),
-	));
-	let cache = ui.ctx().data_mut(|data| {
-		data.get_temp_mut_or_default::<Cache>(egui::Id::unique("emoji-selection-cache"))
-			.clone()
-	});
-	let cached = cache.lock().expect("emoji cache").get(&key).cloned();
-	let galley = cached.unwrap_or_else(|| {
-		let mut galley = ui.fonts_mut(|fonts| {
-			fonts.layout_no_wrap(
-				text.to_owned(),
-				egui::FontId::proportional(size),
-				egui::Color32::TRANSPARENT,
-			)
-		});
-		let glyphs = std::sync::Arc::make_mut(&mut galley);
-		glyphs.rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::Vec2::splat(size));
-		glyphs.mesh_bounds = glyphs.rect;
-		glyphs.num_vertices = 0;
-		glyphs.num_indices = 0;
-		for placed in &mut glyphs.rows {
-			let row = std::sync::Arc::make_mut(&mut placed.row);
-			// One hit target: selection endpoints must never split a Unicode sequence or markup.
-			for glyph in &mut row.glyphs {
-				glyph.pos.x = 0.0;
-				glyph.advance_width = size;
-				glyph.first_vertex = 0;
-			}
-			row.size = egui::Vec2::splat(size);
-			row.visuals = Default::default();
-		}
-		// At most 64 short emoji layouts, independent of message history length.
-		if text.len() <= 128 {
-			let mut cache = cache.lock().expect("emoji cache");
-			if cache.len() >= 64 {
-				cache.clear();
-			}
-			cache.insert(key, galley.clone());
-		}
-		galley
-	});
-	let mut label = egui::Label::new(galley).selectable(true);
-	if link {
-		label = label.sense(egui::Sense::click());
-	}
-	let response = ui.add(label);
-	if let Some(image) = ui
-		.is_rect_visible(response.rect)
-		.then(|| image(ui))
-		.flatten()
-	{
-		let size = image.calc_size(response.rect.size(), image.size());
-		image.paint_at(
-			ui,
-			egui::Rect::from_center_size(response.rect.center(), size),
-		);
-	} else {
-		ui.painter().text(
-			response.rect.center(),
-			egui::Align2::CENTER_CENTER,
-			"?",
-			egui::FontId::proportional(size),
-			ui.visuals().weak_text_color(),
-		);
-	}
-	let response = response.on_hover_text(text);
-	response.context_menu(|ui| {
-		if ui.button("Copy emoji").clicked() {
-			ui.ctx().copy_text(text.to_owned());
-			ui.close();
-		}
-	});
-	response
 }
 
 pub(crate) fn custom_prefix(text: &str) -> Option<(model::Id, usize)> {
