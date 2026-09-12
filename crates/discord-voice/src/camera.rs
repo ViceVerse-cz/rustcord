@@ -373,8 +373,16 @@ mod macos {
 			}
 			session.setSessionPreset(AVCaptureSessionPreset640x480);
 			let format = NSNumber::new_u32(kCVPixelFormatType_32BGRA);
-			let key = NSString::from_str(&kCVPixelBufferPixelFormatTypeKey.to_string());
-			let settings = NSDictionary::from_slices(&[&*key], &[&*format as &AnyObject]);
+			let width = NSNumber::new_usize(WIDTH);
+			let height = NSNumber::new_usize(HEIGHT);
+			let format_key = NSString::from_str(&kCVPixelBufferPixelFormatTypeKey.to_string());
+			let width_key = NSString::from_str(&kCVPixelBufferWidthKey.to_string());
+			let height_key = NSString::from_str(&kCVPixelBufferHeightKey.to_string());
+			// The session preset alone does not fix the video data output dimensions.
+			let settings = NSDictionary::from_slices(
+				&[&*format_key, &*width_key, &*height_key],
+				&[&*format as &AnyObject, &*width, &*height],
+			);
 			output.setVideoSettings(Some(&settings));
 			output.setAlwaysDiscardsLateVideoFrames(true);
 			let allocated = SereinCameraDelegate::alloc().set_ivars(DelegateState {
