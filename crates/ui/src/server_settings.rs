@@ -16,6 +16,7 @@ enum Page {
 	Members,
 	Roles,
 	Invites,
+	Integrations,
 }
 impl Page {
 	fn allowed(self, state: &State, guild: Id) -> bool {
@@ -25,6 +26,7 @@ impl Page {
 			Self::Members => state.can_open_member_settings(guild),
 			Self::Roles => state.can_open_role_settings(guild),
 			Self::Invites => state.can_open_invite_settings(guild),
+			Self::Integrations => state.can_open_integration_settings(guild),
 		}
 	}
 	fn label(self) -> &'static str {
@@ -35,6 +37,7 @@ impl Page {
 			Self::Members => "Members",
 			Self::Roles => "Roles",
 			Self::Invites => "Invites",
+			Self::Integrations => "Integrations",
 		}
 	}
 }
@@ -59,6 +62,7 @@ pub(super) struct Editor {
 	pub(super) admin: crate::server_admin::Admin,
 	roles: crate::server_roles::RolesUi,
 	invites: crate::server_invites::InvitesUi,
+	integrations: crate::server_integrations::IntegrationsUi,
 }
 
 impl MessagingUi {
@@ -118,7 +122,10 @@ impl MessagingUi {
 			}
 			return command;
 		}
-		let page = if page == "invites" {
+		let webhooks = page == "webhooks";
+		let page = if matches!(page, "integrations" | "webhooks") {
+			Page::Integrations
+		} else if page == "invites" {
 			Page::Invites
 		} else if page == "members" {
 			Page::Members
@@ -134,7 +141,10 @@ impl MessagingUi {
 			page,
 			..Editor::default()
 		};
-		if page == Page::Invites {
+		if page == Page::Integrations {
+			self.server_settings.integrations.preview(webhooks);
+			self.server_settings.integrations.load(state, guild)
+		} else if page == Page::Invites {
 			self.server_settings.invites.load(state, guild)
 		} else {
 			self.server_settings
@@ -177,6 +187,7 @@ impl MessagingUi {
 			|| self.server_settings.admin.has_changes()
 			|| self.server_settings.roles.has_changes()
 			|| self.server_settings.invites.busy()
+			|| self.server_settings.integrations.has_changes()
 	}
 	/// Opens the same permission-checked editor used by the server menu.
 	pub fn preview_server_settings(&mut self, state: &mut State, guild: Id) -> Option<Command> {
@@ -186,6 +197,9 @@ impl MessagingUi {
 			}
 			if state.can_open_emoji_settings(guild) {
 				return self.preview_server_admin(state, guild, "emoji");
+			}
+			if state.can_open_integration_settings(guild) {
+				return self.preview_server_admin(state, guild, "integrations");
 			}
 			return None;
 		}
@@ -256,7 +270,8 @@ impl Editor {
 		if !self.is_open() {
 			return true;
 		}
-		if self.roles.has_changes()
+		if self.integrations.has_changes()
+			|| self.roles.has_changes()
 			|| self.invites.busy()
 			|| self.dirty()
 			|| self.admin.has_changes()
@@ -300,7 +315,8 @@ impl Editor {
 			|| !(state.can_manage_guild(guild)
 				|| state.can_open_emoji_settings(guild)
 				|| state.can_open_member_settings(guild)
-				|| state.can_open_role_settings(guild))
+				|| state.can_open_role_settings(guild)
+				|| state.can_open_integration_settings(guild))
 			|| !state.guilds.iter().any(|known| known.id == guild)
 		{
 			*self = Self::default();
@@ -321,15 +337,26 @@ impl Editor {
 				Page::Profile
 			} else if state.can_open_role_settings(guild) {
 				Page::Roles
-			} else {
+			} else if state.can_open_emoji_settings(guild) {
 				Page::Emoji
+			} else if state.can_open_member_settings(guild) {
+				Page::Members
+			} else {
+				Page::Integrations
 			};
 			self.admin = crate::server_admin::Admin::default();
 			self.roles = crate::server_roles::RolesUi::default();
 			self.invites = crate::server_invites::InvitesUi::default();
+			self.integrations = crate::server_integrations::IntegrationsUi::default();
 			state.close_server_admin();
 		}
 		self.invites.sync(state, guild);
+		self.integrations.sync(state, guild);
+		if self.page == Page::Integrations
+			&& let Some(command) = self.integrations.load(state, guild)
+		{
+			commands.push(command);
+		}
 		if self.page == Page::Invites
 			&& let Some(command) = self.invites.load(state, guild)
 		{
@@ -376,7 +403,7 @@ impl Editor {
 		let height = (size.y - 32.0).max(220.0);
 		let wide = width >= 720.0;
 		let mut close = false;
-		let invite_overlay = self.invites.overlay_open();
+		let invite_overlay = self.invites.overlay_open() || self.integrations.overlay_open();
 		let modal = egui::Modal::new(egui::Id::unique("server-settings"))
 			.backdrop_color(colors.chat.to_opaque())
 			.frame(
@@ -416,11 +443,12 @@ impl Editor {
 								Page::Members,
 								Page::Roles,
 								Page::Invites,
+								Page::Integrations,
 							] {
 								if !page.allowed(state, guild) {
 									continue;
 								}
-								if matches!(page, Page::Emoji | Page::Members)
+								if matches!(page, Page::Emoji | Page::Members | Page::Integrations)
 									|| (page == Page::Roles && !Page::Members.allowed(state, guild))
 								{
 									ui.add_space(16.0);
@@ -428,7 +456,9 @@ impl Editor {
 									ui.add_space(12.0);
 									ui.label(design::eyebrow(
 										ui,
-										if page == Page::Emoji {
+										if page == Page::Integrations {
+											"APPS"
+										} else if page == Page::Emoji {
 											"EXPRESSION"
 										} else {
 											"PEOPLE"
@@ -485,6 +515,7 @@ impl Editor {
 									Page::Members,
 									Page::Roles,
 									Page::Invites,
+									Page::Integrations,
 								] {
 									if !page.allowed(state, guild) {
 										continue;
@@ -519,6 +550,10 @@ impl Editor {
 							.auto_shrink([false, false])
 							.show(ui, |ui| {
 								ui.set_width(ui.available_width());
+								if self.page == Page::Integrations {
+									self.integrations.show(ui, state, guild, avatars, commands);
+									return;
+								}
 								if self.page == Page::Invites {
 									self.invites.show(ui, state, guild, avatars, commands);
 									return;
@@ -574,11 +609,15 @@ impl Editor {
 		if self.page == Page::Invites {
 			self.invites.overlays(ctx, state, guild, avatars, commands);
 		}
+		if self.page == Page::Integrations {
+			self.integrations.overlays(ctx, state, guild, commands);
+		}
 		if !invite_overlay && (close || modal.should_close()) {
 			if self.dirty()
 				|| state.server_settings.saving
 				|| self.admin.has_changes()
 				|| self.roles.has_changes()
+				|| self.integrations.has_changes()
 				|| self.invites.busy()
 				|| state.server_admin.saving
 			{
@@ -587,6 +626,7 @@ impl Editor {
 				self.scope = None;
 				self.roles = crate::server_roles::RolesUi::default();
 				self.invites = crate::server_invites::InvitesUi::default();
+				self.integrations = crate::server_integrations::IntegrationsUi::default();
 				state.close_server_settings();
 				state.close_server_admin();
 			}

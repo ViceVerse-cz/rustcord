@@ -553,3 +553,13 @@ they are not silently truncated. Codes and inviter metadata are released when
 settings close, access is lost or the account resets. No invite database, logs,
 background collection or automatic write retry is added. Create Invite retains
 the existing bounded, session-only invite dialog behavior.
+
+
+Server integration settings retain one guild's on-demand metadata in session RAM:
+at most 50 integrations and 1,000 webhooks, further bounded by 1 MiB combined.
+The HTTP decoder caps each list response at 2 MiB and write responses at 64 KiB
+(4 KiB for empty delete responses). Webhook execution tokens and URLs have no
+model fields and are skipped during decoding. The editor retains one bounded
+80-character/320-byte webhook name draft; no integration data or draft is written
+to SQLite. Closing settings, changing guild/session, and permission revocation
+release the applicable metadata. Existing bounded avatar caches remain shared.

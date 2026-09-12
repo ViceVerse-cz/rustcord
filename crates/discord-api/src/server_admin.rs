@@ -56,6 +56,10 @@ impl DiscordApi {
 			return Err(Failure::Protocol);
 		}
 		match action {
+			Action::Integrations(action) => self
+				.server_integration_action(guild, action)
+				.await
+				.map(Outcome::Integrations),
 			Action::Invites(action) => self
 				.server_invite_action(guild, action)
 				.await

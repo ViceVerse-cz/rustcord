@@ -1,0 +1,292 @@
+use crate::{DiscordApi, Failure};
+use discord_protocol::server_integrations as wire;
+use model::{
+	Id,
+	server_integrations::{Action, Snapshot},
+};
+use reqwest::Method;
+use serde_json::json;
+impl DiscordApi {
+	async fn integration_snapshot(
+		&self,
+		guild: Id,
+		integrations: bool,
+		webhooks: bool,
+	) -> Result<Snapshot, Failure> {
+		let mut page = Snapshot {
+			guild,
+			integrations: None,
+			webhooks: None,
+		};
+		if integrations {
+			let bytes = self
+				.request_limited(
+					Method::GET,
+					&format!("/guilds/{guild}/integrations"),
+					None,
+					wire::MAX_WIRE,
+				)
+				.await?;
+			page.integrations = wire::integrations(&bytes, guild)
+				.map_err(|_| {
+					Failure::ProtocolAt(
+						"Integrations exceeded safe bounds or used an unsupported response",
+					)
+				})?
+				.integrations;
+		}
+		if webhooks {
+			let bytes = self
+				.request_limited(
+					Method::GET,
+					&format!("/guilds/{guild}/webhooks"),
+					None,
+					wire::MAX_WIRE,
+				)
+				.await?;
+			page.webhooks = wire::webhooks(&bytes, guild)
+				.map_err(|_| {
+					Failure::ProtocolAt(
+						"Webhooks exceeded safe bounds or used an unsupported response",
+					)
+				})?
+				.webhooks;
+		}
+		if !page.valid() {
+			return Err(Failure::Capacity);
+		}
+		Ok(page)
+	}
+	async fn integration_channel(&self, guild: Id, channel: Id) -> Result<(), Failure> {
+		let bytes = self
+			.request_limited(
+				Method::GET,
+				&format!("/channels/{channel}"),
+				None,
+				64 * 1024,
+			)
+			.await?;
+		wire::channel_scope(&bytes, guild, channel).map_err(|_| Failure::Forbidden)
+	}
+	pub(super) async fn server_integration_action(
+		&self,
+		guild: Id,
+		action: &Action,
+	) -> Result<Snapshot, Failure> {
+		if guild.0 == 0 || !action.valid() {
+			return Err(Failure::Protocol);
+		}
+		let mut saved = None;
+		match action {
+			Action::Load {
+				integrations,
+				webhooks,
+			} => {
+				return self
+					.integration_snapshot(guild, *integrations, *webhooks)
+					.await;
+			}
+			Action::CreateWebhook { channel, name } => {
+				self.integration_channel(guild, *channel).await?;
+				let bytes = self
+					.request_limited(
+						Method::POST,
+						&format!("/channels/{channel}/webhooks"),
+						Some(json!({"name":name})),
+						64 * 1024,
+					)
+					.await
+					.map_err(write_failure)?;
+				let value = wire::webhook(&bytes, guild).map_err(|_| Failure::Ambiguous)?;
+				if value.kind != 1
+					|| value.channel != Some(*channel)
+					|| value.name.as_ref() != Some(name)
+				{
+					return Err(Failure::Ambiguous);
+				}
+				saved = Some(value.id);
+			}
+			Action::EditWebhook {
+				webhook,
+				channel,
+				name,
+			} => {
+				let latest = self.integration_snapshot(guild, false, true).await?;
+				let Some(current) = latest
+					.webhooks
+					.as_ref()
+					.and_then(|items| items.iter().find(|item| item.id == *webhook))
+				else {
+					return Err(Failure::Forbidden);
+				};
+				if current.kind != 1 {
+					return Err(Failure::Forbidden);
+				}
+				self.integration_channel(guild, *channel).await?;
+				let bytes = self
+					.request_limited(
+						Method::PATCH,
+						&format!("/webhooks/{webhook}"),
+						Some(json!({"name":name,"channel_id":channel.to_string()})),
+						64 * 1024,
+					)
+					.await
+					.map_err(write_failure)?;
+				let value = wire::webhook(&bytes, guild).map_err(|_| Failure::Ambiguous)?;
+				if value.id != *webhook
+					|| value.kind != 1
+					|| value.channel != Some(*channel)
+					|| value.name.as_ref() != Some(name)
+				{
+					return Err(Failure::Ambiguous);
+				}
+				saved = Some(value.id);
+			}
+			Action::DeleteWebhook { webhook } => {
+				let latest = self.integration_snapshot(guild, false, true).await?;
+				let Some(current) = latest
+					.webhooks
+					.as_ref()
+					.and_then(|items| items.iter().find(|item| item.id == *webhook))
+				else {
+					return Ok(latest);
+				};
+				if !(1..=3).contains(&current.kind) {
+					return Err(Failure::Forbidden);
+				}
+				let bytes = self
+					.request_limited(Method::DELETE, &format!("/webhooks/{webhook}"), None, 4096)
+					.await
+					.map_err(write_failure)?;
+				if !bytes.is_empty() {
+					return Err(Failure::Ambiguous);
+				}
+			}
+			Action::DeleteIntegration { integration } => {
+				let latest = self.integration_snapshot(guild, true, false).await?;
+				if !latest
+					.integrations
+					.as_ref()
+					.is_some_and(|items| items.iter().any(|item| item.id == *integration))
+				{
+					return Ok(latest);
+				}
+				let bytes = self
+					.request_limited(
+						Method::DELETE,
+						&format!("/guilds/{guild}/integrations/{integration}"),
+						None,
+						4096,
+					)
+					.await
+					.map_err(write_failure)?;
+				if !bytes.is_empty() {
+					return Err(Failure::Ambiguous);
+				}
+			}
+		}
+		let integration_write = matches!(action, Action::DeleteIntegration { .. });
+		let page = self
+			.integration_snapshot(guild, integration_write, !integration_write)
+			.await
+			.map_err(reconcile_failure)?;
+		let failed = match action {
+			Action::CreateWebhook { channel, name } | Action::EditWebhook { channel, name, .. } => {
+				!page.webhooks.as_ref().is_some_and(|items| {
+					items.iter().any(|item| {
+						Some(item.id) == saved
+							&& item.channel == Some(*channel)
+							&& item.name.as_ref() == Some(name)
+							&& item.kind == 1
+					})
+				})
+			}
+			Action::DeleteWebhook { webhook } => page
+				.webhooks
+				.as_ref()
+				.is_some_and(|items| items.iter().any(|item| item.id == *webhook)),
+			Action::DeleteIntegration { integration } => page
+				.integrations
+				.as_ref()
+				.is_some_and(|items| items.iter().any(|item| item.id == *integration)),
+			Action::Load { .. } => false,
+		};
+		if failed {
+			return Err(Failure::Ambiguous);
+		}
+		Ok(page)
+	}
+}
+fn write_failure(failure: Failure) -> Failure {
+	if failure == Failure::Capacity {
+		Failure::Ambiguous
+	} else {
+		failure
+	}
+}
+fn reconcile_failure(failure: Failure) -> Failure {
+	if failure.ends_session() {
+		failure
+	} else {
+		Failure::Ambiguous
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::SessionSecret;
+	use std::{sync::Arc, time::Duration};
+	use tokio::{
+		io::{AsyncReadExt, AsyncWriteExt},
+		net::TcpListener,
+	};
+	#[tokio::test]
+	async fn integrations_http_permission_scopes_mutation_reconciliation_and_no_retry() {
+		tokio::time::timeout(Duration::from_secs(10),async {
+			let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();
+			let mut api=DiscordApi::new(Arc::new(SessionSecret::from_owner_input("SYNTHETIC_INTEGRATIONS_TOKEN".into()).unwrap())).unwrap();
+			api.base=format!("http://{}",listener.local_addr().unwrap());
+			let channel=json!({"id":"4","guild_id":"2","type":0});
+			let hook=json!({"id":"3","guild_id":"2","channel_id":"4","type":1,"name":"Builds","token":"SYNTHETIC_EXECUTION_SECRET"});
+			let edited=json!({"id":"3","guild_id":"2","channel_id":"4","type":1,"name":"Releases"});
+			let integration=json!({"id":"5","name":"Example","type":"discord","enabled":true});
+			let server=tokio::spawn(async move {
+				for (method,path,status,response,body) in [
+					("GET","/guilds/2/integrations",200,json!([integration.clone()]),None),
+					("GET","/channels/4",200,channel.clone(),None),
+					("POST","/channels/4/webhooks",200,hook.clone(),Some(json!({"name":"Builds"}))),
+					("GET","/guilds/2/webhooks",200,json!([hook.clone()]),None),
+					("GET","/guilds/2/webhooks",200,json!([hook]),None),
+					("GET","/channels/4",200,channel,None),
+					("PATCH","/webhooks/3",200,edited.clone(),Some(json!({"name":"Releases","channel_id":"4"}))),
+					("GET","/guilds/2/webhooks",200,json!([edited.clone()]),None),
+					("GET","/guilds/2/webhooks",200,json!([edited.clone()]),None),
+					("DELETE","/webhooks/3",204,serde_json::Value::Null,None),
+					("GET","/guilds/2/webhooks",200,json!([]),None),
+					("GET","/guilds/2/integrations",200,json!([integration]),None),
+					("DELETE","/guilds/2/integrations/5",204,serde_json::Value::Null,None),
+					("GET","/guilds/2/integrations",200,json!([]),None),
+					("GET","/guilds/2/webhooks",200,json!([edited]),None),
+					("DELETE","/webhooks/3",500,json!({}),None),
+				] {
+					let (mut stream,_)=listener.accept().await.unwrap(); let mut bytes=Vec::new();
+					let end=loop { let mut chunk=[0;4096]; let n=stream.read(&mut chunk).await.unwrap(); assert!(n>0); bytes.extend_from_slice(&chunk[..n]); assert!(bytes.len()<=16384); if let Some(end)=bytes.windows(4).position(|part|part==b"\r\n\r\n") { break end+4; } };
+					let headers=std::str::from_utf8(&bytes[..end]).unwrap(); assert!(headers.starts_with(&format!("{method} {path} HTTP/1.1\r\n")));
+					let length=headers.lines().find_map(|line| { let (name,value)=line.split_once(':')?; name.eq_ignore_ascii_case("content-length").then(||value.trim().parse::<usize>().unwrap()) }).unwrap_or(0); assert!(length<=4096);
+					while bytes.len()<end+length { let mut chunk=[0;4096];let n=stream.read(&mut chunk).await.unwrap();assert!(n>0);bytes.extend_from_slice(&chunk[..n]); }
+					if let Some(body)=body { assert_eq!(serde_json::from_slice::<serde_json::Value>(&bytes[end..end+length]).unwrap(),body); } else { assert_eq!(length,0); }
+					let response=if status==204 {String::new()} else {response.to_string()}; stream.write_all(format!("HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",response.len()).as_bytes()).await.unwrap();
+				}
+				assert!(tokio::time::timeout(Duration::from_millis(80),listener.accept()).await.is_err());
+			});
+			let page=api.server_integration_action(Id(2),&Action::Load {integrations:true,webhooks:false}).await.unwrap(); assert!(page.webhooks.is_none());
+			let page=api.server_integration_action(Id(2),&Action::CreateWebhook {channel:Id(4),name:"Builds".into()}).await.unwrap(); assert_eq!(page.webhooks.unwrap()[0].id,Id(3));
+			let page=api.server_integration_action(Id(2),&Action::EditWebhook {webhook:Id(3),channel:Id(4),name:"Releases".into()}).await.unwrap(); assert_eq!(page.webhooks.unwrap()[0].name.as_deref(),Some("Releases"));
+			assert!(api.server_integration_action(Id(2),&Action::DeleteWebhook {webhook:Id(3)}).await.unwrap().webhooks.unwrap().is_empty());
+			assert!(api.server_integration_action(Id(2),&Action::DeleteIntegration {integration:Id(5)}).await.unwrap().integrations.unwrap().is_empty());
+			assert!(matches!(api.server_integration_action(Id(2),&Action::DeleteWebhook {webhook:Id(3)}).await,Err(Failure::Ambiguous)));
+			server.await.unwrap();
+		}).await.unwrap();
+	}
+}

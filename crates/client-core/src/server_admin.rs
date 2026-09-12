@@ -16,6 +16,7 @@ pub struct Event {
 
 #[derive(Default)]
 pub struct View {
+	pub integrations: Option<model::server_integrations::Snapshot>,
 	pub invites: Option<model::server_invites::Snapshot>,
 	pub roles: Option<model::server_roles::Catalog>,
 	pub selected_role: Option<Id>,
@@ -57,7 +58,11 @@ impl View {
 			| Event::Owner { guild, .. }
 			| Event::UnavailableGuild(guild) => *guild == active,
 			Event::Members(members) => members.iter().any(|(guild, ..)| *guild == active),
-			Event::Channel { .. } => false,
+			Event::Channel { guild, .. } => {
+				guild.is_none_or(|guild| guild == active)
+					&& (self.integrations.is_some()
+						|| matches!(self.action, Some(Action::Integrations(_))))
+			}
 		};
 		if relevant {
 			self.permission_revision = self.permission_revision.wrapping_add(1);
@@ -289,6 +294,7 @@ impl State {
 		match action {
 			Action::Roles(action) => self.role_action_allowed(guild, action),
 			Action::Invites(action) => self.invite_action_allowed(guild, action),
+			Action::Integrations(action) => self.integration_action_allowed(guild, action),
 			Action::LoadEmojis => self.can_open_emoji_settings(guild),
 			Action::CreateEmoji { .. } => self.can_create_guild_emoji(guild),
 			Action::RenameEmoji { id, .. } | Action::DeleteEmoji { id } => {
@@ -311,6 +317,7 @@ impl State {
 		match &mut action {
 			Action::Roles(action) => action.normalize(),
 			Action::Invites(action) => action.normalize(),
+			Action::Integrations(action) => action.normalize(),
 			Action::LoadMembers(query) => query.search.shrink_to_fit(),
 			Action::SetNickname { nick, .. } => nick.shrink_to_fit(),
 			Action::CreateEmoji { name, image } => {
@@ -398,7 +405,9 @@ impl State {
 		self.server_admin.pending = false;
 		self.server_admin.saving = false;
 		if action.as_ref().is_none_or(|action| {
-			if matches!(action, Action::Invites(_)) {
+			if let Action::Integrations(action) = action {
+				!self.integration_action_allowed(event.guild, action)
+			} else if matches!(action, Action::Invites(_)) {
 				!self.can_open_invite_settings(event.guild)
 			} else if matches!(action, Action::Roles(_)) {
 				!self.can_open_role_settings(event.guild)
@@ -433,6 +442,16 @@ impl State {
 				return Ok(());
 			}
 		};
+		if matches!(action, Some(Action::Integrations(_)))
+			&& self.server_admin.requested_permission_revision
+				!= self.server_admin.permission_revision
+		{
+			self.server_admin.integrations = None;
+			self.server_admin.error =
+				Some("Server permissions changed; reload integrations to continue");
+			self.server_admin.needs_refresh = true;
+			return Ok(());
+		}
 		if matches!(action, Some(Action::Roles(_)))
 			&& self.server_admin.requested_permission_revision
 				!= self.server_admin.permission_revision
@@ -457,6 +476,10 @@ impl State {
 				| (Some(Action::Prune { .. }), Outcome::Pruned(_))
 				| (Some(Action::ShowMembers { .. }), Outcome::ChannelList(_))
 		) || match (&action, &result) {
+			(Some(Action::Integrations(action)), Outcome::Integrations(snapshot)) => {
+				snapshot.guild == event.guild
+					&& crate::server_integrations::expected(action, snapshot)
+			}
 			(Some(Action::Invites(action)), Outcome::Invites(snapshot)) => {
 				snapshot.guild == event.guild
 					&& match action {
@@ -507,6 +530,11 @@ impl State {
 			return Ok(());
 		}
 		match result {
+			Outcome::Integrations(snapshot) => {
+				if let Some(Action::Integrations(action)) = &action {
+					self.apply_integrations(snapshot, action);
+				}
+			}
 			Outcome::Invites(snapshot) => self.server_admin.invites = Some(snapshot),
 			Outcome::Roles(result) => match result {
 				model::server_roles::Result::Catalog { catalog, selected } => {
@@ -615,6 +643,7 @@ impl State {
 			Some(
 				Action::LoadEmojis
 					| Action::Invites(model::server_invites::Action::Load)
+					| Action::Integrations(model::server_integrations::Action::Load { .. })
 					| Action::LoadMembers(_)
 					| Action::Roles(model::server_roles::Action::Load)
 			)

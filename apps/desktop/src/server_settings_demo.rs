@@ -81,6 +81,7 @@ pub fn execute_admin(
 	let owner = state.user.as_ref().expect("fixture user");
 	let result = match action {
 		Action::Invites(action) => execute_invites(state, guild, action),
+		Action::Integrations(action) => execute_integrations(state, guild, action),
 		Action::Roles(action) => execute_roles(state, guild, action),
 		Action::LoadEmojis
 		| Action::CreateEmoji { .. }
@@ -555,6 +556,7 @@ pub fn open(state: &mut State, messaging: &mut ui::MessagingUi) {
 			roles[0].bits |= match scenario {
 				"admin" => model::permissions::ADMINISTRATOR,
 				"manager" => model::permissions::MANAGE_GUILD,
+				"webhooks" => model::permissions::MANAGE_WEBHOOKS,
 				_ => 0,
 			};
 		}
@@ -607,4 +609,146 @@ pub fn open(state: &mut State, messaging: &mut ui::MessagingUi) {
 			event,
 		});
 	}
+}
+
+fn execute_integrations(
+	state: &State,
+	guild: Id,
+	action: model::server_integrations::Action,
+) -> model::server_admin::Result {
+	use model::server_integrations::{Action, Application, Integration, Snapshot, Source, Webhook};
+	let channel = state
+		.channels
+		.iter()
+		.find(|channel| channel.guild == Some(guild) && channel.kind == 0)
+		.unwrap()
+		.id;
+	let mut page = state.server_admin.integrations.clone().unwrap_or(Snapshot {
+		guild,
+		integrations: None,
+		webhooks: None,
+	});
+	if page.integrations.is_none() {
+		page.integrations = Some(
+			[
+				("Orbit", "Moderation and community tools."),
+				("Tickets", "A helping hand for your support team."),
+			]
+			.into_iter()
+			.enumerate()
+			.map(|(index, (name, description))| {
+				let id = Id(9800 + index as u64);
+				let mut bot = state.user.as_ref().unwrap().clone();
+				bot.id = id;
+				bot.name = name.into();
+				bot.avatar = None;
+				bot.kind = model::AccountKind::Bot;
+				Integration {
+					id,
+					name: name.into(),
+					kind: "discord".into(),
+					enabled: true,
+					user: state.user.clone(),
+					synced_at: None,
+					role_id: None,
+					application: Some(Application {
+						id,
+						name: name.into(),
+						icon: None,
+						description: description.into(),
+						bot: Some(bot),
+					}),
+				}
+			})
+			.collect(),
+		);
+	}
+	if page.webhooks.is_none() {
+		page.webhooks = Some(
+			(0..3)
+				.map(|index| Webhook {
+					id: Id(9900 + index),
+					guild,
+					channel: Some(channel),
+					kind: if index == 2 { 2 } else { 1 },
+					name: Some(
+						["Build updates", "Support updates", "Community news"][index as usize]
+							.into(),
+					),
+					avatar: None,
+					application_id: (index == 1).then_some(Id(9801)),
+					user: state.user.clone(),
+					source_guild: (index == 2).then(|| Source {
+						id: Id(9990),
+						name: Some("Serein Community".into()),
+					}),
+					source_channel: (index == 2).then(|| Source {
+						id: Id(9991),
+						name: Some("announcements".into()),
+					}),
+				})
+				.collect(),
+		);
+	}
+	match action {
+		Action::Load {
+			integrations,
+			webhooks,
+		} => {
+			if !integrations {
+				page.integrations = None;
+			}
+			if !webhooks {
+				page.webhooks = None;
+			}
+		}
+		Action::CreateWebhook { channel, name } => {
+			let items = page.webhooks.as_mut().unwrap();
+			let id = Id(items.iter().map(|item| item.id.0).max().unwrap_or(9900) + 1);
+			items.push(Webhook {
+				id,
+				guild,
+				channel: Some(channel),
+				kind: 1,
+				name: Some(name),
+				avatar: None,
+				application_id: None,
+				user: state.user.clone(),
+				source_guild: None,
+				source_channel: None,
+			});
+			page.integrations = None;
+		}
+		Action::EditWebhook {
+			webhook,
+			channel,
+			name,
+		} => {
+			let hook = page
+				.webhooks
+				.as_mut()
+				.unwrap()
+				.iter_mut()
+				.find(|hook| hook.id == webhook)
+				.unwrap();
+			hook.channel = Some(channel);
+			hook.name = Some(name);
+			page.integrations = None;
+		}
+		Action::DeleteWebhook { webhook } => {
+			page.webhooks
+				.as_mut()
+				.unwrap()
+				.retain(|hook| hook.id != webhook);
+			page.integrations = None;
+		}
+		Action::DeleteIntegration { integration } => {
+			page.integrations
+				.as_mut()
+				.unwrap()
+				.retain(|item| item.id != integration);
+			page.webhooks = None;
+		}
+	}
+	model::server_admin::Result::Integrations(page)
 }
