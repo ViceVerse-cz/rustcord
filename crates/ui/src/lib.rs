@@ -48,6 +48,7 @@ mod server_invite;
 mod server_menu;
 mod settings;
 mod switcher;
+mod thumbhash;
 mod timeline;
 mod typing;
 mod user_menu;

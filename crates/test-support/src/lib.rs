@@ -146,6 +146,7 @@ pub fn message(id: u64, channel: Id) -> Message {
                         proxy_url: None,
                         width: 640,
                         height: 240,
+                        ..Default::default()
                     },
                 },
                 Attachment {
@@ -162,6 +163,7 @@ pub fn message(id: u64, channel: Id) -> Message {
                         proxy_url: None,
                         width: 480,
                         height: 320,
+                        ..Default::default()
                     },
                 },
                 Attachment {
