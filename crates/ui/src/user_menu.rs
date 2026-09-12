@@ -6,6 +6,8 @@ pub(super) use client_core::user_actions::Action;
 
 pub(super) fn prepare(action: Action, state: &mut State) -> Option<Command> {
 	match action {
+		Action::AddFriend { username } => state.add_friend(&username),
+		Action::ResolveFriend { user, accept } => state.resolve_friend_request(user, accept),
 		Action::CloseDm(channel) => state.close_dm(channel),
 		Action::Block { user, blocked } => state.set_user_blocked(user, blocked),
 		Action::Mute { channel, muted } => state.set_dm_muted(channel, muted),

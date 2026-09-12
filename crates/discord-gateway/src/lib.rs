@@ -722,6 +722,7 @@ async fn run_inner(
 										state.url = Some(validated_url(&ready.resume_gateway_url).map_err(|f|f.protocol_at("Gateway login: resume address rejected"))?);
 										state.session = Some(Zeroizing::new(std::mem::take(&mut ready.session_id)));
 										let friends = ready.relationships.as_ref().map(|s| s.friends(&ready.users)).transpose().map_err(|_| Failure::ProtocolAt("Invalid friend metadata"))?;
+										let requests = ready.relationships.as_ref().map(|s| s.requests(&ready.users)).transpose().map_err(|_| Failure::ProtocolAt("Invalid friend request metadata"))?;
 										calls.session_reset();
 										calls.remember_users(std::mem::take(&mut ready.users))?;
 										known_guilds=channel_events::ready_calls(&ready,&mut calls)?;
@@ -745,6 +746,7 @@ async fn run_inner(
 
 										emit(Event::UserAction(client_core::user_actions::Event::Relationships(ready.relationships.take().map(|s| s.entries()))))?;
 										emit(Event::UserAction(client_core::user_actions::Event::Friends(friends)))?;
+										emit(Event::UserAction(client_core::user_actions::Event::Requests(requests)))?;
 										if let Some(friends) = ready.merged_presences.as_ref().and_then(|m| m.friends.as_deref()).or(ready.presences.as_deref()) {
 											direct_presence.friends(friends, Instant::now(), &emit)?;
 										}
@@ -820,7 +822,9 @@ async fn run_inner(
 										emit(Event::UserAction(client_core::user_actions::Event::Relationship { user: relationship.id, blocked: packet.t.as_deref() != Some("RELATIONSHIP_REMOVE") && relationship.kind == 2 }))?;
 										let friend = packet.t.as_deref() != Some("RELATIONSHIP_REMOVE") && relationship.kind == 1;
 										let profile = relationship.user.map(discord_protocol::relationships::friend).transpose().map_err(|_| Failure::ProtocolAt("Invalid friend metadata"))?;
-										emit(Event::UserAction(client_core::user_actions::Event::Friend { user: relationship.id, friend, profile }))?;
+										let incoming = (packet.t.as_deref() != Some("RELATIONSHIP_REMOVE") && matches!(relationship.kind,3|4)).then_some(relationship.kind==3);
+										emit(Event::UserAction(client_core::user_actions::Event::Friend { user: relationship.id, friend, profile: profile.clone() }))?;
+										emit(Event::UserAction(client_core::user_actions::Event::Request { user: relationship.id, incoming, profile }))?;
 									}
 									"USER_UPDATE" => {
 										let user: discord_protocol::UserDto = decode(packet.d.get().as_bytes()).map_err(|_| Failure::ProtocolAt("Invalid user update"))?;
@@ -1518,6 +1522,7 @@ mod tests {
 						}
 						Event::UserAction(
 							client_core::user_actions::Event::Relationships(None)
+							| client_core::user_actions::Event::Requests(None)
 							| client_core::user_actions::Event::Friends(None),
 						) => return Ok(()),
 						_ => return Err(Failure::Protocol),

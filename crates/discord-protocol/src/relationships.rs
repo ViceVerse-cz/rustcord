@@ -15,6 +15,40 @@ pub struct Snapshot(
 	#[serde(deserialize_with = "crate::read_state::entries")] pub Vec<Relationship>,
 );
 impl Snapshot {
+	pub fn requests(
+		&self,
+		users: &[crate::UserDto],
+	) -> Result<Vec<(model::User, String, bool)>, crate::DecodeError> {
+		let users: std::collections::BTreeMap<_, _> = users.iter().map(|u| (u.id, u)).collect();
+		self.0
+			.iter()
+			.filter(|r| matches!(r.kind, 3 | 4))
+			.map(|r| {
+				let profile = r.user.as_ref().or_else(|| users.get(&r.id).copied());
+				let (user, name) = if let Some(user) = profile {
+					if user.id != r.id {
+						return Err(crate::DecodeError);
+					}
+					friend(user.clone())?
+				} else {
+					if r.id.0 == 0 {
+						return Err(crate::DecodeError);
+					}
+					(
+						model::User {
+							id: r.id,
+							name: "Unknown user".into(),
+							avatar: None,
+							discriminator: 0,
+							webhook: false,
+						},
+						format!("User ID: {}", r.id),
+					)
+				};
+				Ok((user, name, r.kind == 3))
+			})
+			.collect()
+	}
 	pub fn entries(&self) -> Vec<(Id, bool)> {
 		self.0.iter().map(|r| (r.id, r.kind == 2)).collect()
 	}
@@ -74,6 +108,14 @@ mod tests {
 		assert_eq!(friends.len(), 1);
 		assert_eq!(friends[0].0.name, "Friend display");
 		assert_eq!(friends[0].1, "friend_name");
+		let requests = rows.requests(&users).unwrap();
+		assert_eq!(requests.len(), 1);
+		assert!(requests[0].2);
+		assert_eq!(requests[0].1, "pending");
+		let outgoing: Snapshot = crate::decode(br#"[{"id":"8","type":4}]"#).unwrap();
+		let requests = outgoing.requests(&[]).unwrap();
+		assert!(!requests[0].2);
+		assert_eq!(requests[0].0.id, Id(8));
 		let invalid: Snapshot =
 			crate::decode(br#"[{"id":"2","type":1,"user":{"id":"3","username":"wrong"}}]"#)
 				.unwrap();

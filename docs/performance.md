@@ -3286,3 +3286,33 @@ cargo test --locked -p serein alternating_tracks_reuse_buffered_ranges -- --noca
 For medians, build once and invoke each emitted test executable directly, one warmup and
 five measured runs. The player test is explicitly ignored by default because it opens the
 local output device at zero volume. It never uses an account or microphone.
+
+## Friend requests — September 12, 2026
+
+Baseline `179484c7353a1b1379df1b8581f8e0c3c940ca0a`, compared with the friend-request
+implementation on Windows / Ryzen 7 7800X3D / approximately 32 GB RAM. Pinned release
+toolchain, no dependencies added. Build `cargo replay` once per revision, then run
+`target/release/replay-bench.exe` directly: one warmup and five measured runs.
+Baseline median 40.8538 ms; after 39.9599 ms (-0.8939 ms / -2.19%). Samples span
+39.4142–41.0634 ms before and 39.3734–42.0728 ms after: overlapping ranges, not a
+performance improvement claim. Both retain 236,992–237,477 estimated timeline bytes
+and 500 records after 100,000 synthetic messages. This existing workload does not
+measure friend-request throughput, UI latency or process RSS.
+
+Pending request profiles are separately bounded to 4,000 entries / 2 MiB; only visible
+72-point rows are rendered. Native before/after screenshot control and scripted process
+sampling are unavailable in this session, so CPU, RSS and frame metrics are unmeasured.
+
+Standard `cargo xtask package` including voice, separate baseline/after snapshots:
+
+| Metric (bytes) | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Executable | 62,854,656 | 62,923,264 | +68,608 (+0.109%) |
+| Installed package | 73,055,652 | 73,126,738 | +71,086 (+0.097%) |
+| PowerShell Compress-Archive ZIP | 43,465,392 | 43,488,770 | +23,378 (+0.054%) |
+
+Both snapshots contain 823 generated files, excluding an unrelated obsolete `dist/voice`
+directory left untouched. Voice is compiled into the standard executable. Source/notices
+and documentation are included; these measurements precede adding this result table.
+The separate debug `--demo --demo-friends` process launched and remained responsive;
+that establishes startup only, not visual correctness or native interaction coverage.
