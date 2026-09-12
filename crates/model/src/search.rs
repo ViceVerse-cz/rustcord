@@ -8,6 +8,64 @@ pub fn valid_search_query(query: &str) -> bool {
 		&& query.chars().count() <= 256
 		&& !query.chars().any(char::is_control)
 }
+/// Bounded query tokens shared by the UI, offline demo and HTTP adapter.
+pub type SearchTerms = (String, Vec<(&'static str, String)>);
+
+pub fn search_terms(query: &str) -> Result<SearchTerms, &'static str> {
+	if !valid_search_query(query) {
+		return Err("Enter a search of at most 256 characters.");
+	}
+	let mut content = Vec::new();
+	let mut filters = Vec::new();
+	for token in query.split_whitespace() {
+		let Some((key, value)) = token.split_once(':') else {
+			content.push(token);
+			continue;
+		};
+		let parameter = match key {
+			"from" | "mentions" | "before_id" | "after_id" => {
+				if value.parse::<u64>().ok().is_none_or(|id| id == 0) {
+					return Err("Choose a user or enter a valid numeric ID.");
+				}
+				match key {
+					"from" => "author_id",
+					"mentions" => "mentions",
+					"before_id" => "max_id",
+					_ => "min_id",
+				}
+			}
+			"has" => {
+				if !matches!(
+					value,
+					"link" | "embed" | "file" | "image" | "video" | "sound"
+				) {
+					return Err("Choose link, embed, file, image, video or sound.");
+				}
+				"has"
+			}
+			"author_type" => {
+				if !matches!(value, "user" | "bot" | "webhook") {
+					return Err("Choose user, bot or webhook.");
+				}
+				"author_type"
+			}
+			_ => {
+				content.push(token);
+				continue;
+			}
+		};
+		if filters.len() >= 16 {
+			return Err("Use at most 16 search filters.");
+		}
+		filters.push((parameter, value.to_owned()));
+	}
+	let content = if filters.is_empty() {
+		query.to_owned()
+	} else {
+		content.join(" ")
+	};
+	Ok((content, filters))
+}
 pub struct SearchHit {
 	pub id: Id,
 	pub channel: Id,

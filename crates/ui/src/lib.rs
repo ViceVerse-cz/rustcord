@@ -1052,7 +1052,11 @@ impl MessagingUi {
 		egui::Panel::top("channel-header")
 			.exact_size(48.0)
 			.show_separator_line(false)
-			.frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(16, 0)))
+			.frame(
+				egui::Frame::new()
+					.fill(colors.chat)
+					.inner_margin(egui::Margin::symmetric(16, 0)),
+			)
 			.show(ui, |ui| {
 				let rect = ui.max_rect();
 				ui.painter().hline(

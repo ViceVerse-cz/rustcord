@@ -724,8 +724,9 @@ impl DiscordApi {
 		if !model::valid_search_query(query) {
 			return Err(Failure::Protocol);
 		}
-		// Encode every query byte; content cannot add filters or change the fixed route.
-		let encoded: String = query.bytes().map(|b| format!("%{b:02X}")).collect();
+		let (content, filters) = model::search_terms(query).map_err(|_| Failure::Protocol)?;
+		// Encode values separately; user input cannot add arbitrary query parameters.
+		let encoded: String = content.bytes().map(|b| format!("%{b:02X}")).collect();
 		let mut path = match guild {
 			Some(guild) => format!("/guilds/{guild}/messages/search?channel_id={channel}&"),
 			None => format!("/channels/{channel}/messages/search?"),
@@ -733,7 +734,17 @@ impl DiscordApi {
 		path.push_str(&format!(
 			"content={encoded}&limit=25&sort_by=timestamp&sort_order=desc"
 		));
-		if let Some(before) = before {
+		let mut maximum = before.map(|id| id.0);
+		for (key, value) in filters {
+			if key == "max_id" {
+				let id = value.parse::<u64>().map_err(|_| Failure::Protocol)?;
+				maximum = Some(maximum.map_or(id, |current| current.min(id)));
+			} else {
+				let encoded: String = value.bytes().map(|b| format!("%{b:02X}")).collect();
+				path.push_str(&format!("&{key}={encoded}"));
+			}
+		}
+		if let Some(before) = maximum {
 			path.push_str(&format!("&max_id={before}"));
 		}
 		let bytes = self
