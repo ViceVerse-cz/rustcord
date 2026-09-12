@@ -56,6 +56,10 @@ impl DiscordApi {
 			return Err(Failure::Protocol);
 		}
 		match action {
+			Action::AuditLog(query) => self
+				.server_audit_log(guild, query)
+				.await
+				.map(Outcome::AuditLog),
 			Action::Integrations(action) => self
 				.server_integration_action(guild, action)
 				.await

@@ -91,6 +91,7 @@ impl ServerMenu {
 						|| state.can_open_role_settings(guild)
 						|| state.can_open_emoji_settings(guild)
 						|| state.can_open_integration_settings(guild)
+						|| state.can_open_audit_log_settings(guild)
 						|| state.can_open_member_settings(guild))
 						&& menu_row(ui, icons::Icon::Gear, "Server Settings", colors.text).clicked()
 					{

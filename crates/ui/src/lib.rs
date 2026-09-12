@@ -46,6 +46,7 @@ mod reading;
 pub mod screen;
 mod search;
 mod server_admin;
+mod server_audit_log;
 mod server_integrations;
 mod server_invite;
 mod server_invites;

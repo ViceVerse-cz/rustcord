@@ -571,3 +571,15 @@ model fields and are skipped during decoding. The editor retains one bounded
 80-character/320-byte webhook name draft; no integration data or draft is written
 to SQLite. Closing settings, changing guild/session, and permission revocation
 release the applicable metadata. Existing bounded avatar caches remain shared.
+
+### Server audit log
+
+One active guild audit view retains at most 500 entries, 1,000 referenced users
+and 2 MiB of metadata in session RAM. Each on-demand response has at most 50
+entries and 100 users within 1 MiB decoded metadata; HTTP input is capped at
+2 MiB. Changes are bounded display values with explicit absent/null states,
+not retained arbitrary JSON. Individual values, nesting and per-entry change
+counts are limited before admission. Filters replace the current history;
+closing settings, switching guild/session and permission loss release it.
+No audit log, filter or expansion state is saved to SQLite or diagnostic logs.
+The shared bounded avatar cache is reused.

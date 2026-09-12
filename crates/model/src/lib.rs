@@ -8,6 +8,7 @@ pub mod guild_folders;
 pub mod permissions;
 mod reading_preferences;
 pub mod server_admin;
+pub mod server_audit_log;
 pub mod server_integrations;
 pub mod server_invites;
 pub mod server_roles;
