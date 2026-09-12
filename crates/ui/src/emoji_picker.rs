@@ -161,6 +161,81 @@ impl Default for Picker {
 const GIF_DEBOUNCE: f64 = 0.3;
 
 impl Picker {
+	/// The same bundled Unicode catalog and cells, without composer or network actions.
+	pub(crate) fn unicode_button(&mut self, ui: &mut egui::Ui, selected: &mut Option<String>) {
+		let button = if let Some(image) = selected
+			.as_deref()
+			.and_then(|emoji| crate::emoji::image(ui.ctx(), emoji, 22.0))
+		{
+			ui.add(
+				egui::Button::image(image)
+					.frame(false)
+					.min_size(egui::Vec2::splat(28.0)),
+			)
+		} else {
+			ui.add_sized(
+				[28.0, 28.0],
+				egui::Button::new(selected.as_deref().unwrap_or("☺")).frame(false),
+			)
+		}
+		.on_hover_text("Choose trait emoji");
+		button.widget_info(|| {
+			egui::WidgetInfo::labeled(
+				egui::WidgetType::Button,
+				ui.is_enabled(),
+				"Choose trait emoji",
+			)
+		});
+		if button.clicked() {
+			self.query.clear();
+			self.filter();
+		}
+		egui::Popup::menu(&button)
+			.close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+			.show(|ui| {
+				ui.set_width(280.0);
+				let colors = crate::design::palette(ui);
+				if ui
+					.add(
+						egui::TextEdit::singleline(&mut self.query)
+							.hint_text("Search emoji")
+							.char_limit(64)
+							.desired_width(f32::INFINITY),
+					)
+					.changed()
+				{
+					self.filter();
+				}
+				if ui.button("Remove emoji").clicked() {
+					*selected = None;
+					ui.close();
+				}
+				egui::ScrollArea::vertical().max_height(240.0).show_rows(
+					ui,
+					CELL,
+					self.matches.len().div_ceil(6),
+					|ui, rows| {
+						for row in rows {
+							ui.horizontal(|ui| {
+								ui.spacing_mut().item_spacing.x = 4.0;
+								for &index in self.matches.iter().skip(row * 6).take(6) {
+									let (text, name) = standard()[index];
+									let image = crate::emoji::image(ui.ctx(), text, 32.0);
+									if cell(ui, image, name, true, &colors)
+										.on_hover_text(name)
+										.clicked()
+									{
+										*selected = Some(text.into());
+										ui.close();
+									}
+								}
+							});
+						}
+					},
+				);
+			});
+	}
+
 	pub(crate) fn is_open(&self) -> bool {
 		self.open
 	}

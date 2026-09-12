@@ -19,6 +19,7 @@ impl Dialog {
 
 #[derive(Default)]
 pub(super) struct ServerMenu {
+	pub settings_requested: Option<Id>,
 	dialog: Option<Dialog>,
 	generation: u64,
 	invite: InviteDialog,
@@ -74,6 +75,12 @@ impl ServerMenu {
 					let available = !state.server_action_pending()
 						&& !state.server_invite_pending()
 						&& (state.demo || state.gateway_connected);
+					if state.can_manage_guild(guild)
+						&& menu_row(ui, icons::Icon::Gear, "Server Settings", colors.text).clicked()
+					{
+						self.settings_requested = Some(guild);
+						ui.close();
+					}
 					if ui
 						.add_enabled_ui(available, |ui| {
 							menu_row(ui, icons::Icon::AddPeople, "Create invite", colors.text)

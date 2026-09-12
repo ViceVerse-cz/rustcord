@@ -13,6 +13,8 @@ mod game_activity;
 mod group_icon;
 mod reading_settings;
 mod screen;
+#[cfg(feature = "demo")]
+mod server_settings_demo;
 mod startup;
 mod toggle_setting;
 mod uploads;
@@ -234,6 +236,7 @@ struct Desktop {
 	notifications: platform::notifications::Notifications,
 	uploads: uploads::Uploads,
 	group_icon: group_icon::GroupIcon,
+	server_icon: group_icon::GroupIcon,
 	clipboard: Option<clipboard::Paste>,
 	download_close_pending: bool,
 	window: Arc<winit::window::Window>,
@@ -899,6 +902,10 @@ impl Desktop {
 			state.user = None;
 			state.status = "Disconnected";
 		}
+		#[cfg(feature = "demo")]
+		if demo && std::env::args().any(|arg| arg == "--demo-server-settings") {
+			server_settings_demo::open(&mut state, &mut messaging);
+		}
 		Ok(Self {
 			extensions: extension_bridge::Bridge::default(),
 			extension_close_pending: false,
@@ -922,6 +929,7 @@ impl Desktop {
 			},
 			uploads: uploads::Uploads::default(),
 			group_icon: group_icon::GroupIcon::default(),
+			server_icon: group_icon::GroupIcon::default(),
 			clipboard: None,
 			download_close_pending: false,
 			window: cc
@@ -977,6 +985,7 @@ impl Desktop {
 	}
 	fn connect(&mut self, secret: SessionSecret, save: bool, ctx: &egui::Context) {
 		self.group_icon.cancel();
+		self.server_icon.cancel();
 		if let Some(store) = &mut self.store {
 			store.cancel_load();
 		}
@@ -1015,6 +1024,7 @@ impl Desktop {
 	fn logout(&mut self, ctx: &egui::Context) {
 		let extension_logout = self.extensions.logout(ctx);
 		self.group_icon.cancel();
+		self.server_icon.cancel();
 		self.notifications.clear();
 		self.uploads.cancel();
 		if let Some(store) = &mut self.store {
@@ -1439,6 +1449,18 @@ impl Desktop {
 		}
 	}
 	fn command(&mut self, command: Command) {
+		if let Command::ServerSettings {
+			guild,
+			request,
+			edit,
+		} = &command
+			&& !self
+				.state
+				.server_settings_command_allowed(*guild, *request, edit)
+		{
+			self.state.command_rejected(command);
+			return;
+		}
 		if let Command::Send { channel, nonce, .. } = &command
 			&& self
 				.state
@@ -1560,6 +1582,11 @@ impl Desktop {
 		#[cfg(feature = "demo")]
 		if self.state.demo {
 			let event = match command {
+				Command::ServerSettings {
+					guild,
+					request,
+					edit,
+				} => server_settings_demo::execute(&self.state, guild, request, edit),
 				Command::GuildFolders(settings) => {
 					Event::GuildFolders(Ok(settings.unwrap_or_default()))
 				}
@@ -3145,6 +3172,9 @@ impl eframe::App for Desktop {
 		if let Some((scope, result)) = self.group_icon.poll(&self.state) {
 			self.messaging.accept_group_icon(&ctx, scope, result);
 		}
+		if let Some((scope, result)) = self.server_icon.poll_server(&self.state) {
+			self.messaging.accept_server_icon(&ctx, scope, result);
+		}
 		self.messaging.voice_available = true;
 		if close_requested
 			&& !self.close_approved
@@ -3155,6 +3185,8 @@ impl eframe::App for Desktop {
 					.iter()
 					.any(|p| p.delivery != Delivery::Confirmed)
 				|| self.messaging.has_edit()
+				|| self.messaging.has_server_settings_changes()
+				|| self.state.server_settings.pending
 				|| self.uploads.has_unsent()
 				|| self.forgetting
 				|| self.messaging.startup_busy
@@ -3392,11 +3424,35 @@ impl eframe::App for Desktop {
 				{
 					Err("This group is no longer available")
 				} else {
-					self.group_icon
-						.start(scope, self.runtime.handle(), &ctx, self.window.clone())
+					self.group_icon.start(
+						scope,
+						self.runtime.handle(),
+						&ctx,
+						self.window.clone(),
+						"Choose group icon",
+						256,
+					)
 				};
 				if let Err(error) = result {
 					self.messaging.accept_group_icon(&ctx, scope, Err(error));
+				}
+			}
+			if let Some(scope) = self.messaging.take_server_icon_request() {
+				let result =
+					if scope.0 != self.state.generation || !self.state.can_manage_guild(scope.1) {
+						Err("You can no longer manage this server")
+					} else {
+						self.server_icon.start(
+							scope,
+							self.runtime.handle(),
+							&ctx,
+							self.window.clone(),
+							"Choose server icon",
+							512,
+						)
+					};
+				if let Err(error) = result {
+					self.messaging.accept_server_icon(&ctx, scope, Err(error));
 				}
 			}
 			for key in self.messaging.take_avatar_requests() {
@@ -3437,7 +3493,11 @@ impl eframe::App for Desktop {
 			self.poll_voice(&ctx);
 			if self.messaging.logout_requested {
 				self.messaging.logout_requested = false;
-				if self.state.has_unsent() || self.messaging.has_edit() || self.uploads.has_unsent()
+				if self.state.has_unsent()
+					|| self.messaging.has_edit()
+					|| self.messaging.has_server_settings_changes()
+					|| self.state.server_settings.pending
+					|| self.uploads.has_unsent()
 				{
 					self.confirming_logout = true;
 				} else {

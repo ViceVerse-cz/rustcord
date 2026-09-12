@@ -23,6 +23,7 @@ pub mod resident;
 pub mod screen;
 pub mod search;
 pub mod server_actions;
+pub mod server_settings;
 mod threads;
 pub mod typing;
 pub mod user_actions;
@@ -42,6 +43,11 @@ pub const EVENT_SLOTS: usize = 8; // UI drain batch; reliable events share a 32 
 pub const COMMAND_SLOTS: usize = 16; // ordinary commands <=16 KiB; one pending group icon <=350 KiB
 
 pub enum Command {
+	ServerSettings {
+		guild: Id,
+		request: u64,
+		edit: Option<Box<model::server_settings::Edit>>,
+	},
 	SendServerInvite {
 		guild: Id,
 		user: Id,
@@ -157,6 +163,7 @@ pub enum Command {
 	},
 }
 pub enum Event {
+	ServerSettings(server_settings::Event),
 	JoinInvite {
 		request: u64,
 		result: Result<Id, auth::Failure>,
@@ -323,6 +330,7 @@ pub struct State {
 	pub folders_error: Option<&'static str>,
 	pub user_actions: user_actions::Actions,
 	pub server_actions: server_actions::Actions,
+	pub server_settings: server_settings::Editor,
 	pub group_actions: group_actions::Actions,
 	pub typing: typing::Typing,
 	pub permissions: permissions::Permissions,
@@ -391,6 +399,7 @@ impl Default for State {
 			folders_error: None,
 			user_actions: user_actions::Actions::default(),
 			server_actions: server_actions::Actions::default(),
+			server_settings: server_settings::Editor::default(),
 			group_actions: group_actions::Actions::default(),
 			typing: typing::Typing::default(),
 			permissions: permissions::Permissions::default(),
@@ -813,6 +822,17 @@ impl State {
 		})
 	}
 	pub fn command_rejected(&mut self, command: Command) {
+		if let Command::ServerSettings { guild, request, .. } = command {
+			let _ = self.apply_server_settings(server_settings::Event {
+				guild,
+				request,
+				result: Err(auth::Failure::ProtocolAt(
+					"Server settings were not queued; reload to continue",
+				)),
+				refreshed: None,
+			});
+			return;
+		}
 		if let Command::EditProfile { user, request, .. } = command {
 			self.reject_own_profile(user, request);
 			return;
@@ -1262,6 +1282,7 @@ impl State {
 			Event::NotificationPreferences(event) => self.apply_notification_preferences(event),
 			Event::UserAction(event) => self.apply_user_action(event),
 			Event::ServerAction(event) => self.apply_server_action(event),
+			Event::ServerSettings(event) => self.apply_server_settings(event),
 			Event::GroupAction(event) => self.apply_group_action(event),
 			Event::ThreadsSync {
 				guild,
@@ -1623,10 +1644,12 @@ impl State {
 				self.notification_preferences = notifications::Preferences::default();
 				self.cancel_user_action();
 				self.cancel_server_action();
+				self.cancel_server_settings();
 				self.cancel_group_action();
 				self.cancel_invite_join();
 				self.user_actions.reset();
 				self.server_actions.reset();
+				self.server_settings.reset();
 				self.group_actions.reset();
 				self.clear_own_profile();
 				self.user = Some(user);
@@ -1948,6 +1971,7 @@ impl State {
 				self.cancel_message_actions();
 				self.cancel_user_action();
 				self.cancel_server_action();
+				self.cancel_server_settings();
 				self.cancel_group_action();
 				self.cancel_invite_join();
 				self.read_state.cancel();
@@ -1974,6 +1998,7 @@ impl State {
 				self.cancel_message_actions();
 				self.cancel_user_action();
 				self.cancel_server_action();
+				self.cancel_server_settings();
 				self.cancel_group_action();
 				self.cancel_invite_join();
 				self.direct_presences.clear();
@@ -2045,6 +2070,13 @@ impl State {
 		}
 		if access_changed {
 			self.prune_direct_presence();
+		}
+		if self
+			.server_settings
+			.guild
+			.is_some_and(|guild| !self.can_manage_guild(guild))
+		{
+			self.server_settings.reset();
 		}
 		self.enforce_resident_budget();
 	}
@@ -2122,6 +2154,7 @@ impl State {
 			}
 			self.cancel_user_action();
 			self.cancel_server_action();
+			self.cancel_server_settings();
 			self.cancel_group_action();
 			self.cancel_invite_join();
 			self.direct_presences.clear();
@@ -2199,6 +2232,13 @@ impl Event {
 					})
 					.sum(),
 				Self::Edited { result, .. } => result.as_ref().map_or(0, Message::bytes),
+				Self::ServerSettings(event) => {
+					event.result.as_ref().map_or(0, |value| {
+						size_of::<model::server_settings::Settings>() + value.heap_bytes()
+					}) + event.refreshed.as_ref().map_or(0, |value| {
+						size_of::<model::server_settings::Settings>() + value.heap_bytes()
+					})
+				}
 				Self::GuildFolders(result) => result
 					.as_ref()
 					.map_or(0, model::guild_folders::Settings::heap_bytes),

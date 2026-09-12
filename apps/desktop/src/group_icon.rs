@@ -31,11 +31,13 @@ impl GroupIcon {
 		runtime: &tokio::runtime::Handle,
 		context: &egui::Context,
 		parent: Arc<winit::window::Window>,
+		title: &'static str,
+		output_edge: u32,
 	) -> Result<(), &'static str> {
 		if self.choosing.is_some() {
 			return Err("Close the previous image picker first");
 		}
-		let dialog = platform::save::group_icon_source(parent);
+		let dialog = platform::save::icon_source(parent, title);
 		let (send, result) = mpsc::sync_channel(1);
 		let cancelled = Arc::new(AtomicBool::new(false));
 		let flag = cancelled.clone();
@@ -48,7 +50,7 @@ impl GroupIcon {
 						if decode_flag.load(Ordering::Acquire) {
 							Ok(None)
 						} else {
-							read(&path).map(Some)
+							read(&path, output_edge).map(Some)
 						}
 					})
 					.await
@@ -76,8 +78,20 @@ impl GroupIcon {
 		}
 	}
 	pub fn poll(&mut self, state: &client_core::State) -> Option<(Scope, Selected)> {
+		self.poll_scoped(state.generation, |id| state.is_group_dm(id))
+	}
+	pub fn poll_server(&mut self, state: &client_core::State) -> Option<(Scope, Selected)> {
+		self.poll_scoped(state.generation, |id| {
+			state.server_settings.guild == Some(id) && state.can_manage_guild(id)
+		})
+	}
+	fn poll_scoped(
+		&mut self,
+		generation: u64,
+		valid: impl FnOnce(Id) -> bool,
+	) -> Option<(Scope, Selected)> {
 		let choosing = self.choosing.as_ref()?;
-		if choosing.scope.0 != state.generation || !state.is_group_dm(choosing.scope.1) {
+		if choosing.scope.0 != generation || !valid(choosing.scope.1) {
 			self.cancel();
 		}
 		let result = match choosing.result.try_recv() {
@@ -97,7 +111,7 @@ impl Drop for GroupIcon {
 	}
 }
 
-fn read(path: &Path) -> Result<(String, egui::ColorImage), &'static str> {
+fn read(path: &Path, output_edge: u32) -> Result<(String, egui::ColorImage), &'static str> {
 	let metadata =
 		std::fs::symlink_metadata(path).map_err(|_| "Could not open the chosen image")?;
 	if !metadata.is_file() || metadata.file_type().is_symlink() {
@@ -111,10 +125,10 @@ fn read(path: &Path) -> Result<(String, egui::ColorImage), &'static str> {
 	file.take(MAX_INPUT as u64 + 1)
 		.read_to_end(&mut bytes)
 		.map_err(|_| "Could not read the chosen image")?;
-	decode(&bytes)
+	decode(&bytes, output_edge)
 }
 
-fn decode(bytes: &[u8]) -> Result<(String, egui::ColorImage), &'static str> {
+fn decode(bytes: &[u8], output_edge: u32) -> Result<(String, egui::ColorImage), &'static str> {
 	if bytes.len() > MAX_INPUT {
 		return Err("Choose an image up to 8 MB");
 	}
@@ -138,13 +152,13 @@ fn decode(bytes: &[u8]) -> Result<(String, egui::ColorImage), &'static str> {
 	);
 	let image = image::DynamicImage::ImageRgba8(image::imageops::thumbnail(
 		&*crop,
-		edge.min(256),
-		edge.min(256),
+		edge.min(output_edge.clamp(1, 512)),
+		edge.min(output_edge.clamp(1, 512)),
 	));
 	let mut png = Cursor::new(Vec::new());
 	image
 		.write_to(&mut png, image::ImageFormat::Png)
-		.map_err(|_| "Could not prepare the group icon")?;
+		.map_err(|_| "Could not prepare the icon")?;
 	let uri = discord_protocol::group_actions::icon_data_uri(png.get_ref())
 		.ok_or("Prepared icon exceeds 256 KB; choose a simpler image")?;
 	let pixels = image.into_rgba8();
@@ -168,16 +182,16 @@ mod tests {
 		))
 		.write_to(&mut png, image::ImageFormat::Png)
 		.unwrap();
-		let (uri, preview) = decode(png.get_ref()).unwrap();
+		let (uri, preview) = decode(png.get_ref(), 256).unwrap();
 		assert_eq!(preview.size, [256, 256]);
 		assert!(uri.starts_with("data:image/png;base64,"));
-		assert!(decode(b"invalid").is_err());
-		assert!(decode(&vec![0; MAX_INPUT + 1]).is_err());
+		assert!(decode(b"invalid", 256).is_err());
+		assert!(decode(&vec![0; MAX_INPUT + 1], 256).is_err());
 		png = Cursor::new(Vec::new());
 		image::DynamicImage::new_rgba8(4097, 1)
 			.write_to(&mut png, image::ImageFormat::Png)
 			.unwrap();
-		assert!(decode(png.get_ref()).is_err());
+		assert!(decode(png.get_ref(), 256).is_err());
 	}
 	#[test]
 	fn stale_picker_retains_single_slot_until_completion_and_discards_result() {

@@ -7,6 +7,18 @@ Webhook label, with no user-profile request or retry. Ordinary bot/user profiles
 retain their existing behavior. Synthetic parser, cache, and UI checks cover this
 path; live webhook interoperability and native visual verification are unverified.
 
+## Server settings — September 12, 2026
+
+Server Profile and Engagement are visible only when current guild permissions
+establish Manage Server (including the owner/administrator cases). The editor
+uses Discord's documented [guild settings route](https://docs.discord.com/developers/resources/guild#modify-guild)
+and the separately observed [guild profile route](https://docs.discord.food/resources/discovery#modify-guild-profile)
+for name/icon, description, profile color and traits. Activity Feed changes the
+mutually exclusive features described by the [unofficial guild reference](https://docs.discord.food/resources/guild#mutable-guild-features).
+These routes are wired for normal-account use but live interoperability remains
+unverified. The offline server-settings preview changes synthetic RAM only.
+Selected icons are prepared off the render thread; only Save uploads them.
+
 ## Group conversation actions — September 11, 2026
 
 Group DM rows and the conversation header expose Edit Group, Mute/Unmute

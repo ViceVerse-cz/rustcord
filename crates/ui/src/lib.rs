@@ -46,6 +46,7 @@ pub mod screen;
 mod search;
 mod server_invite;
 mod server_menu;
+mod server_settings;
 mod settings;
 mod switcher;
 mod thumbhash;
@@ -100,6 +101,8 @@ pub struct MessagingUi {
 	channel_cache: categories::Cache,
 	search: search::SearchUi,
 	settings: settings::Settings,
+	server_settings: server_settings::Editor,
+	server_icon_sequence: u64,
 	switcher: switcher::Switcher,
 	focus_switched_composer: bool,
 	switcher_frame: bool,
@@ -2195,9 +2198,14 @@ impl MessagingUi {
 		}
 		self.extensions
 			.show_result(&ctx, state, &mut self.draft_changes, self.editing.is_some());
-		let settings_open = self.settings.open;
-		if settings_open {
+		let settings_open = self.settings.open || self.server_settings.is_open();
+		if self.settings.open {
 			self.show_settings(&ctx, state, &mut commands);
+			ui.disable();
+		}
+		if self.server_settings.is_open() {
+			self.server_settings
+				.show(&ctx, state, &mut self.avatars, &mut commands);
 			ui.disable();
 		}
 		// Foreground confirmation handles Escape before background search/archive shortcuts.
@@ -2280,6 +2288,11 @@ impl MessagingUi {
 		self.record_reading_sidebar(navigation.response.rect.width() - rail);
 		self.server_menu
 			.show(&ctx, state, self.guild, &mut commands, &mut self.avatars);
+		if let Some(guild) = self.server_menu.settings_requested.take()
+			&& let Some(command) = self.preview_server_settings(state, guild)
+		{
+			commands.push(command);
+		}
 		let selected_voice = state
 			.selected
 			.and_then(|id| state.channel(id))
