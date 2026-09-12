@@ -379,8 +379,10 @@ mod tests {
 		assert!(
 			frame
 				.rgba
-				.chunks_exact(4)
-				.all(|px| px == [255, 255, 255, 255])
+				.as_chunks::<4>()
+				.0
+				.iter()
+				.all(|px| *px == [255, 255, 255, 255])
 		);
 		assert!(nv12_to_rgba(&bytes[..6], format).is_err());
 	}

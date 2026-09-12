@@ -336,7 +336,7 @@ impl Backend {
 			}
 		}
 	}
-	#[cfg(test)]
+	#[cfg(all(test, target_os = "macos"))]
 	fn flush(&self) {
 		if let Self::Hardware(decoder) = self {
 			decoder.flush();

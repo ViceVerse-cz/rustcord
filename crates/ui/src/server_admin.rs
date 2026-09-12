@@ -1,7 +1,7 @@
 //! On-demand emoji and member administration inside the shared server settings shell.
 use crate::{avatars::Avatars, design, icons, user_menu};
 use client_core::{Command, State};
-use egui::{Color32, RichText};
+use egui::RichText;
 use model::{
 	Id, User,
 	server_admin::{Action, Member, Query},
@@ -471,50 +471,49 @@ impl Admin {
 			});
 			ui.add_space(24.0);
 		}
+		ui.label(design::semibold(ui, "Recent Members", 15.0));
+		let search_width = (ui.available_width() - 44.0).clamp(100.0, 260.0);
 		ui.horizontal_wrapped(|ui| {
-			ui.label(design::semibold(ui, "Recent Members", 15.0));
-			ui.add_space((ui.available_width() - 400.0).max(0.0));
+			ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
 			egui::Frame::new()
 				.stroke(egui::Stroke::new(1.0, colors.border))
 				.corner_radius(7)
 				.inner_margin(egui::Margin::symmetric(8, 5))
 				.show(ui, |ui| {
-					icons::inline(ui, icons::Icon::Search, 14.0, colors.muted);
-					if ui
-						.add(
-							egui::TextEdit::singleline(&mut self.query.search)
-								.frame(egui::Frame::NONE)
-								.font(egui::FontId::proportional(12.0))
-								.hint_text("Search by username or id")
-								.desired_width(200.0)
-								.char_limit(100),
-						)
-						.changed()
-					{
-						self.query.after = None;
-						self.query_changed = Some(ui.input(|input| input.time));
-					}
+					ui.horizontal(|ui| {
+						icons::inline(ui, icons::Icon::Search, 14.0, colors.muted);
+						if ui
+							.add(
+								egui::TextEdit::singleline(&mut self.query.search)
+									.frame(egui::Frame::NONE)
+									.font(egui::FontId::proportional(13.0))
+									.hint_text("Search by username or ID")
+									.desired_width(search_width)
+									.char_limit(100),
+							)
+							.changed()
+						{
+							self.query.after = None;
+							self.query_changed = Some(ui.input(|input| input.time));
+						}
+					});
 				});
+		});
+		ui.horizontal_wrapped(|ui| {
+			ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
 			let before = self.query.sort;
+			let sorts = [
+				"Newest members",
+				"Oldest members",
+				"Newest Discord accounts",
+				"Oldest Discord accounts",
+			];
 			egui::ComboBox::from_id_salt("member-sort")
-				.selected_text("Sort")
-				.width(65.0)
+				.selected_text(sorts[usize::from(self.query.sort.saturating_sub(1)).min(3)])
+				.width(200.0)
 				.show_ui(ui, |ui| {
-					for (sort, name) in [
-						(1, "Newest members"),
-						(2, "Oldest members"),
-						(3, "Newest Discord accounts"),
-						(4, "Oldest Discord accounts"),
-					] {
-						ui.selectable_value(&mut self.query.sort, sort, name);
-					}
-					ui.separator();
-					if ui
-						.checkbox(&mut self.query.recent, "Joined in the last 7 days")
-						.changed()
-					{
-						self.query.after = None;
-						self.query_changed = Some(0.0);
+					for (index, name) in sorts.into_iter().enumerate() {
+						ui.selectable_value(&mut self.query.sort, index as u8 + 1, name);
 					}
 				});
 			if before != self.query.sort {
@@ -535,6 +534,13 @@ impl Admin {
 				});
 			}
 		});
+		if ui
+			.checkbox(&mut self.query.recent, "Joined in the last 7 days")
+			.changed()
+		{
+			self.query.after = None;
+			self.query_changed = Some(0.0);
+		}
 		if self
 			.query_changed
 			.is_some_and(|at| ui.input(|input| input.time) - at >= 0.3)
@@ -550,24 +556,37 @@ impl Admin {
 		ui.add_space(10.0);
 		ui.separator();
 		if let Some(members) = &state.server_admin.members {
-			egui::ScrollArea::horizontal()
-				.id_salt("members-table-horizontal")
-				.show(ui, |ui| {
+			if ui.available_width() < 820.0 {
+				for member in &members.items {
+					ui.push_id(member.user.id, |ui| {
+						self.member_card(
+							ui,
+							state,
+							guild,
+							member,
+							&members.roles,
+							avatars,
+							&mut action,
+						);
+					});
+				}
+			} else {
+				ui.scope(|ui| {
 					ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
-					let width = ui.available_width().max(780.0);
+					let width = ui.available_width();
 					ui.set_width(width);
 					let names = (width * 0.24).clamp(190.0, 310.0);
 					let dates = 112.0;
 					let method = 108.0;
-					let roles = (width - names - dates * 2.0 - method - 136.0).max(100.0);
+					let roles = width - names - dates * 2.0 - method - 136.0;
 					ui.horizontal(|ui| {
 						for (text, width) in [
-							("NAME", names),
-							("MEMBER\nSINCE", dates),
-							("JOINED\nDISCORD", dates),
-							("JOIN METHOD", method),
-							("ROLES", roles),
-							("SIGNALS", 64.0),
+							("Name", names),
+							("Member since", dates),
+							("Joined Discord", dates),
+							("Join method", method),
+							("Roles", roles),
+							("Signals", 64.0),
 						] {
 							cell_text(ui, text, width, true);
 						}
@@ -666,22 +685,7 @@ impl Admin {
 										},
 									);
 								} else {
-									cell_text(
-										ui,
-										match member.join_source {
-											Some(1) => "Bot",
-											Some(2) => "Integration",
-											Some(3) => "Discovery",
-											Some(4) => "Student Hub",
-											Some(5) => "Invite",
-											Some(6) => "Vanity URL",
-											Some(7) => "Application",
-											Some(8) => "Linked Lobby",
-											_ => "Unknown",
-										},
-										method,
-										false,
-									);
+									cell_text(ui, join_method(member), method, false);
 								}
 								ui.allocate_ui_with_layout(
 									egui::vec2(roles, 44.0),
@@ -694,34 +698,21 @@ impl Admin {
 											.iter()
 											.filter(|role| member.roles.contains(&role.role.id));
 										if let Some(role) = known.next() {
-											let color = Color32::from_rgb(
-												(role.role.color >> 16) as u8,
-												(role.role.color >> 8) as u8,
-												role.role.color as u8,
-											);
 											egui::Frame::new()
-												.fill(color.gamma_multiply(0.16))
+												.fill(colors.raised)
 												.corner_radius(4)
 												.inner_margin(4)
 												.show(ui, |ui| {
 													ui.set_max_width((roles - 30.0).max(30.0));
 													ui.add(
 														egui::Label::new(
-															RichText::new(format!(
-																"● {}",
-																role.role.name
-															))
-															.size(11.0)
-															.color(
-																if role.role.color == 0 {
-																	colors.text
-																} else {
-																	color
-																},
-															),
+															RichText::new(&role.role.name)
+																.size(12.0)
+																.color(colors.text),
 														)
 														.truncate(),
-													);
+													)
+													.on_hover_text(&role.role.name);
 												});
 											let extra = known.count();
 											if extra > 0 {
@@ -748,6 +739,7 @@ impl Admin {
 						});
 					}
 				});
+			}
 			ui.horizontal_wrapped(|ui| {
 				ui.weak(format!(
 					"Showing {} of {} members",
@@ -780,6 +772,93 @@ impl Admin {
 		{
 			commands.push(command);
 		}
+	}
+	#[allow(clippy::too_many_arguments)]
+	fn member_card(
+		&mut self,
+		ui: &mut egui::Ui,
+		state: &State,
+		guild: Id,
+		member: &Member,
+		roles: &[model::server_admin::Role],
+		avatars: &mut Avatars,
+		action: &mut Option<Action>,
+	) {
+		let colors = design::palette(ui);
+		design::card(ui, |ui| {
+			let row = ui
+				.horizontal(|ui| {
+					if avatars.show(ui, &member.user, 32.0, state.demo).clicked() {
+						self.profile = Some(member.user.clone());
+					}
+					ui.vertical(|ui| {
+						ui.set_width((ui.available_width() - 40.0).max(40.0));
+						let name = member.nick.as_deref().unwrap_or(&member.user.name);
+						if ui
+							.add(
+								egui::Label::new(design::medium(ui, name, 14.0))
+									.truncate()
+									.sense(egui::Sense::click()),
+							)
+							.on_hover_text(name)
+							.clicked()
+						{
+							self.profile = Some(member.user.clone());
+						}
+						if member
+							.nick
+							.as_ref()
+							.is_some_and(|nick| nick != &member.user.name)
+						{
+							ui.add(
+								egui::Label::new(
+									RichText::new(&member.user.name).color(colors.muted),
+								)
+								.truncate(),
+							)
+							.on_hover_text(&member.user.name);
+						}
+					});
+					let button = icons::button(ui, icons::Icon::More, 28.0, "Member actions");
+					egui::Popup::menu(&button)
+						.show(|ui| self.member_menu(ui, state, guild, member, roles, action));
+				})
+				.response;
+			user_menu::popup(&row, row.id.with("member-menu"))
+				.show(|ui| self.member_menu(ui, state, guild, member, roles, action));
+			ui.label(
+				RichText::new(format!(
+					"Member since {}",
+					date(member.joined_at).replace('\n', " · ")
+				))
+				.color(colors.muted),
+			);
+			let signals = signals(member);
+			if !signals.is_empty() {
+				ui.label(signals);
+			}
+			egui::CollapsingHeader::new("Member details").show(ui, |ui| {
+				ui.label(format!(
+					"Joined Discord: {}",
+					date(Some(i128::from(
+						(member.user.id.0 >> 22) + 1_420_070_400_000
+					)))
+					.replace('\n', " · ")
+				));
+				ui.label(format!("Join method: {}", join_method(member)));
+				if let Some(code) = &member.invite_code {
+					ui.label(format!("Invite: {code}"));
+				}
+				ui.horizontal_wrapped(|ui| {
+					for role in roles
+						.iter()
+						.filter(|role| member.roles.contains(&role.role.id))
+					{
+						ui.label(&role.role.name);
+					}
+				});
+			});
+		});
 	}
 	fn member_menu(
 		&mut self,
@@ -1068,6 +1147,22 @@ fn cell_text(ui: &mut egui::Ui, text: &str, width: f32, heading: bool) {
 		},
 	);
 }
+fn join_method(member: &Member) -> &'static str {
+	if member.invite_code.is_some() {
+		return "Invite";
+	}
+	match member.join_source {
+		Some(1) => "Bot",
+		Some(2) => "Integration",
+		Some(3) => "Discovery",
+		Some(4) => "Student Hub",
+		Some(5) => "Invite",
+		Some(6) => "Vanity URL",
+		Some(7) => "Application",
+		Some(8) => "Linked Lobby",
+		_ => "Unknown",
+	}
+}
 fn date(millis: Option<i128>) -> String {
 	millis
 		.and_then(|millis| millis.checked_mul(1_000_000))
@@ -1112,4 +1207,63 @@ fn signals(member: &Member) -> String {
 		}
 	}
 	signals.join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn members_fit_narrow_and_wide_panels() {
+		for width in [280.0, 400.0, 800.0, 900.0, 1200.0] {
+			let ctx = egui::Context::default();
+			design::apply(&ctx);
+			let mut state = test_support::demo_state();
+			let guild = state.guilds[0].id;
+			let mut user = state.user.clone().unwrap();
+			user.name = "Long synthetic member name ".repeat(4);
+			state.server_admin.members = Some(model::server_admin::Members {
+				items: vec![Member {
+					user,
+					nick: Some("Long synthetic nickname ".repeat(4)),
+					roles: vec![],
+					joined_at: Some(1_789_200_000_000),
+					join_source: None,
+					invite_code: Some("longsyntheticinvitecode".repeat(3)),
+					flags: Some(1 << 7),
+					unusual_dm_until: None,
+					timeout_until: None,
+				}],
+				total: 1,
+				..Default::default()
+			});
+			let output = ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(width, 1800.0),
+					)),
+					..Default::default()
+				},
+				|ui| {
+					ui.set_width(width);
+					ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+					let right = ui.max_rect().right();
+					Admin::default().members(
+						ui,
+						&mut state,
+						guild,
+						&mut Avatars::default(),
+						&mut vec![],
+					);
+					assert!(
+						ui.min_rect().right() <= right + 1.0,
+						"member panel overflows at {width}: {:?}",
+						ui.min_rect()
+					);
+				},
+			);
+			output.drop_without_applying_deltas();
+		}
+	}
 }
