@@ -475,3 +475,18 @@ unblocked friends as well as DM recipients. Startup presence admission keeps its
 The UI retains only a 128-character search and Online/All selection, renders visible
 64-point rows, and reuses the avatar cache and existing user actions. No new storage,
 network endpoint or friend-management writes are added.
+
+### Opt-in Windows startup
+
+General settings can register this executable for the current Windows user's sign-in,
+off by default. The sole source of truth is the `Serein` REG_SZ value under
+`HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`: a quoted absolute
+executable path with `--autostart` and optionally `--start-minimized`, at most 260
+UTF-16 code units plus its terminator. It contains no account data or credentials.
+Turning startup off removes only this value. It survives logout; moving the portable
+executable requires enabling startup again from its new location. Windows Startup Apps
+can independently block the entry; Serein does not override that OS decision.
+One off-thread operation and one fixed-size completion may exist at a time. Failed
+writes restore the last known setting and display an error. Demo mode does not read
+or write the startup entry. Automatic launches use the existing saved-login behavior;
+ordinary manual launches remain visible even when Start Serein minimized is selected.

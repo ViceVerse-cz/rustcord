@@ -117,6 +117,12 @@ pub struct MessagingUi {
 	pub minimize_to_tray: bool,
 	pub tray_available: bool,
 	pub tray_status: &'static str,
+	pub startup_enabled: bool,
+	pub startup_minimized: bool,
+	pub startup_available: bool,
+	pub startup_busy: bool,
+	pub startup_status: &'static str,
+	pub startup_disable_requested: bool,
 	pub discord_activity_sharing: Option<bool>,
 	pub discord_activity_sharing_busy: bool,
 	pub discord_activity_sharing_retry: bool,
@@ -417,6 +423,12 @@ impl MessagingUi {
 			minimize_to_tray: self.minimize_to_tray,
 			tray_available: self.tray_available,
 			tray_status: self.tray_status,
+			startup_enabled: self.startup_enabled,
+			startup_minimized: self.startup_minimized,
+			startup_available: self.startup_available,
+			startup_busy: self.startup_busy,
+			startup_status: self.startup_status,
+			startup_disable_requested: self.startup_disable_requested,
 			..Self::default()
 		};
 	}

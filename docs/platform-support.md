@@ -46,12 +46,26 @@ physical capture or delivery to an official Discord client; these remain unverif
 
 ## Opt-in minimize to tray (September 11, 2026)
 
-Windows Appearance settings now offer Minimize to tray, off by default. Minimizing
+Windows General settings offer Minimize to tray, off by default. Minimizing
 hides the window only after successful Shell icon registration. The icon supports
 keyboard/mouse restore and a Show Serein / Quit menu. Quit uses the normal unsaved
 work/download exit checks; the window Close button retains normal exit behavior.
 Disabling restores a hidden window, and Shell recovery failure leaves it accessible.
 The adapter uses existing user32/Shell APIs and dependencies, with no background
-polling or autostart. A synthetic native Windows test verifies registration,
+polling. A synthetic native Windows test verifies registration,
 hide/restore, own-window taskbar recovery, Quit event and cleanup. Linux/macOS have
 an explicitly disabled control; their tray integration is not implemented.
+
+## Opt-in automatic startup
+
+General settings offer automatic launch at Windows sign-in and a dependent Start
+Serein minimized preference. Both default off. Registration uses the current user's
+Run key; no administrator access, service, scheduled task or new dependency is needed.
+Windows Startup Apps can override this registration. Disable startup before deleting
+a portable installation, or re-enable it after moving the executable.
+Minimized launches stay in the taskbar unless the saved tray preference is enabled;
+the tray can attach safely after a minimized launch. Tray failures leave the window
+recoverable. The Close button still exits, and the tray Quit action retains unsaved
+work checks. macOS/Linux autostart remains explicitly unavailable.
+Offline tests cover isolated registry writes/removal, launch flags and settings
+interaction; an actual Windows sign-out/sign-in has not been exercised.

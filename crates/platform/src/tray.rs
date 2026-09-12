@@ -194,6 +194,14 @@ mod native {
 			if !tray.state.add_icon() {
 				return Err(UNAVAILABLE);
 			}
+			// The saved tray preference can arrive after a minimized autostart launch.
+			// SAFETY: hwnd belongs to the retained window and the tray icon now exists.
+			unsafe {
+				if IsIconic(hwnd).as_bool() {
+					tray.state.hidden.set(true);
+					let _ = ShowWindow(hwnd, SW_HIDE);
+				}
+			}
 			Ok(tray)
 		}
 
@@ -428,6 +436,14 @@ mod native {
 					callback as *const () as isize
 				);
 				assert!(!Shell_NotifyIconW(NIM_MODIFY, &icon).as_bool());
+				// Startup can minimize before the asynchronous preference enables the tray.
+				let _ = ShowWindow(hwnd, SW_MINIMIZE);
+				let late_tray = Tray::new(window.clone(), || {}).unwrap();
+				assert!(late_tray.state.hidden.get());
+				assert!(!IsWindowVisible(hwnd).as_bool());
+				drop(late_tray);
+				assert!(IsWindowVisible(hwnd).as_bool());
+				assert!(!IsIconic(hwnd).as_bool());
 			}
 			assert_eq!(wakes.get(), 2);
 			window.set_visible(false);

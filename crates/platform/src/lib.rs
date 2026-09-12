@@ -2,6 +2,7 @@
 pub mod game_activity;
 pub mod notifications;
 pub mod save;
+pub mod startup;
 pub mod tray;
 pub mod video;
 use client_core::auth::{Failure, SessionSecret};

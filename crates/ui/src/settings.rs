@@ -16,6 +16,7 @@ pub(super) struct Settings {
 enum Page {
 	Account,
 	Profile,
+	General,
 	#[default]
 	Appearance,
 	Notifications,
@@ -24,9 +25,10 @@ enum Page {
 	Storage,
 }
 impl Page {
-	const ALL: [Self; 7] = [
+	const ALL: [Self; 8] = [
 		Self::Account,
 		Self::Profile,
+		Self::General,
 		Self::Appearance,
 		Self::Notifications,
 		Self::Activity,
@@ -34,7 +36,8 @@ impl Page {
 		Self::Storage,
 	];
 	const USER: [Self; 2] = [Self::Account, Self::Profile];
-	const APP: [Self; 5] = [
+	const APP: [Self; 6] = [
+		Self::General,
 		Self::Appearance,
 		Self::Notifications,
 		Self::Activity,
@@ -45,6 +48,7 @@ impl Page {
 		match self {
 			Self::Account => "My Account",
 			Self::Profile => "Profile",
+			Self::General => "General",
 			Self::Appearance => "Appearance",
 			Self::Notifications => "Notifications",
 			Self::Activity => "Game Activity",
@@ -56,6 +60,7 @@ impl Page {
 		match self {
 			Self::Account => "The Discord account signed in on this device.",
 			Self::Profile => "Choose how you appear across Discord.",
+			Self::General => "Startup and window behavior on this device.",
 			Self::Appearance => "Theme, colour preset, zoom and layout.",
 			Self::Notifications => "Desktop alerts saved on this device.",
 			Self::Activity => "Show others what you are playing.",
@@ -67,6 +72,9 @@ impl Page {
 		let keywords = match self {
 			Self::Account => "my account profile logout",
 			Self::Profile => "profile edit display name about me bio pronouns color colour",
+			Self::General => {
+				"general windows startup autostart automatically open minimized minimize tray background"
+			}
 			Self::Appearance => {
 				"appearance customization primary accent hex window tray minimize theme dark light system zoom reading layout sidebar people reset colour color preset animate animated gifs autoplay hide image links confirm confirmation external browser"
 			}
@@ -209,6 +217,7 @@ impl MessagingUi {
 									return;
 								}
 								match self.settings.page {
+									Page::General => self.general_settings(ui, state.demo),
 									Page::Account => self.account_page(ui, state),
 									Page::Profile => self.settings.editor.show(
 										ui,
@@ -502,27 +511,70 @@ impl MessagingUi {
 		});
 	}
 
-	fn appearance_settings(&mut self, ui: &mut egui::Ui) {
+	fn general_settings(&mut self, ui: &mut egui::Ui, demo: bool) {
 		let colors = design::palette(ui);
-		ui.label(design::eyebrow(ui, "Window", colors.muted));
-		design::card(ui, |ui| {
-			ui.add_enabled_ui(self.tray_available, |ui| {
+		ui.add_enabled_ui(self.startup_available && !self.startup_busy, |ui| {
+			design::switch(
+				ui,
+				"Automatically open Serein when your computer starts up",
+				None,
+				&mut self.startup_enabled,
+			);
+			ui.add_space(12.0);
+			ui.add_enabled_ui(self.startup_enabled, |ui| {
 				design::switch(
 					ui,
-					"Minimize to tray",
-					Some("Keep Serein running in the notification area when minimized."),
-					&mut self.minimize_to_tray,
+					"Start Serein minimized",
+					Some("Start Serein in the background, out of your way."),
+					&mut self.startup_minimized,
 				);
 			});
-			let status = if self.tray_available {
-				self.tray_status
-			} else {
-				"Tray is unavailable on this platform."
-			};
-			if !status.is_empty() {
-				ui.label(RichText::new(status).size(12.0).color(colors.muted));
-			}
 		});
+		if !self.startup_status.is_empty() {
+			ui.label(
+				RichText::new(self.startup_status)
+					.size(12.0)
+					.color(colors.muted),
+			);
+			if self.startup_available
+				&& !self.startup_busy
+				&& ui.button("Turn off startup").clicked()
+			{
+				self.startup_disable_requested = true;
+			}
+		}
+		if !self.startup_available {
+			ui.label("Automatic startup is currently available on Windows only.");
+		}
+		ui.add_space(12.0);
+		ui.add_enabled_ui(self.tray_available, |ui| {
+			design::switch(
+				ui,
+				"Minimize Serein to System Tray",
+				Some("Keep Serein running in the notification area when minimized."),
+				&mut self.minimize_to_tray,
+			);
+		});
+		let status = if self.tray_available {
+			self.tray_status
+		} else {
+			"Tray is unavailable on this platform."
+		};
+		if !status.is_empty() {
+			ui.label(RichText::new(status).size(12.0).color(colors.muted));
+		}
+		if demo {
+			ui.add_space(12.0);
+			ui.label(
+				RichText::new("Offline preview. Startup settings are not saved.")
+					.size(12.0)
+					.color(colors.muted),
+			);
+		}
+	}
+
+	fn appearance_settings(&mut self, ui: &mut egui::Ui) {
+		let colors = design::palette(ui);
 		ui.add_space(8.0);
 		ui.label(design::eyebrow(ui, "Theme", colors.muted));
 		theme_preference_cards(ui);
