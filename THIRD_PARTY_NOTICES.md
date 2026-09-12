@@ -170,3 +170,16 @@ ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
+# Community extension runtime (September 12, 2026)
+
+Wasmi 2.0.0 and its core, collections and IR crates are MIT OR Apache-2.0.
+The upstream license texts at commit `2970aa871cc1001b57b267ccecdcd1e42306199e`
+are bundled under `assets/licenses/files/wasmi-2.0.0-LICENSE-*`.
+Wasmparser 0.228.0 is used under its MIT option; its upstream license at
+`e66235859a6ec0502bf6f9dcc358953eda4cafcc` is bundled alongside it.
+New transitive foldhash 0.1.5, hashbrown 0.15.5, spin 0.9.9 and
+string-interner 0.19.0 license texts are copied from their registry packages.
+Test-only WAT/WAST/wasm-encoder/wasmparser 0.245.1 use the wasm-tools MIT
+license at `76927bf4bdbddf4b15f835c5eddfffbdfe3bdbd5` (`wat-1.245.1-LICENSE-MIT`);
+leb128fmt license texts are also bundled. These test tools are not a plugin
+compiler shipped to end users. Creator packages carry their own license metadata.

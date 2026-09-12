@@ -1,0 +1,2 @@
+# Release packages are hash-addressed artifacts; never rewrite their line endings.
+*.serein-extension -text

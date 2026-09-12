@@ -7,6 +7,8 @@ mod clipboard;
 mod connection;
 mod credentials;
 mod downloads;
+mod extension_bridge;
+mod extensions;
 mod game_activity;
 mod group_icon;
 mod reading_settings;
@@ -127,6 +129,8 @@ impl Drop for FrameMetrics {
 	}
 }
 struct Desktop {
+	extensions: extension_bridge::Bridge,
+	extension_close_pending: bool,
 	login: Option<platform::LoginView>,
 	connection: Option<connection::Connection>,
 	state: State,
@@ -781,6 +785,8 @@ impl Desktop {
 			state.status = "Disconnected";
 		}
 		Ok(Self {
+			extensions: extension_bridge::Bridge::default(),
+			extension_close_pending: false,
 			login: None,
 			connection: None,
 			state,
@@ -892,6 +898,7 @@ impl Desktop {
 		));
 	}
 	fn logout(&mut self, ctx: &egui::Context) {
+		let extension_logout = self.extensions.logout(ctx);
 		self.group_icon.cancel();
 		self.notifications.clear();
 		self.uploads.cancel();
@@ -918,6 +925,11 @@ impl Desktop {
 			}
 		}
 		self.messaging.clear();
+		if let Err(error) = extension_logout {
+			self.messaging.extensions.status = error;
+			self.cache_error = true;
+			self.cache_status = "Extension account data removal could not be queued";
+		}
 		self.app_settings.apply(&mut self.messaging);
 		self.messaging.share_game_activity = self.game_activity.enabled;
 		ctx.memory_mut(|m| *m = egui::Memory::default());
@@ -2806,6 +2818,14 @@ impl eframe::App for Desktop {
 		);
 		self.messaging.sync_reading_zoom(ctx);
 		self.poll(ctx);
+		self.extensions.tick(
+			&self.state,
+			&mut self.messaging,
+			ctx,
+			&self.runtime,
+			&self.window,
+			self.fixture_only,
+		);
 		self.sync_customization(ctx);
 		#[cfg(feature = "demo")]
 		if self.demo_typing
@@ -2995,6 +3015,14 @@ impl eframe::App for Desktop {
 		};
 		self.messaging.downloads().active = self.downloads.is_active();
 		self.messaging.downloads().status = download_status;
+		if close_requested && self.extensions.cleanup_pending() {
+			self.extension_close_pending = true;
+			ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+		}
+		if self.extension_close_pending && !self.extensions.cleanup_pending() {
+			self.extension_close_pending = false;
+			ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+		}
 		if close_requested && self.downloads.is_active() {
 			self.downloads.cancel();
 			self.download_close_pending = true;
@@ -3349,6 +3377,7 @@ impl eframe::App for Desktop {
 			egui::Window::new("Leave this session?").collapsible(false).show(&ctx,|ui|{
                 ui.label("Saved text drafts survive exit; selected files must be reselected. Logout removes local account data. Edits and uncertain sends need your attention.");
                 if self.forgetting{ui.label("Wait for saved-login removal to finish.");}
+                if self.extensions.cleanup_pending(){ui.label("Removing extension data before closing.");}
                 if self.cache_clears.pending(){ui.label("Cached history cleanup is pending; closing now may leave deleted messages on disk.");}
                 if !self.fixture_only && self.app_settings.state.needs_attention(){ui.label(self.app_settings.state.status());}
                 if !self.fixture_only && self.reading.needs_attention(){ui.label(self.reading.status());}

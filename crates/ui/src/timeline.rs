@@ -9,6 +9,8 @@ use std::{
 
 #[derive(Default)]
 pub struct TimelineView {
+	pub(super) extension_actions: std::sync::Arc<Vec<crate::extensions_ui::MenuAction>>,
+	pub(super) extension_request: Option<(crate::extensions_ui::MenuAction, String)>,
 	pub(super) user_action: Option<crate::user_menu::Action>,
 	pub(super) restore_pending: Option<String>,
 	pub(super) cancel_upload: bool,
@@ -288,7 +290,11 @@ fn action_button(ui: &mut egui::Ui, icon: crate::icons::Icon, label: &str) -> eg
 }
 fn message_actions(
 	popup: egui::Popup<'_>,
-	message: &Message,
+	(message, extension_actions, extension_request): (
+		&Message,
+		&[crate::extensions_ui::MenuAction],
+		&mut Option<(crate::extensions_ui::MenuAction, String)>,
+	),
 	actions: (bool, bool, bool, bool),
 	selection: (Option<&mut Option<Id>>, &mut Option<Id>),
 	editing: (&mut Option<(Id, Id, String)>, &mut bool),
@@ -301,6 +307,18 @@ fn message_actions(
 	let (can_pin, pinned, pin_request) = pin;
 	popup.show(|ui| {
 		ui.set_min_width(160.0);
+		if !extension_actions.is_empty() {
+			ui.menu_button("Extensions", |ui| {
+				for action in extension_actions {
+					if ui.button(&action.label).clicked() {
+						*extension_request =
+							Some((action.clone(), message.display_text().into_owned()));
+						ui.close();
+					}
+				}
+			});
+			ui.separator();
+		}
 		if ui.button("Copy message").clicked() {
 			ui.ctx().copy_text(message.display_text().into_owned());
 			ui.close();
@@ -495,6 +513,7 @@ impl TimelineView {
 		let channel_changed = self.channel != state.selected;
 		if channel_changed {
 			*self = Self {
+				extension_actions: self.extension_actions.clone(),
 				hide_media_links: self.hide_media_links,
 				channel: state.selected,
 				following: true,
@@ -1390,7 +1409,11 @@ impl TimelineView {
 							}
 							message_actions(
 								popup,
-								message,
+								(
+									message,
+									&self.extension_actions,
+									&mut self.extension_request,
+								),
 								(own, can_reply, can_edit, can_delete),
 								(
 									can_mark_read.then_some(&mut self.mark_read),
@@ -2170,7 +2193,7 @@ mod tests {
 						let menu = action_button(ui, crate::icons::Icon::More, "More");
 						message_actions(
 							egui::Popup::menu(&menu),
-							&message,
+							(&message, &[], &mut None),
 							(own, true, true, can_delete),
 							(None, &mut reply),
 							(&mut editing, &mut edit_started),

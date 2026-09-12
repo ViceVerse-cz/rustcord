@@ -1,5 +1,11 @@
 # Resolved dependencies
 
+September 12 community extensions: Wasmi is pinned to 2.0.0 with only `std`,
+`validate`, `stable` and `portable-dispatch`. No WASI implementation is linked.
+WAT 1.245.1 is test-only for executable adversarial sandbox fixtures. The
+application exposes a versioned JSON/Wasm ABI; no JavaScript or web UI runtime
+is added. See `docs/extensions.md` for lifecycle and package trust boundaries.
+
 Voice is now included in every desktop build without a feature flag. Dated dependency-selection notes below describe their original snapshots.
 
 September 12 camera capture: Windows reuses the locked `windows 0.61.3` and

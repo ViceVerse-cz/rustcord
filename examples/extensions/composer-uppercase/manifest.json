@@ -1,0 +1,12 @@
+{
+  "api_version": 1,
+  "id": "composer-uppercase",
+  "name": "Uppercase composer",
+  "version": "1.0.0",
+  "author": "Serein contributors",
+  "license": "MIT OR Apache-2.0",
+  "source": "https://github.com/ViceVerse-cz/rustcord",
+  "kind": "plugin",
+  "capabilities": ["composer"],
+  "actions": [{"id": "uppercase", "label": "Convert to uppercase", "surface": "composer"}]
+}

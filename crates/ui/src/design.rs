@@ -220,7 +220,7 @@ fn gradient(stops: [u32; 2]) -> Palette {
 	p.backdrop = Some([rgb(stops[0]), rgb(stops[1])]);
 	p
 }
-pub fn colors(dark: bool, variant: Variant) -> Palette {
+pub fn builtin_colors(dark: bool, variant: Variant) -> Palette {
 	let palette = match variant {
 		Variant::Standard if dark => dark_common(
 			rgb(0x121214),
@@ -279,6 +279,103 @@ pub fn colors(dark: bool, variant: Variant) -> Palette {
 	};
 	customize(palette, primary_color())
 }
+#[derive(Clone, Copy)]
+struct ExtensionPalette {
+	colors: [Option<Color32>; 18],
+	backdrop: Option<[Color32; 2]>,
+}
+thread_local! {
+	static EXTENSION_THEME: std::cell::Cell<Option<[ExtensionPalette; 2]>> = const { std::cell::Cell::new(None) };
+}
+const THEME_FIELDS: [&str; 18] = [
+	"base",
+	"sidebar",
+	"chat",
+	"raised",
+	"hover",
+	"selected",
+	"border",
+	"text_strong",
+	"text",
+	"muted",
+	"link",
+	"accent",
+	"accent_text",
+	"positive",
+	"warning",
+	"danger",
+	"mention_bg",
+	"mention_text",
+];
+fn extension_palette(theme: &extensions::ThemePalette) -> Option<ExtensionPalette> {
+	let color = |text: &str| {
+		extensions::parse_color(text)
+			.ok()
+			.map(|[r, g, b, a]| Color32::from_rgba_unmultiplied(r, g, b, a))
+	};
+	let mut colors = [None; 18];
+	for (name, value) in &theme.colors {
+		let index = THEME_FIELDS.iter().position(|field| *field == name)?;
+		colors[index] = Some(color(value)?);
+	}
+	let backdrop = match &theme.backdrop {
+		Some([a, b]) => Some([color(a)?, color(b)?]),
+		None => None,
+	};
+	Some(ExtensionPalette { colors, backdrop })
+}
+/// Install prevalidated color overrides; malformed themes reset to the built-in appearance.
+/// Call [`apply`] after changing this value. No parsing or allocation runs while drawing.
+pub fn set_extension_theme(theme: Option<&extensions::Theme>) {
+	let palettes = theme.and_then(|theme| {
+		Some([
+			extension_palette(&theme.light)?,
+			extension_palette(&theme.dark)?,
+		])
+	});
+	EXTENSION_THEME.set(palettes);
+}
+fn recolor(mut palette: Palette, theme: ExtensionPalette) -> Palette {
+	for (destination, color) in [
+		&mut palette.base,
+		&mut palette.sidebar,
+		&mut palette.chat,
+		&mut palette.raised,
+		&mut palette.hover,
+		&mut palette.selected,
+		&mut palette.border,
+		&mut palette.text_strong,
+		&mut palette.text,
+		&mut palette.muted,
+		&mut palette.link,
+		&mut palette.accent,
+		&mut palette.accent_text,
+		&mut palette.positive,
+		&mut palette.warning,
+		&mut palette.danger,
+		&mut palette.mention_bg,
+		&mut palette.mention_text,
+	]
+	.into_iter()
+	.zip(theme.colors)
+	{
+		if let Some(color) = color {
+			*destination = color;
+		}
+	}
+	palette.backdrop = theme.backdrop;
+	palette.canvas = palette.chat;
+	palette.surface = palette.sidebar;
+	palette
+}
+pub fn colors(dark: bool, variant: Variant) -> Palette {
+	let mut palette = builtin_colors(dark, variant);
+	if let Some(palettes) = EXTENSION_THEME.get() {
+		palette = recolor(palette, palettes[usize::from(dark)]);
+	}
+	customize(palette, primary_color())
+}
+
 fn customize(mut palette: Palette, primary: Option<[u8; 3]>) -> Palette {
 	if let Some([r, g, b]) = primary {
 		palette.accent = Color32::from_rgb(r, g, b);
@@ -1188,4 +1285,35 @@ pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
 		lerp(a.b(), b.b()),
 		lerp(a.a(), b.a()),
 	)
+}
+
+#[cfg(test)]
+mod extension_theme_tests {
+	use super::*;
+	#[test]
+	fn extension_colors_keep_aliases_and_user_accent() {
+		let theme = extensions::ThemePalette {
+			colors: [
+				("chat".into(), "#112233".into()),
+				("sidebar".into(), "#445566".into()),
+				("accent".into(), "#ff0000".into()),
+			]
+			.into(),
+			backdrop: Some(["#010203".into(), "#040506".into()]),
+		};
+		let palette = recolor(
+			builtin_colors(true, Variant::Standard),
+			extension_palette(&theme).unwrap(),
+		);
+		assert_eq!(palette.chat, rgb(0x112233));
+		assert_eq!(palette.canvas, palette.chat);
+		assert_eq!(palette.surface, palette.sidebar);
+		assert_eq!(palette.backdrop, Some([rgb(0x010203), rgb(0x040506)]));
+		assert_eq!(customize(palette, Some([3, 4, 5])).accent, rgb(0x030405));
+		let malformed = extensions::ThemePalette {
+			colors: [("chat".into(), "invalid".into())].into(),
+			..Default::default()
+		};
+		assert!(extension_palette(&malformed).is_none());
+	}
 }

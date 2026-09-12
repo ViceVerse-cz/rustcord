@@ -9,6 +9,7 @@ default = []
 demo = []
 
 [dependencies]
+extensions.workspace = true
 egui.workspace = true
 model.workspace = true
 client-core.workspace = true

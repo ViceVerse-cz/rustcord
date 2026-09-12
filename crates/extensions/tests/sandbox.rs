@@ -1,0 +1,226 @@
+use extensions::*;
+
+fn plugin(wasm: &str) -> Package {
+	Package {
+		manifest: Manifest {
+			api_version: API_VERSION,
+			id: "test-plugin".into(),
+			name: "Test plugin".into(),
+			version: "1.0.0".into(),
+			author: "Serein".into(),
+			license: "MIT".into(),
+			source: "https://github.com/example/plugin".into(),
+			kind: ExtensionKind::Plugin,
+			capabilities: vec![Capability::Composer],
+			actions: vec![Action {
+				id: "run".into(),
+				label: "Run".into(),
+				surface: Surface::Composer,
+			}],
+		},
+		theme: None,
+		wasm: wat::parse_str(wasm).unwrap(),
+	}
+}
+
+fn returning(json: &str) -> Package {
+	let data: String = json.bytes().map(|b| format!("\\{b:02x}")).collect();
+	plugin(&format!(
+		r#"(module (memory (export "memory") 1 256)
+		(data (i32.const 32768) "{data}")
+		(func (export "serein_alloc") (param i32) (result i32) (i32.const 0))
+		(func (export "serein_invoke") (param i32 i32) (result i64) (i64.const {})))"#,
+		(32768_u64 << 32) | json.len() as u64
+	))
+}
+
+fn input() -> Invocation {
+	Invocation {
+		action: "run".into(),
+		composer: Some("hello".into()),
+		..Default::default()
+	}
+}
+
+#[test]
+fn returns_bounded_composer_proposal_and_releases_invocations() {
+	let package = returning(r#"{"replacement":"HELLO","panel":[]}"#);
+	let roundtrip = parse_package(&serde_json::to_vec(&package).unwrap()).unwrap();
+	for _ in 0..20 {
+		assert_eq!(
+			invoke(&roundtrip, &input()).unwrap().replacement.as_deref(),
+			Some("HELLO")
+		);
+	}
+}
+
+#[test]
+fn rejects_imports_start_and_excessive_memory() {
+	assert!(
+		plugin(r#"(module (import "wasi_snapshot_preview1" "fd_write" (func)))"#)
+			.validate()
+			.is_err()
+	);
+	assert!(
+		plugin(r#"(module (func $start) (start $start))"#)
+			.validate()
+			.is_err()
+	);
+	let package = plugin(
+		r#"(module (memory (export "memory") 257) (func (export "serein_alloc") (param i32) (result i32) i32.const 0) (func (export "serein_invoke") (param i32 i32) (result i64) i64.const 0))"#,
+	);
+	assert!(invoke(&package, &input()).is_err());
+}
+
+#[test]
+fn fuel_interrupts_infinite_loop_and_memory_growth_traps() {
+	for body in [
+		"(loop $spin (br $spin)) (i64.const 0)",
+		"(drop (memory.grow (i32.const 256))) (i64.const 0)",
+	] {
+		let package = plugin(&format!(
+			r#"(module (memory (export "memory") 1) (func (export "serein_alloc") (param i32) (result i32) i32.const 0) (func (export "serein_invoke") (param i32 i32) (result i64) {body}))"#
+		));
+		assert!(matches!(invoke(&package, &input()), Err(Error::Execution)));
+	}
+}
+
+#[test]
+fn rejects_oversized_or_invalid_pointers_and_json_responses() {
+	for packed in [MAX_IO_BYTES as u64 + 1, (u32::MAX as u64) << 32 | 4] {
+		let package = plugin(&format!(
+			r#"(module (memory (export "memory") 1) (func (export "serein_alloc") (param i32) (result i32) i32.const 0) (func (export "serein_invoke") (param i32 i32) (result i64) i64.const {packed}))"#
+		));
+		assert!(invoke(&package, &input()).is_err());
+	}
+	assert!(invoke(&returning("not json"), &input()).is_err());
+	assert!(invoke(&returning(r#"{"send":"not allowed"}"#), &input()).is_err());
+}
+
+#[test]
+fn enforces_capabilities_and_restricts_context_to_action_surface() {
+	assert!(matches!(
+		invoke(&returning(r#"{"storage":"private"}"#), &input()),
+		Err(Error::Capability)
+	));
+	let mut request = input();
+	request.selected_message = Some("not granted".into());
+	assert!(matches!(
+		invoke(&returning("{}"), &request),
+		Err(Error::Capability)
+	));
+	let mut package = returning(r#"{"replacement":"changed"}"#);
+	package.manifest.actions[0].surface = Surface::Panel;
+	request = Invocation {
+		action: "run".into(),
+		..Default::default()
+	};
+	assert!(matches!(invoke(&package, &request), Err(Error::Capability)));
+}
+
+#[test]
+fn rejects_panel_complexity_duplicate_ids_and_unknown_actions() {
+	let mut package = returning("{}");
+	package.manifest.actions.push(Action {
+		id: "panel".into(),
+		label: "Panel".into(),
+		surface: Surface::Panel,
+	});
+	for panel in [
+		vec![Element::Text { text: "x".into() }; MAX_PANEL_ELEMENTS + 1],
+		vec![Element::Button {
+			id: "missing".into(),
+			label: "Button".into(),
+		}],
+		vec![
+			Element::Checkbox {
+				id: "same".into(),
+				label: "Same".into(),
+				checked: false
+			};
+			2
+		],
+	] {
+		assert!(
+			Output {
+				panel,
+				..Default::default()
+			}
+			.validate(&package.manifest, &input())
+			.is_err()
+		);
+	}
+	let mut tree = vec![Element::Text {
+		text: "nested".into(),
+	}];
+	for _ in 0..10 {
+		tree = vec![Element::Row { children: tree }];
+	}
+	assert!(
+		Output {
+			panel: tree,
+			..Default::default()
+		}
+		.validate(&package.manifest, &input())
+		.is_err()
+	);
+}
+
+#[test]
+fn validates_themes_catalog_and_path_safe_identifiers() {
+	for id in ["../test", "CON", "/tmp", "a/b", "", "test.plugin"] {
+		assert!(!valid_id(id));
+	}
+	assert_eq!(parse_color("#11223380").unwrap(), [17, 34, 51, 128]);
+	for color in ["red", "#xyzxyz", "#123", "#abcdef😀"] {
+		assert!(parse_color(color).is_err());
+	}
+	let mut theme = Theme::default();
+	theme.dark.colors.insert("chat".into(), "#101010".into());
+	assert!(theme.validate().is_ok());
+	theme.dark.colors.insert("image".into(), "#101010".into());
+	assert!(theme.validate().is_err());
+	assert!(parse_package(&vec![b' '; MAX_PACKAGE_BYTES + 1]).is_err());
+	assert!(parse_catalog(br#"{"api_version":2,"entries":[]}"#).is_err());
+	let entry = CatalogEntry {
+		manifest: returning("{}").manifest,
+		release_url: "https://example.com/p.json".into(),
+		sha256: "a".repeat(64),
+		download_bytes: 100,
+		source_commit: "a".repeat(40),
+	};
+	let catalog = Catalog {
+		api_version: API_VERSION,
+		entries: vec![entry.clone(), entry],
+	};
+	assert!(parse_catalog(&serde_json::to_vec(&catalog).unwrap()).is_err());
+}
+
+#[test]
+fn shipped_rust_examples_execute_through_the_real_abi() {
+	let uppercase = parse_package(include_bytes!(
+		"../../../examples/extensions/packages/composer-uppercase.serein-extension"
+	))
+	.unwrap();
+	let input = Invocation {
+		action: "uppercase".into(),
+		composer: Some("Hello, čau!".into()),
+		..Default::default()
+	};
+	assert_eq!(
+		invoke(&uppercase, &input).unwrap().replacement.as_deref(),
+		Some("HELLO, ČAU!")
+	);
+	let counter = parse_package(include_bytes!(
+		"../../../examples/extensions/packages/message-word-count.serein-extension"
+	))
+	.unwrap();
+	let input = Invocation {
+		action: "count".into(),
+		selected_message: Some("Hello\nworld\tčau".into()),
+		..Default::default()
+	};
+	assert!(
+		matches!(&invoke(&counter,&input).unwrap().panel[0],Element::Text{text} if text == "Words: 3")
+	);
+}

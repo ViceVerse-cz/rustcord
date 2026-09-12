@@ -1,0 +1,1040 @@
+//! User-invoked, bounded extension work. No package IO or Wasm runs on the UI thread.
+use std::{
+	collections::VecDeque,
+	fs::{self, File, OpenOptions},
+	io::{Read, Write},
+	net::{IpAddr, Ipv4Addr},
+	path::{Path, PathBuf},
+	sync::{
+		Arc,
+		atomic::{AtomicU64, Ordering},
+		mpsc::{self, Receiver},
+	},
+	time::Duration,
+};
+
+use extensions::{
+	Capability, Catalog, CatalogEntry, ExtensionKind, Invocation, Manifest, Output, Package, Theme,
+};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+const CATALOG_URL: &str =
+	"https://raw.githubusercontent.com/ViceVerse-cz/rustcord/main/extensions/catalog.json";
+const MAX_PACKAGE: usize = 16 * 1024 * 1024;
+const MAX_RECORD: usize = MAX_PACKAGE + 64 * 1024;
+const MAX_CATALOG: usize = 1024 * 1024;
+const MAX_STORAGE: usize = 1024 * 1024;
+const MAX_PER_SCOPE: usize = 8;
+const MAX_ACCOUNTS: usize = 8;
+const MAX_QUEUE: usize = 4;
+
+#[derive(Clone)]
+pub enum InstallSource {
+	Catalog(CatalogEntry),
+	Local {
+		path: PathBuf,
+		sha256: String,
+		manifest: Manifest,
+	},
+}
+
+pub enum Job {
+	Load {
+		account: Option<String>,
+	},
+	RefreshCatalog,
+	InspectImport {
+		path: PathBuf,
+	},
+	Enable {
+		source: InstallSource,
+		grants: Vec<Capability>,
+		account: Option<String>,
+	},
+	Disable {
+		id: String,
+		kind: ExtensionKind,
+		account: Option<String>,
+	},
+	Invoke {
+		id: String,
+		account: String,
+		invocation: Invocation,
+	},
+	Logout {
+		account: String,
+	},
+}
+
+#[derive(Clone)]
+pub struct InstalledExtension {
+	pub manifest: Manifest,
+	pub theme: Option<Theme>,
+	pub reviewed: bool,
+	pub sha256: String,
+	pub download_bytes: u64,
+	pub error: Option<String>,
+}
+
+pub enum Event {
+	Loaded(Vec<InstalledExtension>),
+	Catalog(Catalog),
+	Imported {
+		manifest: Manifest,
+		source: InstallSource,
+		download_bytes: u64,
+	},
+	Enabled(InstalledExtension),
+	Disabled(String),
+	Invoked {
+		id: String,
+		output: Output,
+	},
+	LoggedOut,
+}
+
+/// A single worker exists only while a job runs. Queued jobs and results have fixed limits.
+pub struct ExtensionHost {
+	root: PathBuf,
+	generation: Arc<AtomicU64>,
+	wake_cancel: Arc<tokio::sync::Notify>,
+	queue: VecDeque<(u64, Job)>,
+	next_token: u64,
+	active: Option<(u64, Receiver<Result<Event, String>>)>,
+	context: Option<eframe::egui::Context>,
+}
+
+impl ExtensionHost {
+	pub fn new(root: PathBuf) -> Self {
+		Self {
+			root,
+			generation: Arc::new(AtomicU64::new(0)),
+			wake_cancel: Arc::new(tokio::sync::Notify::new()),
+			queue: VecDeque::new(),
+			next_token: 0,
+			active: None,
+			context: None,
+		}
+	}
+
+	pub fn cancel(&mut self) {
+		self.generation.fetch_add(1, Ordering::AcqRel);
+		self.wake_cancel.notify_waiters();
+		self.queue
+			.retain(|(_, job)| matches!(job, Job::Disable { .. } | Job::Logout { .. }));
+	}
+
+	pub fn submit(&mut self, job: Job, context: &eframe::egui::Context) -> Result<u64, String> {
+		if matches!(job, Job::Disable { .. } | Job::Logout { .. }) {
+			self.cancel();
+		}
+		if self.queue.len() >= MAX_QUEUE {
+			return Err("Extensions are busy; try again after the current operation".into());
+		}
+		validate_job(&job)?;
+		self.context = Some(context.clone());
+		let token = self.next_token;
+		self.next_token = self.next_token.wrapping_add(1);
+		self.queue.push_back((token, job));
+		self.start_next();
+		Ok(token)
+	}
+
+	pub fn busy(&self) -> bool {
+		self.active.is_some() || !self.queue.is_empty()
+	}
+
+	pub fn poll(&mut self) -> Option<(u64, Result<Event, String>)> {
+		let (token, receiver) = self.active.as_ref()?;
+		let token = *token;
+		let result = receiver.try_recv();
+		match result {
+			Ok(result) => {
+				self.active = None;
+				self.start_next();
+				Some((token, result))
+			}
+			Err(mpsc::TryRecvError::Empty) => None,
+			Err(mpsc::TryRecvError::Disconnected) => {
+				self.active = None;
+				self.start_next();
+				Some((token, Err("Extension worker stopped unexpectedly".into())))
+			}
+		}
+	}
+
+	fn start_next(&mut self) {
+		if self.active.is_some() {
+			return;
+		}
+		let Some((token, job)) = self.queue.pop_front() else {
+			return;
+		};
+		let (sender, receiver) = mpsc::sync_channel(1);
+		let root = self.root.clone();
+		let generation = if matches!(job, Job::Disable { .. } | Job::Logout { .. }) {
+			Arc::new(AtomicU64::new(0))
+		} else {
+			self.generation.clone()
+		};
+		let gate = Gate {
+			epoch: generation.load(Ordering::Acquire),
+			generation,
+			wake_cancel: self.wake_cancel.clone(),
+		};
+		let context = self.context.clone();
+		self.active = Some((token, receiver));
+		if std::thread::Builder::new()
+			.name("serein-extension".into())
+			.spawn(move || {
+				let result = run(&root, job, &gate);
+				let _ = sender.send(result);
+				if let Some(context) = context {
+					context.request_repaint();
+				}
+			})
+			.is_err()
+		{
+			// The disconnected receiver reports the failure through the ordinary error UI.
+			if let Some(context) = &self.context {
+				context.request_repaint();
+			}
+		}
+	}
+}
+
+impl Drop for ExtensionHost {
+	fn drop(&mut self) {
+		self.cancel();
+	}
+}
+
+struct Gate {
+	epoch: u64,
+	generation: Arc<AtomicU64>,
+	wake_cancel: Arc<tokio::sync::Notify>,
+}
+impl Gate {
+	fn check(&self) -> Result<(), String> {
+		if self.epoch == self.generation.load(Ordering::Acquire) {
+			Ok(())
+		} else {
+			Err("Extension operation cancelled".into())
+		}
+	}
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Stored {
+	package: Package,
+	grants: Vec<Capability>,
+	reviewed: bool,
+	sha256: String,
+	download_bytes: u64,
+}
+
+impl Stored {
+	fn summary(&self) -> InstalledExtension {
+		InstalledExtension {
+			manifest: self.package.manifest.clone(),
+			theme: self.package.theme.clone(),
+			reviewed: self.reviewed,
+			sha256: self.sha256.clone(),
+			download_bytes: self.download_bytes,
+			error: None,
+		}
+	}
+}
+
+fn validate_job(job: &Job) -> Result<(), String> {
+	match job {
+		Job::Invoke {
+			id,
+			account,
+			invocation,
+		} => {
+			valid_id(id)?;
+			account_key(account)?;
+			if invocation.values.len() > 64
+				|| invocation
+					.action
+					.len()
+					.saturating_add(invocation.selected_message.as_ref().map_or(0, String::len))
+					.saturating_add(invocation.composer.as_ref().map_or(0, String::len))
+					.saturating_add(invocation.storage.as_ref().map_or(0, String::len))
+					.saturating_add(
+						invocation
+							.values
+							.iter()
+							.map(|(key, value)| key.len().saturating_add(value.len()))
+							.sum::<usize>(),
+					) > 256 * 1024
+			{
+				return Err("Plugin input exceeds 256 KiB".into());
+			}
+		}
+		Job::Disable { id, .. } => valid_id(id)?,
+		Job::Enable { grants, .. } if grants.len() > 3 => {
+			return Err("Invalid plugin grants".into());
+		}
+		Job::InspectImport { path } if path.as_os_str().len() > 4096 => {
+			return Err("Import path is too long".into());
+		}
+		_ => {}
+	}
+	Ok(())
+}
+
+fn run(root: &Path, job: Job, gate: &Gate) -> Result<Event, String> {
+	gate.check()?;
+	match job {
+		Job::Load { account } => load(root, account.as_deref(), gate).map(Event::Loaded),
+		Job::RefreshCatalog => {
+			let bytes = download(CATALOG_URL, MAX_CATALOG, gate)?;
+			extensions::parse_catalog(&bytes)
+				.map(Event::Catalog)
+				.map_err(|e| e.to_string())
+		}
+		Job::InspectImport { path } => {
+			let bytes = read_bounded(&path, MAX_PACKAGE)?;
+			let package = extensions::parse_package(&bytes).map_err(|e| e.to_string())?;
+			let manifest = package.manifest;
+			Ok(Event::Imported {
+				source: InstallSource::Local {
+					path,
+					sha256: digest(&bytes),
+					manifest: manifest.clone(),
+				},
+				manifest,
+				download_bytes: bytes.len() as u64,
+			})
+		}
+		Job::Enable {
+			source,
+			grants,
+			account,
+		} => enable(root, source, grants, account.as_deref(), gate).map(Event::Enabled),
+		Job::Disable { id, kind, account } => {
+			let scope = scope(root, kind, account.as_deref())?;
+			disable(&scope, &id, gate)?;
+			Ok(Event::Disabled(id))
+		}
+		Job::Invoke {
+			id,
+			account,
+			mut invocation,
+		} => {
+			let directory = scope(root, ExtensionKind::Plugin, Some(&account))?.join(&id);
+			if directory.with_extension("disabled").exists() {
+				return Err("Plugin is disabled".into());
+			}
+			let stored = read_stored(&directory.join("package.json"))?;
+			if stored.package.manifest.id != id
+				|| stored.package.manifest.kind != ExtensionKind::Plugin
+			{
+				return Err("Installed plugin identity changed".into());
+			}
+			if invocation.selected_message.is_some()
+				&& !stored.grants.contains(&Capability::SelectedMessage)
+				|| invocation.composer.is_some() && !stored.grants.contains(&Capability::Composer)
+			{
+				return Err("Plugin access was not granted".into());
+			}
+			invocation.storage = if stored.grants.contains(&Capability::Storage)
+				&& directory.join("data.json").exists()
+			{
+				Some(
+					String::from_utf8(read_bounded(&directory.join("data.json"), MAX_STORAGE)?)
+						.map_err(|_| "Plugin data is invalid")?,
+				)
+			} else {
+				None
+			};
+			gate.check()?;
+			let mut output =
+				extensions::invoke(&stored.package, &invocation).map_err(|e| e.to_string())?;
+			gate.check()?;
+			if let Some(data) = output.storage.take() {
+				if !stored.grants.contains(&Capability::Storage) || data.len() > MAX_STORAGE {
+					return Err("Plugin data exceeds its granted storage budget".into());
+				}
+				atomic_write(&directory.join("data.json"), data.as_bytes(), gate)?;
+			}
+			Ok(Event::Invoked { id, output })
+		}
+		Job::Logout { account } => {
+			let directory = scope(root, ExtensionKind::Plugin, Some(&account))?;
+			// The tombstone survives failed deletion and is retried before the next load.
+			if directory.exists() {
+				atomic_write(&directory.with_extension("disabled"), b"", gate)?;
+				remove_owned_directory(&directory)?;
+				remove_file(&directory.with_extension("disabled"))?;
+			}
+			Ok(Event::LoggedOut)
+		}
+	}
+}
+
+fn enable(
+	root: &Path,
+	source: InstallSource,
+	grants: Vec<Capability>,
+	account: Option<&str>,
+	gate: &Gate,
+) -> Result<InstalledExtension, String> {
+	let (bytes, manifest, sha256, reviewed) = match source {
+		InstallSource::Catalog(entry) => {
+			let bytes = download(&entry.release_url, MAX_PACKAGE, gate)?;
+			if bytes.len() as u64 != entry.download_bytes {
+				return Err("Extension download size changed".into());
+			}
+			(bytes, entry.manifest, entry.sha256, true)
+		}
+		InstallSource::Local {
+			path,
+			sha256,
+			manifest,
+		} => (read_bounded(&path, MAX_PACKAGE)?, manifest, sha256, false),
+	};
+	if !digest(&bytes).eq_ignore_ascii_case(&sha256) {
+		return Err("Extension package checksum changed; inspect the release again".into());
+	}
+	let package = extensions::parse_package(&bytes).map_err(|e| e.to_string())?;
+	if package.manifest != manifest {
+		return Err("Package does not match the reviewed manifest".into());
+	}
+	validate_grants(&package.manifest, &grants)?;
+	let parent = scope(root, package.manifest.kind, account)?;
+	let directory = parent.join(&package.manifest.id);
+	if parent.with_extension("disabled").exists() {
+		return Err("Account extension cleanup is incomplete; reopen Extensions to retry".into());
+	}
+	if !directory.exists() && count_directories(&parent)? >= MAX_PER_SCOPE {
+		return Err(
+			"Disable an extension first; each scope allows eight installed extensions".into(),
+		);
+	}
+	if package.manifest.kind == ExtensionKind::Plugin
+		&& !parent.exists()
+		&& count_directories(&root.join("accounts"))? >= MAX_ACCOUNTS
+	{
+		return Err("Extension storage is full; log out an old account first".into());
+	}
+	let stored = Stored {
+		package,
+		grants,
+		reviewed,
+		sha256: sha256.to_ascii_lowercase(),
+		download_bytes: bytes.len() as u64,
+	};
+	let record = serde_json::to_vec(&stored).map_err(|_| "Cannot encode extension package")?;
+	if record.len() > MAX_RECORD {
+		return Err("Extension package exceeds storage budget".into());
+	}
+	gate.check()?;
+	fs::create_dir_all(&directory).map_err(|_| "Cannot create extension directory")?;
+	atomic_write(&directory.join("package.json"), &record, gate)?;
+	remove_file(&directory.with_extension("disabled"))?;
+	if stored.package.manifest.kind == ExtensionKind::Theme {
+		atomic_write(
+			&parent.join("active.json"),
+			stored.package.manifest.id.as_bytes(),
+			gate,
+		)?;
+		cleanup_inactive_themes(&parent, &stored.package.manifest.id, gate)?;
+	}
+	Ok(stored.summary())
+}
+
+fn validate_grants(manifest: &Manifest, grants: &[Capability]) -> Result<(), String> {
+	if grants.len() != manifest.capabilities.len()
+		|| manifest
+			.capabilities
+			.iter()
+			.any(|cap| !grants.contains(cap))
+	{
+		return Err("Confirm every requested capability before enabling this extension".into());
+	}
+	Ok(())
+}
+
+fn scope(root: &Path, kind: ExtensionKind, account: Option<&str>) -> Result<PathBuf, String> {
+	match kind {
+		ExtensionKind::Theme => Ok(root.join("themes")),
+		ExtensionKind::Plugin => Ok(root.join("accounts").join(account_key(
+			account.ok_or("Select an account before enabling plugins")?,
+		)?)),
+	}
+}
+
+fn account_key(account: &str) -> Result<String, String> {
+	if account.is_empty() || account.len() > 128 {
+		return Err("Invalid extension account scope".into());
+	}
+	Ok(digest(account.as_bytes()))
+}
+
+fn valid_id(id: &str) -> Result<(), String> {
+	if !extensions::valid_id(id) {
+		return Err("Invalid extension identifier".into());
+	}
+	Ok(())
+}
+
+fn load(
+	root: &Path,
+	account: Option<&str>,
+	gate: &Gate,
+) -> Result<Vec<InstalledExtension>, String> {
+	cleanup(&root.join("accounts"), MAX_ACCOUNTS, gate)?;
+	let mut scopes = vec![(root.join("themes"), ExtensionKind::Theme)];
+	if let Some(account) = account {
+		scopes.push((
+			scope(root, ExtensionKind::Plugin, Some(account))?,
+			ExtensionKind::Plugin,
+		));
+	}
+	let mut installed = Vec::new();
+	for (parent, kind) in scopes {
+		let cleanup_error = cleanup(&parent, MAX_PER_SCOPE, gate).err();
+		let mut active_theme = None;
+		if kind == ExtensionKind::Theme && parent.join("active.json").exists() {
+			let active = String::from_utf8(read_bounded(&parent.join("active.json"), 64)?)
+				.map_err(|_| "Invalid active theme")?;
+			valid_id(&active)?;
+			let _ = cleanup_inactive_themes(&parent, &active, gate);
+			active_theme = Some(active);
+		}
+		if !parent.exists() {
+			continue;
+		}
+		for entry in fs::read_dir(&parent)
+			.map_err(|_| "Cannot read extensions")?
+			.take(MAX_PER_SCOPE * 4 + 1)
+		{
+			let entry = entry.map_err(|_| "Cannot read extension entry")?;
+			if entry
+				.file_type()
+				.map_err(|_| "Cannot read extension entry")?
+				.is_dir()
+			{
+				if installed.len() >= MAX_PER_SCOPE * 2 {
+					return Err("Too many installed extensions".into());
+				}
+				let id = entry.file_name().to_string_lossy().into_owned();
+				valid_id(&id)?;
+				let package_path = entry.path().join("package.json");
+				if !package_path.exists() {
+					remove_owned_directory(&entry.path())?;
+					continue;
+				}
+				let stored = read_stored(&package_path).and_then(|stored| {
+					if entry.path().with_extension("disabled").exists()
+						|| kind == ExtensionKind::Theme
+							&& active_theme.as_deref() != Some(id.as_str())
+					{
+						return Err(cleanup_error.clone().unwrap_or_else(|| {
+							"Extension is disabled; cleanup needs retrying".into()
+						}));
+					}
+					if stored.package.manifest.id != id || stored.package.manifest.kind != kind {
+						return Err("Installed extension identity changed".into());
+					}
+					Ok(stored)
+				});
+				remove_file(&entry.path().join("package.partial"))?;
+				remove_file(&entry.path().join("data.partial"))?;
+				installed.push(match stored {
+					Ok(stored) => stored.summary(),
+					Err(error) => InstalledExtension {
+						manifest: Manifest {
+							api_version: extensions::API_VERSION,
+							id: id.clone(),
+							name: id,
+							version: "invalid".into(),
+							author: "Unknown".into(),
+							license: "Unknown".into(),
+							source: "https://github.com/ViceVerse-cz/rustcord".into(),
+							kind,
+							capabilities: Vec::new(),
+							actions: Vec::new(),
+						},
+						theme: None,
+						reviewed: false,
+						sha256: String::new(),
+						download_bytes: 0,
+						error: Some(error),
+					},
+				});
+			}
+		}
+	}
+	Ok(installed)
+}
+
+fn read_stored(path: &Path) -> Result<Stored, String> {
+	let bytes = read_bounded(path, MAX_RECORD)?;
+	let stored: Stored =
+		serde_json::from_slice(&bytes).map_err(|_| "Installed extension metadata is invalid")?;
+	if stored.sha256.len() != 64
+		|| !stored.sha256.bytes().all(|b| b.is_ascii_hexdigit())
+		|| stored.download_bytes == 0
+		|| stored.download_bytes > MAX_PACKAGE as u64
+	{
+		return Err("Installed extension fingerprint is invalid".into());
+	}
+	stored.package.validate().map_err(|e| e.to_string())?;
+	validate_grants(&stored.package.manifest, &stored.grants)?;
+	Ok(stored)
+}
+
+fn disable(parent: &Path, id: &str, gate: &Gate) -> Result<(), String> {
+	valid_id(id)?;
+	if !parent.exists() {
+		return Ok(());
+	}
+	let directory = parent.join(id);
+	atomic_write(&directory.with_extension("disabled"), b"", gate)?;
+	remove_owned_directory(&directory)?;
+	if parent.join("active.json").exists()
+		&& read_bounded(&parent.join("active.json"), 64)? == id.as_bytes()
+	{
+		remove_file(&parent.join("active.json"))?;
+	}
+	remove_file(&directory.with_extension("disabled"))
+}
+
+fn cleanup_inactive_themes(parent: &Path, active: &str, gate: &Gate) -> Result<(), String> {
+	for entry in fs::read_dir(parent)
+		.map_err(|_| "Cannot inspect theme storage")?
+		.take(MAX_PER_SCOPE * 4 + 1)
+	{
+		let entry = entry.map_err(|_| "Cannot inspect theme storage")?;
+		if entry
+			.file_type()
+			.map_err(|_| "Cannot inspect theme storage")?
+			.is_dir() && entry.file_name() != active
+		{
+			let id = entry.file_name().to_string_lossy().into_owned();
+			disable(parent, &id, gate)?;
+		}
+	}
+	Ok(())
+}
+
+fn cleanup(parent: &Path, max: usize, gate: &Gate) -> Result<(), String> {
+	if !parent.exists() {
+		return Ok(());
+	}
+	for entry in fs::read_dir(parent)
+		.map_err(|_| "Cannot inspect extension cleanup")?
+		.take(max * 4 + 1)
+	{
+		gate.check()?;
+		let entry = entry.map_err(|_| "Cannot inspect extension cleanup")?;
+		if entry
+			.path()
+			.extension()
+			.is_some_and(|extension| extension == "disabled")
+		{
+			let id = entry
+				.path()
+				.file_stem()
+				.ok_or("Invalid cleanup marker")?
+				.to_string_lossy()
+				.into_owned();
+			valid_id(&id)?;
+			remove_owned_directory(&parent.join(&id))?;
+			remove_file(&entry.path())?;
+		} else if entry
+			.path()
+			.extension()
+			.is_some_and(|extension| extension == "partial")
+		{
+			remove_file(&entry.path())?;
+		}
+	}
+	Ok(())
+}
+
+fn count_directories(path: &Path) -> Result<usize, String> {
+	if !path.exists() {
+		return Ok(0);
+	}
+	let mut count = 0;
+	for entry in fs::read_dir(path)
+		.map_err(|_| "Cannot inspect extension budget")?
+		.take(MAX_PER_SCOPE * 4 + 1)
+	{
+		if entry
+			.map_err(|_| "Cannot inspect extension budget")?
+			.file_type()
+			.map_err(|_| "Cannot inspect extension budget")?
+			.is_dir()
+		{
+			count += 1;
+		}
+	}
+	Ok(count)
+}
+
+fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
+	let file = File::open(path).map_err(|_| "Cannot read extension file")?;
+	if !file
+		.metadata()
+		.map_err(|_| "Cannot inspect extension file")?
+		.is_file()
+	{
+		return Err("Extension package must be a regular file".into());
+	}
+	let mut bytes = Vec::new();
+	file.take(limit as u64 + 1)
+		.read_to_end(&mut bytes)
+		.map_err(|_| "Cannot read extension file")?;
+	if bytes.len() > limit {
+		return Err("Extension file exceeds its byte budget".into());
+	}
+	Ok(bytes)
+}
+
+fn atomic_write(path: &Path, bytes: &[u8], gate: &Gate) -> Result<(), String> {
+	gate.check()?;
+	let temporary = path.with_extension("partial");
+	let result: Result<(), String> = (|| {
+		let mut options = OpenOptions::new();
+		options.write(true).create(true).truncate(true);
+		#[cfg(unix)]
+		{
+			use std::os::unix::fs::OpenOptionsExt;
+			options.mode(0o600);
+		}
+		let mut file = options
+			.open(&temporary)
+			.map_err(|_| "Cannot write extension data")?;
+		file.write_all(bytes)
+			.map_err(|_| "Cannot write extension data")?;
+		file.sync_all()
+			.map_err(|_| "Cannot finish extension data")?;
+		drop(file);
+		gate.check()?;
+		fs::rename(&temporary, path).map_err(|_| "Cannot replace extension data".to_owned())
+	})();
+	if result.is_err() {
+		let _ = remove_file(&temporary);
+	}
+	result
+}
+
+fn remove_file(path: &Path) -> Result<(), String> {
+	match fs::remove_file(path) {
+		Ok(()) => Ok(()),
+		Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+		Err(_) => Err("Extension cleanup failed; retry or reopen Extensions".into()),
+	}
+}
+
+fn remove_owned_directory(path: &Path) -> Result<(), String> {
+	match fs::symlink_metadata(path) {
+		Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+		Err(_) => return Err("Cannot inspect extension cleanup path".into()),
+		Ok(metadata) if metadata.file_type().is_symlink() => {
+			return Err("Extension directory cannot be a symbolic link".into());
+		}
+		Ok(_) => {}
+	}
+	fs::remove_dir_all(path).map_err(|_| "Extension cleanup failed; it will retry on launch".into())
+}
+
+fn digest(bytes: &[u8]) -> String {
+	format!("{:x}", Sha256::digest(bytes))
+}
+
+fn download(raw: &str, limit: usize, gate: &Gate) -> Result<Vec<u8>, String> {
+	tokio::runtime::Builder::new_current_thread()
+		.enable_all()
+		.build()
+		.map_err(|_| "Extension downloader unavailable")?
+		.block_on(async {
+			tokio::select! {
+				biased;
+				_ = gate.wake_cancel.notified() => Err("Extension operation cancelled".into()),
+				result = tokio::time::timeout(Duration::from_secs(60), download_https(raw, limit, gate)) => result.map_err(|_| "Extension download timed out")?,
+			}
+		})
+}
+
+async fn download_https(raw: &str, limit: usize, gate: &Gate) -> Result<Vec<u8>, String> {
+	let mut url = url::Url::parse(raw).map_err(|_| "Invalid extension download URL")?;
+	for _ in 0..6 {
+		gate.check()?;
+		let host = url.host_str().ok_or("Invalid extension download host")?;
+		if url.scheme() != "https"
+			|| !url.username().is_empty()
+			|| url.password().is_some()
+			|| url.port_or_known_default() != Some(443)
+			|| !host.contains('.')
+		{
+			return Err("Extensions require credential-free public HTTPS URLs".into());
+		}
+		let addresses: Vec<_> = tokio::net::lookup_host((host, 443))
+			.await
+			.map_err(|_| "Extension download DNS failed")?
+			.take(16)
+			.collect();
+		if addresses.is_empty() || addresses.iter().any(|address| !public_ip(address.ip())) {
+			return Err("Extension downloads cannot access private networks".into());
+		}
+		// Pin the validated DNS result; redirects receive a fresh validation and client.
+		let client = reqwest::Client::builder()
+			.no_proxy()
+			.no_gzip()
+			.redirect(reqwest::redirect::Policy::none())
+			.resolve_to_addrs(host, &addresses)
+			.timeout(Duration::from_secs(30))
+			.build()
+			.map_err(|_| "Extension downloader unavailable")?;
+		let mut response = client
+			.get(url.clone())
+			.header(reqwest::header::ACCEPT_ENCODING, "identity")
+			.send()
+			.await
+			.map_err(|_| "Extension download failed")?;
+		if response.status().is_redirection() {
+			let location = response
+				.headers()
+				.get(reqwest::header::LOCATION)
+				.and_then(|v| v.to_str().ok())
+				.ok_or("Invalid extension redirect")?;
+			url = url
+				.join(location)
+				.map_err(|_| "Invalid extension redirect")?;
+			continue;
+		}
+		if response.status() != reqwest::StatusCode::OK {
+			return Err(
+				"Extension download unavailable; refresh the catalog or use a local package".into(),
+			);
+		}
+		if response
+			.content_length()
+			.is_some_and(|size| size > limit as u64)
+			|| response
+				.headers()
+				.get(reqwest::header::CONTENT_ENCODING)
+				.is_some_and(|encoding| encoding != "identity")
+		{
+			return Err("Extension download size or encoding is unsupported".into());
+		}
+		let mut bytes = Vec::new();
+		while let Some(chunk) = response
+			.chunk()
+			.await
+			.map_err(|_| "Extension download interrupted")?
+		{
+			gate.check()?;
+			if bytes.len().saturating_add(chunk.len()) > limit {
+				return Err("Extension download exceeds its byte budget".into());
+			}
+			bytes.extend_from_slice(&chunk);
+		}
+		return Ok(bytes);
+	}
+	Err("Too many extension download redirects".into())
+}
+
+fn public_ip(ip: IpAddr) -> bool {
+	match ip {
+		IpAddr::V4(ip) => {
+			let [a, b, _, _] = ip.octets();
+			!ip.is_private()
+				&& !ip.is_loopback()
+				&& !ip.is_link_local()
+				&& !ip.is_broadcast()
+				&& !ip.is_documentation()
+				&& !ip.is_multicast()
+				&& a != 0 && a < 240
+				&& !(a == 100 && (64..=127).contains(&b))
+				&& !(a == 198 && (b == 18 || b == 19))
+				&& !(a == 192 && b == 0)
+				&& ip != Ipv4Addr::UNSPECIFIED
+		}
+		IpAddr::V6(ip) => {
+			let segments = ip.segments();
+			segments[0] & 0xe000 == 0x2000
+				&& !(segments[0] == 0x2001 && (segments[1] == 0xdb8 || segments[1] < 0x200))
+		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	struct Profile(PathBuf);
+	impl Profile {
+		fn new() -> Self {
+			let mut nonce = [0; 16];
+			getrandom::fill(&mut nonce).unwrap();
+			let path =
+				std::env::temp_dir().join(format!("serein-extension-test-{}", digest(&nonce)));
+			fs::create_dir(&path).unwrap();
+			Self(path)
+		}
+	}
+	impl Drop for Profile {
+		fn drop(&mut self) {
+			fs::remove_dir_all(&self.0).unwrap();
+		}
+	}
+	fn gate() -> Gate {
+		Gate {
+			epoch: 0,
+			generation: Arc::new(AtomicU64::new(0)),
+			wake_cancel: Arc::new(tokio::sync::Notify::new()),
+		}
+	}
+	fn theme(id: &str) -> Package {
+		Package {
+			manifest: Manifest {
+				api_version: 1,
+				id: id.into(),
+				name: id.into(),
+				version: "1.0.0".into(),
+				author: "Synthetic test".into(),
+				license: "MIT".into(),
+				source: "https://github.com/ViceVerse-cz/rustcord".into(),
+				kind: ExtensionKind::Theme,
+				capabilities: Vec::new(),
+				actions: Vec::new(),
+			},
+			theme: Some(Theme::default()),
+			wasm: Vec::new(),
+		}
+	}
+	fn source(profile: &Profile, package: &Package) -> InstallSource {
+		let bytes = serde_json::to_vec(package).unwrap();
+		let path = profile.0.join(format!("{}.json", package.manifest.id));
+		fs::write(&path, &bytes).unwrap();
+		InstallSource::Local {
+			path,
+			sha256: digest(&bytes),
+			manifest: package.manifest.clone(),
+		}
+	}
+
+	#[test]
+	fn theme_install_replace_disable_restart_and_checksum() {
+		let profile = Profile::new();
+		let root = profile.0.join("extensions");
+		let first = source(&profile, &theme("first"));
+		let enabled = enable(&root, first.clone(), Vec::new(), None, &gate()).unwrap();
+		let original = fs::read(profile.0.join("first.json")).unwrap();
+		assert_eq!(enabled.sha256, digest(&original));
+		assert_eq!(enabled.download_bytes, original.len() as u64);
+		let reloaded = load(&root, None, &gate()).unwrap();
+		assert_eq!(reloaded[0].sha256, enabled.sha256);
+		assert_eq!(reloaded[0].download_bytes, enabled.download_bytes);
+		assert_eq!(load(&root, None, &gate()).unwrap()[0].manifest.id, "first");
+		let second = source(&profile, &theme("second"));
+		enable(&root, second, Vec::new(), None, &gate()).unwrap();
+		assert!(!root.join("themes/first").exists());
+		assert_eq!(load(&root, None, &gate()).unwrap()[0].manifest.id, "second");
+		disable(&root.join("themes"), "second", &gate()).unwrap();
+		assert!(load(&root, None, &gate()).unwrap().is_empty());
+		assert!(!root.join("themes/second").exists());
+		assert!(!root.join("themes/active.json").exists());
+		if let InstallSource::Local { path, .. } = &first {
+			fs::write(path, b"{}").unwrap();
+		}
+		assert!(enable(&root, first, Vec::new(), None, &gate()).is_err());
+		assert!(
+			profile.0.join("first.json").exists(),
+			"The user's imported original survives disable"
+		);
+	}
+
+	#[test]
+	fn cleanup_retries_tombstones_and_accounts_remain_isolated() {
+		let profile = Profile::new();
+		let root = profile.0.join("extensions");
+		let first = scope(&root, ExtensionKind::Plugin, Some("account-one")).unwrap();
+		let second = scope(&root, ExtensionKind::Plugin, Some("account-two")).unwrap();
+		fs::create_dir_all(first.join("plugin")).unwrap();
+		fs::create_dir_all(second.join("plugin")).unwrap();
+		fs::write(first.join("plugin/data.json"), b"private-one").unwrap();
+		fs::write(second.join("plugin/data.json"), b"private-two").unwrap();
+		fs::write(first.with_extension("disabled"), b"").unwrap();
+		cleanup(&root.join("accounts"), MAX_ACCOUNTS, &gate()).unwrap();
+		assert!(!first.exists());
+		assert_eq!(
+			fs::read(second.join("plugin/data.json")).unwrap(),
+			b"private-two"
+		);
+		fs::write(second.join("plugin.disabled"), b"").unwrap();
+		fs::write(second.join("orphan.partial"), b"unfinished").unwrap();
+		cleanup(&second, MAX_PER_SCOPE, &gate()).unwrap();
+		assert!(!second.join("plugin").exists());
+		assert!(!second.join("orphan.partial").exists());
+		assert!(scope(&root, ExtensionKind::Plugin, None).is_err());
+		assert!(disable(&second, "../outside", &gate()).is_err());
+	}
+
+	#[test]
+	fn invalid_package_remains_disableable_and_cancel_preserves_cleanup() {
+		let profile = Profile::new();
+		let root = profile.0.join("extensions");
+		let directory = scope(&root, ExtensionKind::Plugin, Some("account")).unwrap();
+		fs::create_dir_all(directory.join("broken")).unwrap();
+		fs::write(directory.join("broken/package.json"), b"invalid").unwrap();
+		let loaded = load(&root, Some("account"), &gate()).unwrap();
+		assert_eq!(loaded.len(), 1);
+		assert!(loaded[0].error.is_some());
+		disable(&directory, "broken", &gate()).unwrap();
+		let mut host = ExtensionHost::new(root);
+		host.queue.push_back((0, Job::RefreshCatalog));
+		host.queue.push_back((
+			1,
+			Job::Logout {
+				account: "account".into(),
+			},
+		));
+		host.cancel();
+		assert_eq!(host.queue.len(), 1);
+		assert!(matches!(host.queue.front(), Some((1, Job::Logout { .. }))));
+		let cancelled = gate();
+		cancelled.generation.fetch_add(1, Ordering::Release);
+		assert!(atomic_write(&profile.0.join("cancelled.json"), b"no", &cancelled).is_err());
+		assert!(!profile.0.join("cancelled.json").exists());
+	}
+
+	#[test]
+	fn byte_limits_and_private_download_destinations_fail_closed() {
+		let profile = Profile::new();
+		let file = profile.0.join("large.json");
+		fs::write(&file, b"12345").unwrap();
+		assert!(read_bounded(&file, 4).is_err());
+		for ip in [
+			"127.0.0.1",
+			"10.0.0.1",
+			"192.168.0.1",
+			"169.254.169.254",
+			"100.64.0.1",
+			"0.0.0.0",
+			"::1",
+			"fc00::1",
+			"fe80::1",
+			"::ffff:127.0.0.1",
+			"2001:db8::1",
+		] {
+			assert!(!public_ip(ip.parse().unwrap()), "{ip}");
+		}
+		for ip in ["1.1.1.1", "2606:4700:4700::1111"] {
+			assert!(public_ip(ip.parse().unwrap()), "{ip}");
+		}
+		let cancelled = gate();
+		cancelled.generation.fetch_add(1, Ordering::Release);
+		assert!(download("https://github.com/example", 100, &cancelled).is_err());
+	}
+}
