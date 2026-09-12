@@ -1,3 +1,4 @@
+use crate::design::LazyHover;
 use crate::{MessagingUi, design};
 use client_core::{Command, State};
 use egui::{Align2, Color32, FontId};
@@ -177,15 +178,17 @@ impl MessagingUi {
 								)
 							});
 							if response
-								.on_hover_text(format!(
-									"{} · {}",
-									channel.name,
-									if state.channel_unread(channel).is_some() {
-										"Unread activity; count may be a lower bound"
-									} else {
-										"Session activity · read sync unavailable"
-									}
-								))
+								.on_hover_text_with(|| {
+									format!(
+										"{} · {}",
+										channel.name,
+										if state.channel_unread(channel).is_some() {
+											"Unread activity; count may be a lower bound"
+										} else {
+											"Session activity · read sync unavailable"
+										}
+									)
+								})
 								.clicked()
 							{
 								self.guild = None;

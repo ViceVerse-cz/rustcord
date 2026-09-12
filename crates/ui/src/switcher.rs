@@ -48,33 +48,56 @@ fn bounded(value: &str) -> String {
 	value.chars().take(QUERY_CHARS).collect()
 }
 
+/// Writes `bounded(value).to_lowercase()` into `buffer`, allocating only for non-ASCII text.
+fn lowercase_bounded_into(buffer: &mut String, value: &str) {
+	buffer.clear();
+	if value.is_ascii() {
+		buffer.push_str(&value[..value.len().min(QUERY_CHARS)]);
+		buffer.make_ascii_lowercase();
+	} else {
+		let end = value
+			.char_indices()
+			.nth(QUERY_CHARS)
+			.map_or(value.len(), |(index, _)| index);
+		buffer.push_str(&value[..end].to_lowercase());
+	}
+}
+
 fn candidates(state: &State, query: &str) -> Vec<Candidate> {
 	let query = bounded(query).to_lowercase();
 	let words: Vec<_> = query.split_whitespace().collect();
-	let matches = |channel: &Channel| {
+	// One reused buffer instead of a lowercase copy of every label per keystroke.
+	let mut label = String::new();
+	let mut matched = vec![false; words.len()];
+	let mut matches = |channel: &Channel| {
 		if words.is_empty() {
 			return true;
 		}
 		let guild = channel
 			.guild
-			.and_then(|id| state.guilds.iter().find(|g| g.id == id));
-		// Normalize each bounded field once, without retaining account metadata.
-		let mut labels = vec![bounded(&channel.name).to_lowercase()];
-		if let Some(guild) = guild {
-			labels.push(bounded(&guild.name).to_lowercase());
+			.and_then(|id| state.guild(id))
+			.map(|guild| guild.name.as_str());
+		let recipients = channel.guild.is_none().then(|| {
+			channel
+				.recipients
+				.iter()
+				.take(64)
+				.map(|user| user.name.as_str())
+		});
+		let labels = std::iter::once(channel.name.as_str())
+			.chain(guild)
+			.chain(recipients.into_iter().flatten());
+		matched.fill(false);
+		for value in labels {
+			lowercase_bounded_into(&mut label, value);
+			for (word, hit) in words.iter().zip(matched.iter_mut()) {
+				*hit = *hit || label.contains(word);
+			}
+			if matched.iter().all(|hit| *hit) {
+				return true;
+			}
 		}
-		if channel.guild.is_none() {
-			labels.extend(
-				channel
-					.recipients
-					.iter()
-					.take(64)
-					.map(|user| bounded(&user.name).to_lowercase()),
-			);
-		}
-		words
-			.iter()
-			.all(|word| labels.iter().any(|label| label.contains(word)))
+		false
 	};
 	let selected = state
 		.channels
@@ -98,19 +121,16 @@ fn candidates(state: &State, query: &str) -> Vec<Candidate> {
 			} else {
 				channel.name.as_str()
 			};
-			let scope = channel
-				.guild
-				.and_then(|id| state.guilds.iter().find(|g| g.id == id))
-				.map_or(
-					if channel.guild.is_some() {
-						"Server"
-					} else if channel.kind == 3 {
-						"Group direct message"
-					} else {
-						"Direct message"
-					},
-					|g| g.name.as_str(),
-				);
+			let scope = channel.guild.and_then(|id| state.guild(id)).map_or(
+				if channel.guild.is_some() {
+					"Server"
+				} else if channel.kind == 3 {
+					"Group direct message"
+				} else {
+					"Direct message"
+				},
+				|g| g.name.as_str(),
+			);
 			let kind = if channel.kind == 2 {
 				Kind::Voice
 			} else if channel.guild.is_some() {
@@ -562,6 +582,23 @@ mod tests {
 			.collect();
 		state.selected = Some(Id(25));
 		state
+	}
+
+	#[test]
+	fn lowercase_buffer_matches_allocating_normalization() {
+		let mut buffer = String::new();
+		for value in [
+			"",
+			"General Chat",
+			"Žofie Example",
+			"ΟΔΥΣΣΕΎΣ ΑΣ",
+			"İstanbul",
+			&"🦀A".repeat(1000),
+			&"x".repeat(1000),
+		] {
+			lowercase_bounded_into(&mut buffer, value);
+			assert_eq!(buffer, bounded(value).to_lowercase(), "{value:?}");
+		}
 	}
 
 	#[test]

@@ -2225,23 +2225,19 @@ impl MessagingUi {
 			}
 			self.focus_switched_composer = state.selected == Some(channel)
 				&& state
-					.channels
-					.iter()
-					.any(|known| known.id == channel && known.supports_text());
+					.channel(channel)
+					.is_some_and(|known| known.supports_text());
 		}
 		if self.navigation_channel != state.selected {
 			self.navigation_channel = state.selected;
-			self.guild = state.selected.and_then(|id| {
-				state
-					.channels
-					.iter()
-					.find(|channel| channel.id == id)
-					.and_then(|channel| channel.guild)
-			});
+			self.guild = state
+				.selected
+				.and_then(|id| state.channel(id))
+				.and_then(|channel| channel.guild);
 		}
 		let title = self
 			.guild
-			.and_then(|id| state.guilds.iter().find(|g| g.id == id))
+			.and_then(|id| state.guild(id))
 			.map_or_else(|| "Direct Messages".to_owned(), |g| g.name.clone());
 		self.title_bar(ui, state, &title);
 		// Server rail and channel list share one resizable column so the account card can
@@ -2280,9 +2276,9 @@ impl MessagingUi {
 		self.server_menu
 			.show(&ctx, state, self.guild, &mut commands, &mut self.avatars);
 		let selected_voice = state
-			.channels
-			.iter()
-			.any(|c| Some(c.id) == state.selected && c.kind == 2);
+			.selected
+			.and_then(|id| state.channel(id))
+			.is_some_and(|c| c.kind == 2);
 		let selected_forum = state.selected.is_some_and(|id| state.is_forum(id));
 		if let Some(id) = state.posting.created.take()
 			&& let Some(command) = state.select(id)

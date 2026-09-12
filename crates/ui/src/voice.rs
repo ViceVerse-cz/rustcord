@@ -1,3 +1,4 @@
+use crate::design::LazyHover;
 use crate::{MessagingUi, design};
 use client_core::{
 	Command, State,
@@ -114,11 +115,13 @@ impl MessagingUi {
 				),
 			)
 		});
-		response.on_hover_text(format!(
-			"{} · View voice channel{}",
-			channel.name,
-			if connected { " · Connected" } else { "" }
-		))
+		response.on_hover_text_with(|| {
+			format!(
+				"{} · View voice channel{}",
+				channel.name,
+				if connected { " · Connected" } else { "" }
+			)
+		})
 	}
 
 	pub(super) fn voice_participant(

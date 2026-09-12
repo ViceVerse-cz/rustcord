@@ -6,6 +6,23 @@
 use egui::{Color32, FontFamily, FontId, RichText, Stroke};
 use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
+/// Tooltip text that is only formatted while the tooltip is actually shown.
+///
+/// `Response::on_hover_text(format!(..))` evaluates its argument every frame for every widget;
+/// lists of messages, reactions and channels otherwise allocate a string per row per frame.
+pub trait LazyHover {
+	fn on_hover_text_with(self, text: impl FnOnce() -> String) -> Self;
+}
+impl LazyHover for egui::Response {
+	fn on_hover_text_with(self, text: impl FnOnce() -> String) -> Self {
+		self.on_hover_ui(|ui| {
+			// Same layout as `on_hover_text`: keep dynamic tooltips from shrinking (egui #5167).
+			ui.set_max_width(ui.spacing().tooltip_width);
+			ui.label(text());
+		})
+	}
+}
+
 /// Recolour preset layered over the light/dark preference.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[repr(u8)]

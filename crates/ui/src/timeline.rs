@@ -1,3 +1,4 @@
+use crate::design::LazyHover;
 use crate::markdown::{FormatCache, discord_url};
 use client_core::State;
 use egui::RichText;
@@ -49,8 +50,8 @@ pub struct TimelineView {
 	following: bool,
 	formatted: FormatCache,
 	pending_formatted: FormatCache,
-	// Exact revealed content prevents a reload that resets model revisions from revealing edits.
-	// Pruned with the active window: at most its 500 records / 4 MiB content budget.
+	// A fingerprint of the revealed content prevents a reload that resets model revisions from
+	// revealing edits, without cloning payloads. Pruned with the active window: at most 500 records.
 	revealed: BTreeMap<Id, Revealed>,
 	viewing: Option<(Id, Id)>,
 	/// Fixture-only: viewer to open once its message has arrived in the timeline.
@@ -67,26 +68,28 @@ pub struct TimelineView {
 	unread_boundary: Option<Id>,
 }
 struct Revealed {
-	content: String,
-	embeds: Vec<model::Embed>,
-	attachments: Vec<model::Attachment>,
+	/// Fingerprint of the content, embeds and attachments that were revealed.
+	content: u64,
 	text: u32,
 	media: bool,
 }
 impl Revealed {
+	fn fingerprint(message: &Message) -> u64 {
+		let mut hasher = DefaultHasher::new();
+		message.content.hash(&mut hasher);
+		message.embeds.hash(&mut hasher);
+		message.attachments.hash(&mut hasher);
+		hasher.finish()
+	}
 	fn new(message: &Message, text: u32, media: bool) -> Self {
 		Self {
-			content: message.content.clone(),
-			embeds: message.embeds.clone(),
-			attachments: message.attachments.clone(),
+			content: Self::fingerprint(message),
 			text,
 			media,
 		}
 	}
 	fn matches(&self, message: &Message) -> bool {
-		self.content == message.content
-			&& self.embeds == message.embeds
-			&& self.attachments == message.attachments
+		self.content == Self::fingerprint(message)
 	}
 }
 pub fn visible_range(rows: &[(Id, f32)], min: f32, max: f32) -> (usize, usize, f32) {
@@ -474,7 +477,7 @@ fn show_system(
 					.size(12.0)
 					.color(colors.muted),
 			)
-			.on_hover_text(format!("{time} UTC"));
+			.on_hover_text_with(|| format!("{time} UTC"));
 		});
 	}
 }
@@ -1043,7 +1046,7 @@ impl TimelineView {
 													.size(12.0)
 													.color(colors.muted),
 												)
-												.on_hover_text(format!("{} UTC", time));
+												.on_hover_text_with(|| format!("{} UTC", time));
 											},
 										);
 									}
@@ -1301,7 +1304,7 @@ impl TimelineView {
 								colors.muted,
 							);
 							ui.interact(rect, ui.id().with("timestamp"), egui::Sense::hover())
-								.on_hover_text(format!("{} UTC", time));
+								.on_hover_text_with(|| format!("{} UTC", time));
 						}
 						let own = state
 							.user

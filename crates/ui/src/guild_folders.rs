@@ -1,3 +1,4 @@
+use crate::design::LazyHover;
 use crate::{
 	MessagingUi, design,
 	icons::{self, Icon},
@@ -374,10 +375,9 @@ impl MessagingUi {
 									self.folder_ui.expanded.insert(id);
 								}
 							}
-							response.on_hover_text(format!(
-								"{name} · {} servers",
-								folder.guild_ids.len()
-							))
+							response.on_hover_text_with(|| {
+								format!("{name} · {} servers", folder.guild_ids.len())
+							})
 						}
 					};
 					response.context_menu(|ui| {
