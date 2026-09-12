@@ -50,6 +50,11 @@ codegen-units = 1
 strip = "debuginfo"
 debug = "line-tables-only"
 
+# egui layout and wgpu frame preparation run on the CPU even with GPU rendering.
+# Follow egui's dev profile: optimize dependencies, keep workspace logic debuggable.
+[profile.dev.package."*"]
+opt-level = 2
+
 # Real-time echo processing must also keep up in otherwise unoptimized dev builds.
 [profile.dev.package.sonora]
 opt-level = 3
