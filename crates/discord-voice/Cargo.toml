@@ -41,9 +41,15 @@ objc2-core-media = { version = "=0.3.2", default-features = false, features = ["
 objc2-core-video = { version = "=0.3.2", default-features = false, features = ["std", "CVBase", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVReturn"] }
 dispatch2 = "=0.3.1"
 
-# Only the macOS permission and camera modules permit documented native calls.
+# Native permission and capture boundaries permit documented OS calls locally.
 [lints.rust]
 unsafe_code = "deny"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-capture = "=2.0.1"
+windows = { version = "=0.61.3", features = ["Win32_Media_MediaFoundation", "Win32_System_Com"] }
+windows-core = "=0.61.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "=0.2.189"
+image = { version = "=0.25.10", default-features = false, features = ["jpeg"] }

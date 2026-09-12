@@ -1,13 +1,32 @@
 //! User-started, ephemeral camera capture. No device is opened before `start`.
 
+use openh264::{
+	OpenH264API,
+	encoder::{BitRate, Encoder, EncoderConfig, FrameRate, Profile},
+	formats::{RgbSliceU8, YUVBuffer},
+};
 use std::sync::{
 	Arc, Mutex,
 	atomic::{AtomicBool, Ordering},
 };
+use std::{thread, time::Duration};
+
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "windows")]
+mod windows;
 
 pub const WIDTH: usize = 640;
 pub const HEIGHT: usize = 480;
 pub const MAX_ENCODED_BYTES: usize = 128 * 1024;
+pub const SUPPORTED: bool = cfg!(any(
+	target_os = "macos",
+	target_os = "windows",
+	target_os = "linux"
+));
+const FRAME_INTERVAL: Duration = Duration::from_millis(67);
+// Includes asynchronous teardown: rapid toggles cannot accumulate camera workers.
+static RUNNING: AtomicBool = AtomicBool::new(false);
 
 pub struct Frame {
 	pub rgb: Vec<u8>,
@@ -32,15 +51,54 @@ impl Camera {
 		on_frame: Arc<dyn Fn(Frame) + Send + Sync>,
 		wake: Arc<dyn Fn() + Send + Sync>,
 	) -> Result<Self, &'static str> {
-		#[cfg(target_os = "macos")]
-		{
-			macos::start(on_frame, wake)
+		if !SUPPORTED {
+			return Err("Camera capture is unavailable on this platform");
 		}
-		#[cfg(not(target_os = "macos"))]
+		if RUNNING
+			.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+			.is_err()
 		{
-			let _ = (on_frame, wake);
-			Err("Camera capture is currently available on macOS only")
+			return Err("Previous camera session is still closing; try again shortly");
 		}
+		let shared = Arc::new(Shared::default());
+		let worker = shared.clone();
+		if thread::Builder::new()
+			.name("serein-camera".into())
+			.spawn(move || {
+				let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+					#[cfg(target_os = "macos")]
+					{
+						objc2::rc::autoreleasepool(|_| macos::run(&worker, &on_frame, &wake))
+					}
+					#[cfg(any(target_os = "windows", target_os = "linux"))]
+					{
+						run(&worker, &on_frame, &wake)
+					}
+					#[cfg(not(any(
+						target_os = "macos",
+						target_os = "windows",
+						target_os = "linux"
+					)))]
+					Err("Camera capture is unavailable on this platform")
+				}))
+				.unwrap_or(Err("Camera worker failed"));
+				worker.active.store(false, Ordering::Release);
+				if !worker.stopped.load(Ordering::Acquire)
+					&& let Err(error) = result
+					&& let Ok(mut slot) = worker.error.lock()
+				{
+					*slot = Some(error);
+				}
+				worker.finished.store(true, Ordering::Release);
+				RUNNING.store(false, Ordering::Release);
+				wake();
+			})
+			.is_err()
+		{
+			RUNNING.store(false, Ordering::Release);
+			return Err("Camera worker could not start");
+		}
+		Ok(Self { shared })
 	}
 
 	pub fn stop(&self) {
@@ -57,7 +115,73 @@ impl Camera {
 	}
 
 	pub fn active(&self) -> bool {
-		self.shared.active.load(Ordering::Acquire)
+		!self.shared.stopped.load(Ordering::Acquire) && self.shared.active.load(Ordering::Acquire)
+	}
+}
+
+fn encoder() -> Result<Encoder, &'static str> {
+	Encoder::with_api_config(
+		OpenH264API::from_source(),
+		EncoderConfig::new()
+			.bitrate(BitRate::from_bps(600_000))
+			.max_frame_rate(FrameRate::from_hz(15.0))
+			.profile(Profile::Baseline)
+			.num_threads(1)
+			.debug(false),
+	)
+	.map_err(|_| "Camera H264 encoder could not start")
+}
+
+fn encode_rgb(
+	encoder: &mut Encoder,
+	yuv: &mut YUVBuffer,
+	rgb: Vec<u8>,
+) -> Result<Option<Frame>, &'static str> {
+	if rgb.len() != WIDTH * HEIGHT * 3 {
+		return Err("Camera did not provide a bounded 640×480 RGB frame");
+	}
+	yuv.read_rgb8(RgbSliceU8::new(&rgb, (WIDTH, HEIGHT)));
+	// ponytail: independently decodable frames tolerate latest-slot drops;
+	// add feedback-aware inter frames when bandwidth adaptation is implemented.
+	encoder.force_intra_frame();
+	let bits = encoder
+		.encode(yuv)
+		.map_err(|_| "Camera frame could not be encoded")?;
+	if bits.raw_info().iFrameSizeInBytes < 0
+		|| bits.raw_info().iFrameSizeInBytes as usize > MAX_ENCODED_BYTES
+	{
+		return Err("Camera encoded frame exceeded its 128 KiB limit");
+	}
+	let h264 = bits.to_vec();
+	Ok((!h264.is_empty()).then_some(Frame { rgb, h264 }))
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn run(
+	shared: &Shared,
+	on_frame: &Arc<dyn Fn(Frame) + Send + Sync>,
+	wake: &Arc<dyn Fn() + Send + Sync>,
+) -> Result<(), &'static str> {
+	let mut encoder = encoder()?;
+	let mut yuv = YUVBuffer::new(WIDTH, HEIGHT);
+	let mut emit = |rgb| {
+		if !shared.stopped.load(Ordering::Acquire)
+			&& let Some(frame) = encode_rgb(&mut encoder, &mut yuv, rgb)?
+			&& !shared.stopped.load(Ordering::Acquire)
+		{
+			on_frame(frame);
+			shared.active.store(true, Ordering::Release);
+			wake();
+		}
+		Ok(())
+	};
+	#[cfg(target_os = "windows")]
+	{
+		windows::run(shared, &mut emit)
+	}
+	#[cfg(target_os = "linux")]
+	{
+		linux::run(shared, &mut emit)
 	}
 }
 
@@ -76,29 +200,19 @@ mod macos {
 	use dispatch2::{DispatchQueue, DispatchRetained};
 	use objc2::{
 		AnyThread, DefinedClass, define_class, msg_send,
-		rc::{Retained, autoreleasepool},
+		rc::Retained,
 		runtime::{AnyObject, Bool, NSObject, NSObjectProtocol, ProtocolObject},
 	};
 	use objc2_av_foundation::*;
 	use objc2_core_media::CMSampleBuffer;
 	use objc2_core_video::*;
 	use objc2_foundation::{NSDictionary, NSNumber, NSString};
-	use openh264::{
-		OpenH264API,
-		encoder::{BitRate, Encoder, EncoderConfig, FrameRate, Profile},
-		formats::{RgbSliceU8, YUVBuffer},
-	};
 	use std::{
 		sync::mpsc::{self, Receiver, SyncSender},
-		thread,
 		time::{Duration, Instant},
 	};
 
-	// One process-wide slot also covers asynchronous teardown: repeated clicks cannot
-	// accumulate workers or open a second device while the previous session closes.
-	static RUNNING: AtomicBool = AtomicBool::new(false);
 	const DENIED: &str = "Camera access denied. Allow Serein (or your terminal) in System Settings > Privacy & Security > Camera, then try again.";
-	const FRAME_INTERVAL: Duration = Duration::from_millis(67);
 
 	struct DelegateState {
 		send: SyncSender<Result<Vec<u8>, &'static str>>,
@@ -177,44 +291,6 @@ mod macos {
 		}
 	}
 
-	pub(super) fn start(
-		on_frame: Arc<dyn Fn(Frame) + Send + Sync>,
-		wake: Arc<dyn Fn() + Send + Sync>,
-	) -> Result<Camera, &'static str> {
-		if RUNNING
-			.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-			.is_err()
-		{
-			return Err("Previous camera session is still closing; try again shortly");
-		}
-		let shared = Arc::new(Shared::default());
-		let worker = shared.clone();
-		if thread::Builder::new()
-			.name("serein-camera".into())
-			.spawn(move || {
-				let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-					autoreleasepool(|_| run(&worker, &on_frame, &wake))
-				}))
-				.unwrap_or(Err("Camera worker failed"));
-				worker.active.store(false, Ordering::Release);
-				if !worker.stopped.load(Ordering::Acquire)
-					&& let Err(error) = result
-					&& let Ok(mut slot) = worker.error.lock()
-				{
-					*slot = Some(error);
-				}
-				worker.finished.store(true, Ordering::Release);
-				RUNNING.store(false, Ordering::Release);
-				wake();
-			})
-			.is_err()
-		{
-			RUNNING.store(false, Ordering::Release);
-			return Err("Camera worker could not start");
-		}
-		Ok(Camera { shared })
-	}
-
 	fn authorize(shared: &Shared) -> Result<(), &'static str> {
 		// SAFETY: Framework-owned constant, class methods callable from this worker;
 		// AVFoundation copies the block, which owns only a bounded result sender.
@@ -264,7 +340,7 @@ mod macos {
 		}
 	}
 
-	fn run(
+	pub(super) fn run(
 		shared: &Arc<Shared>,
 		on_frame: &Arc<dyn Fn(Frame) + Send + Sync>,
 		wake: &Arc<dyn Fn() + Send + Sync>,
@@ -273,16 +349,7 @@ mod macos {
 		if shared.stopped.load(Ordering::Acquire) {
 			return Ok(());
 		}
-		let mut encoder = Encoder::with_api_config(
-			OpenH264API::from_source(),
-			EncoderConfig::new()
-				.bitrate(BitRate::from_bps(600_000))
-				.max_frame_rate(FrameRate::from_hz(15.0))
-				.profile(Profile::Baseline)
-				.num_threads(1)
-				.debug(false),
-		)
-		.map_err(|_| "Camera H264 encoder could not start")?;
+		let mut encoder = encoder()?;
 		let (send, receive) = mpsc::sync_channel(1);
 		let queue = DispatchQueue::new("serein.camera.frames", None);
 		// SAFETY: Only this worker configures/owns the session. Delegate lives until
@@ -367,29 +434,51 @@ mod macos {
 			{
 				rgb.copy_from_slice(&[bgra[2], bgra[1], bgra[0]]);
 			}
-			yuv.read_rgb8(RgbSliceU8::new(&rgb, (WIDTH, HEIGHT)));
-			// ponytail: independently decodable frames tolerate latest-slot drops;
-			// add feedback-aware inter frames when bandwidth adaptation is implemented.
-			encoder.force_intra_frame();
-			let bits = encoder
-				.encode(&yuv)
-				.map_err(|_| "Camera frame could not be encoded")?;
-			if bits.raw_info().iFrameSizeInBytes < 0
-				|| bits.raw_info().iFrameSizeInBytes as usize > MAX_ENCODED_BYTES
-			{
-				return Err("Camera encoded frame exceeded its 128 KiB limit");
-			}
-			let h264 = bits.to_vec();
-			if h264.is_empty() {
+			let Some(frame) = encode_rgb(encoder, &mut yuv, rgb)? else {
 				continue;
-			}
+			};
 			if shared.stopped.load(Ordering::Acquire) {
 				break;
 			}
-			on_frame(Frame { rgb, h264 });
+			on_frame(frame);
 			shared.active.store(true, Ordering::Release);
 			wake();
 		}
 		Ok(())
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use openh264::formats::YUVSource;
+	#[test]
+	fn camera_frames_are_bounded_independently_decodable_and_stop_is_immediate() {
+		let mut encoder = encoder().unwrap();
+		let mut yuv = YUVBuffer::new(WIDTH, HEIGHT);
+		for length in [0, WIDTH * HEIGHT * 3 - 1, WIDTH * HEIGHT * 3 + 1] {
+			assert!(encode_rgb(&mut encoder, &mut yuv, vec![0; length]).is_err());
+		}
+		for value in [0, 127, 255] {
+			let frame = encode_rgb(&mut encoder, &mut yuv, vec![value; WIDTH * HEIGHT * 3])
+				.unwrap()
+				.unwrap();
+			assert!(frame.h264.len() <= MAX_ENCODED_BYTES);
+			let mut decoder = openh264::decoder::Decoder::new().unwrap();
+			let decoded = decoder.decode(&frame.h264).unwrap().unwrap();
+			assert_eq!(decoded.dimensions(), (WIDTH, HEIGHT));
+		}
+		let camera = Camera {
+			shared: Arc::new(Shared::default()),
+		};
+		camera.shared.active.store(true, Ordering::Release);
+		assert!(camera.active());
+		camera.stop();
+		// A late native callback cannot turn a stopped camera back on.
+		camera.shared.active.store(true, Ordering::Release);
+		assert!(!camera.active());
+		assert!(!camera.stopped());
+		camera.shared.finished.store(true, Ordering::Release);
+		assert!(camera.stopped());
 	}
 }
