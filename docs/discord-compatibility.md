@@ -943,3 +943,33 @@ Manage Server, which is the gate used here. There is no invite-event subscriptio
 scraping, invented pagination or automatic background refresh. Synthetic protocol,
 reducer and local HTTP tests cover bounds, scope, permissions and write reconciliation;
 normal-account compatibility and service-side concurrent edits remain live-unverified.
+
+
+### Server integrations (September 12, 2026)
+
+Server Settings > Integrations loads the guild integration list on demand with
+Manage Server, and independently loads webhooks/followed channels with Manage
+Webhooks. Cards open native integration details and webhook management. Incoming
+webhooks can be created or renamed/moved to an accessible text, announcement,
+forum or media channel; known webhooks and followed-channel subscriptions can be
+deleted after confirmation. Removing an integration also removes its associated
+webhooks and bot membership according to the service contract; the UI states that
+consequence before confirmation. Current guild/channel permissions and request
+and session generations are checked again before accepting results.
+
+The adapter uses the documented [guild integration list and delete routes](https://docs.discord.com/developers/resources/guild#get-guild-integrations)
+and [authenticated webhook management routes](https://docs.discord.com/developers/resources/webhook).
+These developer API contracts are protocol evidence, not approval or proof of
+normal-user session interoperability. Normal-user live validation has not been
+performed. Forbidden, unsupported, oversized and uncertain-write responses are
+reported without automatic mutation retries. An uncertain outcome requires an
+explicit reload before another write.
+
+Integration reads retain at most 50 integrations and 1,000 webhooks within a
+combined 1 MiB metadata budget; HTTP responses are capped at 2 MiB. The service's
+50-integration endpoint limit is not presented as a complete count for larger
+guilds. Missing metadata stays absent; last synchronization is not represented as
+an installation date. Webhook execution tokens and URLs are discarded by decoding
+and are never exposed, copied, logged or persisted by this view. OAuth command
+permission editing, webhook execution URL copying, avatar uploads, and creator
+subscription settings are not part of this slice.

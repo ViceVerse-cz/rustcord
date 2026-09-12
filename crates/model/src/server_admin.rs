@@ -78,6 +78,7 @@ impl Query {
 }
 #[derive(Clone)]
 pub enum Action {
+	Integrations(crate::server_integrations::Action),
 	Invites(crate::server_invites::Action),
 	Roles(crate::server_roles::Action),
 	LoadEmojis,
@@ -93,6 +94,9 @@ pub enum Action {
 }
 impl Action {
 	pub fn write(&self) -> bool {
+		if let Self::Integrations(action) = self {
+			return action.write();
+		}
 		if let Self::Invites(action) = self {
 			return action.write();
 		}
@@ -117,6 +121,7 @@ impl Action {
 		match self {
 			Self::Roles(action) => action.valid(),
 			Self::Invites(action) => action.valid(),
+			Self::Integrations(action) => action.valid(),
 			Self::CreateEmoji { name, image } => {
 				name.capacity() <= 128
 					&& valid_emoji_name(name)
@@ -143,6 +148,7 @@ impl Action {
 	}
 }
 pub enum Result {
+	Integrations(crate::server_integrations::Snapshot),
 	Invites(crate::server_invites::Snapshot),
 	Roles(crate::server_roles::Result),
 	Emojis(Emojis),
@@ -186,6 +192,7 @@ impl Result {
 	pub fn bytes(&self) -> usize {
 		size_of::<Self>()
 			+ match self {
+				Self::Integrations(snapshot) => snapshot.bytes(),
 				Self::Roles(result) => result.bytes(),
 				Self::Invites(snapshot) => snapshot.bytes(),
 				Self::Emojis(page) => {
@@ -207,6 +214,7 @@ impl Result {
 	pub fn valid(&self) -> bool {
 		self.bytes() <= MAX_BYTES
 			&& match self {
+				Self::Integrations(snapshot) => snapshot.valid(),
 				Self::Roles(result) => result.valid(),
 				Self::Invites(snapshot) => snapshot.valid(),
 				Self::Emojis(page) => {

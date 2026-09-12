@@ -24,6 +24,7 @@ pub mod screen;
 pub mod search;
 pub mod server_actions;
 pub mod server_admin;
+pub mod server_integrations;
 pub mod server_roles;
 pub mod server_settings;
 mod threads;
@@ -2141,9 +2142,11 @@ impl State {
 				.retain(|id, _| guilds.contains(id));
 		}
 		if let Some(guild) = self.server_admin.guild {
+			self.prune_integration_access(guild);
 			if !self.can_open_emoji_settings(guild)
 				&& !self.can_open_member_settings(guild)
 				&& !self.can_open_role_settings(guild)
+				&& !self.can_open_integration_settings(guild)
 			{
 				self.server_admin.reset();
 			} else {

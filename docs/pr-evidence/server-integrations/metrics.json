@@ -1,0 +1,469 @@
+{
+  "baseline_commit": "6178e0fd5f010975d07ec904ddc40548418140a0",
+  "after_branch": "feat/server-integrations",
+  "after_source_fingerprint_sha256": "c22e88ad8ed2b963432b865601da71fd4537086b059b5b376ba568b4bd7f36ab",
+  "environment": {
+    "os": "Microsoft Windows 11 Home",
+    "os_version": "10.0.26200",
+    "cpu": "AMD Ryzen 7 7800X3D 8-Core Processor",
+    "logical_processors": 16,
+    "ram_bytes": 33410678784,
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)"
+  },
+  "package_method": "System.IO.Compression.ZipFile.CreateFromDirectory(source, destination, CompressionLevel.Optimal, false); clean 234-file packager outputs; measurements precede this performance note",
+  "baseline_package": {
+    "exe_bytes": 67125760,
+    "installed_bytes": 73468894,
+    "installed_files": 234,
+    "zip_bytes": 43117724
+  },
+  "after_package": {
+    "exe_bytes": 67291136,
+    "exe_sha256": "26425ae49719f645afbcbd5131fd7efd0c0d9ecb89161c99f642d6a62f48f43d",
+    "installed_bytes": 73636897,
+    "installed_files": 234,
+    "zip_bytes": 43178867
+  },
+  "replay_method": "Direct release executable; 100000 events; one warmup, five measured runs; no concurrent builds; retained 500 records and 236992..237477 estimated bytes",
+  "baseline_replay": {
+    "warmup": "Synthetic reducer replay: 100000 events in 40.3915ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+    "runs": [
+      "Synthetic reducer replay: 100000 events in 40.2218ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 41.8779ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 45.1117ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 44.5453ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 40.4905ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility."
+    ]
+  },
+  "baseline_replay_median_ms": 41.8779,
+  "after_replay": {
+    "warmup_ms": 41.1661,
+    "runs": [
+      "Synthetic reducer replay: 100000 events in 52.8766ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 41.5264ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 41.8111ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 49.7038ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 44.2123ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility."
+    ],
+    "median_ms": 44.2123
+  },
+  "process_method": "Release --features demo with --demo --demo-server-settings; default1120x760 logical window, Wgpu. Start-Process -WindowStyle Hidden; visibility/occlusion and actual adapter unverified. 5s warmup then20samples/500ms. Compiler processes absent before sampling, root held builds. CPU is process timer resolution; GPU allocations/framep95/startuplatency unmeasured.",
+  "baseline_profile_process": {
+    "executable": "E:/codex-builds/rustcord-settings-layout-target/release/serein.exe",
+    "args": [
+      "--demo",
+      "--demo-server-settings"
+    ],
+    "warmup_ms": 5000,
+    "sample_interval_ms": 500,
+    "samples": [
+      {
+        "time_utc": "2026-09-12T21:20:22.1236995Z",
+        "cpu_ms": 453.125,
+        "working_set_bytes": 172142592,
+        "private_bytes": 397127680
+      },
+      {
+        "time_utc": "2026-09-12T21:20:22.6495332Z",
+        "cpu_ms": 453.125,
+        "working_set_bytes": 172142592,
+        "private_bytes": 397127680
+      },
+      {
+        "time_utc": "2026-09-12T21:20:23.1664503Z",
+        "cpu_ms": 453.125,
+        "working_set_bytes": 172142592,
+        "private_bytes": 397127680
+      },
+      {
+        "time_utc": "2026-09-12T21:20:23.6707587Z",
+        "cpu_ms": 453.125,
+        "working_set_bytes": 172142592,
+        "private_bytes": 397127680
+      },
+      {
+        "time_utc": "2026-09-12T21:20:24.1889353Z",
+        "cpu_ms": 453.125,
+        "working_set_bytes": 172142592,
+        "private_bytes": 397127680
+      },
+      {
+        "time_utc": "2026-09-12T21:20:24.7025911Z",
+        "cpu_ms": 453.125,
+        "working_set_bytes": 172142592,
+        "private_bytes": 397127680
+      },
+      {
+        "time_utc": "2026-09-12T21:20:25.2189875Z",
+        "cpu_ms": 453.125,
+        "working_set_bytes": 172142592,
+        "private_bytes": 397127680
+      },
+      {
+        "time_utc": "2026-09-12T21:20:25.7355113Z",
+        "cpu_ms": 453.125,
+        "working_set_bytes": 172142592,
+        "private_bytes": 397127680
+      },
+      {
+        "time_utc": "2026-09-12T21:20:26.2393648Z",
+        "cpu_ms": 453.125,
+        "working_set_bytes": 172142592,
+        "private_bytes": 397127680
+      },
+      {
+        "time_utc": "2026-09-12T21:20:26.7453922Z",
+        "cpu_ms": 453.125,
+        "working_set_bytes": 172142592,
+        "private_bytes": 397127680
+      },
+      {
+        "time_utc": "2026-09-12T21:20:27.2495202Z",
+        "cpu_ms": 453.125,
+        "working_set_bytes": 172142592,
+        "private_bytes": 397127680
+      },
+      {
+        "time_utc": "2026-09-12T21:20:27.7610452Z",
+        "cpu_ms": 453.125,
+        "working_set_bytes": 172142592,
+        "private_bytes": 397127680
+      },
+      {
+        "time_utc": "2026-09-12T21:20:28.2741309Z",
+        "cpu_ms": 453.125,
+        "working_set_bytes": 172142592,
+        "private_bytes": 397127680
+      },
+      {
+        "time_utc": "2026-09-12T21:20:28.7866382Z",
+        "cpu_ms": 453.125,
+        "working_set_bytes": 172142592,
+        "private_bytes": 397127680
+      },
+      {
+        "time_utc": "2026-09-12T21:20:29.3030316Z",
+        "cpu_ms": 468.75,
+        "working_set_bytes": 172142592,
+        "private_bytes": 397127680
+      },
+      {
+        "time_utc": "2026-09-12T21:20:29.8211107Z",
+        "cpu_ms": 468.75,
+        "working_set_bytes": 172142592,
+        "private_bytes": 397127680
+      },
+      {
+        "time_utc": "2026-09-12T21:20:30.3372489Z",
+        "cpu_ms": 468.75,
+        "working_set_bytes": 172142592,
+        "private_bytes": 397127680
+      },
+      {
+        "time_utc": "2026-09-12T21:20:30.8536842Z",
+        "cpu_ms": 468.75,
+        "working_set_bytes": 172142592,
+        "private_bytes": 397127680
+      },
+      {
+        "time_utc": "2026-09-12T21:20:31.3581702Z",
+        "cpu_ms": 468.75,
+        "working_set_bytes": 172142592,
+        "private_bytes": 397127680
+      },
+      {
+        "time_utc": "2026-09-12T21:20:31.8626655Z",
+        "cpu_ms": 468.75,
+        "working_set_bytes": 172142592,
+        "private_bytes": 397127680
+      }
+    ],
+    "children": [],
+    "cpu_delta_ms": 15.625,
+    "peak_working_set_bytes": 172142592,
+    "settled_working_set_bytes": 172142592,
+    "peak_private_bytes": 397127680,
+    "settled_private_bytes": 397127680
+  },
+  "after_profile_process": {
+    "executable": "C:/Users/Jakub/Desktop/Projects/rustcord/target/release/serein.exe",
+    "args": [
+      "--demo",
+      "--demo-server-settings"
+    ],
+    "warmup_ms": 5000,
+    "sample_interval_ms": 500,
+    "samples": [
+      {
+        "time_utc": "2026-09-12T21:38:50.5080587Z",
+        "cpu_ms": 515.625,
+        "working_set_bytes": 170872832,
+        "private_bytes": 397238272
+      },
+      {
+        "time_utc": "2026-09-12T21:38:51.0345487Z",
+        "cpu_ms": 515.625,
+        "working_set_bytes": 170872832,
+        "private_bytes": 397238272
+      },
+      {
+        "time_utc": "2026-09-12T21:38:51.5489440Z",
+        "cpu_ms": 515.625,
+        "working_set_bytes": 170872832,
+        "private_bytes": 397238272
+      },
+      {
+        "time_utc": "2026-09-12T21:38:52.0611858Z",
+        "cpu_ms": 515.625,
+        "working_set_bytes": 170872832,
+        "private_bytes": 397238272
+      },
+      {
+        "time_utc": "2026-09-12T21:38:52.5758149Z",
+        "cpu_ms": 515.625,
+        "working_set_bytes": 170872832,
+        "private_bytes": 397238272
+      },
+      {
+        "time_utc": "2026-09-12T21:38:53.0912821Z",
+        "cpu_ms": 515.625,
+        "working_set_bytes": 170872832,
+        "private_bytes": 397238272
+      },
+      {
+        "time_utc": "2026-09-12T21:38:53.6038479Z",
+        "cpu_ms": 515.625,
+        "working_set_bytes": 170872832,
+        "private_bytes": 397238272
+      },
+      {
+        "time_utc": "2026-09-12T21:38:54.1232630Z",
+        "cpu_ms": 515.625,
+        "working_set_bytes": 170872832,
+        "private_bytes": 397238272
+      },
+      {
+        "time_utc": "2026-09-12T21:38:54.6402171Z",
+        "cpu_ms": 515.625,
+        "working_set_bytes": 170872832,
+        "private_bytes": 397238272
+      },
+      {
+        "time_utc": "2026-09-12T21:38:55.1598302Z",
+        "cpu_ms": 515.625,
+        "working_set_bytes": 170872832,
+        "private_bytes": 397238272
+      },
+      {
+        "time_utc": "2026-09-12T21:38:55.6710103Z",
+        "cpu_ms": 515.625,
+        "working_set_bytes": 170872832,
+        "private_bytes": 397238272
+      },
+      {
+        "time_utc": "2026-09-12T21:38:56.1859077Z",
+        "cpu_ms": 515.625,
+        "working_set_bytes": 170872832,
+        "private_bytes": 397238272
+      },
+      {
+        "time_utc": "2026-09-12T21:38:56.7006421Z",
+        "cpu_ms": 515.625,
+        "working_set_bytes": 170872832,
+        "private_bytes": 397238272
+      },
+      {
+        "time_utc": "2026-09-12T21:38:57.2127848Z",
+        "cpu_ms": 515.625,
+        "working_set_bytes": 170872832,
+        "private_bytes": 397238272
+      },
+      {
+        "time_utc": "2026-09-12T21:38:57.7261112Z",
+        "cpu_ms": 515.625,
+        "working_set_bytes": 170872832,
+        "private_bytes": 397238272
+      },
+      {
+        "time_utc": "2026-09-12T21:38:58.2432024Z",
+        "cpu_ms": 515.625,
+        "working_set_bytes": 170872832,
+        "private_bytes": 397238272
+      },
+      {
+        "time_utc": "2026-09-12T21:38:58.7601032Z",
+        "cpu_ms": 515.625,
+        "working_set_bytes": 170872832,
+        "private_bytes": 397238272
+      },
+      {
+        "time_utc": "2026-09-12T21:38:59.2723498Z",
+        "cpu_ms": 515.625,
+        "working_set_bytes": 170872832,
+        "private_bytes": 397238272
+      },
+      {
+        "time_utc": "2026-09-12T21:38:59.7881460Z",
+        "cpu_ms": 515.625,
+        "working_set_bytes": 170872832,
+        "private_bytes": 397238272
+      },
+      {
+        "time_utc": "2026-09-12T21:39:00.3024806Z",
+        "cpu_ms": 515.625,
+        "working_set_bytes": 170872832,
+        "private_bytes": 397238272
+      }
+    ],
+    "children": [],
+    "cpu_delta_ms": 0,
+    "peak_working_set_bytes": 170872832,
+    "settled_working_set_bytes": 170872832,
+    "peak_private_bytes": 397238272,
+    "settled_private_bytes": 397238272
+  },
+  "after_integrations_process": {
+    "executable": "C:/Users/Jakub/Desktop/Projects/rustcord/target/release/serein.exe",
+    "args": [
+      "--demo",
+      "--demo-server-settings",
+      "--demo-server-page=integrations"
+    ],
+    "warmup_ms": 5000,
+    "sample_interval_ms": 500,
+    "samples": [
+      {
+        "time_utc": "2026-09-12T21:39:20.2672280Z",
+        "cpu_ms": 406.25,
+        "working_set_bytes": 170119168,
+        "private_bytes": 398082048
+      },
+      {
+        "time_utc": "2026-09-12T21:39:20.7788114Z",
+        "cpu_ms": 406.25,
+        "working_set_bytes": 170119168,
+        "private_bytes": 398082048
+      },
+      {
+        "time_utc": "2026-09-12T21:39:21.2949001Z",
+        "cpu_ms": 406.25,
+        "working_set_bytes": 170119168,
+        "private_bytes": 398082048
+      },
+      {
+        "time_utc": "2026-09-12T21:39:21.8069795Z",
+        "cpu_ms": 406.25,
+        "working_set_bytes": 170119168,
+        "private_bytes": 398082048
+      },
+      {
+        "time_utc": "2026-09-12T21:39:22.3229136Z",
+        "cpu_ms": 406.25,
+        "working_set_bytes": 170119168,
+        "private_bytes": 398082048
+      },
+      {
+        "time_utc": "2026-09-12T21:39:22.8385415Z",
+        "cpu_ms": 406.25,
+        "working_set_bytes": 170119168,
+        "private_bytes": 398082048
+      },
+      {
+        "time_utc": "2026-09-12T21:39:23.3543707Z",
+        "cpu_ms": 406.25,
+        "working_set_bytes": 170119168,
+        "private_bytes": 398082048
+      },
+      {
+        "time_utc": "2026-09-12T21:39:23.8678832Z",
+        "cpu_ms": 406.25,
+        "working_set_bytes": 170119168,
+        "private_bytes": 398082048
+      },
+      {
+        "time_utc": "2026-09-12T21:39:24.3839107Z",
+        "cpu_ms": 406.25,
+        "working_set_bytes": 170119168,
+        "private_bytes": 398082048
+      },
+      {
+        "time_utc": "2026-09-12T21:39:24.9001426Z",
+        "cpu_ms": 406.25,
+        "working_set_bytes": 170119168,
+        "private_bytes": 398082048
+      },
+      {
+        "time_utc": "2026-09-12T21:39:25.4140796Z",
+        "cpu_ms": 406.25,
+        "working_set_bytes": 170119168,
+        "private_bytes": 398082048
+      },
+      {
+        "time_utc": "2026-09-12T21:39:25.9291602Z",
+        "cpu_ms": 406.25,
+        "working_set_bytes": 170119168,
+        "private_bytes": 398082048
+      },
+      {
+        "time_utc": "2026-09-12T21:39:26.4471173Z",
+        "cpu_ms": 406.25,
+        "working_set_bytes": 170119168,
+        "private_bytes": 398082048
+      },
+      {
+        "time_utc": "2026-09-12T21:39:26.9667625Z",
+        "cpu_ms": 406.25,
+        "working_set_bytes": 170119168,
+        "private_bytes": 398082048
+      },
+      {
+        "time_utc": "2026-09-12T21:39:27.4701004Z",
+        "cpu_ms": 406.25,
+        "working_set_bytes": 170119168,
+        "private_bytes": 398082048
+      },
+      {
+        "time_utc": "2026-09-12T21:39:27.9810543Z",
+        "cpu_ms": 406.25,
+        "working_set_bytes": 170119168,
+        "private_bytes": 398082048
+      },
+      {
+        "time_utc": "2026-09-12T21:39:28.4988160Z",
+        "cpu_ms": 406.25,
+        "working_set_bytes": 170119168,
+        "private_bytes": 398082048
+      },
+      {
+        "time_utc": "2026-09-12T21:39:29.0021976Z",
+        "cpu_ms": 406.25,
+        "working_set_bytes": 170119168,
+        "private_bytes": 398082048
+      },
+      {
+        "time_utc": "2026-09-12T21:39:29.5180970Z",
+        "cpu_ms": 406.25,
+        "working_set_bytes": 170119168,
+        "private_bytes": 398082048
+      },
+      {
+        "time_utc": "2026-09-12T21:39:30.0320176Z",
+        "cpu_ms": 406.25,
+        "working_set_bytes": 170119168,
+        "private_bytes": 398082048
+      }
+    ],
+    "children": [],
+    "cpu_delta_ms": 0,
+    "peak_working_set_bytes": 170119168,
+    "settled_working_set_bytes": 170119168,
+    "peak_private_bytes": 398082048,
+    "settled_private_bytes": 398082048
+  },
+  "baseline_demo_compile_repair": "For feature-demo compilation ONLY, added Command::ForumPosts { .. } => return in apps/desktop/src/main.rs synthetic command match; baseline excluded this exhaustiveness arm. Core disables ForumPosts loads in demos. Same repair applied root. Standard package was built before patch.",
+  "screenshots": "Inspected synthetic offline framebuffer exports, dark/light 1440x1000 and narrow 800x900 logical pixels, scale 1.25. Not native input or live service proof.",
+  "blockers": [
+    "orca command not found",
+    "Computer Use native pipe is unavailable: failed to connect native pipe: The system cannot find the file specified. (os error 2)"
+  ]
+}

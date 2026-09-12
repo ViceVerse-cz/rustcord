@@ -3725,3 +3725,55 @@ Inspected offline framebuffer exports at 1440x1000 and 800x900 logical sizes
 (125% pixel output), dark/light themes. Native Computer Use could not connect to
 its pipe (OS error 2). These captures and egui click tests are not native input,
 accessibility or live Discord proof. Raw evidence: [metrics.json](pr-evidence/server-invites/metrics.json).
+
+
+## Server integrations - September 12, 2026
+
+Baseline `6178e0f`, implementation branch `feat/server-integrations` (exact source
+fingerprint in the linked metrics), Windows 11 Home 10.0.26200, Ryzen 7 7800X3D
+(16 logical processors), 33,410,678,784 RAM bytes, Rust 1.98.1. Standard packages
+include voice with no dependency or feature-policy changes.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Standard executable bytes | 67,125,760 | 67,291,136 | +165,376.0000 (+0.246%) |
+| Installed package bytes | 73,468,894 | 73,636,897 | +168,003.0000 (+0.229%) |
+| ZIP bytes (CompressionLevel.Optimal) | 43,117,724 | 43,178,867 | +61,143.0000 (+0.142%) |
+| Reducer replay median, ms | 41.8779 | 44.2123 | +2.3344 (+5.574%) |
+| Profile peak working-set bytes | 172,142,592 | 170,872,832 | -1,269,760.0000 (-0.738%) |
+| Profile peak private bytes | 397,127,680 | 397,238,272 | +110,592.0000 (+0.028%) |
+
+Package measurements use clean staging of the same 234 packager paths, preserving
+unrelated stale root dist files. Both ZIPs use .NET ZipFile.CreateFromDirectory
+with CompressionLevel.Optimal and no enclosing directory. Sizes precede this
+measurement note; ZIP timestamps are not normalized.
+
+Reducer replay uses one warmup and five direct release runs of 100,000 synthetic
+events, without concurrent builds. Both retain 500 records and 236,992-237,477
+estimated timeline bytes. Baseline runs span 40.2218-45.1117 ms; after runs span
+41.5264-52.8766 ms. The median increase is reported, not attributed to integration
+operations: this generic workload does not measure their latency.
+
+Process comparison uses release builds with the existing demo feature and
+`--demo --demo-server-settings`, Wgpu, default 1120x760 logical window at the
+125% environment scale. Both used Start-Process Hidden, five seconds warmup and
+twenty samples 500 ms apart, without concurrent builds or scripted native input.
+Window visibility/occlusion and actual GPU adapter were not verified. The baseline
+demo needed the same missing Command::ForumPosts match arm repaired in this change;
+its standard package was built from unchanged main before that demo-only repair.
+
+- Baseline Profile: peak/settled working set 172,142,592 bytes; private bytes 397,127,680; measured CPU delta 15.625 ms.
+- After Profile: peak/settled working set 170,872,832 bytes; private bytes 397,238,272; measured CPU delta 0 ms.
+- New Integrations view: peak/settled working set 170,119,168 bytes; private bytes 398,082,048; measured CPU delta 0 ms.
+
+The new-view sample adds `--demo-server-page=integrations` with two apps, two
+incoming webhooks and one followed channel. No predecessor Integrations page
+exists. No child processes were observed. Timer resolution does not prove zero
+idle CPU, and one pair of memory samples does not establish an improvement.
+GPU allocations, frame-time p95 and startup latency remain unmeasured.
+
+Final offline framebuffer exports were inspected in dark/light themes at
+1440x1000 and narrow 800x900 logical sizes (125% pixel output), including webhook
+rows. Computer Use could not connect to its native pipe (OS error 2); Orca CLI
+was absent. Native interaction, accessibility and live Discord remain unverified.
+Raw samples: [metrics.json](pr-evidence/server-integrations/metrics.json).

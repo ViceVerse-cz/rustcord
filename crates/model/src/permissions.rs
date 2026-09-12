@@ -28,6 +28,7 @@ pub const MUTE_MEMBERS: u128 = 1 << 22;
 pub const DEAFEN_MEMBERS: u128 = 1 << 23;
 pub const MOVE_MEMBERS: u128 = 1 << 24;
 pub const USE_VAD: u128 = 1 << 25;
+pub const MANAGE_WEBHOOKS: u128 = 1 << 29;
 pub const MANAGE_ROLES: u128 = 1 << 28;
 pub const MANAGE_THREADS: u128 = 1 << 34;
 pub const CREATE_PUBLIC_THREADS: u128 = 1 << 35;
