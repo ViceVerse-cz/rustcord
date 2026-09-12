@@ -46,6 +46,9 @@ pub enum InstallSource {
 }
 
 pub enum Job {
+	SelectTheme {
+		id: Option<String>,
+	},
 	Load {
 		account: Option<String>,
 	},
@@ -194,11 +197,57 @@ pub fn demo_check_examples() -> Result<bool, String> {
 			return Err("Theme starter must only supply a valid palette".into());
 		}
 	}
-	Ok(activated)
+	let root = std::env::temp_dir().join(format!("serein-theme-check-{}", std::process::id()));
+	fs::create_dir(&root).map_err(|_| "Cannot create isolated theme check directory")?;
+	let result = (|| {
+		for starter in self::starters()?
+			.into_iter()
+			.filter(|entry| entry.theme.is_some())
+			.take(2)
+		{
+			enable(&root, starter.source, Vec::new(), None, &gate)?;
+		}
+		let installed = load(&root, None, &gate)?;
+		assert_eq!(installed.len(), 2, "installing retains previous presets");
+		let id = installed
+			.iter()
+			.find(|entry| !entry.active_theme)
+			.unwrap()
+			.manifest
+			.id
+			.clone();
+		run(
+			&root,
+			Job::SelectTheme {
+				id: Some(id.clone()),
+			},
+			&gate,
+		)?;
+		let reloaded = load(&root, None, &gate)?;
+		assert_eq!(
+			reloaded
+				.iter()
+				.find(|entry| entry.active_theme)
+				.unwrap()
+				.manifest
+				.id,
+			id
+		);
+		run(&root, Job::SelectTheme { id: None }, &gate)?;
+		let reloaded = load(&root, None, &gate)?;
+		assert_eq!(reloaded.len(), 2, "built-in presets keep installed themes");
+		assert!(reloaded.iter().all(|entry| !entry.active_theme));
+		Ok(activated)
+	})();
+	let cleanup =
+		fs::remove_dir_all(&root).map_err(|_| "Cannot remove isolated theme check directory");
+	cleanup?;
+	result
 }
 
 #[derive(Clone)]
 pub struct InstalledExtension {
+	pub active_theme: bool,
 	pub manifest: Manifest,
 	pub theme: Option<Theme>,
 	pub reviewed: bool,
@@ -209,6 +258,7 @@ pub struct InstalledExtension {
 }
 
 pub enum Event {
+	ThemeSelected(Option<String>),
 	Loaded {
 		installed: Vec<InstalledExtension>,
 		starters: Vec<Starter>,
@@ -402,6 +452,7 @@ impl Stored {
 			Ok(output)
 		});
 		InstalledExtension {
+			active_theme: self.package.manifest.kind == ExtensionKind::Theme,
 			manifest: self.package.manifest.clone(),
 			theme: self.package.theme.clone().or_else(|| {
 				result
@@ -451,7 +502,7 @@ fn validate_job(job: &Job) -> Result<(), String> {
 			valid_id(id)?;
 			preview.validate().map_err(|e| e.to_string())?;
 		}
-		Job::Disable { id, .. } => valid_id(id)?,
+		Job::SelectTheme { id: Some(id) } | Job::Disable { id, .. } => valid_id(id)?,
 		Job::Enable { grants, .. } if grants.len() > 4 => {
 			return Err("Invalid plugin grants".into());
 		}
@@ -466,6 +517,23 @@ fn validate_job(job: &Job) -> Result<(), String> {
 fn run(root: &Path, job: Job, gate: &Gate) -> Result<Event, String> {
 	gate.check()?;
 	match job {
+		Job::SelectTheme { id } => {
+			let parent = root.join("themes");
+			if let Some(id) = &id {
+				valid_id(id)?;
+				let stored = read_stored(&parent.join(id).join("package.json"))?;
+				if stored.package.manifest.id != *id
+					|| stored.package.manifest.kind != ExtensionKind::Theme
+					|| parent.join(id).with_extension("disabled").exists()
+				{
+					return Err("Theme is not installed".into());
+				}
+				atomic_write(&parent.join("active.json"), id.as_bytes(), gate)?;
+			} else {
+				remove_file(&parent.join("active.json"))?;
+			}
+			Ok(Event::ThemeSelected(id))
+		}
 		Job::Load { account } => Ok(Event::Loaded {
 			starters: starters()?,
 			installed: load(root, account.as_deref(), gate)?,
@@ -644,7 +712,6 @@ fn enable(
 			stored.package.manifest.id.as_bytes(),
 			gate,
 		)?;
-		cleanup_inactive_themes(&parent, &stored.package.manifest.id, gate)?;
 	}
 	Ok(summary)
 }
@@ -705,7 +772,6 @@ fn load(
 			let active = String::from_utf8(read_bounded(&parent.join("active.json"), 64)?)
 				.map_err(|_| "Invalid active theme")?;
 			valid_id(&active)?;
-			let _ = cleanup_inactive_themes(&parent, &active, gate);
 			active_theme = Some(active);
 		}
 		if !parent.exists() {
@@ -732,10 +798,7 @@ fn load(
 					continue;
 				}
 				let stored = read_stored(&package_path).and_then(|stored| {
-					if entry.path().with_extension("disabled").exists()
-						|| kind == ExtensionKind::Theme
-							&& active_theme.as_deref() != Some(id.as_str())
-					{
+					if entry.path().with_extension("disabled").exists() {
 						return Err(cleanup_error.clone().unwrap_or_else(|| {
 							"Extension is disabled; cleanup needs retrying".into()
 						}));
@@ -749,7 +812,12 @@ fn load(
 				remove_file(&entry.path().join("data.partial"))?;
 				installed.push(match stored {
 					Ok(stored) => match activation_storage(&stored, &entry.path()) {
-						Ok(storage) => stored.summary(gate, storage),
+						Ok(storage) => {
+							let mut summary = stored.summary(gate, storage);
+							summary.active_theme = kind == ExtensionKind::Theme
+								&& active_theme.as_deref() == Some(id.as_str());
+							summary
+						}
 						Err(error) => {
 							let mut summary = stored.summary(gate, None);
 							summary.theme = None;
@@ -759,6 +827,7 @@ fn load(
 						}
 					},
 					Err(error) => InstalledExtension {
+						active_theme: false,
 						manifest: Manifest {
 							api_version: extensions::API_VERSION,
 							id: id.clone(),
@@ -826,24 +895,6 @@ fn disable(parent: &Path, id: &str, gate: &Gate) -> Result<(), String> {
 		remove_file(&parent.join("active.json"))?;
 	}
 	remove_file(&directory.with_extension("disabled"))
-}
-
-fn cleanup_inactive_themes(parent: &Path, active: &str, gate: &Gate) -> Result<(), String> {
-	for entry in fs::read_dir(parent)
-		.map_err(|_| "Cannot inspect theme storage")?
-		.take(MAX_PER_SCOPE * 4 + 1)
-	{
-		let entry = entry.map_err(|_| "Cannot inspect theme storage")?;
-		if entry
-			.file_type()
-			.map_err(|_| "Cannot inspect theme storage")?
-			.is_dir() && entry.file_name() != active
-		{
-			let id = entry.file_name().to_string_lossy().into_owned();
-			disable(parent, &id, gate)?;
-		}
-	}
-	Ok(())
 }
 
 fn cleanup(parent: &Path, max: usize, gate: &Gate) -> Result<(), String> {
@@ -1225,7 +1276,7 @@ mod tests {
 	}
 
 	#[test]
-	fn theme_install_replace_disable_restart_and_checksum() {
+	fn theme_install_select_disable_restart_and_checksum() {
 		let profile = Profile::new();
 		let root = profile.0.join("extensions");
 		let first = source(&profile, &theme("first"));
@@ -1239,10 +1290,45 @@ mod tests {
 		assert_eq!(load(&root, None, &gate()).unwrap()[0].manifest.id, "first");
 		let second = source(&profile, &theme("second"));
 		enable(&root, second, Vec::new(), None, &gate()).unwrap();
-		assert!(!root.join("themes/first").exists());
-		assert_eq!(load(&root, None, &gate()).unwrap()[0].manifest.id, "second");
+		assert!(root.join("themes/first").exists());
+		let installed = load(&root, None, &gate()).unwrap();
+		assert_eq!(installed.len(), 2);
+		assert_eq!(
+			installed
+				.iter()
+				.find(|entry| entry.active_theme)
+				.unwrap()
+				.manifest
+				.id,
+			"second"
+		);
+		run(
+			&root,
+			Job::SelectTheme {
+				id: Some("first".into()),
+			},
+			&gate(),
+		)
+		.unwrap();
+		assert_eq!(
+			load(&root, None, &gate())
+				.unwrap()
+				.iter()
+				.find(|entry| entry.active_theme)
+				.unwrap()
+				.manifest
+				.id,
+			"first"
+		);
+		run(&root, Job::SelectTheme { id: None }, &gate()).unwrap();
+		assert!(
+			load(&root, None, &gate())
+				.unwrap()
+				.iter()
+				.all(|entry| !entry.active_theme)
+		);
 		disable(&root.join("themes"), "second", &gate()).unwrap();
-		assert!(load(&root, None, &gate()).unwrap().is_empty());
+		assert_eq!(load(&root, None, &gate()).unwrap().len(), 1);
 		assert!(!root.join("themes/second").exists());
 		assert!(!root.join("themes/active.json").exists());
 		if let InstallSource::Local { path, .. } = &first {

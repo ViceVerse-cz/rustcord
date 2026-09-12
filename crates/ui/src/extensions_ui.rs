@@ -63,6 +63,9 @@ impl ExtensionContext {
 }
 
 pub enum ExtensionRequest {
+	SelectTheme {
+		id: Option<String>,
+	},
 	Preview {
 		id: String,
 	},
@@ -113,6 +116,7 @@ struct PreviewImage {
 }
 #[derive(Default)]
 pub struct ExtensionUi {
+	pub active_theme: Option<String>,
 	pub entries: Vec<ExtensionEntry>,
 	pub status: String,
 	pub busy: bool,
@@ -418,7 +422,7 @@ impl ExtensionUi {
 			values: BTreeMap::new(),
 		});
 	}
-	fn queue(&mut self, ctx: &egui::Context, request: ExtensionRequest) {
+	pub(crate) fn queue(&mut self, ctx: &egui::Context, request: ExtensionRequest) {
 		if self.requests.len()
 			< if matches!(&request, ExtensionRequest::Disable { .. }) {
 				extensions::MAX_PLUGINS * 2
@@ -629,11 +633,15 @@ impl ExtensionUi {
 												egui::Layout::right_to_left(egui::Align::Center),
 												|ui| {
 													ui.label(
-														egui::RichText::new(if entry.enabled {
-															"Enabled"
-														} else {
-															"Free"
-														})
+														egui::RichText::new(
+															if entry.enabled && self.themes {
+																"Installed"
+															} else if entry.enabled {
+																"Enabled"
+															} else {
+																"Free"
+															},
+														)
 														.size(12.0)
 														.color(if entry.enabled {
 															colors.positive
@@ -1131,6 +1139,7 @@ fn request_bytes(request: &ExtensionRequest) -> usize {
 	std::mem::size_of_val(request)
 		+ match request {
 			ExtensionRequest::RefreshCatalog | ExtensionRequest::Import => 0,
+			ExtensionRequest::SelectTheme { id } => id.as_ref().map_or(0, String::len),
 			ExtensionRequest::Enable {
 				id, sha256, grants, ..
 			} => id.len() + sha256.len() + grants.len() * std::mem::size_of::<Capability>(),

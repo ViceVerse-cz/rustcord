@@ -2,7 +2,9 @@
 
 Community extensions (September 12): packages and grants are stored under the
 application data directory's `extensions` subtree. Plugin data/grants are
-account-isolated; declarative themes are device preferences. Installation,
+account-isolated; declarative themes are device preferences. Up to eight installed
+themes remain available in Colour preset; switching only changes the bounded
+64-byte active theme identifier and retains the packages. Installation,
 validation, invocation storage and removal run on a bounded background worker.
 Disabling removes Serein's package and extension data, and failed cleanup is
 reported and retried. Logout removes the account's plugin data. Imported

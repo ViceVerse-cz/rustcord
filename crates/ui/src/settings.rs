@@ -621,12 +621,48 @@ impl MessagingUi {
 		ui.add_space(8.0);
 		ui.label(design::eyebrow(ui, "Colour preset", colors.muted));
 		let current = design::variant();
+		let mut presets: Vec<_> = design::Variant::ALL
+			.into_iter()
+			.map(|variant| {
+				(
+					Some(variant),
+					None,
+					variant.label().to_owned(),
+					design::builtin_colors(ui.visuals().dark_mode, variant),
+				)
+			})
+			.collect();
+		presets.extend(self.extensions.entries.iter().filter_map(|entry| {
+			if !entry.enabled || entry.manifest.kind != extensions::ExtensionKind::Theme {
+				return None;
+			}
+			Some((
+				None,
+				Some(entry.manifest.id.clone()),
+				entry.manifest.name.clone(),
+				design::theme_preview_palette(ui, entry.theme_preview.as_ref()?),
+			))
+		}));
+		let active_label = presets
+			.iter()
+			.find(|(variant, id, _, _)| {
+				if let Some(active) = &self.extensions.active_theme {
+					id.as_ref() == Some(active)
+				} else {
+					*variant == Some(current)
+				}
+			})
+			.map_or(current.label(), |(_, _, label, _)| label.as_str())
+			.to_owned();
 		design::card(ui, |ui| {
 			ui.horizontal_wrapped(|ui| {
 				ui.spacing_mut().item_spacing = egui::vec2(12.0, 10.0);
-				for variant in design::Variant::ALL {
-					let swatch = design::builtin_colors(ui.visuals().dark_mode, variant);
-					let selected = variant == current;
+				for (variant, id, label, swatch) in presets {
+					let selected = if let Some(active) = &self.extensions.active_theme {
+						id.as_ref() == Some(active)
+					} else {
+						variant == Some(current)
+					};
 					let (rect, response) =
 						ui.allocate_exact_size(egui::vec2(76.0, 70.0), egui::Sense::click());
 					response.widget_info(|| {
@@ -634,10 +670,10 @@ impl MessagingUi {
 							egui::WidgetType::RadioButton,
 							true,
 							selected,
-							variant.label(),
+							&label,
 						)
 					});
-					let painter = ui.painter();
+					let painter = &ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
 					if response.hovered() || response.has_focus() {
 						painter.rect_filled(rect, 6, colors.hover);
 					}
@@ -676,7 +712,7 @@ impl MessagingUi {
 					painter.text(
 						egui::pos2(rect.center().x, rect.bottom() - 10.0),
 						egui::Align2::CENTER_CENTER,
-						variant.label(),
+						&label,
 						egui::FontId::proportional(11.0),
 						if selected {
 							colors.text_strong
@@ -684,10 +720,16 @@ impl MessagingUi {
 							colors.muted
 						},
 					);
-					if response.clicked() && !selected {
-						design::set_variant(variant);
-						design::apply(ui.ctx());
-						self.theme_variant_changed = Some(variant);
+					if response.on_hover_text(&label).clicked()
+						&& !selected && !self.extensions.busy
+					{
+						if let Some(variant) = variant {
+							design::set_variant(variant);
+							design::apply(ui.ctx());
+							self.theme_variant_changed = Some(variant);
+						}
+						self.extensions
+							.queue(ui.ctx(), crate::ExtensionRequest::SelectTheme { id });
 					}
 				}
 			});
@@ -695,7 +737,7 @@ impl MessagingUi {
 			ui.label(
 				RichText::new(format!(
 					"{} · saved with your appearance. Gradient presets always use dark text.",
-					current.label()
+					active_label
 				))
 				.size(12.0)
 				.color(colors.muted),
