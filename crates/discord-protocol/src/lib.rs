@@ -5,6 +5,7 @@ pub mod archives;
 mod attachments;
 mod embeds;
 mod extra_content;
+pub mod forum;
 pub mod gifs;
 pub mod group_actions;
 pub mod guild_folders;

@@ -97,6 +97,13 @@ impl State {
 		self.remove_channels(&removed);
 		self.channels.retain(|c| !in_scope(c));
 		self.channels.extend(threads);
+		// The snapshot just replaced this scope, so any fetched forum page is stale.
+		if let Some(parent) = self.posts.parent
+			&& self.channel(parent).and_then(|c| c.guild) == Some(guild)
+			&& parents.as_ref().is_none_or(|ids| ids.contains(&parent))
+		{
+			self.reload_forum_posts(parent);
+		}
 		Ok(())
 	}
 }

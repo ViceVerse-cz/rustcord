@@ -68,9 +68,13 @@ impl ForumUi {
 		{
 			self.draft = None;
 		}
+		if let Some(command) = state.request_forum_posts(forum, false) {
+			commands.push(command);
+		}
 		let colors = design::palette(ui);
 		let mut open = None;
 		let mut archive_request = None;
+		let mut posts_request = false;
 		egui::ScrollArea::vertical()
 			.id_salt(("forum", forum))
 			.auto_shrink([false, false])
@@ -104,7 +108,8 @@ impl ForumUi {
 							.map(|page| page.threads.iter().filter(|post| matches(post)).collect())
 							.unwrap_or_default();
 						let now = time::OffsetDateTime::now_utc();
-						if active.is_empty() && archived.is_empty() {
+						let loading = state.posts.parent == Some(forum) && state.posts.loading;
+						if active.is_empty() && archived.is_empty() && !loading {
 							ui.add_space(24.0);
 							ui.vertical_centered(|ui| {
 								ui.label(
@@ -121,7 +126,7 @@ impl ForumUi {
 								);
 								ui.label(
 									RichText::new(if query.is_empty() {
-										"Active posts arrive with the guild; archived posts load on request."
+										"Nothing is posted here yet; archived posts load on request."
 									} else {
 										"Press Enter to start a post with this title."
 									})
@@ -134,6 +139,7 @@ impl ForumUi {
 								open = Some(Open::Active(post.id));
 							}
 						}
+						posts_request = posts_footer(ui, state, forum);
 						for post in archived {
 							if card(ui, post, true, now).clicked() {
 								open = Some(Open::Archived(post.id));
@@ -160,6 +166,11 @@ impl ForumUi {
 			&& let Some(command) = state.request_archives(forum, Kind::Public, before)
 		{
 			commands.push(command);
+		} else if posts_request {
+			state.posts.error = None;
+			if let Some(command) = state.request_forum_posts(forum, state.posts.loaded > 0) {
+				commands.push(command);
+			}
 		}
 	}
 
@@ -418,6 +429,44 @@ fn card(
 	response
 }
 
+/// Active-post status under the list; returns true when the user asks for another page.
+fn posts_footer(ui: &mut egui::Ui, state: &State, forum: Id) -> bool {
+	let colors = design::palette(ui);
+	if state.posts.parent != Some(forum) {
+		return false;
+	}
+	let mut request = false;
+	ui.horizontal_wrapped(|ui| {
+		if state.posts.loading {
+			ui.label(
+				RichText::new("Loading posts…")
+					.size(13.0)
+					.color(colors.muted),
+			);
+		} else if let Some(error) = state.posts.error {
+			ui.label(RichText::new(error).size(13.0).color(colors.danger));
+			request = ui
+				.add_enabled(
+					state.can_load_posts(forum),
+					egui::Button::new(RichText::new("Retry").size(13.0)),
+				)
+				.clicked();
+		} else if state.posts.more {
+			request = ui
+				.add(
+					egui::Button::new(
+						RichText::new("Load more posts")
+							.size(13.0)
+							.color(colors.link),
+					)
+					.frame(false),
+				)
+				.clicked();
+		}
+	});
+	request
+}
+
 /// Archive controls under the list; returns a page cursor request when the user asks for one.
 fn archive_footer(
 	ui: &mut egui::Ui,
@@ -629,6 +678,52 @@ mod tests {
 					..
 				})
 			));
+			// A live session fetches the posts the gateway never delivered, exactly once.
+			state.demo = false;
+			let mut forum = ForumUi::default();
+			frame(&ctx, |ui| forum.show(ui, &mut state, Id(26), &mut commands));
+			let Some(Command::ForumPosts {
+				parent: Id(26),
+				offset: 0,
+				request,
+				..
+			}) = commands.pop()
+			else {
+				panic!("the post list loads itself");
+			};
+			assert!(commands.is_empty());
+			frame(&ctx, |ui| forum.show(ui, &mut state, Id(26), &mut commands));
+			assert!(commands.is_empty(), "A pending page is never re-requested");
+			state.apply_forum_posts(
+				Id(26),
+				request,
+				Ok(model::forum::Page {
+					threads: vec![Channel {
+						id: Id(1_549_000_000_000_000_000),
+						guild: Some(Id(10)),
+						parent_id: Some(Id(26)),
+						position: 0,
+						name: "Fetched post".into(),
+						kind: 11,
+						recipients: vec![],
+						last_message: None,
+						member_list_id: None,
+						message_count: Some(2),
+						icon: None,
+					}],
+					more: false,
+				}),
+			);
+			forum.query.clear();
+			frame(&ctx, |ui| forum.show(ui, &mut state, Id(26), &mut commands));
+			assert!(commands.is_empty(), "A loaded forum stays quiet");
+			assert!(
+				state
+					.forum_posts(Id(26))
+					.iter()
+					.any(|post| post.id == Id(1_549_000_000_000_000_000)),
+				"Fetched posts join the list"
+			);
 		}
 	}
 }

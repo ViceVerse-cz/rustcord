@@ -1,6 +1,7 @@
 // Direct, origin-fixed REST adapter. No cookies, redirects, logging, persistence or bot SDK.
 mod activity_sharing;
 mod archives;
+mod forum;
 mod group_actions;
 mod guild_folders;
 mod profile_edit;
@@ -395,6 +396,19 @@ impl DiscordApi {
 			} => {
 				let result = self.create_post(parent, guild, &title, &content).await;
 				Event::PostCreated {
+					parent,
+					request,
+					result,
+				}
+			}
+			Command::ForumPosts {
+				parent,
+				guild,
+				offset,
+				request,
+			} => {
+				let result = self.forum_posts(parent, guild, offset).await;
+				Event::ForumPosts {
 					parent,
 					request,
 					result,

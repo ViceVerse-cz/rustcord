@@ -1,5 +1,6 @@
 //! UI-neutral session entities. No filesystem or network dependencies.
 pub mod archives;
+pub mod forum;
 pub mod gifs;
 pub mod guild_folders;
 pub mod permissions;

@@ -6,6 +6,18 @@ use model::{Channel, Id, permissions as p};
 
 pub const MAX_TITLE: usize = 100;
 
+/// The on-demand active-post list of one forum; the gateway only delivers joined posts.
+#[derive(Default)]
+pub struct Posts {
+	pub parent: Option<Id>,
+	pub request: u64,
+	pub loading: bool,
+	/// Posts admitted so far, used as the search offset of the next page.
+	pub loaded: usize,
+	pub more: bool,
+	pub error: Option<&'static str>,
+}
+
 #[derive(Default)]
 pub struct Posting {
 	pub request: u64,
@@ -31,6 +43,119 @@ impl State {
 			.collect();
 		posts.sort_by_key(|c| std::cmp::Reverse(c.last_message.unwrap_or(c.id)));
 		posts
+	}
+
+	pub fn can_load_posts(&self, parent: Id) -> bool {
+		// Fixtures ship their own posts; a demo session has nothing to fetch them with.
+		!self.demo
+			&& self.auth == AuthState::Authenticated
+			&& self.gateway_connected
+			&& self.is_forum(parent)
+			&& self.can_read_history(parent)
+	}
+
+	/// Loads the first page of a forum, or the next one when `more` is set.
+	pub fn request_forum_posts(&mut self, parent: Id, more: bool) -> Option<Command> {
+		if !self.can_load_posts(parent) {
+			return None;
+		}
+		let current = self.posts.parent == Some(parent);
+		if self.posts.loading && current {
+			return None;
+		}
+		if more {
+			if !current || !self.posts.more || self.posts.loaded >= model::forum::MAX_POSTS {
+				return None;
+			}
+		} else if current && (self.posts.loaded > 0 || self.posts.error.is_some()) {
+			return None;
+		}
+		let guild = self.channel(parent)?.guild?;
+		let offset = if more { self.posts.loaded } else { 0 };
+		self.posts.request = self.posts.request.wrapping_add(1);
+		self.posts.parent = Some(parent);
+		self.posts.loading = true;
+		self.posts.error = None;
+		if !more {
+			self.posts.loaded = 0;
+			self.posts.more = false;
+		}
+		Some(Command::ForumPosts {
+			parent,
+			guild,
+			offset,
+			request: self.posts.request,
+		})
+	}
+
+	/// Re-arms the loader so the next frame of this forum fetches its posts again.
+	pub fn reload_forum_posts(&mut self, parent: Id) {
+		if self.posts.parent == Some(parent) && !self.posts.loading {
+			// Keep the request counter monotonic so a late reply cannot match a fresh load.
+			self.posts = Posts {
+				request: self.posts.request,
+				..Posts::default()
+			};
+		}
+	}
+
+	pub fn apply_forum_posts(
+		&mut self,
+		parent: Id,
+		request: u64,
+		result: Result<model::forum::Page, Failure>,
+	) {
+		if let Err(failure) = &result
+			&& failure.ends_session()
+			&& *failure != Failure::Capacity
+		{
+			self.fail(*failure);
+			return;
+		}
+		if self.posts.parent != Some(parent) || self.posts.request != request || !self.posts.loading
+		{
+			return;
+		}
+		self.posts.loading = false;
+		let guild = self
+			.channel(parent)
+			.and_then(|c| c.guild)
+			.filter(|_| self.can_load_posts(parent));
+		let page = match result {
+			Err(failure) => {
+				self.posts.error = Some(failure.label());
+				return;
+			}
+			Ok(page) => page,
+		};
+		let Some(guild) = guild.filter(|guild| page.valid(parent, *guild)) else {
+			self.posts.error = Some("The service returned unexpected posts");
+			return;
+		};
+		// Every returned row advances the offset, even one this state already knew.
+		let returned = page.threads.len();
+		for post in page.threads {
+			if let Some(existing) = self.channels.iter_mut().find(|c| c.id == post.id) {
+				if existing.parent_id == Some(parent) && existing.guild == Some(guild) {
+					existing.last_message = existing.last_message.max(post.last_message);
+					existing.message_count = post.message_count.or(existing.message_count);
+					existing.name = post.name;
+				}
+				continue;
+			}
+			let bytes = self.channels.iter().map(Channel::bytes).sum::<usize>()
+				+ self.guilds.iter().map(model::Guild::bytes).sum::<usize>();
+			if self.channels.len() + self.guilds.len() >= MAX_NAV
+				|| bytes + post.bytes() > MAX_EVENT_BYTES
+			{
+				self.posts.error = Some("Posts exceed the navigation budget");
+				self.posts.more = false;
+				return;
+			}
+			self.channels.push(post);
+		}
+		self.posts.loaded = self.posts.loaded.saturating_add(returned);
+		self.posts.more = page.more && returned > 0;
 	}
 
 	pub fn can_create_post(&self, parent: Id) -> bool {
@@ -167,6 +292,81 @@ mod tests {
 		state.channels[3].last_message = Some(Id(500));
 		crate::tests::grant_permissions(&mut state);
 		state
+	}
+
+	#[test]
+	fn forum_posts_load_on_demand_page_forward_and_reload_after_a_sync() {
+		let mut state = state();
+		// Only joined posts arrive over the gateway, so the list fetches the rest.
+		let Some(Command::ForumPosts {
+			parent: Id(20),
+			guild: Id(1),
+			offset: 0,
+			request,
+		}) = state.request_forum_posts(Id(20), false)
+		else {
+			panic!("the first page should be requested");
+		};
+		assert!(state.request_forum_posts(Id(20), false).is_none());
+		assert!(state.request_forum_posts(Id(20), true).is_none());
+		let page = |ids: &[u64], more| model::forum::Page {
+			threads: ids
+				.iter()
+				.map(|id| channel(*id, Some(Id(20)), 11))
+				.collect(),
+			more,
+		};
+		// A stale reply for another request is ignored.
+		state.apply_forum_posts(Id(20), request.wrapping_sub(1), Ok(page(&[30], false)));
+		assert!(state.channels.iter().all(|c| c.id != Id(30)));
+		state.apply_forum_posts(Id(20), request, Ok(page(&[23, 21], true)));
+		let posts: Vec<_> = state.forum_posts(Id(20)).iter().map(|c| c.id).collect();
+		assert_eq!(posts, vec![Id(22), Id(23), Id(21)]);
+		assert_eq!(state.posts.loaded, 2);
+		let Some(Command::ForumPosts { offset: 2, .. }) = state.request_forum_posts(Id(20), true)
+		else {
+			panic!("the next page continues from the loaded count");
+		};
+		state.apply_forum_posts(Id(20), state.posts.request, Ok(page(&[], false)));
+		assert!(!state.posts.more && state.posts.error.is_none());
+		assert!(state.request_forum_posts(Id(20), true).is_none());
+		// A page scoped to another parent or guild never reaches navigation.
+		state.reload_forum_posts(Id(20));
+		let request = match state.request_forum_posts(Id(20), false) {
+			Some(Command::ForumPosts { request, .. }) => request,
+			_ => panic!("a reloaded forum fetches again"),
+		};
+		let mut foreign = page(&[31], false);
+		foreign.threads[0].guild = Some(Id(7));
+		state.apply_forum_posts(Id(20), request, Ok(foreign));
+		assert_eq!(
+			state.posts.error,
+			Some("The service returned unexpected posts")
+		);
+		assert!(state.channels.iter().all(|c| c.id != Id(31)));
+		// A failure surfaces once and only a retry clears it.
+		state.reload_forum_posts(Id(20));
+		let request = match state.request_forum_posts(Id(20), false) {
+			Some(Command::ForumPosts { request, .. }) => request,
+			_ => panic!("a reloaded forum fetches again"),
+		};
+		state.apply_forum_posts(Id(20), request, Err(Failure::Capacity));
+		assert!(state.posts.error.is_some() && !state.posts.loading);
+		assert!(state.request_forum_posts(Id(20), false).is_none());
+		// A thread snapshot replaces this scope, so the fetched page must be taken again.
+		state
+			.apply_threads_sync(Id(1), Some(vec![Id(20)]), vec![], vec![])
+			.unwrap();
+		assert!(state.posts.error.is_none() && state.posts.loaded == 0);
+		assert!(matches!(
+			state.request_forum_posts(Id(20), false),
+			Some(Command::ForumPosts { offset: 0, .. })
+		));
+		// A disconnected session asks for nothing.
+		state.gateway_connected = false;
+		state.posts = Posts::default();
+		assert!(!state.can_load_posts(Id(20)));
+		assert!(state.request_forum_posts(Id(20), false).is_none());
 	}
 
 	#[test]

@@ -90,6 +90,12 @@ pub enum Command {
 		content: String,
 		request: u64,
 	},
+	ForumPosts {
+		parent: Id,
+		guild: Id,
+		offset: usize,
+		request: u64,
+	},
 	Archives {
 		parent: Id,
 		guild: Id,
@@ -195,6 +201,11 @@ pub enum Event {
 		parent: Id,
 		request: u64,
 		result: Result<model::archives::Page, auth::Failure>,
+	},
+	ForumPosts {
+		parent: Id,
+		request: u64,
+		result: Result<model::forum::Page, auth::Failure>,
 	},
 	Search {
 		channel: Id,
@@ -346,6 +357,7 @@ pub struct State {
 	pub permissions: permissions::Permissions,
 	pub archives: Option<archives::View>,
 	pub posting: forum::Posting,
+	pub posts: forum::Posts,
 	pub archived_thread: Option<Id>,
 	pub search: Option<search::SearchView>,
 	pub search_request: u64,
@@ -417,6 +429,7 @@ impl Default for State {
 			permissions: permissions::Permissions::default(),
 			archives: None,
 			posting: forum::Posting::default(),
+			posts: forum::Posts::default(),
 			archived_thread: None,
 			search: None,
 			search_request: 0,
@@ -926,6 +939,13 @@ impl State {
 			self.apply_archives(parent, request, Err(auth::Failure::Capacity));
 			return;
 		}
+		if let Command::ForumPosts {
+			parent, request, ..
+		} = command
+		{
+			self.apply_forum_posts(parent, request, Err(auth::Failure::Capacity));
+			return;
+		}
 		if let Command::Search {
 			channel, request, ..
 		}
@@ -1279,6 +1299,14 @@ impl State {
 				result,
 			} => {
 				self.apply_archives(parent, request, result);
+				Ok(())
+			}
+			Event::ForumPosts {
+				parent,
+				request,
+				result,
+			} => {
+				self.apply_forum_posts(parent, request, result);
 				Ok(())
 			}
 			Event::PostCreated {
@@ -2365,6 +2393,9 @@ impl Event {
 					.map_or(0, |e| e.capacity() * size_of::<(Id, bool)>()),
 				Self::Archives { result, .. } => {
 					result.as_ref().map_or(0, model::archives::Page::bytes)
+				}
+				Self::ForumPosts { result, .. } => {
+					result.as_ref().map_or(0, model::forum::Page::bytes)
 				}
 				Self::PostCreated { result, .. } => result.as_ref().map_or(0, Channel::bytes),
 				Self::Search {
