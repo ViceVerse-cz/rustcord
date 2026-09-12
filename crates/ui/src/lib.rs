@@ -2649,7 +2649,7 @@ impl MessagingUi {
 						Freshness::Unavailable => Some("Conversation unavailable"),
 					}
 					.map(str::to_owned),
-					state.read_state.status.map(str::to_owned),
+					state.read_state.status(channel).map(str::to_owned),
 					(state.archived_thread.is_some() && state.archived_thread == state.selected)
 						.then(|| "Opened from archive".to_owned()),
 				]

@@ -34,9 +34,14 @@ pub struct ReadState {
 	version: Option<u64>,
 	revision: u64,
 	pending: Option<(Id, Id, u64, u64)>,
-	pub status: Option<&'static str>,
+	pub(crate) status: Option<(Id, &'static str)>,
 }
 impl ReadState {
+	pub fn status(&self, channel: Id) -> Option<&'static str> {
+		self.status
+			.filter(|(id, _)| *id == channel)
+			.map(|(_, text)| text)
+	}
 	pub fn reset(&mut self) {
 		*self = Self {
 			revision: self.revision.wrapping_add(1),
@@ -51,6 +56,9 @@ impl ReadState {
 	pub fn forget(&mut self, channel: Id) {
 		self.entries.remove(&channel);
 		self.activity.forget(channel);
+		if self.status(channel).is_some() {
+			self.status = None;
+		}
 		if self.pending.is_some_and(|(id, ..)| id == channel) {
 			self.cancel();
 		}
@@ -319,6 +327,9 @@ impl State {
 				self.read_state
 					.entries
 					.insert(channel, (message, self.read_state.revision));
+				if self.read_state.status(channel).is_some() {
+					self.read_state.status = None;
+				}
 			}
 			Event::Latest(channels) => {
 				if channels.len() > crate::MAX_NAV {
@@ -389,9 +400,26 @@ impl State {
 						self.read_state.status = None;
 					}
 					Err(failure) => {
-						self.read_state.status = Some(failure.label());
 						if failure.ends_session() {
 							self.fail(failure);
+						} else if self
+							.read_state
+							.entries
+							.get(&channel)
+							.map_or(0, |(_, epoch)| *epoch)
+							== epoch
+						{
+							self.read_state.status = Some((
+								channel,
+								match failure {
+									Failure::Ambiguous => {
+										"Read status could not be confirmed · unread markers may be out of date"
+									}
+									_ => {
+										"Read status could not sync · unread markers may be out of date"
+									}
+								},
+							));
 						}
 					}
 				}
@@ -477,6 +505,64 @@ mod navigation_tests {
 			generation: state.generation,
 			event,
 		});
+	}
+	#[test]
+	fn read_failure_is_scoped_and_service_ack_resolves_it_in_either_order() {
+		for ack_first in [false, true] {
+			let mut state = state(Some(Id(100)));
+			let mut other = state.channels[0].clone();
+			other.id = Id(2);
+			state.channels.push(other);
+			let Command::MarkRead {
+				channel,
+				message,
+				request,
+			} = state.prepare_mark_read(Id(500)).unwrap()
+			else {
+				panic!("expected read acknowledgement");
+			};
+			state.select(Id(2));
+			let ack = Event::Ack {
+				channel,
+				message: Some(message),
+				manual: false,
+				mention_count: None,
+				version: None,
+			};
+			if ack_first {
+				state.apply_read_state(ack).unwrap();
+			}
+			state
+				.apply_read_state(Event::Result {
+					channel,
+					message,
+					request,
+					result: Err(Failure::Ambiguous),
+				})
+				.unwrap();
+			assert!(state.read_state.status(Id(2)).is_none());
+			assert_eq!(state.read_state.status(Id(1)).is_some(), !ack_first);
+			if !ack_first {
+				assert!(
+					state
+						.read_state
+						.status(Id(1))
+						.unwrap()
+						.starts_with("Read status")
+				);
+				state
+					.apply_read_state(Event::Ack {
+						channel,
+						message: Some(message),
+						manual: false,
+						mention_count: None,
+						version: None,
+					})
+					.unwrap();
+			}
+			assert!(state.read_state.status(Id(1)).is_none());
+			assert_eq!(state.read_marker(Id(1)), Some(Some(message)));
+		}
 	}
 	fn page(state: &mut State, messages: Vec<Message>) {
 		apply(

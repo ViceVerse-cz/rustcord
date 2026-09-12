@@ -1033,7 +1033,7 @@ impl State {
 				request,
 				result: Err(auth::Failure::RateLimited),
 			});
-			self.read_state.status = Some("Work queue full; read marker was not sent");
+			self.read_state.status = Some((channel, "Work queue full; read marker was not sent"));
 			return;
 		}
 		if let Command::Reactions(command) = command {
