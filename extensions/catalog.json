@@ -1,4 +1,73 @@
 {
   "api_version": 1,
-  "entries": []
+  "entries": [
+    {
+      "manifest": {
+        "api_version": 1,
+        "id": "serein-ocean",
+        "name": "Ocean",
+        "version": "1.0.0",
+        "author": "Serein contributors",
+        "license": "MIT OR Apache-2.0",
+        "source": "https://github.com/ViceVerse-cz/rustcord",
+        "kind": "theme"
+      },
+      "release_url": "https://raw.githubusercontent.com/ViceVerse-cz/rustcord/cb637f07ea9ff643325533820fd1ba052a00176d/extensions/ocean.serein-extension",
+      "sha256": "ec95e43e6167d95393b279062b41587408ad270ebcc61a5eed2a71865c8387cd",
+      "download_bytes": 960,
+      "source_commit": "cb637f07ea9ff643325533820fd1ba052a00176d"
+    },
+    {
+      "manifest": {
+        "api_version": 1,
+        "id": "composer-uppercase",
+        "name": "Uppercase composer",
+        "version": "1.0.0",
+        "author": "Serein contributors",
+        "license": "MIT OR Apache-2.0",
+        "source": "https://github.com/ViceVerse-cz/rustcord",
+        "kind": "plugin",
+        "capabilities": [
+          "composer"
+        ],
+        "actions": [
+          {
+            "id": "uppercase",
+            "label": "Convert to uppercase",
+            "surface": "composer"
+          }
+        ]
+      },
+      "release_url": "https://raw.githubusercontent.com/ViceVerse-cz/rustcord/cb637f07ea9ff643325533820fd1ba052a00176d/examples/extensions/packages/composer-uppercase.serein-extension",
+      "sha256": "94a949113efca1d9da51e7240467d54d1c648af425f4ce03e0d16f4aa045808a",
+      "download_bytes": 213284,
+      "source_commit": "cb637f07ea9ff643325533820fd1ba052a00176d"
+    },
+    {
+      "manifest": {
+        "api_version": 1,
+        "id": "message-word-count",
+        "name": "Message word count",
+        "version": "1.0.0",
+        "author": "Serein contributors",
+        "license": "MIT OR Apache-2.0",
+        "source": "https://github.com/ViceVerse-cz/rustcord",
+        "kind": "plugin",
+        "capabilities": [
+          "selected_message"
+        ],
+        "actions": [
+          {
+            "id": "count",
+            "label": "Count words",
+            "surface": "message"
+          }
+        ]
+      },
+      "release_url": "https://raw.githubusercontent.com/ViceVerse-cz/rustcord/cb637f07ea9ff643325533820fd1ba052a00176d/examples/extensions/packages/message-word-count.serein-extension",
+      "sha256": "234036c94dac2dbd7f654a6c9685de0e1ac7861bbee038bed860e58ff21b6abe",
+      "download_bytes": 199814,
+      "source_commit": "cb637f07ea9ff643325533820fd1ba052a00176d"
+    }
+  ]
 }
