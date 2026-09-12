@@ -2,6 +2,35 @@
 use crate::{design, icons, invites::input_code};
 use client_core::{Command, State};
 
+fn invite_input(ui: &mut egui::Ui, text: &mut String, focus: bool) -> egui::Response {
+	let colors = design::palette(ui);
+	let response = ui.add_sized(
+		[ui.available_width(), 48.0],
+		egui::TextEdit::singleline(text)
+			.hint_text("https://discord.gg/hTKzmak")
+			.font(egui::FontId::proportional(16.0))
+			.align(egui::Align2::LEFT_CENTER)
+			.frame(
+				egui::Frame::new()
+					.fill(colors.base)
+					.corner_radius(8)
+					.inner_margin(egui::Margin::symmetric(12, 8)),
+			)
+			.char_limit(512),
+	);
+	if focus {
+		response.request_focus();
+	}
+	let stroke = if response.has_focus() {
+		egui::Stroke::new(2.0, colors.accent)
+	} else {
+		egui::Stroke::new(1.0, colors.border)
+	};
+	ui.painter()
+		.rect_stroke(response.rect, 8, stroke, egui::StrokeKind::Inside);
+	response
+}
+
 #[derive(Default)]
 pub(super) struct JoinDialog {
 	generation: Option<u64>,
@@ -53,16 +82,8 @@ impl JoinDialog {
 					});
 					ui.add_space(18.0);
 					let label = ui.label(design::semibold(ui, "Invite link *", 16.0));
-					let input = ui.add_sized(
-						[ui.available_width(), 44.0],
-						egui::TextEdit::singleline(&mut self.input)
-							.hint_text("https://discord.gg/hTKzmak")
-							.char_limit(512),
-					);
+					let input = invite_input(ui, &mut self.input, std::mem::take(&mut self.focus));
 					let input = input.labelled_by(label.id);
-					if std::mem::take(&mut self.focus) {
-						input.request_focus();
-					}
 					if input.changed() {
 						self.status = "";
 					}
@@ -141,6 +162,69 @@ impl JoinDialog {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[test]
+	fn invite_field_centers_hint_and_text_with_padding_and_focus_outline() {
+		for light in [false, true] {
+			for width in [240.0, 490.0] {
+				for initial in ["", "synthetic-invite"] {
+					let ctx = egui::Context::default();
+					design::apply(&ctx);
+					ctx.set_visuals(if light {
+						egui::Visuals::light()
+					} else {
+						egui::Visuals::dark()
+					});
+					let mut text = initial.to_owned();
+					let mut rect = egui::Rect::NOTHING;
+					for _ in 0..2 {
+						let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+							ui.set_width(width);
+							let response = invite_input(ui, &mut text, true);
+							assert!(response.has_focus());
+							rect = response.rect;
+						});
+						let mut shapes = Vec::new();
+						fn flatten<'a>(shape: &'a egui::Shape, out: &mut Vec<&'a egui::Shape>) {
+							if let egui::Shape::Vec(children) = shape {
+								for child in children {
+									flatten(child, out);
+								}
+							} else {
+								out.push(shape);
+							}
+						}
+						for shape in &output.shapes {
+							flatten(&shape.shape, &mut shapes);
+						}
+						assert!((rect.height() - 48.0).abs() < 1.0, "{rect:?}");
+						let label = shapes
+							.iter()
+							.find_map(|shape| match shape {
+								egui::Shape::Text(t)
+									if t.galley.job.text
+										== if initial.is_empty() {
+											"https://discord.gg/hTKzmak"
+										} else {
+											initial
+										} =>
+								{
+									Some(t.galley.rect.translate(t.pos.to_vec2()))
+								}
+								_ => None,
+							})
+							.expect("input text is rendered");
+						assert!(
+							(label.center().y - rect.center().y).abs() <= 1.0,
+							"text {label:?}, field {rect:?}"
+						);
+						assert!(label.left() >= rect.left() + 11.0);
+						assert!(shapes.iter().any(|shape| matches!(shape, egui::Shape::Rect(r) if r.rect == rect && r.stroke.width == 2.0 && r.stroke.color == design::palette_for(&ctx).accent)));
+						output.drop_without_applying_deltas();
+					}
+				}
+			}
+		}
+	}
 	fn frame(
 		ctx: &egui::Context,
 		dialog: &mut JoinDialog,

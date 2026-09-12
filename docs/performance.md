@@ -1,5 +1,26 @@
 # Initial performance evidence
 
+## Invite input alignment — September 12, 2026
+
+Baseline `a2ad207ca9225ef8973ab3e865ad14a1d5083e0e`, Windows 11 Home
+10.0.26200, Rust 1.98.1 MSVC. One standard locked `cargo xtask package` build
+and PowerShell `Compress-Archive` per revision; voice included, no demo/developer
+features. Separate `target/invite-input-{baseline,after}` snapshots exclude the
+unrelated obsolete `dist/voice` directory, which was preserved. Measurements precede
+this report's addition to bundled documentation.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Executable bytes | 62,853,632 | 62,854,656 | +1,024 |
+| Installed package file bytes | 73,053,443 | 73,054,467 | +1,024 |
+| ZIP bytes | 43,464,705 | 43,465,087 | +382 |
+
+Only text-field presentation changes; no dependency, protocol, storage or input-limit
+change. Synthetic egui tests measure centering, padding, height and focus outline in
+dark/light themes at 240/490-point widths with empty and typed input. Native capture
+and interaction remain unavailable (no native app surface), so screenshots, CPU/RSS
+and frame timings are unmeasured. No runtime performance improvement is claimed.
+
 ## Standalone Join Server dialog — September 12, 2026
 
 Baseline `9bbdd07b2a545b554ee164fd862cda79b86608f7` versus the standalone join
