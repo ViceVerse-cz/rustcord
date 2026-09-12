@@ -9,6 +9,89 @@ pub enum Action {
 	Apply(String),
 }
 
+/// One full-width hit target with a left-aligned icon and two text styles.
+pub fn suggestion_row(ui: &mut egui::Ui, key: &str, title: &str, detail: &str) -> egui::Response {
+	let colors = design::palette(ui);
+	let width = ui.available_width();
+	let text_width = (width - 54.0).max(1.0);
+	let title = ui.painter().layout(
+		title.to_owned(),
+		egui::FontId::new(15.0, design::semibold_family(ui.ctx())),
+		colors.text_strong,
+		text_width,
+	);
+	let subtitle = ui.painter().layout(
+		detail.to_owned(),
+		egui::FontId::proportional(14.0),
+		colors.muted,
+		text_width,
+	);
+	let text_height = title.size().y
+		+ if detail.is_empty() {
+			0.0
+		} else {
+			2.0 + subtitle.size().y
+		};
+	let height = (text_height + 14.0).max(if detail.is_empty() { 40.0 } else { 52.0 });
+	let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+	response.widget_info(|| {
+		egui::WidgetInfo::labeled(
+			egui::WidgetType::Button,
+			ui.is_enabled(),
+			format!("{} {detail}", title.job.text),
+		)
+	});
+	if response.hovered() || response.has_focus() {
+		ui.painter().rect_filled(rect, 6, colors.raised);
+	}
+	let icon_rect = egui::Rect::from_center_size(
+		rect.left_center() + egui::vec2(22.0, 0.0),
+		egui::Vec2::splat(22.0),
+	);
+	match key {
+		"mentions" => {
+			ui.painter().text(
+				icon_rect.center(),
+				egui::Align2::CENTER_CENTER,
+				"@",
+				egui::FontId::proportional(24.0),
+				colors.muted,
+			);
+		}
+		"" => {
+			for (y, x) in [(-7.0, -3.0), (0.0, 4.0), (7.0, -3.0)] {
+				let center = icon_rect.center() + egui::vec2(x, y);
+				ui.painter().line_segment(
+					[
+						icon_rect.center() + egui::vec2(-10.0, y),
+						icon_rect.center() + egui::vec2(10.0, y),
+					],
+					egui::Stroke::new(1.5, colors.muted),
+				);
+				ui.painter().circle_filled(center, 2.5, colors.muted);
+			}
+		}
+		_ => icons::paint(
+			ui.painter(),
+			match key {
+				"from" => icons::Icon::Profile,
+				"has" => icons::Icon::Link,
+				_ => icons::Icon::Search,
+			},
+			icon_rect,
+			colors.muted,
+		),
+	}
+	let position = rect.left_top() + egui::vec2(44.0, (height - text_height) * 0.5);
+	let subtitle_position = position + egui::vec2(0.0, title.size().y + 2.0);
+	ui.painter().galley(position, title, colors.text_strong);
+	if !detail.is_empty() {
+		ui.painter()
+			.galley(subtitle_position, subtitle, colors.muted);
+	}
+	response
+}
+
 pub struct Draft {
 	query: String,
 	before: String,

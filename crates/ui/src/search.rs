@@ -223,6 +223,7 @@ impl SearchUi {
 						.inner_margin(10)
 						.show(ui, |ui| {
 							ui.set_width((width - 20.0).max(1.0));
+							ui.spacing_mut().item_spacing.y = 4.0;
 							if let Some((start, key, typed)) =
 								filters::active_user_token(&self.query)
 							{
@@ -301,15 +302,28 @@ impl SearchUi {
 								}
 							} else {
 								submit = ui
-									.add_enabled(
+									.add_enabled_ui(
 										state.can_search()
 											&& model::search_terms(&self.query).is_ok(),
-										egui::Button::new(format!("⌕  Search for {}", self.query))
-											.frame(false),
+										|ui| {
+											filters::suggestion_row(
+												ui,
+												"search",
+												&format!("Search for {}", self.query),
+												"",
+											)
+										},
 									)
+									.inner
 									.clicked();
 								ui.separator();
-								ui.label(design::semibold(ui, "Filters", 13.0).color(colors.muted));
+								ui.add_space(6.0);
+								ui.horizontal(|ui| {
+									ui.add_space(10.0);
+									ui.label(
+										design::semibold(ui, "Filters", 13.0).color(colors.muted),
+									);
+								});
 								for (title, detail, key) in [
 									("From a specific user", "from: user", "from"),
 									(
@@ -320,11 +334,7 @@ impl SearchUi {
 									("Mentions a specific user", "mentions: user", "mentions"),
 									("More filters", "dates, author type, and more", ""),
 								] {
-									let row = ui.add_sized(
-										[ui.available_width(), 52.0],
-										egui::Button::new(format!("{title}\n{detail}"))
-											.frame(false),
-									);
+									let row = filters::suggestion_row(ui, key, title, detail);
 									if row.clicked() {
 										if key == "from" || key == "mentions" {
 											let query = format!("{} {key}:", self.query.trim());
