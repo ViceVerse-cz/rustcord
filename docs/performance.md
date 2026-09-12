@@ -3496,3 +3496,31 @@ Synthetic tests verify hand/default/text/resize/grab output in both themes,
 including disabled controls and repeated theme application. Native cursor capture,
 CPU/RSS and p95 frame measurements are unavailable because native application
 control is disabled. No native latency or speed improvement is claimed.
+
+## Solo call camera and screen previews - September 12, 2026
+
+Baseline `ec0ce9553dac516fdccd678958be94d1cf1996cf`; Windows 11 Home,
+Ryzen 7 7800X3D, 33,410,678,784 bytes RAM, Rust 1.98.1. Separate clean
+`cargo xtask package` snapshots use standard release builds including voice,
+without default features. Package snapshots include the behavior documentation
+but precede these refreshed measurement values. After-build includes main's
+cursor/Homebrew changes through `02a859f`; the delta includes those changes. ZIPs use PowerShell Compress-Archive.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Executable bytes | 63,097,856 | 63,091,200 | -6,656 (-0.0105%) |
+| Installed package bytes | 69,337,029 | 69,334,506 | -2,523 (-0.0036%) |
+| Compress-Archive ZIP bytes | 41,683,608 | 41,688,126 | +4,518 (+0.0108%) |
+
+These small size changes are not a performance improvement claim. Shared
+DM/guild tiles replace the separate DM avatar renderer. Local screen capture now
+runs after the user starts sharing even without a peer; its worker retains one
+preview up to 640x360 RGBA (921,600 bytes), replaces it at most 10 times per second,
+and uses the existing bounded native raw-frame channel. UI texture/upload copies
+are additional. Encoding/transmission still wait for secure readiness.
+
+Synthetic checks cover both preview textures in empty DM/guild rosters at
+320/900-point widths, light/dark, waiting/connected/failed, preview byte/color
+validation, and camera rekeys. Native screenshot/interaction tools were unavailable
+(missing Computer Use pipe; no Orca CLI), so native CPU, RSS, GPU, startup and frame
+timings are unmeasured. No real device or Discord call was exercised.

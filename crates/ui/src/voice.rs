@@ -262,13 +262,7 @@ impl MessagingUi {
 					.color(STAGE_MUTED),
 			);
 		} else {
-			let entries: Vec<RosterEntry> = state
-				.voice
-				.roster
-				.iter()
-				.filter(|e| e.channel == channel)
-				.cloned()
-				.collect();
+			let entries = stage_participants(state, channel);
 			if entries.is_empty() {
 				body_ui.add_space((body_ui.available_height() * 0.4).max(0.0));
 				body_ui.vertical_centered(|ui| {
@@ -321,25 +315,69 @@ impl MessagingUi {
 		channel: Id,
 		entries: &[RosterEntry],
 	) {
+		let screen = state.voice.active.as_ref().is_some_and(|call| {
+			call.channel == channel
+				&& call.phase != Phase::Failed
+				&& self.screen.context == Some((state.generation, channel, call.request))
+				&& self.screen.busy
+				&& self.screen.preview.is_some()
+		});
+		let count = entries.len() + usize::from(screen);
 		let width = ui.available_width();
-		let max_columns = ((width + TILE_GAP) / (180.0 + TILE_GAP)).floor().max(1.0) as usize;
-		let columns = ((entries.len() as f32).sqrt().ceil() as usize)
+		let max_columns = ((width + TILE_GAP) / (120.0 + TILE_GAP)).floor().max(1.0) as usize;
+		let columns = ((count as f32).sqrt().ceil() as usize)
 			.clamp(1, max_columns)
-			.min(entries.len().max(1));
+			.min(count.max(1));
 		let tile_width = ((width - TILE_GAP * (columns as f32 - 1.0)) / columns as f32).min(360.0);
-		let tile_height = (tile_width * 9.0 / 16.0).max(120.0);
-		let rows = entries.len().div_ceil(columns);
+		let tile_height = (tile_width * 9.0 / 16.0)
+			.max(120.0)
+			.min(ui.available_height().max(80.0));
+		let rows = count.div_ceil(columns);
 		egui::ScrollArea::vertical()
 			.id_salt(("voice-tiles", channel))
 			.show_rows(ui, tile_height + TILE_GAP, rows, |ui, range| {
 				for row in range {
-					let in_row = entries.len().saturating_sub(row * columns).min(columns);
+					let in_row = count.saturating_sub(row * columns).min(columns);
 					let row_width =
 						tile_width * in_row as f32 + TILE_GAP * (in_row as f32 - 1.0).max(0.0);
 					ui.horizontal(|ui| {
 						ui.spacing_mut().item_spacing.x = TILE_GAP;
 						ui.add_space(((ui.available_width() - row_width) * 0.5).max(0.0));
-						for entry in entries.iter().skip(row * columns).take(columns) {
+						for index in row * columns..row * columns + in_row {
+							if screen && index == 0 {
+								let texture =
+									self.screen.preview.as_ref().expect("visible preview");
+								let (rect, _) = ui.allocate_exact_size(
+									egui::vec2(tile_width, tile_height),
+									egui::Sense::hover(),
+								);
+								ui.painter().rect_filled(rect, 8, TILE_FILL);
+								let size = texture.size_vec2();
+								let size =
+									size * (rect.width() / size.x).min(rect.height() / size.y);
+								ui.put(
+									egui::Rect::from_center_size(rect.center(), size),
+									egui::Image::new((texture.id(), size)).corner_radius(8),
+								)
+								.on_hover_text("Your screen · local preview");
+								ui.painter().rect_filled(
+									egui::Rect::from_min_max(
+										rect.left_bottom() + egui::vec2(4.0, -28.0),
+										rect.right_bottom() - egui::vec2(4.0, 4.0),
+									),
+									6,
+									egui::Color32::from_black_alpha(160),
+								);
+								ui.painter().text(
+									rect.left_bottom() + egui::vec2(8.0, -8.0),
+									egui::Align2::LEFT_BOTTOM,
+									"Your screen",
+									egui::FontId::proportional(12.0),
+									STAGE_TEXT,
+								);
+								continue;
+							}
+							let entry = &entries[index - usize::from(screen)];
 							self.participant_tile(
 								ui,
 								state,
@@ -369,13 +407,12 @@ impl MessagingUi {
 			.user
 			.as_ref()
 			.is_some_and(|user| user.id == entry.participant.user)
-			&& state
-				.voice
-				.active
-				.as_ref()
-				.is_some_and(|call| call.channel == entry.channel && call.camera);
+			&& state.voice.active.as_ref().is_some_and(|call| {
+				call.channel == entry.channel && call.camera && call.phase != Phase::Failed
+			});
 		if preview && let Some(texture) = &self.voice_camera_preview {
-			let image_size = egui::vec2(size.y * 4.0 / 3.0, size.y).min(size);
+			let image_size = texture.size_vec2()
+				* (size.x / texture.size_vec2().x).min(size.y / texture.size_vec2().y);
 			ui.put(
 				egui::Rect::from_center_size(rect.center(), image_size),
 				egui::Image::new((texture.id(), image_size)).corner_radius(8),
@@ -908,8 +945,9 @@ impl MessagingUi {
 		};
 		let phase = call.phase;
 		let camera = call.camera;
-		let can_camera =
-			self.voice_camera_available && state.can_camera(channel) && phase == Phase::Connected;
+		let can_camera = self.voice_camera_available
+			&& state.can_camera(channel)
+			&& matches!(phase, Phase::Connected | Phase::Waiting);
 		let can_speak = state.can_speak(channel);
 		let (mut muted, mut deafened) = (call.muted || !can_speak, call.deafened);
 		let controls = self.controls_enabled(state);
@@ -1089,7 +1127,8 @@ impl MessagingUi {
 			|| state.demo
 			|| (self.screen.supported
 				&& state.voice.active.as_ref().is_some_and(|call| {
-					call.phase == Phase::Connected && state.can_stream(call.channel)
+					matches!(call.phase, Phase::Connected | Phase::Waiting)
+						&& state.can_stream(call.channel)
 				}));
 		let label = if self.screen.busy {
 			"Stop sharing"
@@ -1155,96 +1194,24 @@ impl MessagingUi {
 						state.voice.active.as_ref().and_then(|c| c.error),
 						STAGE_TEXT,
 					);
-					let participants: Vec<(Option<model::User>, Participant)> = state
-						.voice
-						.active
-						.as_ref()
-						.map(|call| {
-							call.participants
-								.iter()
-								.map(|p| (participant_user(state, channel, p.user).cloned(), *p))
-								.collect()
-						})
-						.unwrap_or_default();
-					let visible = ((rect.width() - 2.0 * STAGE_MARGIN + 16.0) / 96.0)
-						.floor()
-						.max(1.0) as usize;
-					let shown = participants.len().min(visible);
-					let extra = participants.len() - shown;
-					let count = shown + usize::from(extra > 0);
-					let row_width = count as f32 * 80.0 + (count as f32 - 1.0).max(0.0) * 16.0;
-					let row = egui::Rect::from_center_size(
-						egui::pos2(rect.center().x, rect.center().y - 24.0),
-						egui::vec2(row_width, 80.0),
+					let body = egui::Rect::from_min_max(
+						egui::pos2(rect.left() + STAGE_MARGIN, notice_ui.cursor().top() + 8.0),
+						egui::pos2(
+							rect.right() - STAGE_MARGIN,
+							rect.bottom() - CONTROL_HEIGHT - 2.0 * STAGE_MARGIN,
+						),
 					);
-					let mut row_ui = ui.new_child(
+					let mut body_ui = ui.new_child(
 						egui::UiBuilder::new()
-							.max_rect(row)
-							.layout(egui::Layout::left_to_right(egui::Align::Center)),
+							.max_rect(body)
+							.layout(egui::Layout::top_down(egui::Align::Min)),
 					);
-					row_ui.spacing_mut().item_spacing.x = 16.0;
-					for (user, participant) in participants.iter().take(shown) {
-						let name = user.as_ref().map_or("Participant", |u| u.name.as_str());
-						let avatar = match user {
-							Some(user) => self.avatars.show(&mut row_ui, user, 80.0, state.demo),
-							None => design::avatar(&mut row_ui, name, 80.0),
-						};
-						if self.is_speaking(state, channel, participant) {
-							speaking_avatar(&row_ui, &avatar, name);
-						}
-						let badge_icon = if participant.deafened {
-							Some(crate::icons::Icon::HeadphonesSlash)
-						} else if participant.muted {
-							Some(crate::icons::Icon::MicrophoneSlash)
-						} else {
-							None
-						};
-						if let Some(icon) = badge_icon {
-							let center = avatar.rect.right_bottom() - egui::vec2(12.0, 12.0);
-							row_ui.painter().circle_filled(center, 14.0, TILE_FILL);
-							crate::icons::paint(
-								row_ui.painter(),
-								icon,
-								egui::Rect::from_center_size(center, egui::Vec2::splat(16.0)),
-								colors.danger,
-							);
-						}
-						if let Some(user) = user {
-							crate::user_menu::show(
-								&avatar,
-								state,
-								user,
-								&mut self.profile,
-								&mut self.user_action,
-							);
-						}
-						if avatar
-							.on_hover_text(if participant.deafened {
-								format!("{name} · Deafened")
-							} else if participant.muted {
-								format!("{name} · Muted")
-							} else {
-								name.to_owned()
-							})
-							.clicked() && let Some(user) = user
-						{
-							self.profile = Some(user.clone());
-						}
-					}
-					if extra > 0 {
-						let (more, _) = row_ui
-							.allocate_exact_size(egui::Vec2::splat(80.0), egui::Sense::hover());
-						row_ui
-							.painter()
-							.circle_filled(more.center(), 40.0, TILE_FILL);
-						row_ui.painter().text(
-							more.center(),
-							egui::Align2::CENTER_CENTER,
-							format!("+{extra}"),
-							egui::FontId::new(20.0, design::semibold_family(ui.ctx())),
-							STAGE_TEXT,
-						);
-					}
+					self.participant_tiles(
+						&mut body_ui,
+						state,
+						channel,
+						&stage_participants(state, channel),
+					);
 					let bar = egui::Rect::from_min_max(
 						egui::pos2(rect.left(), rect.bottom() - CONTROL_HEIGHT - STAGE_MARGIN),
 						egui::pos2(rect.right(), rect.bottom() - STAGE_MARGIN),
@@ -1660,6 +1627,61 @@ fn round_action(
 }
 
 /// Resolve the display name and user for a roster entry from the entry, member list or self.
+/// Include the local call participant before its gateway roster update arrives.
+fn stage_participants(state: &State, channel: Id) -> Vec<RosterEntry> {
+	let call = state
+		.voice
+		.active
+		.as_ref()
+		.filter(|call| call.channel == channel);
+	let mut entries: Vec<_> = if let Some(call) = call.filter(|call| call.guild.is_none()) {
+		call.participants
+			.iter()
+			.map(|participant| RosterEntry {
+				guild: Id(0),
+				channel,
+				participant: *participant,
+				member: None,
+			})
+			.collect()
+	} else {
+		state
+			.voice
+			.roster
+			.iter()
+			.filter(|entry| entry.channel == channel)
+			.cloned()
+			.collect()
+	};
+	if let Some(call) = call.filter(|call| call.phase != Phase::Failed)
+		&& let Some(user) = &state.user
+	{
+		if let Some(index) = entries
+			.iter()
+			.position(|entry| entry.participant.user == user.id)
+		{
+			entries.swap(0, index);
+		} else {
+			entries.insert(
+				0,
+				RosterEntry {
+					guild: call.guild.unwrap_or(Id(0)),
+					channel,
+					participant: Participant {
+						user: user.id,
+						muted: call.muted,
+						deafened: call.deafened,
+						server_muted: call.server_muted,
+						server_deafened: call.server_deafened,
+					},
+					member: None,
+				},
+			);
+		}
+	}
+	entries
+}
+
 fn resolve_member<'a>(
 	state: &'a State,
 	entry: &'a RosterEntry,
@@ -1676,12 +1698,9 @@ fn resolve_member<'a>(
 					.find(|m| m.user.id == entry.participant.user)
 			})
 	});
-	let user = member.map(|m| &m.user).or_else(|| {
-		state
-			.user
-			.as_ref()
-			.filter(|u| u.id == entry.participant.user)
-	});
+	let user = member
+		.map(|m| &m.user)
+		.or_else(|| participant_user(state, entry.channel, entry.participant.user));
 	let name = member
 		.and_then(|m| m.nick.as_deref())
 		.or_else(|| user.map(|u| u.name.as_str()))
@@ -1814,6 +1833,100 @@ fn device_combo(
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn solo_call_stages_show_both_local_previews_without_a_roster() {
+		fn textures(shape: &egui::Shape, ids: &mut Vec<egui::TextureId>) {
+			match shape {
+				egui::Shape::Mesh(mesh) => ids.push(mesh.texture_id),
+				egui::Shape::Rect(rect) => {
+					if let Some(brush) = &rect.brush {
+						ids.push(brush.fill_texture_id);
+					}
+				}
+				egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| textures(shape, ids)),
+				_ => {}
+			}
+		}
+		for guild in [false, true] {
+			for width in [320.0, 900.0] {
+				for dark in [false, true] {
+					let mut state = if guild {
+						test_support::voice_demo_state()
+					} else {
+						test_support::call_demo_state()
+					};
+					state.voice.roster.clear();
+					let call = state.voice.active.as_mut().unwrap();
+					call.participants.clear();
+					call.phase = Phase::Waiting;
+					call.camera = true;
+					let (channel, request) = (call.channel, call.request);
+					let ctx = egui::Context::default();
+					ctx.set_visuals(if dark {
+						egui::Visuals::dark()
+					} else {
+						egui::Visuals::light()
+					});
+					let mut messaging = MessagingUi::default();
+					let camera = ctx.load_texture(
+						"synthetic-camera",
+						egui::ColorImage::filled([4, 3], egui::Color32::RED),
+						Default::default(),
+					);
+					let screen = ctx.load_texture(
+						"synthetic-screen",
+						egui::ColorImage::filled([16, 9], egui::Color32::BLUE),
+						Default::default(),
+					);
+					let expected = [camera.id(), screen.id()];
+					messaging.voice_camera_preview = Some(camera);
+					messaging.screen.preview = Some(screen);
+					messaging.screen.busy = true;
+					messaging.screen.context = Some((state.generation, channel, request));
+					assert_eq!(stage_participants(&state, channel).len(), 1);
+					let mut commands = vec![];
+					for phase in [Phase::Waiting, Phase::Connected, Phase::Failed] {
+						state.voice.active.as_mut().unwrap().phase = phase;
+						let mut output = ctx.run_ui(
+							egui::RawInput {
+								screen_rect: Some(egui::Rect::from_min_size(
+									egui::Pos2::ZERO,
+									egui::vec2(width, 800.0),
+								)),
+								..Default::default()
+							},
+							|ui| {
+								if guild {
+									messaging.voice_channel(ui, &mut state, channel, &mut commands);
+								} else {
+									messaging.call_bar(ui, &mut state, &mut commands);
+								}
+							},
+						);
+						let mut rendered = vec![];
+						for shape in &output.shapes {
+							textures(&shape.shape, &mut rendered);
+						}
+						output.textures_delta.clear();
+						for id in expected {
+							assert_eq!(
+								rendered.contains(&id),
+								phase != Phase::Failed,
+								"guild={guild}, width={width}, phase={phase:?}, texture={id:?}"
+							);
+						}
+					}
+					assert!(
+						commands.is_empty(),
+						"Synthetic previews must never start media"
+					);
+					state.voice.active = None;
+					assert!(stage_participants(&state, channel).is_empty());
+				}
+			}
+		}
+	}
 
 	#[test]
 	fn existing_dm_call_banner_joins_without_ringing_and_disables_unavailable_actions() {

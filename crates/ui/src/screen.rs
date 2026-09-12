@@ -21,6 +21,7 @@ pub struct ScreenUi {
 	pub busy: bool,
 	pub status: &'static str,
 	pub supported: bool,
+	pub preview: Option<egui::TextureHandle>,
 	height: u32,
 	fps: u32,
 	cursor: bool,
@@ -37,6 +38,7 @@ impl Default for ScreenUi {
 			busy: false,
 			status: "",
 			supported: false,
+			preview: None,
 			height: 1080,
 			fps: 30,
 			cursor: true,
@@ -95,6 +97,7 @@ impl ScreenUi {
 			.filter(|c| c.phase != Phase::Failed)
 			.map(|c| (state.generation, c.channel, c.request));
 		if self.context.is_some() && current != self.context {
+			self.preview = None;
 			self.open = false;
 			self.sources.clear();
 			self.selected = None;
@@ -181,7 +184,8 @@ impl ScreenUi {
 					&& self.supported
 					&& !self.busy && self.settings().is_some()
 					&& state.voice.active.as_ref().is_some_and(|call| {
-						call.phase == Phase::Connected && state.can_stream(call.channel)
+						matches!(call.phase, Phase::Connected | Phase::Waiting)
+							&& state.can_stream(call.channel)
 					});
 				share = ui
 					.add_enabled(

@@ -268,10 +268,23 @@ The native demo (`cargo run --locked -p serein -- --demo --demo-voice`) exposes 
 
 The voice build can send a native camera after an explicit camera-on click in a
 connected DM or guild call. The camera button remains available in narrow call controls.
-A local preview replaces your avatar; permission/device errors appear in the call stage.
+A local preview replaces your avatar in both DM and guild call tiles, including when
+you are alone or the participant roster has not arrived. Camera and screen-share
+controls are available in the connected, waiting-for-others state.
+Permission/device errors appear in the call stage.
 Guild camera use requires STREAM permission. Camera-off, permission loss, call failure,
-leave and logout stop capture; a call security pause stops the camera and requires another
-click after reconnection. Demo mode never requests camera or microphone access.
+leave and logout stop capture. Peer join/leave rekeys preserve an enabled local camera;
+outgoing media remains disabled until DAVE is ready. A transport reconnection stops
+capture and requires another click. Demo mode never requests camera or microphone access.
+
+An explicitly started screen share also shows a separate local tile while alone.
+The worker retains at most one 640×360 RGBA preview (921,600 bytes), updated at
+most ten times per second, plus the bounded UI texture and upload copy. Preview
+resizing and color conversion run on the capture worker. Native raw-frame limits
+still apply; encoding and network transmission wait for secure media readiness.
+Stop, source failure, permission loss, leaving and logout release the preview.
+These paths have synthetic coverage; native camera/screen capture and live Discord
+viewing still require owner-operated validation.
 
 AVFoundation on macOS, Media Foundation on Windows and V4L2 on Linux capture
 640×480 frames, capped at 15 encoded frames/second; OpenH264 encodes on a
