@@ -1,5 +1,7 @@
 //! Offline native framebuffer capture; no account, filesystem cache, or network adapters.
 use eframe::egui;
+#[path = "../src/server_settings_demo.rs"]
+mod server_settings_demo;
 use std::{
 	path::PathBuf,
 	sync::{
@@ -226,9 +228,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let page = value("--page=").unwrap_or("profile").to_owned();
 	if !matches!(
 		page.as_str(),
-		"profile" | "account" | "appearance" | "general" | "extensions"
+		"profile"
+			| "account"
+			| "appearance"
+			| "general"
+			| "extensions"
+			| "server"
+			| "server-engagement"
 	) {
-		return Err("Page must be profile, account, appearance, general or extensions".into());
+		return Err("Page must be profile, account, appearance, general, extensions, server or server-engagement".into());
 	}
 	let width: f32 = value("--width=").unwrap_or("1120").parse()?;
 	let height: f32 = value("--height=").unwrap_or("760").parse()?;
@@ -284,6 +292,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 							id: model::Id(601),
 						},
 					});
+				}
+			} else if page.starts_with("server") {
+				server_settings_demo::open(&mut state, &mut messaging);
+				if page == "server-engagement" {
+					messaging.preview_server_engagement();
 				}
 			} else {
 				messaging.preview_settings(

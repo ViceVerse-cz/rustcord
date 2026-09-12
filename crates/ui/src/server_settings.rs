@@ -42,6 +42,10 @@ pub(super) struct Editor {
 }
 
 impl MessagingUi {
+	/// Select the engagement page in the offline preview harness.
+	pub fn preview_server_engagement(&mut self) {
+		self.server_settings.page = Page::Engagement;
+	}
 	pub fn has_server_settings_changes(&self) -> bool {
 		self.server_settings.is_open()
 			&& (self.server_settings.dirty()
@@ -173,12 +177,12 @@ impl Editor {
 		}
 		let colors = design::palette_for(ctx);
 		let size = ctx.content_rect().size();
-		let width = (size.x - 32.0).clamp(260.0, 1560.0);
+		let width = (size.x - 32.0).clamp(260.0, 1160.0);
 		let height = (size.y - 32.0).max(220.0);
 		let wide = width >= 720.0;
 		let mut close = false;
 		let modal = egui::Modal::new(egui::Id::unique("server-settings"))
-			.backdrop_color(Color32::from_black_alpha(220))
+			.backdrop_color(colors.chat.to_opaque())
 			.frame(
 				egui::Frame::new()
 					.fill(colors.chat.to_opaque())
@@ -187,14 +191,17 @@ impl Editor {
 			.show(ctx, |ui| {
 				ui.set_width(width);
 				ui.set_height(height);
+				ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+				ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
 				if wide {
 					egui::Panel::left("server-settings-navigation")
-						.exact_size(if width >= 1200.0 { 290.0 } else { 215.0 })
+						.exact_size(220.0)
 						.resizable(false)
+						.show_separator_line(false)
 						.frame(
 							egui::Frame::new()
-								.fill(colors.sidebar.to_opaque())
-								.inner_margin(egui::Margin::symmetric(18, 40)),
+								.fill(colors.chat.to_opaque())
+								.inner_margin(egui::Margin::symmetric(12, 40)),
 						)
 						.show(ui, |ui| {
 							let name = state
@@ -205,10 +212,16 @@ impl Editor {
 							for page in [Page::Profile, Page::Engagement] {
 								if ui
 									.add_sized(
-										[ui.available_width(), 40.0],
-										egui::Button::new(design::medium(ui, page.label(), 16.0))
+										[ui.available_width(), 32.0],
+										egui::Button::new(design::medium(ui, page.label(), 14.0))
 											.selected(self.page == page)
-											.frame_when_inactive(false),
+											.right_text("")
+											.fill(if self.page == page {
+												colors.selected
+											} else {
+												Color32::TRANSPARENT
+											})
+											.corner_radius(4),
 									)
 									.clicked()
 								{
@@ -218,27 +231,31 @@ impl Editor {
 						});
 				}
 				egui::CentralPanel::default()
-					.frame(
-						egui::Frame::new()
-							.inner_margin(egui::Margin::symmetric(if wide { 36 } else { 16 }, 36)),
-					)
+					.frame(egui::Frame::new().inner_margin(egui::Margin {
+						left: if wide { 32 } else { 16 },
+						right: if wide { 64 } else { 16 },
+						top: 40,
+						bottom: 24,
+					}))
 					.show(ui, |ui| {
-						ui.horizontal_top(|ui| {
-							ui.vertical(|ui| {
-								ui.label(
-									design::semibold(ui, self.page.label(), 22.0)
-										.color(colors.text_strong),
-								);
-							});
-							ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-								close = close_control(ui).clicked()
-							});
-						});
+						if wide {
+							let rect = egui::Rect::from_min_size(
+								ui.max_rect().right_top() + egui::vec2(16.0, 0.0),
+								egui::vec2(40.0, 64.0),
+							);
+							let mut close_ui = ui.new_child(
+								egui::UiBuilder::new()
+									.id_salt("server-close")
+									.max_rect(rect),
+							);
+							close = close_control(&mut close_ui).clicked();
+						}
 						if !wide {
 							ui.horizontal(|ui| {
 								for page in [Page::Profile, Page::Engagement] {
 									ui.selectable_value(&mut self.page, page, page.label());
 								}
+								close = close_control(ui).clicked();
 							});
 						}
 						if self.dirty() || state.server_settings.saving {
@@ -366,16 +383,21 @@ impl Editor {
 
 	fn profile(&mut self, ui: &mut egui::Ui, state: &State, avatars: &mut Avatars) {
 		let width = ui.available_width();
-		if width >= 780.0 {
+		if width >= 700.0 {
+			let preview_width = if width >= 820.0 { 300.0 } else { 260.0 };
+			let form_width = width - preview_width - 32.0;
 			ui.horizontal_top(|ui| {
-				ui.spacing_mut().item_spacing.x = 36.0;
+				ui.spacing_mut().item_spacing.x = 32.0;
 				ui.allocate_ui_with_layout(
-					egui::vec2(width - 336.0, 0.0),
+					egui::vec2(form_width, 0.0),
 					egui::Layout::top_down(egui::Align::Min),
-					|ui| self.profile_form(ui),
+					|ui| {
+						ui.set_width(form_width);
+						self.profile_form(ui);
+					},
 				);
 				ui.vertical(|ui| {
-					ui.set_width(300.0);
+					ui.set_width(preview_width);
 					self.preview(ui, state, avatars);
 				});
 			});
@@ -390,14 +412,22 @@ impl Editor {
 			return;
 		};
 		let colors = design::palette(ui);
-		ui.spacing_mut().item_spacing.y = 8.0;
+		// Column spacing must not leak into the swatch, trait and button rows.
+		ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+		ui.label(design::semibold(ui, "Server Profile", 20.0).color(colors.text_strong));
 		ui.label("Customize how your server appears in invite links and, if enabled, in Server Discovery and Announcement Channel messages.");
-		ui.add_space(32.0);
-		let name_label = ui.label(design::medium(ui, "Name", 17.0));
+		ui.add_space(24.0);
+		let name_label = ui.label(design::medium(ui, "Name", 15.0));
 		ui.add_sized(
 			[ui.available_width(), 40.0],
 			egui::TextEdit::singleline(&mut draft.name)
 				.char_limit(100)
+				.frame(
+					egui::Frame::new()
+						.stroke(egui::Stroke::new(1.0, colors.border))
+						.corner_radius(6)
+						.inner_margin(egui::Margin::symmetric(12, 10)),
+				)
 				.margin(egui::vec2(12.0, 10.0)),
 		)
 		.labelled_by(name_label.id);
@@ -482,7 +512,7 @@ impl Editor {
 		divider(ui);
 		label(ui, "Traits");
 		ui.weak("Add up to 5 traits to show off your server's interests and personality.");
-		let columns = if ui.available_width() >= 540.0 {
+		let columns = if ui.available_width() >= 480.0 {
 			3
 		} else if ui.available_width() >= 330.0 {
 			2
@@ -504,13 +534,13 @@ impl Editor {
 							.corner_radius(8)
 							.inner_margin(8)
 							.show(ui, |ui| {
-								ui.set_width((cell_width - 16.0).max(60.0));
+								ui.set_width((cell_width - 18.0).max(60.0));
 								ui.horizontal(|ui| {
 									self.emoji_picker.unicode_button(ui, &mut entry.emoji);
 									ui.add(
 										egui::TextEdit::singleline(&mut entry.label)
 											.char_limit(100)
-											.desired_width((cell_width - 80.0).max(32.0))
+											.desired_width((cell_width - 90.0).max(24.0))
 											.frame(egui::Frame::NONE),
 									)
 									.on_hover_text("Trait name");
@@ -545,10 +575,16 @@ impl Editor {
 		}
 		draft.traits = traits;
 		divider(ui);
-		let description_label = ui.label(design::medium(ui, "Description", 17.0));
+		let description_label = ui.label(design::medium(ui, "Description", 15.0));
 		ui.weak("How did your server get started? Why should people join?");
 		ui.add(
 			egui::TextEdit::multiline(&mut draft.description)
+				.frame(
+					egui::Frame::new()
+						.stroke(egui::Stroke::new(1.0, colors.border))
+						.corner_radius(6)
+						.inner_margin(10),
+				)
 				.hint_text("Tell the world a bit about this server.")
 				.char_limit(300)
 				.desired_width(f32::INFINITY)
@@ -561,7 +597,9 @@ impl Editor {
 			return;
 		};
 		let colors = design::palette(ui);
-		let width = ui.available_width().min(340.0);
+		ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+		ui.style_mut().override_font_id = Some(egui::FontId::proportional(13.0));
+		let width = ui.available_width().min(300.0) - 2.0;
 		egui::Frame::new()
 			.fill(colors.raised)
 			.stroke(egui::Stroke::new(1.0, colors.border))
@@ -572,6 +610,7 @@ impl Editor {
 					ui.allocate_exact_size(egui::vec2(width, 125.0), egui::Sense::hover());
 				gradient(ui, banner, draft.banner_color.unwrap_or(0x2153dc), 16);
 				egui::Frame::new().inner_margin(16).show(ui, |ui| {
+					ui.set_width(width - 32.0);
 					let icon_rect = egui::Rect::from_min_size(
 						egui::pos2(ui.cursor().left(), banner.bottom() - 36.0),
 						egui::Vec2::splat(72.0),
@@ -593,7 +632,7 @@ impl Editor {
 						});
 					}
 					ui.advance_cursor_after_rect(icon_rect);
-					ui.label(design::semibold(ui, &draft.name, 19.0));
+					ui.label(design::semibold(ui, &draft.name, 16.0));
 					ui.horizontal_wrapped(|ui| {
 						if let Some(count) = draft.online_count {
 							ui.colored_label(colors.positive, format!("● {count} Online"));
@@ -609,18 +648,19 @@ impl Editor {
 					ui.horizontal_wrapped(|ui| {
 						for entry in &draft.traits {
 							if !entry.label.is_empty() {
-								egui::Frame::new()
+								ui.add(
+									egui::Button::new(format!(
+										"{}{}{}",
+										entry.emoji.as_deref().unwrap_or(""),
+										if entry.emoji.is_some() { " " } else { "" },
+										entry.label
+									))
+									.wrap()
+									.sense(egui::Sense::hover())
+									.fill(Color32::TRANSPARENT)
 									.stroke(egui::Stroke::new(1.0, colors.border))
-									.corner_radius(20)
-									.inner_margin(egui::Margin::symmetric(9, 5))
-									.show(ui, |ui| {
-										ui.label(format!(
-											"{}{}{}",
-											entry.emoji.as_deref().unwrap_or(""),
-											if entry.emoji.is_some() { " " } else { "" },
-											entry.label
-										));
-									});
+									.corner_radius(20),
+								);
 							}
 						}
 					});
@@ -634,12 +674,12 @@ impl Editor {
 }
 
 fn label(ui: &mut egui::Ui, text: &str) {
-	ui.label(design::medium(ui, text, 17.0));
+	ui.label(design::medium(ui, text, 15.0));
 }
 fn divider(ui: &mut egui::Ui) {
-	ui.add_space(32.0);
+	ui.add_space(24.0);
 	ui.separator();
-	ui.add_space(32.0);
+	ui.add_space(24.0);
 }
 fn gradient(ui: &mut egui::Ui, rect: egui::Rect, color: u32, radius: u8) {
 	let top = Color32::from_rgb((color >> 16) as u8, (color >> 8) as u8, color as u8);
@@ -660,8 +700,8 @@ fn gradient(ui: &mut egui::Ui, rect: egui::Rect, color: u32, radius: u8) {
 		bottom,
 	);
 	let band = egui::Rect::from_min_max(
-		egui::pos2(rect.left(), rect.top() + f32::from(radius)),
-		egui::pos2(rect.right(), rect.bottom() - f32::from(radius)),
+		egui::pos2(rect.left(), rect.top() + f32::from(radius) - 1.0),
+		egui::pos2(rect.right(), rect.bottom() - f32::from(radius) + 1.0),
 	);
 	let mut mesh = egui::Mesh::default();
 	mesh.colored_vertex(band.left_top(), top);
@@ -675,6 +715,7 @@ fn gradient(ui: &mut egui::Ui, rect: egui::Rect, color: u32, radius: u8) {
 fn engagement(ui: &mut egui::Ui, state: &State, draft: &mut Settings) {
 	ui.set_max_width(850.0);
 	ui.spacing_mut().item_spacing.y = 8.0;
+	ui.label(design::semibold(ui, "Engagement", 20.0));
 	ui.label("Manage settings that help keep your server active.");
 	ui.add_space(32.0);
 	ui.label(design::semibold(ui, "System Messages", 21.0));
@@ -817,4 +858,57 @@ fn timeout_picker(ui: &mut egui::Ui, timeout: &mut u32) {
 				ui.selectable_value(timeout, seconds, format!("{} minutes", seconds / 60));
 			}
 		});
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn profile_columns_stay_inside_available_width() {
+		for width in [360.0, 700.0, 844.0] {
+			let ctx = egui::Context::default();
+			design::apply(&ctx);
+			let state = test_support::demo_state();
+			let settings = Settings {
+				guild: state.guilds[0].id,
+				name: "A long synthetic server name ".repeat(3),
+				description: "A long description that wraps within the form and preview. "
+					.repeat(4),
+				traits: (0..5)
+					.map(|_| Trait {
+						label: "A long trait".repeat(7),
+						emoji: None,
+					})
+					.collect(),
+				..Default::default()
+			};
+			let mut editor = Editor {
+				draft: Some(settings),
+				..Default::default()
+			};
+			let mut avatars = Avatars::default();
+			let output = ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(width, 1800.0),
+					)),
+					..Default::default()
+				},
+				|ui| {
+					ui.set_width(width);
+					ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+					let right = ui.max_rect().right();
+					editor.profile(ui, &state, &mut avatars);
+					assert!(
+						ui.min_rect().right() <= right + 1.0,
+						"profile overflow at {width}: {:?}",
+						ui.min_rect()
+					);
+				},
+			);
+			output.drop_without_applying_deltas();
+		}
+	}
 }
