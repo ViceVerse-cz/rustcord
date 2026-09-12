@@ -1,5 +1,5 @@
 //! Session-scoped account menu; the host owns presence publication.
-use crate::{MessagingUi, design, profiles};
+use crate::{MessagingUi, design, icons, profiles};
 use client_core::{Command, State};
 use egui::{RichText, vec2};
 use model::PresenceStatus;
@@ -10,6 +10,15 @@ pub(super) struct AccountMenu {
 	generation: u64,
 	draft: String,
 	custom_open: bool,
+}
+
+impl AccountMenu {
+	/// Fixture-only: show the popout on the first frame of a demo capture.
+	#[cfg(any(test, feature = "demo"))]
+	pub(super) fn preview(&mut self, generation: u64) {
+		self.open = true;
+		self.generation = generation;
+	}
 }
 
 impl MessagingUi {
@@ -88,7 +97,7 @@ impl MessagingUi {
 	) {
 		let colors = design::palette(ui);
 		let (banner, _) =
-			ui.allocate_exact_size(vec2(ui.available_width(), 66.0), egui::Sense::hover());
+			ui.allocate_exact_size(vec2(ui.available_width(), 64.0), egui::Sense::hover());
 		let corner = egui::CornerRadius {
 			nw: 10,
 			ne: 10,
@@ -107,181 +116,274 @@ impl MessagingUi {
 		}
 		if let Some(user) = &state.user {
 			let avatar = egui::Rect::from_min_size(
-				banner.left_bottom() + vec2(16.0, -30.0),
-				vec2(64.0, 64.0),
+				banner.left_bottom() + vec2(14.0, -38.0),
+				vec2(72.0, 72.0),
 			);
+			// Thick popover-coloured ring, as Discord punches the avatar out of the banner.
 			ui.painter()
-				.circle_filled(avatar.center(), 37.0, colors.raised);
+				.circle_filled(avatar.center(), 42.0, colors.raised);
 			ui.scope_builder(egui::UiBuilder::new().max_rect(avatar), |ui| {
-				self.avatars.show(ui, user, 64.0, state.demo);
+				self.avatars.show(ui, user, 72.0, state.demo);
 			});
-			design::presence_dot(
-				ui,
-				avatar,
-				profiles::presence_color(self.own_presence.status.wire()),
+			let dot = avatar.right_bottom() - egui::Vec2::splat(11.0);
+			ui.painter().circle_filled(dot, 10.5, colors.raised);
+			presence_dot(
+				ui.painter(),
+				dot,
+				7.0,
+				self.own_presence.status,
 				colors.raised,
 			);
-			ui.add_space((avatar.bottom() + 10.0 - ui.cursor().top()).max(0.0));
+			ui.add_space((avatar.bottom() + 12.0 - ui.cursor().top()).max(0.0));
+		} else {
+			ui.add_space(12.0);
 		}
-		egui::Frame::new().inner_margin(16).show(ui, |ui| {
-			ui.set_width(ui.available_width());
-			let profile = state.own_profile.data.as_ref();
-			let name = profile
-				.and_then(|p| p.global_name.as_deref())
-				.or_else(|| state.user.as_ref().map(|u| u.name.as_str()))
-				.unwrap_or("Your account");
-			ui.add(
-				egui::Label::new(design::semibold(ui, name, 21.0).color(colors.text_strong)).wrap(),
-			);
-			if let Some(profile) = profile {
+		egui::Frame::new()
+			.inner_margin(egui::Margin {
+				left: 12,
+				right: 12,
+				top: 0,
+				bottom: 12,
+			})
+			.show(ui, |ui| {
+				ui.set_width(ui.available_width());
+				self.account_identity_card(ui, state, commands);
+				ui.add_space(8.0);
+				ui.spacing_mut().item_spacing.y = 2.0;
+				self.account_status_row(ui);
+				self.account_custom_status_row(ui);
+			});
+	}
+
+	/// Name, handle and current custom status, grouped on the sunken card Discord uses.
+	fn account_identity_card(
+		&mut self,
+		ui: &mut egui::Ui,
+		state: &mut State,
+		commands: &mut Vec<Command>,
+	) {
+		let colors = design::palette(ui);
+		egui::Frame::new()
+			.fill(colors.base)
+			.corner_radius(8)
+			.inner_margin(12)
+			.show(ui, |ui| {
+				ui.set_width(ui.available_width());
+				ui.spacing_mut().item_spacing.y = 2.0;
+				let profile = state.own_profile.data.as_ref();
+				let name = profile
+					.and_then(|p| p.global_name.as_deref())
+					.or_else(|| state.user.as_ref().map(|u| u.name.as_str()))
+					.unwrap_or("Your account");
 				ui.add(
-					egui::Label::new(RichText::new(&profile.username).color(colors.muted)).wrap(),
+					egui::Label::new(design::semibold(ui, name, 20.0).color(colors.text_strong))
+						.wrap(),
 				);
-				if !profile.pronouns.is_empty() {
+				if let Some(profile) = profile {
 					ui.add(
 						egui::Label::new(
-							RichText::new(&profile.pronouns).small().color(colors.muted),
+							design::medium(ui, &profile.username, 14.0).color(colors.muted),
+						)
+						.wrap(),
+					);
+					if !profile.pronouns.is_empty() {
+						ui.add(
+							egui::Label::new(
+								RichText::new(&profile.pronouns)
+									.size(12.0)
+									.color(colors.muted),
+							)
+							.wrap(),
+						);
+					}
+				}
+				if !self.own_presence.custom_status.is_empty() {
+					ui.add_space(10.0);
+					let (line, _) = ui
+						.allocate_exact_size(vec2(ui.available_width(), 1.0), egui::Sense::hover());
+					ui.painter().rect_filled(line, 0, colors.border);
+					ui.add_space(10.0);
+					ui.add(
+						egui::Label::new(
+							RichText::new(&self.own_presence.custom_status)
+								.size(14.0)
+								.color(colors.text),
 						)
 						.wrap(),
 					);
 				}
-			}
-			if state.own_profile.loading {
-				ui.small("Loading profile…");
-			}
-			if let Some(error) = state.own_profile.error {
-				ui.colored_label(colors.danger, error);
-				if ui.button("Reload profile").clicked()
-					&& let Some(command) = state.load_own_profile()
-				{
-					commands.push(command);
+				if state.own_profile.loading {
+					ui.add_space(6.0);
+					ui.label(
+						RichText::new("Loading profile…")
+							.small()
+							.color(colors.muted),
+					);
 				}
-			}
-			ui.add_space(8.0);
-			ui.separator();
-			egui::Frame::new()
-				.fill(colors.base)
-				.corner_radius(8)
-				.inner_margin(8)
-				.show(ui, |ui| {
-					ui.style_mut().spacing.interact_size.y = 36.0;
-					let status_menu = ui.menu_button(
-						format!("    {}  ›", self.own_presence.status.label()),
-						|ui| {
-							ui.set_width(260.0_f32.min(ui.ctx().content_rect().width() - 48.0));
-							for status in PresenceStatus::ALL {
-								let description = match status {
-									PresenceStatus::DoNotDisturb => {
-										"You will not receive desktop notifications"
-									}
-									PresenceStatus::Invisible => "You will appear offline",
-									_ => "",
-								};
-								let height = if description.is_empty() { 42.0 } else { 66.0 };
-								let response = ui.add_sized(
-									[ui.available_width(), height],
-									egui::Button::new("").frame(false),
-								);
-								response.widget_info(|| {
-									egui::WidgetInfo::labeled(
-										egui::WidgetType::Button,
-										true,
-										status.label(),
-									)
-								});
-								let x = response.rect.left() + 32.0;
-								let y = response.rect.top() + 12.0;
-								ui.painter().circle_filled(
-									egui::pos2(x - 18.0, y + 8.0),
-									5.0,
-									profiles::presence_color(status.wire()),
-								);
-								let dot = egui::pos2(x - 18.0, y + 8.0);
-								let background = if response.hovered() || response.has_focus() {
-									ui.visuals().widgets.hovered.weak_bg_fill
-								} else {
-									ui.visuals().window_fill
-								};
-								match status {
-									PresenceStatus::Idle => {
-										ui.painter().circle_filled(
-											dot + vec2(-2.5, -2.5),
-											4.0,
-											background,
-										);
-									}
-									PresenceStatus::Invisible => {
-										ui.painter().circle_filled(dot, 2.8, background);
-									}
-									PresenceStatus::DoNotDisturb => {
-										ui.painter().line_segment(
-											[dot - vec2(3.0, 0.0), dot + vec2(3.0, 0.0)],
-											egui::Stroke::new(2.0, background),
-										);
-									}
-									_ => {}
-								}
-								ui.painter().text(
-									egui::pos2(x, y),
-									egui::Align2::LEFT_TOP,
-									status.label(),
-									egui::FontId::proportional(15.0),
-									colors.text_strong,
-								);
-								if !description.is_empty() {
-									let galley = ui.painter().layout(
-										description.into(),
-										egui::FontId::proportional(12.0),
-										colors.muted,
-										(response.rect.width() - 44.0).max(80.0),
-									);
-									ui.painter().galley(
-										egui::pos2(x, y + 23.0),
-										galley,
-										colors.muted,
-									);
-								}
-								if response.clicked() {
-									if self.own_presence.status != status {
-										self.own_presence.status = status;
-										self.own_presence_changed = true;
-									}
-									ui.close();
-								}
-								if status == PresenceStatus::Online {
-									ui.separator();
-								}
-							}
-						},
+				if let Some(error) = state.own_profile.error {
+					ui.add_space(6.0);
+					ui.add(
+						egui::Label::new(RichText::new(error).size(12.0).color(colors.danger))
+							.wrap(),
 					);
-					ui.painter().circle_filled(
-						egui::pos2(
-							status_menu.response.rect.left() + 12.0,
-							status_menu.response.rect.center().y,
-						),
-						5.0,
-						profiles::presence_color(self.own_presence.status.wire()),
-					);
-				});
-			ui.add_space(8.0);
-			let label = if self.own_presence.custom_status.is_empty() {
-				"Set a custom status"
-			} else {
-				&self.own_presence.custom_status
-			};
-			if ui
-				.add_sized(
-					[ui.available_width(), 44.0],
-					egui::Button::new(label).wrap(),
+					if ui.button("Reload profile").clicked()
+						&& let Some(command) = state.load_own_profile()
+					{
+						commands.push(command);
+					}
+				}
+			});
+	}
+
+	/// Presence row: status dot, label and a chevron opening the status menu.
+	fn account_status_row(&mut self, ui: &mut egui::Ui) {
+		let colors = design::palette(ui);
+		let status = self.own_presence.status;
+		let label = design::medium(ui, status.label(), 14.0).color(colors.text_strong);
+		let response = ui
+			.scope(|ui| {
+				let width = ui.available_width();
+				ui.spacing_mut().button_padding = vec2(34.0, 10.0);
+				egui::containers::menu::MenuButton::from_button(
+					egui::Button::new(())
+						.left_text(label)
+						.frame_when_inactive(false)
+						.corner_radius(6)
+						.min_size(vec2(width, 40.0)),
 				)
-				.clicked()
-			{
-				self.account_menu
-					.draft
-					.clone_from(&self.own_presence.custom_status);
-				self.account_menu.custom_open = true;
+				.ui(ui, |ui| self.presence_menu(ui))
+				.0
+			})
+			.inner;
+		let rect = response.rect;
+		let background = if response.hovered() || response.has_focus() {
+			ui.visuals().widgets.hovered.weak_bg_fill
+		} else {
+			colors.raised
+		};
+		presence_dot(
+			ui.painter(),
+			egui::pos2(rect.left() + 17.0, rect.center().y),
+			5.0,
+			status,
+			background,
+		);
+		icons::paint(
+			ui.painter(),
+			icons::Icon::ChevronRight,
+			egui::Rect::from_center_size(
+				egui::pos2(rect.right() - 18.0, rect.center().y),
+				egui::Vec2::splat(16.0),
+			),
+			colors.muted,
+		);
+	}
+
+	fn presence_menu(&mut self, ui: &mut egui::Ui) {
+		let colors = design::palette(ui);
+		ui.set_width(260.0_f32.min(ui.ctx().content_rect().width() - 48.0));
+		for status in PresenceStatus::ALL {
+			let description = match status {
+				PresenceStatus::DoNotDisturb => "You will not receive desktop notifications",
+				PresenceStatus::Invisible => "You will appear offline",
+				_ => "",
+			};
+			let height = if description.is_empty() { 40.0 } else { 62.0 };
+			let response = ui.add_sized(
+				[ui.available_width(), height],
+				egui::Button::new("")
+					.frame_when_inactive(false)
+					.corner_radius(6),
+			);
+			response.widget_info(|| {
+				egui::WidgetInfo::labeled(egui::WidgetType::Button, true, status.label())
+			});
+			let x = response.rect.left() + 34.0;
+			let y = response.rect.top() + if description.is_empty() { 11.0 } else { 10.0 };
+			let background = if response.hovered() || response.has_focus() {
+				ui.visuals().widgets.hovered.weak_bg_fill
+			} else {
+				ui.visuals().window_fill
+			};
+			presence_dot(
+				ui.painter(),
+				egui::pos2(response.rect.left() + 17.0, response.rect.center().y),
+				5.0,
+				status,
+				background,
+			);
+			ui.painter().text(
+				egui::pos2(x, y),
+				egui::Align2::LEFT_TOP,
+				status.label(),
+				egui::FontId::new(14.0, design::medium_family(ui.ctx())),
+				colors.text_strong,
+			);
+			if !description.is_empty() {
+				let galley = ui.painter().layout(
+					description.into(),
+					egui::FontId::proportional(12.0),
+					colors.muted,
+					(response.rect.width() - 46.0).max(80.0),
+				);
+				ui.painter()
+					.galley(egui::pos2(x, y + 22.0), galley, colors.muted);
 			}
-		});
+			if response.clicked() {
+				if self.own_presence.status != status {
+					self.own_presence.status = status;
+					self.own_presence_changed = true;
+				}
+				ui.close();
+			}
+			if status == PresenceStatus::Online {
+				ui.separator();
+			}
+		}
+	}
+
+	/// Custom status row: smiley to write one, pencil once a status is set.
+	fn account_custom_status_row(&mut self, ui: &mut egui::Ui) {
+		let colors = design::palette(ui);
+		let set = !self.own_presence.custom_status.is_empty();
+		let label = if set {
+			"Edit custom status"
+		} else {
+			"Set a custom status"
+		};
+		let text = design::medium(ui, label, 14.0).color(colors.text_strong);
+		let response = ui
+			.scope(|ui| {
+				let width = ui.available_width();
+				ui.spacing_mut().button_padding = vec2(34.0, 10.0);
+				ui.add(
+					egui::Button::new(())
+						.left_text(text)
+						.frame_when_inactive(false)
+						.corner_radius(6)
+						.min_size(vec2(width, 40.0)),
+				)
+			})
+			.inner;
+		icons::paint(
+			ui.painter(),
+			if set {
+				icons::Icon::Pencil
+			} else {
+				icons::Icon::Smile
+			},
+			egui::Rect::from_center_size(
+				egui::pos2(response.rect.left() + 17.0, response.rect.center().y),
+				egui::Vec2::splat(17.0),
+			),
+			colors.muted,
+		);
+		if response.clicked() {
+			self.account_menu
+				.draft
+				.clone_from(&self.own_presence.custom_status);
+			self.account_menu.custom_open = true;
+		}
 	}
 	fn custom_status_editor(&mut self, ui: &mut egui::Ui, state: &State) {
 		let colors = design::palette(ui);
@@ -358,6 +460,39 @@ impl MessagingUi {
 				.wrap(),
 			);
 		}
+	}
+}
+
+/// Presence dot with Discord's status glyphs punched out in the surface colour.
+fn presence_dot(
+	painter: &egui::Painter,
+	center: egui::Pos2,
+	radius: f32,
+	status: PresenceStatus,
+	background: egui::Color32,
+) {
+	painter.circle_filled(center, radius, profiles::presence_color(status.wire()));
+	match status {
+		PresenceStatus::Idle => {
+			painter.circle_filled(
+				center - egui::Vec2::splat(radius * 0.5),
+				radius * 0.8,
+				background,
+			);
+		}
+		PresenceStatus::Invisible => {
+			painter.circle_filled(center, radius * 0.56, background);
+		}
+		PresenceStatus::DoNotDisturb => {
+			painter.line_segment(
+				[
+					center - vec2(radius * 0.62, 0.0),
+					center + vec2(radius * 0.62, 0.0),
+				],
+				egui::Stroke::new(radius * 0.42, background),
+			);
+		}
+		_ => {}
 	}
 }
 
@@ -482,13 +617,7 @@ mod tests {
 				}
 				assert!(view.account_menu.open);
 				let text = frame(&ctx, &mut view, &mut state, size, vec![]);
-				click(
-					&ctx,
-					&mut view,
-					&mut state,
-					size,
-					locate(&text, "    Online  ›"),
-				);
+				click(&ctx, &mut view, &mut state, size, locate(&text, "Online"));
 				for _ in 0..3 {
 					frame(&ctx, &mut view, &mut state, size, vec![]);
 				}

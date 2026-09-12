@@ -1,3 +1,4 @@
+use crate::design::LazyHover;
 use crate::markdown::{FormatCache, discord_url};
 use client_core::State;
 use egui::RichText;
@@ -49,8 +50,8 @@ pub struct TimelineView {
 	following: bool,
 	formatted: FormatCache,
 	pending_formatted: FormatCache,
-	// Exact revealed content prevents a reload that resets model revisions from revealing edits.
-	// Pruned with the active window: at most its 500 records / 4 MiB content budget.
+	// A fingerprint of the revealed content prevents a reload that resets model revisions from
+	// revealing edits, without cloning payloads. Pruned with the active window: at most 500 records.
 	revealed: BTreeMap<Id, Revealed>,
 	viewing: Option<(Id, Id)>,
 	/// Fixture-only: viewer to open once its message has arrived in the timeline.
@@ -67,26 +68,28 @@ pub struct TimelineView {
 	unread_boundary: Option<Id>,
 }
 struct Revealed {
-	content: String,
-	embeds: Vec<model::Embed>,
-	attachments: Vec<model::Attachment>,
+	/// Fingerprint of the content, embeds and attachments that were revealed.
+	content: u64,
 	text: u32,
 	media: bool,
 }
 impl Revealed {
+	fn fingerprint(message: &Message) -> u64 {
+		let mut hasher = DefaultHasher::new();
+		message.content.hash(&mut hasher);
+		message.embeds.hash(&mut hasher);
+		message.attachments.hash(&mut hasher);
+		hasher.finish()
+	}
 	fn new(message: &Message, text: u32, media: bool) -> Self {
 		Self {
-			content: message.content.clone(),
-			embeds: message.embeds.clone(),
-			attachments: message.attachments.clone(),
+			content: Self::fingerprint(message),
 			text,
 			media,
 		}
 	}
 	fn matches(&self, message: &Message) -> bool {
-		self.content == message.content
-			&& self.embeds == message.embeds
-			&& self.attachments == message.attachments
+		self.content == Self::fingerprint(message)
 	}
 }
 pub fn visible_range(rows: &[(Id, f32)], min: f32, max: f32) -> (usize, usize, f32) {
@@ -474,7 +477,7 @@ fn show_system(
 					.size(12.0)
 					.color(colors.muted),
 			)
-			.on_hover_text(format!("{time} UTC"));
+			.on_hover_text_with(|| format!("{time} UTC"));
 		});
 	}
 }
@@ -608,7 +611,11 @@ impl TimelineView {
 			self.width = width;
 			self.text_size = text_size;
 			self.scale = scale;
-			let row_ids: Vec<_> = state.timeline.iter().map(|message| message.id).collect();
+			let row_ids: Vec<_> = state
+				.timeline
+				.display_iter()
+				.map(|message| message.id)
+				.collect();
 			self.heights
 				.retain(|id, _| row_ids.binary_search(id).is_ok());
 			self.formatted.retain(|id| state.timeline.get(id).is_some());
@@ -620,10 +627,11 @@ impl TimelineView {
 			let mut previous = None;
 			self.rows = state
 				.timeline
-				.iter()
+				.display_iter()
 				.map(|m| {
-					let key = row_key(m, previous, self.unread_boundary);
-					previous = Some(m);
+					let key = row_key(m, previous, self.unread_boundary)
+						^ u64::from(state.timeline.is_deleted(m.id));
+					previous = (!state.timeline.is_deleted(m.id)).then_some(m);
 					let estimate = (if m.embeds_suppressed {
 						0.0
 					} else {
@@ -664,7 +672,7 @@ impl TimelineView {
 			ui.weak("Message history is unavailable with current permission information.");
 		}
 		if history_available && state.freshness == model::Freshness::Loading {
-			let empty = state.timeline.is_empty()
+			let empty = state.timeline.display_iter().next().is_none()
 				&& !state
 					.pending
 					.iter()
@@ -673,7 +681,7 @@ impl TimelineView {
 			if empty {
 				return;
 			}
-		} else if state.timeline.is_empty()
+		} else if state.timeline.display_iter().next().is_none()
 			&& history_available
 			&& !state
 				.pending
@@ -807,12 +815,53 @@ impl TimelineView {
 				end = index + 1;
 				let (id, _) = &self.rows[index];
 				let can_mark_read = state.can_mark_read(*id);
-				let Some(message) = state.timeline.get(*id) else {
+				let Some(message) = state.timeline.get_display(*id) else {
 					continue;
 				};
 				let previous = index
 					.checked_sub(1)
 					.and_then(|i| state.timeline.get(self.rows[i].0));
+				if state.timeline.is_deleted(*id) {
+					let colors = crate::design::palette(ui);
+					let response = ui.push_id(row_id, |ui| {
+						egui::Frame::new()
+							.fill(colors.danger.gamma_multiply(0.10))
+							.inner_margin(egui::Margin::symmetric(16, 10))
+							.show(ui, |ui| {
+								ui.set_min_width((width - 32.0).max(1.0));
+								ui.horizontal_wrapped(|ui| {
+									ui.label(
+										RichText::new(&message.author.name)
+											.strong()
+											.color(colors.danger),
+									);
+									ui.label(
+										RichText::new("Deleted - kept by Message delete protector")
+											.small()
+											.color(colors.danger),
+									);
+								});
+								ui.add(
+									egui::Label::new(
+										RichText::new(if message.content.is_empty() {
+											"[Deleted message had no text]"
+										} else {
+											&message.content
+										})
+										.color(colors.danger),
+									)
+									.wrap()
+									.selectable(true),
+								);
+							});
+					});
+					measurements.push((
+						*id,
+						row_key(message, previous, self.unread_boundary) ^ 1,
+						response.response.rect.height(),
+					));
+					continue;
+				}
 				let compact = grouped(previous, message, self.unread_boundary);
 				let new_day =
 					previous.is_none_or(|p| timestamp(p.id).date() != timestamp(*id).date());
@@ -1043,7 +1092,7 @@ impl TimelineView {
 													.size(12.0)
 													.color(colors.muted),
 												)
-												.on_hover_text(format!("{} UTC", time));
+												.on_hover_text_with(|| format!("{} UTC", time));
 											},
 										);
 									}
@@ -1301,7 +1350,7 @@ impl TimelineView {
 								colors.muted,
 							);
 							ui.interact(rect, ui.id().with("timestamp"), egui::Sense::hover())
-								.on_hover_text(format!("{} UTC", time));
+								.on_hover_text_with(|| format!("{} UTC", time));
 						}
 						let own = state
 							.user

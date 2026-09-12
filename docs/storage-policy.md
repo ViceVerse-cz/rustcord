@@ -8,7 +8,14 @@ Disabling removes Serein's package and extension data, and failed cleanup is
 reported and retried. Logout removes the account's plugin data. Imported
 original files and source repositories are never deleted. No credentials belong
 in plugin storage; it is not encrypted. Only bounded metadata may remain after
-successful disable. See `extensions.md` for the creator and permission model.
+successful disable. Shop descriptions and optional preview URLs/hashes belong to
+bounded catalog metadata (1 MiB / 256 entries). Visible cards may fetch a PNG/JPEG
+preview using credential-free validated public HTTPS; bytes are hash/size checked,
+limited to 256 KiB compressed, decoded off-thread within 4,194,304 source pixels,
+and reduced to at most 640 x 360. Eight UI thumbnails cost at most 7,372,800 RGBA
+bytes plus GPU/framework overhead. Images stay in memory only; no preview disk
+cache or background refresh is added. Existing single-worker/four-job bounds and
+session cancellation apply. See `extensions.md` for the creator and permission model.
 
 Schema 13 adds a constrained webhook boolean to cached message authors. It comes
 from the service message webhook_id and follows the existing bounded author data
@@ -511,3 +518,9 @@ Unknown stored values are rejected. No new table, cache, queue, payload collecti
 network request is introduced; account, item, byte and page limits remain unchanged.
 Older schema-13 clients cannot reopen a schema-14 cache. User metadata serialized in
 bounded existing caches defaults missing kinds to ordinary/unknown.
+
+Message delete protector is opt-in and session-only. Retained deleted payloads share
+the existing 500-row / 4 MiB timeline limit and resident-history budget. They are
+excluded from normal message iteration, service actions and disk cache writes.
+Disabling the plugin, logout, lost channel access or eviction releases the payloads.
+The usual disk-cache deletion still runs when a deletion arrives.

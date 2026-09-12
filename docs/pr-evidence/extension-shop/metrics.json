@@ -1,0 +1,1104 @@
+{
+  "baseline_revision": "d00bd04",
+  "runs": [
+    {
+      "iteration": 0,
+      "variant": "before",
+      "samples": [
+        {
+          "working_set_bytes": 2666496,
+          "cpu_ms": 0,
+          "elapsed_ms": 7.1729
+        },
+        {
+          "working_set_bytes": 36651008,
+          "cpu_ms": 125,
+          "elapsed_ms": 116.5686
+        },
+        {
+          "working_set_bytes": 67092480,
+          "cpu_ms": 234.375,
+          "elapsed_ms": 222.1782
+        },
+        {
+          "working_set_bytes": 151756800,
+          "cpu_ms": 343.75,
+          "elapsed_ms": 343.3283
+        },
+        {
+          "working_set_bytes": 157773824,
+          "cpu_ms": 390.625,
+          "elapsed_ms": 470.4257
+        },
+        {
+          "working_set_bytes": 158011392,
+          "cpu_ms": 406.25,
+          "elapsed_ms": 582.6632000000001
+        },
+        {
+          "working_set_bytes": 158011392,
+          "cpu_ms": 406.25,
+          "elapsed_ms": 690.8565
+        },
+        {
+          "working_set_bytes": 158011392,
+          "cpu_ms": 406.25,
+          "elapsed_ms": 799.7750000000001
+        },
+        {
+          "working_set_bytes": 158056448,
+          "cpu_ms": 406.25,
+          "elapsed_ms": 923.8102
+        },
+        {
+          "working_set_bytes": 158056448,
+          "cpu_ms": 406.25,
+          "elapsed_ms": 1048.1141
+        },
+        {
+          "working_set_bytes": 160157696,
+          "cpu_ms": 406.25,
+          "elapsed_ms": 1171.0511000000001
+        },
+        {
+          "working_set_bytes": 160161792,
+          "cpu_ms": 406.25,
+          "elapsed_ms": 1294.9487000000001
+        },
+        {
+          "working_set_bytes": 227360768,
+          "cpu_ms": 406.25,
+          "elapsed_ms": 1402.5537000000002
+        },
+        {
+          "working_set_bytes": 233230336,
+          "cpu_ms": 406.25,
+          "elapsed_ms": 1512.7999
+        }
+      ],
+      "duration_ms": 1624.2075,
+      "peak_working_set_bytes": 233230336,
+      "last_sample_cpu_ms": 406.25,
+      "warmup": true,
+      "framebuffer_saved": true,
+      "completion_verified": true,
+      "framebuffer_dimensions": [
+        1400,
+        950
+      ]
+    },
+    {
+      "iteration": 0,
+      "variant": "after",
+      "samples": [
+        {
+          "working_set_bytes": 2662400,
+          "cpu_ms": 0,
+          "elapsed_ms": 3.2867
+        },
+        {
+          "working_set_bytes": 35495936,
+          "cpu_ms": 78.125,
+          "elapsed_ms": 107.17320000000001
+        },
+        {
+          "working_set_bytes": 65245184,
+          "cpu_ms": 203.125,
+          "elapsed_ms": 219.01330000000002
+        },
+        {
+          "working_set_bytes": 115019776,
+          "cpu_ms": 281.25,
+          "elapsed_ms": 327.5067
+        },
+        {
+          "working_set_bytes": 158580736,
+          "cpu_ms": 328.125,
+          "elapsed_ms": 436.283
+        },
+        {
+          "working_set_bytes": 159019008,
+          "cpu_ms": 343.75,
+          "elapsed_ms": 546.4505
+        },
+        {
+          "working_set_bytes": 159051776,
+          "cpu_ms": 359.375,
+          "elapsed_ms": 656.3191
+        },
+        {
+          "working_set_bytes": 161161216,
+          "cpu_ms": 359.375,
+          "elapsed_ms": 765.1006
+        },
+        {
+          "working_set_bytes": 161161216,
+          "cpu_ms": 359.375,
+          "elapsed_ms": 875.4786
+        },
+        {
+          "working_set_bytes": 161173504,
+          "cpu_ms": 359.375,
+          "elapsed_ms": 983.5334
+        },
+        {
+          "working_set_bytes": 161189888,
+          "cpu_ms": 390.625,
+          "elapsed_ms": 1093.6143
+        },
+        {
+          "working_set_bytes": 161189888,
+          "cpu_ms": 406.25,
+          "elapsed_ms": 1202.9904000000001
+        },
+        {
+          "working_set_bytes": 161198080,
+          "cpu_ms": 421.875,
+          "elapsed_ms": 1312.5168
+        },
+        {
+          "working_set_bytes": 229109760,
+          "cpu_ms": 421.875,
+          "elapsed_ms": 1421.9204
+        }
+      ],
+      "duration_ms": 1536.5231,
+      "peak_working_set_bytes": 229109760,
+      "last_sample_cpu_ms": 421.875,
+      "warmup": true,
+      "framebuffer_saved": true,
+      "completion_verified": true,
+      "framebuffer_dimensions": [
+        1400,
+        950
+      ]
+    },
+    {
+      "iteration": 1,
+      "variant": "before",
+      "samples": [
+        {
+          "working_set_bytes": 2666496,
+          "cpu_ms": 0,
+          "elapsed_ms": 2.6766
+        },
+        {
+          "working_set_bytes": 38219776,
+          "cpu_ms": 93.75,
+          "elapsed_ms": 117.477
+        },
+        {
+          "working_set_bytes": 66347008,
+          "cpu_ms": 234.375,
+          "elapsed_ms": 228.1472
+        },
+        {
+          "working_set_bytes": 132034560,
+          "cpu_ms": 328.125,
+          "elapsed_ms": 339.4884
+        },
+        {
+          "working_set_bytes": 157339648,
+          "cpu_ms": 375,
+          "elapsed_ms": 448.03970000000004
+        },
+        {
+          "working_set_bytes": 157614080,
+          "cpu_ms": 375,
+          "elapsed_ms": 559.0525
+        },
+        {
+          "working_set_bytes": 159797248,
+          "cpu_ms": 390.625,
+          "elapsed_ms": 668.4683
+        },
+        {
+          "working_set_bytes": 159846400,
+          "cpu_ms": 421.875,
+          "elapsed_ms": 779.3081000000001
+        },
+        {
+          "working_set_bytes": 159870976,
+          "cpu_ms": 437.5,
+          "elapsed_ms": 902.1367
+        },
+        {
+          "working_set_bytes": 160018432,
+          "cpu_ms": 453.125,
+          "elapsed_ms": 1011.956
+        },
+        {
+          "working_set_bytes": 160043008,
+          "cpu_ms": 484.375,
+          "elapsed_ms": 1122.2594000000001
+        },
+        {
+          "working_set_bytes": 160059392,
+          "cpu_ms": 484.375,
+          "elapsed_ms": 1232.3947
+        },
+        {
+          "working_set_bytes": 160079872,
+          "cpu_ms": 531.25,
+          "elapsed_ms": 1357.8016
+        }
+      ],
+      "duration_ms": 1483.0799000000002,
+      "peak_working_set_bytes": 160079872,
+      "last_sample_cpu_ms": 531.25,
+      "warmup": false,
+      "framebuffer_saved": true,
+      "completion_verified": true,
+      "framebuffer_dimensions": [
+        1400,
+        950
+      ]
+    },
+    {
+      "iteration": 1,
+      "variant": "after",
+      "samples": [
+        {
+          "working_set_bytes": 2662400,
+          "cpu_ms": 0,
+          "elapsed_ms": 3.0927000000000002
+        },
+        {
+          "working_set_bytes": 47644672,
+          "cpu_ms": 125,
+          "elapsed_ms": 120.3129
+        },
+        {
+          "working_set_bytes": 68263936,
+          "cpu_ms": 250,
+          "elapsed_ms": 228.9966
+        },
+        {
+          "working_set_bytes": 138256384,
+          "cpu_ms": 312.5,
+          "elapsed_ms": 338.8347
+        },
+        {
+          "working_set_bytes": 158748672,
+          "cpu_ms": 343.75,
+          "elapsed_ms": 448.59650000000005
+        },
+        {
+          "working_set_bytes": 159080448,
+          "cpu_ms": 359.375,
+          "elapsed_ms": 557.9245000000001
+        },
+        {
+          "working_set_bytes": 161214464,
+          "cpu_ms": 390.625,
+          "elapsed_ms": 666.7632
+        },
+        {
+          "working_set_bytes": 161243136,
+          "cpu_ms": 421.875,
+          "elapsed_ms": 777.0582
+        },
+        {
+          "working_set_bytes": 161275904,
+          "cpu_ms": 453.125,
+          "elapsed_ms": 888.5206000000001
+        },
+        {
+          "working_set_bytes": 161292288,
+          "cpu_ms": 468.75,
+          "elapsed_ms": 997.6811
+        },
+        {
+          "working_set_bytes": 161333248,
+          "cpu_ms": 484.375,
+          "elapsed_ms": 1106.5619000000002
+        },
+        {
+          "working_set_bytes": 161353728,
+          "cpu_ms": 500,
+          "elapsed_ms": 1217.7056
+        },
+        {
+          "working_set_bytes": 161370112,
+          "cpu_ms": 531.25,
+          "elapsed_ms": 1341.9850000000001
+        }
+      ],
+      "duration_ms": 1453.2258000000002,
+      "peak_working_set_bytes": 161370112,
+      "last_sample_cpu_ms": 531.25,
+      "warmup": false,
+      "framebuffer_saved": true,
+      "completion_verified": true,
+      "framebuffer_dimensions": [
+        1400,
+        950
+      ]
+    },
+    {
+      "iteration": 2,
+      "variant": "before",
+      "samples": [
+        {
+          "working_set_bytes": 2666496,
+          "cpu_ms": 0,
+          "elapsed_ms": 2.9858000000000002
+        },
+        {
+          "working_set_bytes": 35565568,
+          "cpu_ms": 93.75,
+          "elapsed_ms": 116.9136
+        },
+        {
+          "working_set_bytes": 63987712,
+          "cpu_ms": 187.5,
+          "elapsed_ms": 221.209
+        },
+        {
+          "working_set_bytes": 114688000,
+          "cpu_ms": 312.5,
+          "elapsed_ms": 338.029
+        },
+        {
+          "working_set_bytes": 157302784,
+          "cpu_ms": 390.625,
+          "elapsed_ms": 446.7355
+        },
+        {
+          "working_set_bytes": 157659136,
+          "cpu_ms": 406.25,
+          "elapsed_ms": 556.5463
+        },
+        {
+          "working_set_bytes": 157691904,
+          "cpu_ms": 421.875,
+          "elapsed_ms": 666.1708
+        },
+        {
+          "working_set_bytes": 159797248,
+          "cpu_ms": 437.5,
+          "elapsed_ms": 775.9374
+        },
+        {
+          "working_set_bytes": 159801344,
+          "cpu_ms": 437.5,
+          "elapsed_ms": 883.3997
+        },
+        {
+          "working_set_bytes": 159801344,
+          "cpu_ms": 437.5,
+          "elapsed_ms": 990.3412000000001
+        },
+        {
+          "working_set_bytes": 159805440,
+          "cpu_ms": 437.5,
+          "elapsed_ms": 1097.6638
+        },
+        {
+          "working_set_bytes": 159817728,
+          "cpu_ms": 453.125,
+          "elapsed_ms": 1207.3228000000001
+        },
+        {
+          "working_set_bytes": 159821824,
+          "cpu_ms": 468.75,
+          "elapsed_ms": 1317.0923
+        },
+        {
+          "working_set_bytes": 227008512,
+          "cpu_ms": 468.75,
+          "elapsed_ms": 1427.0917000000002
+        },
+        {
+          "working_set_bytes": 232960000,
+          "cpu_ms": 484.375,
+          "elapsed_ms": 1538.3687
+        }
+      ],
+      "duration_ms": 1645.7785000000001,
+      "peak_working_set_bytes": 232960000,
+      "last_sample_cpu_ms": 484.375,
+      "warmup": false,
+      "framebuffer_saved": true,
+      "completion_verified": true,
+      "framebuffer_dimensions": [
+        1400,
+        950
+      ]
+    },
+    {
+      "iteration": 2,
+      "variant": "after",
+      "samples": [
+        {
+          "working_set_bytes": 2662400,
+          "cpu_ms": 15.625,
+          "elapsed_ms": 4.0658
+        },
+        {
+          "working_set_bytes": 35717120,
+          "cpu_ms": 109.375,
+          "elapsed_ms": 113.4016
+        },
+        {
+          "working_set_bytes": 61579264,
+          "cpu_ms": 187.5,
+          "elapsed_ms": 220.90900000000002
+        },
+        {
+          "working_set_bytes": 114229248,
+          "cpu_ms": 250,
+          "elapsed_ms": 331.9513
+        },
+        {
+          "working_set_bytes": 158441472,
+          "cpu_ms": 296.875,
+          "elapsed_ms": 442.7454
+        },
+        {
+          "working_set_bytes": 158748672,
+          "cpu_ms": 312.5,
+          "elapsed_ms": 553.4382
+        },
+        {
+          "working_set_bytes": 158785536,
+          "cpu_ms": 312.5,
+          "elapsed_ms": 676.693
+        },
+        {
+          "working_set_bytes": 158793728,
+          "cpu_ms": 312.5,
+          "elapsed_ms": 786.2984
+        },
+        {
+          "working_set_bytes": 158797824,
+          "cpu_ms": 312.5,
+          "elapsed_ms": 895.7688
+        },
+        {
+          "working_set_bytes": 158797824,
+          "cpu_ms": 312.5,
+          "elapsed_ms": 1005.0545000000001
+        },
+        {
+          "working_set_bytes": 158797824,
+          "cpu_ms": 328.125,
+          "elapsed_ms": 1114.5039000000002
+        },
+        {
+          "working_set_bytes": 158806016,
+          "cpu_ms": 328.125,
+          "elapsed_ms": 1224.0024
+        },
+        {
+          "working_set_bytes": 158806016,
+          "cpu_ms": 328.125,
+          "elapsed_ms": 1332.5796
+        },
+        {
+          "working_set_bytes": 226025472,
+          "cpu_ms": 328.125,
+          "elapsed_ms": 1444.3886
+        },
+        {
+          "working_set_bytes": 234192896,
+          "cpu_ms": 328.125,
+          "elapsed_ms": 1556.7624
+        }
+      ],
+      "duration_ms": 1679.3887,
+      "peak_working_set_bytes": 234192896,
+      "last_sample_cpu_ms": 328.125,
+      "warmup": false,
+      "framebuffer_saved": true,
+      "completion_verified": true,
+      "framebuffer_dimensions": [
+        1400,
+        950
+      ]
+    },
+    {
+      "iteration": 3,
+      "variant": "before",
+      "samples": [
+        {
+          "working_set_bytes": 2666496,
+          "cpu_ms": 0,
+          "elapsed_ms": 4.1647
+        },
+        {
+          "working_set_bytes": 36679680,
+          "cpu_ms": 109.375,
+          "elapsed_ms": 112.4758
+        },
+        {
+          "working_set_bytes": 67452928,
+          "cpu_ms": 234.375,
+          "elapsed_ms": 224.41750000000002
+        },
+        {
+          "working_set_bytes": 145219584,
+          "cpu_ms": 328.125,
+          "elapsed_ms": 341.5862
+        },
+        {
+          "working_set_bytes": 157294592,
+          "cpu_ms": 359.375,
+          "elapsed_ms": 450.5108
+        },
+        {
+          "working_set_bytes": 157450240,
+          "cpu_ms": 375,
+          "elapsed_ms": 558.8742
+        },
+        {
+          "working_set_bytes": 157450240,
+          "cpu_ms": 375,
+          "elapsed_ms": 666.7411000000001
+        },
+        {
+          "working_set_bytes": 157450240,
+          "cpu_ms": 375,
+          "elapsed_ms": 776.6875
+        },
+        {
+          "working_set_bytes": 157462528,
+          "cpu_ms": 375,
+          "elapsed_ms": 885.6261000000001
+        },
+        {
+          "working_set_bytes": 157462528,
+          "cpu_ms": 375,
+          "elapsed_ms": 994.5377000000001
+        },
+        {
+          "working_set_bytes": 157466624,
+          "cpu_ms": 375,
+          "elapsed_ms": 1103.6934
+        },
+        {
+          "working_set_bytes": 157466624,
+          "cpu_ms": 375,
+          "elapsed_ms": 1215.8481000000002
+        },
+        {
+          "working_set_bytes": 157470720,
+          "cpu_ms": 375,
+          "elapsed_ms": 1325.4944
+        },
+        {
+          "working_set_bytes": 224657408,
+          "cpu_ms": 375,
+          "elapsed_ms": 1432.6008000000002
+        },
+        {
+          "working_set_bytes": 232566784,
+          "cpu_ms": 375,
+          "elapsed_ms": 1540.7579
+        }
+      ],
+      "duration_ms": 1658.7749000000001,
+      "peak_working_set_bytes": 232566784,
+      "last_sample_cpu_ms": 375,
+      "warmup": false,
+      "framebuffer_saved": true,
+      "completion_verified": true,
+      "framebuffer_dimensions": [
+        1400,
+        950
+      ]
+    },
+    {
+      "iteration": 3,
+      "variant": "after",
+      "samples": [
+        {
+          "working_set_bytes": 2662400,
+          "cpu_ms": 0,
+          "elapsed_ms": 3.2669
+        },
+        {
+          "working_set_bytes": 46436352,
+          "cpu_ms": 125,
+          "elapsed_ms": 115.6824
+        },
+        {
+          "working_set_bytes": 67096576,
+          "cpu_ms": 234.375,
+          "elapsed_ms": 219.4909
+        },
+        {
+          "working_set_bytes": 148000768,
+          "cpu_ms": 296.875,
+          "elapsed_ms": 340.32120000000003
+        },
+        {
+          "working_set_bytes": 158539776,
+          "cpu_ms": 359.375,
+          "elapsed_ms": 465.25870000000003
+        },
+        {
+          "working_set_bytes": 158744576,
+          "cpu_ms": 375,
+          "elapsed_ms": 576.8592
+        },
+        {
+          "working_set_bytes": 158748672,
+          "cpu_ms": 375,
+          "elapsed_ms": 685.8089
+        },
+        {
+          "working_set_bytes": 158756864,
+          "cpu_ms": 406.25,
+          "elapsed_ms": 796.2604
+        },
+        {
+          "working_set_bytes": 158756864,
+          "cpu_ms": 406.25,
+          "elapsed_ms": 907.1092
+        },
+        {
+          "working_set_bytes": 158756864,
+          "cpu_ms": 406.25,
+          "elapsed_ms": 1016.0685000000001
+        },
+        {
+          "working_set_bytes": 158760960,
+          "cpu_ms": 406.25,
+          "elapsed_ms": 1125.8989000000001
+        },
+        {
+          "working_set_bytes": 158760960,
+          "cpu_ms": 406.25,
+          "elapsed_ms": 1234.3069
+        },
+        {
+          "working_set_bytes": 158760960,
+          "cpu_ms": 406.25,
+          "elapsed_ms": 1344.1537
+        },
+        {
+          "working_set_bytes": 225939456,
+          "cpu_ms": 421.875,
+          "elapsed_ms": 1451.8639
+        },
+        {
+          "working_set_bytes": 222928896,
+          "cpu_ms": 437.5,
+          "elapsed_ms": 1574.1656
+        }
+      ],
+      "duration_ms": 1695.1254000000001,
+      "peak_working_set_bytes": 225939456,
+      "last_sample_cpu_ms": 437.5,
+      "warmup": false,
+      "framebuffer_saved": true,
+      "completion_verified": true,
+      "framebuffer_dimensions": [
+        1400,
+        950
+      ]
+    },
+    {
+      "iteration": 4,
+      "variant": "before",
+      "samples": [
+        {
+          "working_set_bytes": 2666496,
+          "cpu_ms": 0,
+          "elapsed_ms": 2.9979
+        },
+        {
+          "working_set_bytes": 50122752,
+          "cpu_ms": 93.75,
+          "elapsed_ms": 117.98910000000001
+        },
+        {
+          "working_set_bytes": 77627392,
+          "cpu_ms": 171.875,
+          "elapsed_ms": 234.6166
+        },
+        {
+          "working_set_bytes": 152510464,
+          "cpu_ms": 250,
+          "elapsed_ms": 351.5598
+        },
+        {
+          "working_set_bytes": 157384704,
+          "cpu_ms": 296.875,
+          "elapsed_ms": 461.4345
+        },
+        {
+          "working_set_bytes": 157614080,
+          "cpu_ms": 312.5,
+          "elapsed_ms": 568.7147
+        },
+        {
+          "working_set_bytes": 157614080,
+          "cpu_ms": 312.5,
+          "elapsed_ms": 678.3815000000001
+        },
+        {
+          "working_set_bytes": 157614080,
+          "cpu_ms": 312.5,
+          "elapsed_ms": 787.7900000000001
+        },
+        {
+          "working_set_bytes": 157614080,
+          "cpu_ms": 312.5,
+          "elapsed_ms": 896.8845
+        },
+        {
+          "working_set_bytes": 157614080,
+          "cpu_ms": 312.5,
+          "elapsed_ms": 1005.9829000000001
+        },
+        {
+          "working_set_bytes": 157614080,
+          "cpu_ms": 312.5,
+          "elapsed_ms": 1114.7322000000001
+        },
+        {
+          "working_set_bytes": 157618176,
+          "cpu_ms": 312.5,
+          "elapsed_ms": 1237.4007000000001
+        },
+        {
+          "working_set_bytes": 157618176,
+          "cpu_ms": 328.125,
+          "elapsed_ms": 1362.6497000000002
+        },
+        {
+          "working_set_bytes": 232865792,
+          "cpu_ms": 343.75,
+          "elapsed_ms": 1487.8133
+        }
+      ],
+      "duration_ms": 1613.0227,
+      "peak_working_set_bytes": 232865792,
+      "last_sample_cpu_ms": 343.75,
+      "warmup": false,
+      "framebuffer_saved": true,
+      "completion_verified": true,
+      "framebuffer_dimensions": [
+        1400,
+        950
+      ]
+    },
+    {
+      "iteration": 4,
+      "variant": "after",
+      "samples": [
+        {
+          "working_set_bytes": 2662400,
+          "cpu_ms": 0,
+          "elapsed_ms": 3.2166
+        },
+        {
+          "working_set_bytes": 36716544,
+          "cpu_ms": 109.375,
+          "elapsed_ms": 123.04140000000001
+        },
+        {
+          "working_set_bytes": 67256320,
+          "cpu_ms": 218.75,
+          "elapsed_ms": 236.18720000000002
+        },
+        {
+          "working_set_bytes": 148844544,
+          "cpu_ms": 328.125,
+          "elapsed_ms": 358.3691
+        },
+        {
+          "working_set_bytes": 158728192,
+          "cpu_ms": 390.625,
+          "elapsed_ms": 468.3484
+        },
+        {
+          "working_set_bytes": 158801920,
+          "cpu_ms": 406.25,
+          "elapsed_ms": 577.888
+        },
+        {
+          "working_set_bytes": 158801920,
+          "cpu_ms": 406.25,
+          "elapsed_ms": 687.1323
+        },
+        {
+          "working_set_bytes": 158801920,
+          "cpu_ms": 406.25,
+          "elapsed_ms": 811.5422000000001
+        },
+        {
+          "working_set_bytes": 158806016,
+          "cpu_ms": 406.25,
+          "elapsed_ms": 935.5102
+        },
+        {
+          "working_set_bytes": 158806016,
+          "cpu_ms": 406.25,
+          "elapsed_ms": 1059.7514
+        },
+        {
+          "working_set_bytes": 158810112,
+          "cpu_ms": 406.25,
+          "elapsed_ms": 1183.7872
+        },
+        {
+          "working_set_bytes": 158810112,
+          "cpu_ms": 406.25,
+          "elapsed_ms": 1292.8898000000002
+        },
+        {
+          "working_set_bytes": 226095104,
+          "cpu_ms": 437.5,
+          "elapsed_ms": 1401.1125
+        },
+        {
+          "working_set_bytes": 234344448,
+          "cpu_ms": 453.125,
+          "elapsed_ms": 1511.2916
+        }
+      ],
+      "duration_ms": 1621.7984000000001,
+      "peak_working_set_bytes": 234344448,
+      "last_sample_cpu_ms": 453.125,
+      "warmup": false,
+      "framebuffer_saved": true,
+      "completion_verified": true,
+      "framebuffer_dimensions": [
+        1400,
+        950
+      ]
+    },
+    {
+      "iteration": 5,
+      "variant": "before",
+      "samples": [
+        {
+          "working_set_bytes": 2666496,
+          "cpu_ms": 0,
+          "elapsed_ms": 2.8558000000000003
+        },
+        {
+          "working_set_bytes": 35831808,
+          "cpu_ms": 93.75,
+          "elapsed_ms": 112.4581
+        },
+        {
+          "working_set_bytes": 70053888,
+          "cpu_ms": 203.125,
+          "elapsed_ms": 234.2665
+        },
+        {
+          "working_set_bytes": 145965056,
+          "cpu_ms": 296.875,
+          "elapsed_ms": 346.0894
+        },
+        {
+          "working_set_bytes": 157683712,
+          "cpu_ms": 375,
+          "elapsed_ms": 456.7509
+        },
+        {
+          "working_set_bytes": 157810688,
+          "cpu_ms": 390.625,
+          "elapsed_ms": 566.0035
+        },
+        {
+          "working_set_bytes": 157818880,
+          "cpu_ms": 390.625,
+          "elapsed_ms": 674.7575
+        },
+        {
+          "working_set_bytes": 157822976,
+          "cpu_ms": 390.625,
+          "elapsed_ms": 783.7014
+        },
+        {
+          "working_set_bytes": 157831168,
+          "cpu_ms": 390.625,
+          "elapsed_ms": 908.1852
+        },
+        {
+          "working_set_bytes": 157831168,
+          "cpu_ms": 390.625,
+          "elapsed_ms": 1032.8996
+        },
+        {
+          "working_set_bytes": 157835264,
+          "cpu_ms": 390.625,
+          "elapsed_ms": 1158.3256000000001
+        },
+        {
+          "working_set_bytes": 157835264,
+          "cpu_ms": 406.25,
+          "elapsed_ms": 1268.4765
+        },
+        {
+          "working_set_bytes": 225017856,
+          "cpu_ms": 406.25,
+          "elapsed_ms": 1392.0138000000002
+        },
+        {
+          "working_set_bytes": 233152512,
+          "cpu_ms": 406.25,
+          "elapsed_ms": 1517.2142000000001
+        }
+      ],
+      "duration_ms": 1629.6599,
+      "peak_working_set_bytes": 233152512,
+      "last_sample_cpu_ms": 406.25,
+      "warmup": false,
+      "framebuffer_saved": true,
+      "completion_verified": true,
+      "framebuffer_dimensions": [
+        1400,
+        950
+      ]
+    },
+    {
+      "iteration": 5,
+      "variant": "after",
+      "samples": [
+        {
+          "working_set_bytes": 2662400,
+          "cpu_ms": 0,
+          "elapsed_ms": 3.9922
+        },
+        {
+          "working_set_bytes": 35688448,
+          "cpu_ms": 93.75,
+          "elapsed_ms": 109.0759
+        },
+        {
+          "working_set_bytes": 66056192,
+          "cpu_ms": 187.5,
+          "elapsed_ms": 217.48600000000002
+        },
+        {
+          "working_set_bytes": 130043904,
+          "cpu_ms": 281.25,
+          "elapsed_ms": 326.5296
+        },
+        {
+          "working_set_bytes": 158908416,
+          "cpu_ms": 328.125,
+          "elapsed_ms": 436.30490000000003
+        },
+        {
+          "working_set_bytes": 159064064,
+          "cpu_ms": 343.75,
+          "elapsed_ms": 544.4823
+        },
+        {
+          "working_set_bytes": 159088640,
+          "cpu_ms": 343.75,
+          "elapsed_ms": 653.6120000000001
+        },
+        {
+          "working_set_bytes": 159088640,
+          "cpu_ms": 343.75,
+          "elapsed_ms": 763.0272
+        },
+        {
+          "working_set_bytes": 159088640,
+          "cpu_ms": 343.75,
+          "elapsed_ms": 871.3864000000001
+        },
+        {
+          "working_set_bytes": 159113216,
+          "cpu_ms": 359.375,
+          "elapsed_ms": 980.7586
+        },
+        {
+          "working_set_bytes": 159121408,
+          "cpu_ms": 359.375,
+          "elapsed_ms": 1090.3319000000001
+        },
+        {
+          "working_set_bytes": 159121408,
+          "cpu_ms": 359.375,
+          "elapsed_ms": 1200.5568
+        },
+        {
+          "working_set_bytes": 159129600,
+          "cpu_ms": 359.375,
+          "elapsed_ms": 1309.6829
+        },
+        {
+          "working_set_bytes": 226328576,
+          "cpu_ms": 359.375,
+          "elapsed_ms": 1419.597
+        },
+        {
+          "working_set_bytes": 234496000,
+          "cpu_ms": 375,
+          "elapsed_ms": 1528.4383
+        }
+      ],
+      "duration_ms": 1637.1251,
+      "peak_working_set_bytes": 234496000,
+      "last_sample_cpu_ms": 375,
+      "warmup": false,
+      "framebuffer_saved": true,
+      "completion_verified": true,
+      "framebuffer_dimensions": [
+        1400,
+        950
+      ]
+    }
+  ],
+  "sampling_interval_ms": 100,
+  "executables_volume": "C:",
+  "features": [
+    "demo"
+  ],
+  "scenario": "Offline native Extensions shop startup, frame rendering, framebuffer capture and PNG write; not idle CPU or p95 frame latency",
+  "display_scale": 1.25,
+  "warmup_runs_per_variant": 1,
+  "profile": "release",
+  "logical_viewport": [
+    1120,
+    760
+  ],
+  "cpu_metric": "Maximum sampled process TotalProcessorTime before exit; may omit final <100ms",
+  "after_revision": "ae697f4ca62b891877c5f6a39ad6c193a0f2a798",
+  "framebuffer": [
+    1400,
+    950
+  ],
+  "renderer": "wgpu",
+  "memory_metric": "Peak sampled process WorkingSet64; GPU and child processes not included",
+  "measured_runs_per_variant": 5,
+  "os": {
+    "Caption": "Microsoft Windows 11 Home",
+    "Version": "10.0.26200",
+    "BuildNumber": "26200"
+  },
+  "cpu": "AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD",
+  "baseline_fixture_note": "d00bd04 runtime UI; only existing native profile_preview example harness extended to seed the committed catalog and select Extensions. No baseline runtime UI source changes.",
+  "command": "profile_preview --demo --page=extensions --width=1120 --height=760 --output=OUTPUT.png",
+  "before_executable_sha256": "e56a4865541c02ae475446d29cfebf340068915201708d4f31f2e8dc059fdf06",
+  "after_executable_sha256": "b921cd0066dfa745d6a9581b710fec6926256d6b82b475bddca3914c32dad944",
+  "completion_verification": "PowerShell Start-Process did not expose ExitCode after polling. Every run instead verifies its saved-framebuffer stdout marker, expected 1400x950 PNG dimensions and empty stderr; no exit code is inferred.",
+  "packages": {
+    "baseline": {
+      "revision": "d00bd04",
+      "executable_bytes": 65071104,
+      "installed_bytes": 71389398,
+      "zip_bytes": 42431635
+    },
+    "after": {
+      "revision": "ae697f4ca62b891877c5f6a39ad6c193a0f2a798",
+      "executable_bytes": 65398272,
+      "installed_bytes": 71719314,
+      "zip_bytes": 42538459
+    }
+  },
+  "notes": [
+    "After includes main through 65c5f4b, including egui revision 441971, in addition to the shop change.",
+    "The native fixture preloads all three local starter thumbnails; the production host loads only visible cards.",
+    "Baseline example-only harness changes seed the same starter entries and support extension-specific screenshots; baseline application UI is unchanged."
+  ]
+}

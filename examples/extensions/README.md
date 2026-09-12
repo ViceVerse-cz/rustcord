@@ -1,6 +1,6 @@
 # Making a Serein extension
 
-These are complete offline examples and a small Rust SDK. Copy a plugin directory and the
+This is a complete offline example and a small Rust SDK. Copy a plugin directory and the
 SDK into your own repository, edit its manifest and action, and publish the resulting
 `.serein-extension` file. Any language producing compatible WebAssembly can use this ABI;
 Rust authors can call `serein_extension_sdk::export!(handler)`.
@@ -10,13 +10,17 @@ Build and package from this directory (Python 3 is used only by the author):
 ```powershell
 rustup target add wasm32-unknown-unknown
 cargo build --locked --release --target wasm32-unknown-unknown
-python pack.py composer-uppercase/manifest.json target/wasm32-unknown-unknown/release/composer_uppercase.wasm packages/composer-uppercase.serein-extension
-python pack.py message-word-count/manifest.json target/wasm32-unknown-unknown/release/message_word_count.wasm packages/message-word-count.serein-extension
+python pack.py message-delete-protector/manifest.json target/wasm32-unknown-unknown/release/message_delete_protector.wasm packages/message-delete-protector.serein-extension
 ```
 
 Import the package in Settings > Extensions, review the capabilities, and enable it.
-Uppercase composer proposes a replacement that the user must Apply; word count appears in
-the selected message's extension menu and returns a native panel. Neither can send messages.
+Message delete protector is the sole example plugin. Its `activation` action returns
+`preserve_deleted_messages: true` after the user grants `deleted_messages`. The host
+keeps already-loaded messages in bounded session memory and displays deleted text in red.
+It never sends message bodies to the plugin, saves deleted bodies to disk, restores
+messages deleted before loading, or gives deleted messages live service actions.
+Disabling, logout, permission revocation and timeline eviction release retained content.
+Ocean, Midnight, Rose, Forest and Latte are declarative themes under `extensions/`.
 The author packages compiled bytes; Serein never runs a repository's build scripts.
 
 ## ABI version 1
@@ -30,7 +34,11 @@ memory and leaked ABI buffers are destroyed afterward. Do not import WASI or any
 Input fields are `action`, optional `selected_message`, optional `composer`, optional
 `storage`, and `values` (input IDs mapped to strings; checkbox values are `true`/`false`).
 Only the explicitly selected action's context is included and only after capability consent.
-Output fields are optional `replacement`, optional `storage`, and `panel` (array).
+Output fields are optional `replacement`, optional `storage`, `panel` (array), and
+`preserve_deleted_messages` (boolean, defaults false). Only an `activation` action
+with the `deleted_messages` capability may request preservation. There is at most
+one activation action per plugin, invoked by the worker on enable/account load.
+This added capability requires a host version that supports it.
 Storage is one opaque UTF-8 value, replacing the previous value when present.
 
 Panel elements use the `type` tag: `text` (`text`), `row` (`children`), `button` (`id`, `label`),

@@ -9,7 +9,7 @@ pub const MAX_MUTATIONS: usize = 1024;
 pub struct Timeline {
 	// None preserves only the position of a message deleted while it was loaded.
 	messages: BTreeMap<Id, Option<Message>>,
-	live_count: usize,
+	payload_count: usize,
 	bytes: usize,
 	changed: BTreeSet<Id>,
 	patches: BTreeMap<Id, MessagePatch>,
@@ -17,22 +17,47 @@ pub struct Timeline {
 	deleted: BTreeSet<Id>,
 	loading: bool,
 	retain_older: bool,
+	preserve_deleted_messages: bool,
 }
 impl Timeline {
 	pub fn iter(&self) -> impl DoubleEndedIterator<Item = &Message> {
-		self.messages.values().filter_map(Option::as_ref)
+		self.messages
+			.iter()
+			.filter(|(id, _)| !self.deleted.contains(id))
+			.filter_map(|(_, message)| message.as_ref())
 	}
 	pub fn get(&self, id: Id) -> Option<&Message> {
+		self.get_display(id).filter(|_| !self.is_deleted(id))
+	}
+	/// Includes opt-in retained rows for display only; never service actions or persistence.
+	pub fn display_iter(&self) -> impl DoubleEndedIterator<Item = &Message> {
+		self.messages.values().filter_map(Option::as_ref)
+	}
+	pub fn get_display(&self, id: Id) -> Option<&Message> {
 		self.messages.get(&id).and_then(Option::as_ref)
+	}
+	pub fn set_preserve_deleted_messages(&mut self, enabled: bool) {
+		if self.preserve_deleted_messages == enabled {
+			return;
+		}
+		self.preserve_deleted_messages = enabled;
+		if !enabled {
+			for id in &self.deleted {
+				if let Some(old) = self.messages.get_mut(id).and_then(Option::take) {
+					self.bytes -= old.bytes();
+					self.payload_count -= 1;
+				}
+			}
+		}
 	}
 	pub fn is_deleted(&self, id: Id) -> bool {
 		self.deleted.contains(&id)
 	}
 	pub fn len(&self) -> usize {
-		self.live_count
+		self.iter().count()
 	}
 	pub fn is_empty(&self) -> bool {
-		self.live_count == 0
+		self.iter().next().is_none()
 	}
 	/// Reading positions, including ID-only placeholders for previously loaded messages.
 	pub fn row_ids(&self) -> impl DoubleEndedIterator<Item = Id> {
@@ -41,18 +66,18 @@ impl Timeline {
 	pub fn row_count(&self) -> usize {
 		self.messages.len()
 	}
-	/// Live message payloads; empty row storage is also charged during eviction.
+	/// Live and opt-in deleted payloads; empty row storage is also charged during eviction.
 	pub fn bytes(&self) -> usize {
 		self.bytes
 	}
 	fn row_bytes(&self) -> usize {
-		self.bytes - self.live_count * size_of::<Message>()
+		self.bytes - self.payload_count * size_of::<Message>()
 			+ self.row_count() * size_of::<Option<Message>>()
 	}
 	/// Conservative retained allocation estimate, including reconciliation state and
 	/// B-tree node slack. This is a budget charge, not an allocator/RSS measurement.
 	pub fn retained_bytes(&self) -> usize {
-		size_of::<Self>() + self.bytes - self.live_count * size_of::<Message>()
+		size_of::<Self>() + self.bytes - self.payload_count * size_of::<Message>()
 			+ tree_bytes::<(Id, Option<Message>)>(self.messages.len())
 			+ tree_bytes::<Id>(self.changed.len())
 			+ tree_bytes::<Id>(self.deleted.len())
@@ -133,7 +158,7 @@ impl Timeline {
 		self.bytes += message.bytes();
 		match self.messages.insert(message.id, Some(message)) {
 			Some(Some(old)) => self.bytes -= old.bytes(),
-			_ => self.live_count += 1,
+			_ => self.payload_count += 1,
 		}
 		while self.row_count() > MAX_MESSAGES || self.row_bytes() > MAX_BYTES {
 			let item = if older || self.retain_older {
@@ -143,7 +168,7 @@ impl Timeline {
 			};
 			if let Some((_, Some(old))) = item {
 				self.bytes -= old.bytes();
-				self.live_count -= 1;
+				self.payload_count -= 1;
 			}
 		}
 		Ok(())
@@ -200,10 +225,11 @@ impl Timeline {
 		self.retain_older = older;
 		if !older {
 			self.messages.retain(|id, message| {
-				let keep = self.changed.contains(id);
+				let keep = self.changed.contains(id)
+					|| (self.preserve_deleted_messages && self.deleted.contains(id));
 				if !keep && let Some(message) = message {
 					self.bytes -= message.bytes();
-					self.live_count -= 1;
+					self.payload_count -= 1;
 				}
 				keep
 			});
@@ -232,7 +258,7 @@ impl Timeline {
 		self.remember(patch.id)?;
 		if let Some(Some(mut message)) = self.messages.remove(&patch.id) {
 			self.bytes -= message.bytes();
-			self.live_count -= 1;
+			self.payload_count -= 1;
 			// Once hydrated, changed protects this record from the in-flight history page.
 			if let Some(old) = self.patches.remove(&patch.id) {
 				self.patch_bytes -= patch_bytes(&old);
@@ -291,9 +317,11 @@ impl Timeline {
 		if let Some(old) = self.patches.remove(&id) {
 			self.patch_bytes -= patch_bytes(&old);
 		}
-		if let Some(old) = self.messages.get_mut(&id).and_then(Option::take) {
+		if !self.preserve_deleted_messages
+			&& let Some(old) = self.messages.get_mut(&id).and_then(Option::take)
+		{
 			self.bytes -= old.bytes();
-			self.live_count -= 1;
+			self.payload_count -= 1;
 		}
 		Ok(())
 	}
@@ -306,6 +334,7 @@ impl Timeline {
 		let deleted = std::mem::take(&mut self.deleted);
 		*self = Self {
 			deleted,
+			preserve_deleted_messages: self.preserve_deleted_messages,
 			..Self::default()
 		};
 	}
@@ -319,6 +348,9 @@ impl Timeline {
 			.is_some_and(|r| !model::valid_reactions(r))
 		{
 			return Err("Reaction data exceeds safe capacity");
+		}
+		if self.is_deleted(id) {
+			return Ok(());
 		}
 		// Take the footprint before borrowing a live row mutably.
 		let retained = self.row_bytes();

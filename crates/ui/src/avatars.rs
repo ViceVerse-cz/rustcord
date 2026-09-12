@@ -434,6 +434,33 @@ impl Avatars {
 	fn paint(&mut self, ui: &mut egui::Ui, key: &str, rect: egui::Rect, radius: u8) -> bool {
 		self.paint_fitted(ui, key, rect, radius, false)
 	}
+	/// Paints a decoded ThumbHash placeholder into `rect`; decoding happens once per hash.
+	fn paint_placeholder(
+		&mut self,
+		ui: &mut egui::Ui,
+		hash: &[u8],
+		rect: egui::Rect,
+		radius: u8,
+		cover: bool,
+	) -> bool {
+		if hash.is_empty() || hash.len() > model::MAX_PLACEHOLDER_BYTES {
+			return false;
+		}
+		let mut key = String::with_capacity(6 + hash.len() * 2);
+		key.push_str("thumb:");
+		for byte in hash {
+			use std::fmt::Write;
+			let _ = write!(key, "{byte:02x}");
+		}
+		if !self.textures.contains_key(&key) {
+			if self.attempts.get(&key).is_some_and(|(_, failed)| *failed) {
+				return false;
+			}
+			self.attempts.insert(key.clone(), (Instant::now(), false));
+			self.accept(ui.ctx(), key.clone(), crate::thumbhash::decode(hash));
+		}
+		self.paint_fitted(ui, &key, rect, radius, cover)
+	}
 	fn paint_fitted(
 		&mut self,
 		ui: &mut egui::Ui,
@@ -631,6 +658,7 @@ impl Avatars {
 				proxy_url: None,
 				width: gif.width,
 				height: gif.height,
+				..Default::default()
 			});
 		let media = original
 			.as_ref()
@@ -789,9 +817,14 @@ impl Avatars {
 					.is_some_and(|key| self.paint_fitted(ui, key, rect, radius, cover));
 			if !painted {
 				let colors = crate::design::palette(ui);
-				ui.painter().rect_filled(rect, 5, colors.canvas);
+				// Discord's ThumbHash stands in for the pixels until the real rendition lands.
+				let placeholder =
+					self.paint_placeholder(ui, &media.placeholder, rect, radius, cover);
+				if !placeholder {
+					ui.painter().rect_filled(rect, 5, colors.canvas);
+				}
 				#[cfg(any(test, feature = "demo"))]
-				if demo {
+				if demo && !placeholder {
 					// Original native landscape, never a service request or bundled third-party image.
 					let ridge = vec![
 						rect.left_bottom(),
@@ -813,7 +846,7 @@ impl Avatars {
 				if !demo && let Some(key) = key.as_ref() {
 					self.request(key.clone());
 				}
-				if size.x >= 100.0 && size.y >= 32.0 {
+				if !placeholder && size.x >= 100.0 && size.y >= 32.0 {
 					ui.painter().text(
 						rect.center(),
 						egui::Align2::CENTER_CENTER,
@@ -989,6 +1022,45 @@ fn synthetic_gif(gif: &model::Gif) -> ColorImage {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[test]
+	fn placeholder_paints_decoded_thumbhash_while_the_image_is_requested() {
+		let ctx = egui::Context::default();
+		let mut images = Avatars::default();
+		let media = model::EmbedMedia {
+			url: Some("https://cdn.discordapp.com/attachments/1/2/a.png".into()),
+			width: 230,
+			height: 320,
+			placeholder: vec![
+				0xd5, 0x07, 0x12, 0x1d, 0x04, 0x67, 0x87, 0x8f, 0x77, 0x57, 0x87, 0x48, 0x87, 0x87,
+				0x97, 0x87, 0x58, 0x78, 0x90, 0x95, 0x08,
+			],
+			..Default::default()
+		};
+		let mut output = ctx.run_ui(Default::default(), |ui| {
+			images.show_embed(ui, &media, egui::vec2(320.0, 320.0), false);
+		});
+		output.textures_delta.clear();
+		let key = "thumb:d507121d0467878f77578748878797875878909508";
+		assert!(images.texture_id(key).is_some());
+		assert_eq!(images.textures[key].1.size(), [23, 32]);
+		// The real rendition is still requested; the placeholder only fills the wait.
+		let requests = images.take_requests();
+		assert!(requests.iter().any(|request| request.starts_with("embed:")));
+		assert!(!requests.iter().any(|request| request.starts_with("thumb:")));
+		// Garbage never becomes a texture and is not retried every frame.
+		let broken = model::EmbedMedia {
+			placeholder: vec![0xff; 6],
+			..media.clone()
+		};
+		for _ in 0..2 {
+			let mut output = ctx.run_ui(Default::default(), |ui| {
+				images.show_embed(ui, &broken, egui::vec2(320.0, 320.0), false);
+			});
+			output.textures_delta.clear();
+		}
+		assert_eq!(images.textures.len(), 1);
+		assert!(images.attempts["thumb:ffffffffffff"].1);
+	}
 	#[test]
 	fn gif_picker_requests_animation_advances_frames_and_respects_setting() {
 		let ctx = egui::Context::default();

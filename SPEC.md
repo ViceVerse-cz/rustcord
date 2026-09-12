@@ -38,6 +38,12 @@ Store local data in the OS-standard application-data directory. Keep accounts is
 
 Treat cached history as potentially stale until Discord revalidates it. Reconcile edits, deletions, permission changes, and missing events without resurrecting removed content from disk. A cache hit never grants authorization. Stop showing inaccessible channel content after revocation. Cache only content needed for normal user-driven navigation, not bulk account exports or member scraping.
 
+**Owner revision (September 12, 2026):** an explicitly enabled message delete protector
+extension may retain already-loaded deleted messages in bounded session RAM and show
+their text in red. These remain authoritative deletions: no service actions, disk
+persistence or resurrection from late history. Disabling, logout, permission loss and
+normal cache eviction release retained payloads. The ordinary deletion path is unchanged.
+
 ### 2.2 Drafts, settings, logout, and explicit files
 
 Save drafts and useful session preferences locally. Make save failures and unsaved/pending operations visible. Use transactional database writes or atomic file replacement for data that must survive ordinary restarts; do not claim recovery from every crash. Do not automatically resend uncertain message writes merely because their drafts or pending state survived.

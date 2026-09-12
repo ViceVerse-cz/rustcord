@@ -1,3 +1,4 @@
+use crate::design::LazyHover;
 use crate::{MessagingUi, design};
 use client_core::State;
 use egui::RichText;
@@ -293,12 +294,14 @@ impl MessagingUi {
 								label,
 								color,
 							);
-							let response = response.on_hover_text(format!(
-								"{} category · {} channels · {}",
-								category.name,
-								count,
-								if collapsed { "Expand" } else { "Collapse" }
-							));
+							let response = response.on_hover_text_with(|| {
+								format!(
+									"{} category · {} channels · {}",
+									category.name,
+									count,
+									if collapsed { "Expand" } else { "Collapse" }
+								)
+							});
 							response.widget_info(|| {
 								egui::WidgetInfo::labeled(
 									egui::WidgetType::Button,
@@ -536,20 +539,22 @@ impl MessagingUi {
 									},
 								);
 							}
-							let response = response.on_hover_text(format!(
-								"{} · {}{}",
-								channel.name,
-								kind_label(channel.kind),
-								if unread && state.channel_unread(channel).is_none() {
-									" · Session activity; read sync unavailable"
-								} else if count > 0 {
-									" · Notification count may be a lower bound"
-								} else if !visible {
-									" · Unavailable with current permission information"
-								} else {
-									""
-								}
-							));
+							let response = response.on_hover_text_with(|| {
+								format!(
+									"{} · {}{}",
+									channel.name,
+									kind_label(channel.kind),
+									if unread && state.channel_unread(channel).is_none() {
+										" · Session activity; read sync unavailable"
+									} else if count > 0 {
+										" · Notification count may be a lower bound"
+									} else if !visible {
+										" · Unavailable with current permission information"
+									} else {
+										""
+									}
+								)
+							});
 							response.widget_info(|| {
 								egui::WidgetInfo::labeled(
 									egui::WidgetType::Button,

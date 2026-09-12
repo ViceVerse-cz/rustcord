@@ -36,20 +36,12 @@ fn measure(name: &str, bytes: &[u8], invocation: Invocation) {
 
 fn main() {
 	measure(
-		"composer-uppercase",
-		include_bytes!("../../../examples/extensions/packages/composer-uppercase.serein-extension"),
+		"message-delete-protector",
+		include_bytes!(
+			"../../../examples/extensions/packages/message-delete-protector.serein-extension"
+		),
 		Invocation {
-			action: "uppercase".into(),
-			composer: Some("Hello, čau! Synthetic offline composer text.".into()),
-			..Default::default()
-		},
-	);
-	measure(
-		"message-word-count",
-		include_bytes!("../../../examples/extensions/packages/message-word-count.serein-extension"),
-		Invocation {
-			action: "count".into(),
-			selected_message: Some("Hello, čau! Synthetic offline message text.".into()),
+			action: "activate".into(),
 			..Default::default()
 		},
 	);

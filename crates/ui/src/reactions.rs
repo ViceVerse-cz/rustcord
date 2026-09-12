@@ -1,3 +1,4 @@
+use crate::design::LazyHover;
 use model::{Reaction, ReactionEmoji};
 
 pub fn show(
@@ -81,10 +82,12 @@ pub fn show(
 			} else {
 				"Add your reaction"
 			};
-			let response = response.on_hover_text(format!(
-				"{verb}: {}. Count includes super reactions; only normal reactions can be toggled here.",
-				reaction.emoji.label()
-			));
+			let response = response.on_hover_text_with(|| {
+				format!(
+					"{verb}: {}. Count includes super reactions; only normal reactions can be toggled here.",
+					reaction.emoji.label()
+				)
+			});
 			if response.clicked() {
 				action = Some(Some(reaction.emoji.clone()));
 			}

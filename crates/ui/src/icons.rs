@@ -324,21 +324,22 @@ impl Icon {
 		}
 	}
 	fn cell(self) -> usize {
-		static CELLS: OnceLock<Vec<(&'static str, usize)>> = OnceLock::new();
-		let cells = CELLS.get_or_init(|| {
-			INDEX
-				.lines()
-				.map(|line| {
-					let (name, cell) = line.split_once('\t').expect("bundled icon index");
-					(name, cell.parse().expect("bundled icon cell"))
-				})
-				.collect()
-		});
-		cells
-			.iter()
-			.find(|(name, _)| *name == self.asset())
-			.map(|(_, cell)| *cell)
-			.expect("every icon is in the bundled atlas")
+		// Resolved once from the bundled index, then a plain array lookup per paint.
+		static CELLS: OnceLock<[usize; Icon::ALL.len()]> = OnceLock::new();
+		CELLS.get_or_init(|| {
+			let mut cells = [0; Icon::ALL.len()];
+			for icon in Icon::ALL {
+				let asset = icon.asset();
+				cells[icon as usize] = INDEX
+					.lines()
+					.find_map(|line| {
+						let (name, cell) = line.split_once('\t').expect("bundled icon index");
+						(name == asset).then(|| cell.parse().expect("bundled icon cell"))
+					})
+					.expect("every icon is in the bundled atlas");
+			}
+			cells
+		})[self as usize]
 	}
 }
 

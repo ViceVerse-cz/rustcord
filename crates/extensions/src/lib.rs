@@ -9,6 +9,7 @@ pub use runtime::invoke;
 pub const API_VERSION: u32 = 1;
 pub const MAX_PACKAGE_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_MODULE_BYTES: usize = 4 * 1024 * 1024;
+pub const MAX_PREVIEW_BYTES: usize = 256 * 1024;
 pub const MAX_CATALOG_BYTES: usize = 1024 * 1024;
 pub const MAX_IO_BYTES: usize = 256 * 1024;
 pub const MAX_STORAGE_BYTES: usize = 1024 * 1024;
@@ -46,6 +47,7 @@ pub enum Capability {
 	SelectedMessage,
 	Composer,
 	Storage,
+	DeletedMessages,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,6 +56,7 @@ pub enum Surface {
 	Message,
 	Composer,
 	Panel,
+	Activation,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,11 +122,38 @@ pub struct Catalog {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CatalogEntry {
+	#[serde(default)]
+	pub description: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub preview: Option<Preview>,
 	pub manifest: Manifest,
 	pub release_url: String,
 	pub sha256: String,
 	pub download_bytes: u64,
 	pub source_commit: String,
+}
+
+/// A creator-supplied shop image, pinned independently from executable packages.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Preview {
+	pub url: String,
+	pub sha256: String,
+	pub download_bytes: u64,
+}
+
+impl Preview {
+	pub fn validate(&self) -> Result<(), Error> {
+		if !valid_https_url(&self.url)
+			|| self.sha256.len() != 64
+			|| !self.sha256.bytes().all(|b| b.is_ascii_hexdigit())
+			|| self.download_bytes == 0
+			|| self.download_bytes > MAX_PREVIEW_BYTES as u64
+		{
+			return Err(Error::Invalid);
+		}
+		Ok(())
+	}
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -143,6 +173,8 @@ pub struct Invocation {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Output {
+	#[serde(default)]
+	pub preserve_deleted_messages: bool,
 	#[serde(default)]
 	pub replacement: Option<String>,
 	#[serde(default)]
@@ -224,11 +256,19 @@ impl Manifest {
 				return Err(Error::Invalid);
 			}
 		}
-		if self.capabilities.len() > 3 || self.actions.len() > 16 {
+		if self.capabilities.len() > 4 || self.actions.len() > 16 {
 			return Err(Error::Limit);
 		}
 		let mut capabilities = BTreeSet::new();
 		if self.capabilities.iter().any(|c| !capabilities.insert(*c)) {
+			return Err(Error::Invalid);
+		}
+		if self
+			.actions
+			.iter()
+			.filter(|a| a.surface == Surface::Activation)
+			.count() > 1
+		{
 			return Err(Error::Invalid);
 		}
 		let mut ids = BTreeSet::new();
@@ -245,6 +285,7 @@ impl Manifest {
 				Surface::Message => Some(Capability::SelectedMessage),
 				Surface::Composer => Some(Capability::Composer),
 				Surface::Panel => None,
+				Surface::Activation => Some(Capability::DeletedMessages),
 			};
 			if required.is_some_and(|c| !capabilities.contains(&c)) {
 				return Err(Error::Capability);
@@ -367,6 +408,15 @@ pub fn parse_catalog(bytes: &[u8]) -> Result<Catalog, Error> {
 	let mut ids = BTreeSet::new();
 	for entry in &catalog.entries {
 		entry.manifest.validate()?;
+		if entry.description.len() > 1024
+			|| entry.description.chars().count() > 256
+			|| entry.description.chars().any(char::is_control)
+		{
+			return Err(Error::Invalid);
+		}
+		if let Some(preview) = &entry.preview {
+			preview.validate()?;
+		}
 		if !ids.insert(&entry.manifest.id)
 			|| !valid_https_url(&entry.release_url)
 			|| entry.sha256.len() != 64
@@ -425,6 +475,15 @@ impl Invocation {
 
 impl Output {
 	pub fn validate(&self, manifest: &Manifest, input: &Invocation) -> Result<(), Error> {
+		if self.preserve_deleted_messages
+			&& (!manifest.capabilities.contains(&Capability::DeletedMessages)
+				|| !manifest
+					.actions
+					.iter()
+					.any(|a| a.id == input.action && a.surface == Surface::Activation))
+		{
+			return Err(Error::Capability);
+		}
 		if self.replacement.is_some()
 			&& (input.composer.is_none() || !manifest.capabilities.contains(&Capability::Composer))
 		{

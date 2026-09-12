@@ -28,6 +28,26 @@ struct AttachmentDto {
 	duration_secs: Option<f64>,
 	#[serde(default)]
 	waveform: Option<String>,
+	#[serde(default)]
+	placeholder: Option<String>,
+	#[serde(default)]
+	placeholder_version: Option<u32>,
+}
+/// Decode Discord's base64 ThumbHash placeholder; only version 1 is a known format.
+pub(crate) fn placeholder(value: Option<String>, version: Option<u32>) -> Vec<u8> {
+	if version != Some(1) {
+		return Vec::new();
+	}
+	let mut bytes = [0u8; model::MAX_PLACEHOLDER_BYTES];
+	value
+		.filter(|value| value.len() <= model::MAX_PLACEHOLDER_BYTES / 3 * 4)
+		.and_then(|value| {
+			base64::engine::general_purpose::STANDARD
+				.decode_slice(value.trim_end_matches('='), &mut bytes)
+				.ok()
+		})
+		.filter(|len| *len >= 5)
+		.map_or_else(Vec::new, |len| bytes[..len].to_vec())
 }
 fn url(value: Option<String>) -> Option<String> {
 	value.filter(|value| value.len() <= 2048 && !value.chars().any(char::is_control))
@@ -92,6 +112,7 @@ impl AttachmentDto {
 				proxy_url: url(self.proxy_url),
 				width: self.width.unwrap_or_default(),
 				height: self.height.unwrap_or_default(),
+				placeholder: placeholder(self.placeholder, self.placeholder_version),
 			},
 			spoiler,
 		};
@@ -202,6 +223,37 @@ mod tests {
 		};
 		assert_eq!(attachments[0].filename, "edited.png");
 		assert_eq!(attachments[0].media.height, 16);
+	}
+
+	#[test]
+	fn placeholders_decode_only_known_versions_and_bounded_lengths() {
+		let message = json!({"id":"1","channel_id":"2","author":{"id":"3","username":"Synthetic"},
+            "attachments":[
+                {"id":"4","filename":"a.png","placeholder":"1QcSHQRnh493V4dIh4eXh1h4kJUI","placeholder_version":1},
+                {"id":"5","filename":"b.png","placeholder":"1QcSHQRnh493V4dIh4eXh1h4kJUI","placeholder_version":2},
+                {"id":"6","filename":"c.png","placeholder":"1QcSHQRnh493V4dIh4eXh1h4kJUI"},
+                {"id":"7","filename":"d.png","placeholder":"AAAA","placeholder_version":1},
+                {"id":"8","filename":"e.png","placeholder":"QUFB".repeat(40),"placeholder_version":1},
+                {"id":"9","filename":"f.png","placeholder":"not base64!","placeholder_version":1}],
+            "embeds":[{"type":"image","thumbnail":{"url":"https://example.com/a.png","width":4,"height":2,
+                "placeholder":"1QcSHQRnh493V4dIh4eXh1h4kJUI","placeholder_version":1}}]});
+		let model = crate::decode::<crate::MessageDto>(message.to_string().as_bytes())
+			.unwrap()
+			.into_model();
+		let placeholder = &model.attachments[0].media.placeholder;
+		assert_eq!(placeholder.len(), 21);
+		assert_eq!(placeholder[..3], [0xd5, 0x07, 0x12]);
+		for attachment in &model.attachments[1..] {
+			assert!(
+				attachment.media.placeholder.is_empty(),
+				"{}",
+				attachment.filename
+			);
+		}
+		assert!(model::valid_attachments(&model.attachments));
+		let thumbnail = model.embeds[0].thumbnail.as_ref().unwrap();
+		assert_eq!(&thumbnail.placeholder, placeholder);
+		assert_eq!(thumbnail.width, 4);
 	}
 
 	#[test]

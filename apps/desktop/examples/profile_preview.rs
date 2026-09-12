@@ -14,6 +14,7 @@ struct Preview {
 	messaging: ui::MessagingUi,
 	state: client_core::State,
 	output: PathBuf,
+	thumbnail: bool,
 	frames: u8,
 	requested: bool,
 	screenshot: Option<std::sync::mpsc::Receiver<Arc<egui::ColorImage>>>,
@@ -39,6 +40,7 @@ impl eframe::App for Preview {
 				.and_then(|receiver| receiver.try_recv().ok());
 			if let Some(image) = screenshot {
 				let output = self.output.clone();
+				let thumbnail = self.thumbnail;
 				self.writer = Some(std::thread::spawn(move || {
 					if image.size[0] > 4096 || image.size[1] > 4096 {
 						return Err("Screenshot exceeds the 4096-pixel dimension limit".into());
@@ -48,15 +50,21 @@ impl eframe::App for Preview {
 						.iter()
 						.flat_map(|pixel| pixel.to_srgba_unmultiplied())
 						.collect();
-					image::save_buffer_with_format(
-						&output,
-						&pixels,
+					let image = image::RgbaImage::from_raw(
 						image.size[0] as u32,
 						image.size[1] as u32,
-						image::ColorType::Rgba8,
-						image::ImageFormat::Png,
+						pixels,
 					)
-					.map_err(|error| error.to_string())
+					.ok_or("Invalid screenshot pixel count")?;
+					let image = image::DynamicImage::ImageRgba8(image);
+					let image = if thumbnail {
+						image.thumbnail(640, 360)
+					} else {
+						image
+					};
+					image
+						.save_with_format(&output, image::ImageFormat::Png)
+						.map_err(|error| error.to_string())
 				}));
 			}
 		}
@@ -110,19 +118,117 @@ fn prime_profile(state: &mut client_core::State) {
 	}
 }
 
+fn prime_extension_chat(state: &mut client_core::State) {
+	let channel = state.selected.expect("selected fixture channel");
+	let messages = [
+		"Welcome to our little corner of the internet.",
+		"A place for good conversations and late-night ideas.",
+		"**Game night** starts at 8. Everyone is welcome!",
+		"I'll bring the playlist. Any requests?",
+		"Something with a little more synth, please.",
+		"Hey everyone, ready for game night?",
+	]
+	.into_iter()
+	.enumerate()
+	.map(|(index, content)| {
+		let mut message = test_support::message(600 + index as u64, channel);
+		message.content = content.into();
+		message.attachments.clear();
+		message.embeds.clear();
+		message.reactions = Some(vec![]);
+		message
+	})
+	.collect();
+	state.timeline.clear();
+	state
+		.timeline
+		.seed_cache(messages)
+		.expect("valid synthetic conversation");
+}
+
+// Fixture packages are checked-in inputs; execution never calls desktop adapters.
+fn extension_fixture(
+	id: &str,
+) -> Result<
+	(
+		extensions::Package,
+		extensions::Invocation,
+		Option<extensions::Output>,
+	),
+	Box<dyn std::error::Error>,
+> {
+	let bytes: &[u8] = match id {
+		"serein-ocean" => include_bytes!("../../../extensions/ocean.serein-extension"),
+		"message-delete-protector" => include_bytes!(
+			"../../../examples/extensions/packages/message-delete-protector.serein-extension"
+		),
+		"serein-midnight" => include_bytes!("../../../extensions/midnight.serein-extension"),
+		"serein-rose" => include_bytes!("../../../extensions/rose.serein-extension"),
+		"serein-forest" => include_bytes!("../../../extensions/forest.serein-extension"),
+		"serein-latte" => include_bytes!("../../../extensions/latte.serein-extension"),
+		_ => return Err("Unknown fixture extension".into()),
+	};
+	let package = extensions::parse_package(bytes)?;
+	let invocation = extensions::Invocation {
+		action: "activate".into(),
+		..Default::default()
+	};
+	let output = if package.theme.is_none() {
+		Some(extensions::invoke(&package, &invocation)?)
+	} else {
+		None
+	};
+	Ok((package, invocation, output))
+}
+
+fn seed_catalog(extensions: &mut ui::ExtensionUi) {
+	let catalog = extensions::parse_catalog(include_bytes!("../../../extensions/catalog.json"))
+		.expect("valid fixture catalog");
+	extensions.set_entries(
+		catalog
+			.entries
+			.into_iter()
+			.map(|entry| ui::ExtensionEntry {
+				manifest: entry.manifest,
+				description: entry.description,
+				preview: entry.preview,
+				theme_preview: None,
+				reviewed: true,
+				sha256: entry.sha256,
+				download_bytes: entry.download_bytes,
+				enabled: false,
+				cleanup_pending: false,
+				update_available: false,
+				update_manifest: None,
+			})
+			.collect(),
+	);
+	let previews = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../extensions/previews");
+	for (id, filename) in [("serein-ocean", "ocean.png")] {
+		let image = image::open(previews.join(filename))
+			.expect("valid fixture preview")
+			.to_rgba8();
+		let size = [image.width() as usize, image.height() as usize];
+		extensions.preview_fixture_image(
+			id.into(),
+			egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw()),
+		);
+	}
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let args: Vec<_> = std::env::args().skip(1).collect();
 	let value = |prefix: &str| args.iter().find_map(|arg| arg.strip_prefix(prefix));
 	if !args.iter().any(|arg| arg == "--demo") {
-		return Err("Usage: profile_preview --demo --output=PATH.png [--page=profile|account|appearance|general] [--width=1120] [--height=760] [--light]".into());
+		return Err("Usage: profile_preview --demo --output=PATH.png [--page=profile|account|appearance|general|extensions] [--themes] [--extension=ID] [--thumbnail] [--width=1120] [--height=760] [--light]".into());
 	}
 	let output = PathBuf::from(value("--output=").ok_or("Missing --output=PATH.png")?);
 	let page = value("--page=").unwrap_or("profile").to_owned();
 	if !matches!(
 		page.as_str(),
-		"profile" | "account" | "appearance" | "general"
+		"profile" | "account" | "appearance" | "general" | "extensions"
 	) {
-		return Err("Page must be profile, account, appearance or general".into());
+		return Err("Page must be profile, account, appearance, general or extensions".into());
 	}
 	let width: f32 = value("--width=").unwrap_or("1120").parse()?;
 	let height: f32 = value("--height=").unwrap_or("760").parse()?;
@@ -130,6 +236,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 		return Err("Viewport must be 500-1920 by 520-1200".into());
 	}
 	let light = args.iter().any(|arg| arg == "--light");
+	let thumbnail = args.iter().any(|arg| arg == "--thumbnail");
+	let extension = value("--extension=").map(str::to_owned);
+	let fixture = extension.as_deref().map(extension_fixture).transpose()?;
 	let saved = Arc::new(AtomicBool::new(false));
 	let completed = saved.clone();
 	eframe::run_native(
@@ -159,11 +268,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			messaging.startup_available = platform::startup::available();
 			messaging.startup_enabled = args.iter().any(|arg| arg == "--startup-enabled");
 			messaging.startup_minimized = args.iter().any(|arg| arg == "--startup-minimized");
-			messaging.preview_settings(&page);
+			if let Some((package, _invocation, result)) = fixture {
+				prime_extension_chat(&mut state);
+				if let Some(theme) = package.theme.as_ref() {
+					ui::design::set_extension_theme(Some(theme));
+					ui::design::apply(&cc.egui_ctx);
+				}
+				if let Some(output) = result {
+					state.set_preserve_deleted_messages(output.preserve_deleted_messages);
+					let channel = state.selected.unwrap();
+					state.apply(client_core::Envelope {
+						generation: state.generation,
+						event: client_core::Event::Delete {
+							channel,
+							id: model::Id(601),
+						},
+					});
+				}
+			} else {
+				messaging.preview_settings(&page);
+				if page == "extensions" {
+					seed_catalog(&mut messaging.extensions);
+					messaging
+						.extensions
+						.preview_themes(args.iter().any(|arg| arg == "--themes"));
+				}
+			}
 			Ok(Box::new(Preview {
 				messaging,
 				state,
 				output,
+				thumbnail,
 				frames: 0,
 				requested: false,
 				screenshot: None,

@@ -3525,6 +3525,45 @@ validation, and camera rekeys. Native screenshot/interaction tools were unavaila
 (missing Computer Use pipe; no Orca CLI), so native CPU, RSS, GPU, startup and frame
 timings are unmeasured. No real device or Discord call was exercised.
 
+## Extension shop previews - September 12, 2026
+
+Baseline `d00bd04`, after `ae697f4` (includes main through `65c5f4b`);
+Windows 11, Ryzen 7 7800X3D, Rust 1.98.1, release/wgpu. Standard packages
+include voice. Package snapshots precede this note; development evidence and
+preview PNGs are not bundled in the standard executable/package.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Executable bytes | 65,071,104 | 65,398,272 | +327,168 (+0.503%) |
+| Installed bytes | 71,389,398 | 71,719,314 | +329,916 (+0.462%) |
+| Compress-Archive ZIP bytes | 42,431,635 | 42,538,459 | +106,824 (+0.252%) |
+| Native capture workload peak WorkingSet64, median bytes | 232,865,792 | 234,192,896 | +1,327,104 (+0.57%) |
+| Sampled process CPU, median ms | 406.250 | 437.500 | +31.250 |
+
+Native method: existing `profile_preview --demo --page=extensions`, 1120x760
+logical / 1400x950 framebuffer, 125% display scale. One warmup per variant,
+then five alternating launches, 100 ms WorkingSet64/TotalProcessorTime samples
+until the fixture exits. This measures synthetic startup, rendering, GPU readback
+and PNG writing together, not idle CPU, interactive startup p95 or frame p95.
+Both executables ran from C:, with no concurrent Cargo builds. GPU allocations
+and child processes are not included. Completion was verified using each saved
+1400x950 PNG and stdout marker; PowerShell's polled ExitCode was unavailable.
+Sampled peaks ranged from 160 to 234 MB across the series; 100 ms sampling
+can miss brief PNG-write peaks. The median difference is within this noise,
+not evidence of a precise RAM regression or speed improvement.
+
+The baseline example harness seeds the same starter catalog without changing
+application UI. The after fixture preloads all three local thumbnails; production
+loads only visible cards. The shop keeps up to eight 640x360 RGBA thumbnails
+(7,372,800 pixel bytes), rejects oversized inputs, and evicts offscreen images.
+It uses the existing worker/HTTPS client and adds no dependency or idle animation.
+These component limits are not whole-process RAM or GPU measurements.
+
+Native dark/light, narrow and theme-page screenshots were captured and inspected
+using the existing wgpu framebuffer example. Keyboard/consent/cache behavior is
+covered by offline egui tests; no OS input automation or live Discord claim is
+made. Raw measurements: [metrics.json](pr-evidence/extension-shop/metrics.json).
+
 ## Community extensions - September 12, 2026
 
 Baseline `0e355da`, implementation `46e81a1`; Windows 11 (10.0.26200),
@@ -3565,3 +3604,25 @@ data removal; shared host code and allocator reserves remain possible costs.
 
 Raw numeric samples: [metrics.json](pr-evidence/community-extensions/metrics.json).
 No live Discord, microphone, macOS native or Linux native UI claim is made.
+
+## Notification preference save retries - September 12, 2026
+
+Baseline `d00bd04`, branch `fix/remember-notifications`; Windows 11 Home
+10.0.26200, Rust 1.98.1. Both snapshots use `cargo xtask package`, standard
+release features including voice, before adding this measurement note.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Executable bytes | 65,071,104 | 65,071,104 | 0 |
+| Installed package bytes | 71,389,398 | 71,389,398 | 0 |
+| ZIP bytes (Python zipfile, DEFLATE level 9, sorted paths) | 42,280,563 | 42,280,541 | -22 (-0.000052%) |
+
+One package per revision; these sizes do not establish a speed improvement.
+Only a rejected preference enqueue is retried on subsequent UI frames. The
+existing sixteen-command cache queue and one outstanding preference write remain
+bounded. A synthetic regression fills the queue, drains it, retries through the
+desktop's save path, and reopens SQLite with a fresh UI for both enabled and
+disabled notifications. The old behavior fails that regression; the fix passes.
+Native restart interaction, CPU/RSS and save latency are unmeasured: the native
+Computer Use pipe was unavailable (OS error 2), and Orca CLI was absent. No live
+Discord session or system notification was exercised for this verification.

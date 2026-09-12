@@ -385,6 +385,66 @@ mod tests {
 	use super::*;
 
 	#[test]
+	fn notification_choice_survives_a_full_queue_and_database_reopen() {
+		let root = std::env::temp_dir().join(format!(
+			"serein-notification-restart-{}-{}",
+			std::process::id(),
+			std::time::SystemTime::now()
+				.duration_since(std::time::UNIX_EPOCH)
+				.unwrap()
+				.as_nanos()
+		));
+		std::fs::create_dir(&root).unwrap();
+		let path = root.join("client.sqlite3");
+		let (send, commands) = mpsc::sync_channel(16);
+		let (_, receive) = mpsc::sync_channel(16);
+		let cache = Cache {
+			send,
+			receive,
+			history: Arc::new(HistorySafety::default()),
+		};
+		for enabled in [true, false] {
+			let mut store = Ok(LocalStore::open(&path).unwrap());
+			let mut settings = crate::app_settings::Settings {
+				current: store.as_ref().unwrap().app_preferences().unwrap(),
+				..Default::default()
+			};
+			let mut view = ui::MessagingUi::default();
+			settings.apply(&mut view);
+			view.notifications_enabled = enabled;
+			settings.observe(&view);
+			for _ in 0..16 {
+				assert!(cache.queue(1, Id(0), Operation::LoadAppPreferences));
+			}
+			assert!(!settings.save(Some(&cache), 1));
+			assert!(settings.state.needs_attention());
+			for _ in 0..16 {
+				commands.try_recv().unwrap();
+			}
+			// The next frame retries without another click, after cache work has drained.
+			settings.observe(&view);
+			assert!(settings.save(Some(&cache), 2));
+			assert!(!settings.save(Some(&cache), 2));
+			let (_, account, epoch, operation) = commands.try_recv().unwrap();
+			assert!(matches!(
+				execute(&mut store, &cache.history, account, epoch, operation),
+				Outcome::AppPreferencesSaved(Ok(()))
+			));
+			drop(store);
+			let reopened = LocalStore::open(&path).unwrap();
+			let restored = crate::app_settings::Settings {
+				current: reopened.app_preferences().unwrap(),
+				..Default::default()
+			};
+			let mut restarted_view = ui::MessagingUi::default();
+			restored.apply(&mut restarted_view);
+			assert_eq!(restarted_view.notifications_enabled, enabled);
+		}
+		std::fs::remove_file(path).unwrap();
+		std::fs::remove_dir(root).unwrap();
+	}
+
+	#[test]
 	fn minimize_to_tray_results_are_independent_of_account_history() {
 		let safety = HistorySafety::default();
 		safety.fail();

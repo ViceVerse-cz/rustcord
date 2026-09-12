@@ -372,6 +372,7 @@ pub struct State {
 	pub navigation_index: NavigationIndex,
 	pub selected: Option<Id>,
 	pub timeline: Timeline,
+	pub preserve_deleted_messages: bool,
 	pub resident: resident::Windows,
 	pub freshness: Freshness,
 	pub status: &'static str,
@@ -436,6 +437,7 @@ impl Default for State {
 			navigation_index: NavigationIndex::default(),
 			selected: None,
 			timeline: Timeline::default(),
+			preserve_deleted_messages: false,
 			resident: resident::Windows::default(),
 			freshness: Freshness::Stale,
 			status: "Disconnected",
@@ -1165,6 +1167,8 @@ impl State {
 		{
 			return;
 		}
+		self.timeline
+			.set_preserve_deleted_messages(self.preserve_deleted_messages);
 		self.invalidate_resident_event(&envelope.event);
 		if let Event::ChannelCreated(channel) = &envelope.event {
 			self.observe_dm_reopened(channel.id);

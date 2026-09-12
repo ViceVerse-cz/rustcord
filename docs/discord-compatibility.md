@@ -755,6 +755,15 @@ and Invisible, including the latter two explanations. Custom text opens its own 
 editor with Apply/Clear. This reuses session presence publication; no automatic expiry,
 emoji picker, account switching or public-profile editing is claimed.
 
+The popout itself was restyled to match Discord's account panel: a 64-point banner with
+a ring-punched 72-point avatar, a sunken card holding display name, handle, pronouns and
+any custom status, then icon rows for the presence submenu (leading status glyph,
+trailing chevron) and the custom-status editor (smiley, or pencil once set). Only
+layout changed; presence publication, profile loading and the bounded editor are the
+same. `--demo --demo-account` (or `--demo-account=status`) opens the popout with the
+synthetic profile at startup for screenshots; dark and light rendering were captured
+natively on macOS.
+
 ### Account-type badges (September 12, 2026)
 
 Chat author headers and member-list names share a compact theme-aware badge, reserving
