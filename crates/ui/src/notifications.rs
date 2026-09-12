@@ -93,7 +93,7 @@ impl MessagingUi {
 			.show_separator_line(false)
 			.frame(
 				egui::Frame::new()
-					.fill(colors.base)
+					.fill(design::window_palette(ui).base)
 					.inner_margin(egui::Margin {
 						left: 12,
 						right: 12,

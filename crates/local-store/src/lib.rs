@@ -14,6 +14,7 @@ pub struct LocalStore(Connection);
 pub struct AppPreferences {
 	pub notifications_enabled: bool,
 	pub show_hidden_channels: bool,
+	pub primary_color: Option<[u8; 3]>,
 	pub voice_noise_suppression: bool,
 	pub voice_push_to_talk: bool,
 	pub voice_input: Option<String>,
@@ -26,6 +27,7 @@ impl Default for AppPreferences {
 		Self {
 			notifications_enabled: false,
 			show_hidden_channels: false,
+			primary_color: None,
 			voice_noise_suppression: false,
 			voice_push_to_talk: false,
 			voice_input: None,
@@ -887,6 +889,7 @@ mod tests {
 		assert_eq!(store.app_preferences().unwrap(), AppPreferences::default());
 		let mut value = AppPreferences {
 			notifications_enabled: true,
+			primary_color: Some([80, 120, 220]),
 			voice_noise_suppression: true,
 			voice_input: Some("synthetic microphone".into()),
 			output_percent: 75,

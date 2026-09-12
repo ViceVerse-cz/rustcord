@@ -58,7 +58,7 @@ value. A full or failed worker reports an unsaved change without an automatic re
 Retry saving is deliberate. Closing with pending/failed writes prompts before discarding.
 In-app preview edits are not saved; a write already requested outside preview still completes.
 The standalone --demo does not start the SQLite worker. Category collapse, narrow People overlays and outer window geometry remain session-local.
-Notification opt-in, hidden-channel visibility, audio devices (up to 1,024 bytes each),
+Notification opt-in, hidden-channel visibility, primary RGB color, audio devices (up to 1,024 bytes each),
 noise suppression, push-to-talk and gain are saved in the device-wide `app_preferences`
 SQLite singleton (16 KiB maximum), using the existing background worker. These survive
 restart/logout; demo controls never read or write them. Save failures remain visible.

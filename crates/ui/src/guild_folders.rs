@@ -585,7 +585,7 @@ impl MessagingUi {
 					ui.add(egui::TextEdit::singleline(name).char_limit(100));
 					ui.horizontal(|ui| {
 						ui.label("Color");
-						ui.color_edit_button_srgb(color);
+						design::color_edit(ui, color);
 					});
 					ui.horizontal(|ui| {
 						if ui.add_enabled(enabled, egui::Button::new("Save")).clicked() {

@@ -1975,7 +1975,7 @@ impl Desktop {
 	fn sign_in_screen(&mut self, ui: &mut egui::Ui) {
 		let p = ui::design::palette(ui);
 		egui::CentralPanel::default()
-			.frame(egui::Frame::NONE.fill(p.canvas))
+			.frame(egui::Frame::NONE.fill(ui::design::window_palette(ui).canvas))
 			.show(ui, |ui| {
 				// Soft radial accent glow behind the card instead of a flat canvas.
 				let rect = ui.max_rect();
@@ -2740,6 +2740,13 @@ impl Desktop {
 	}
 }
 impl Desktop {
+	fn sync_customization(&self, ctx: &egui::Context) {
+		if self.messaging.primary_color != ui::design::primary_color() {
+			ui::design::set_primary_color(self.messaging.primary_color);
+			ui::design::apply(ctx);
+			ctx.request_repaint();
+		}
+	}
 	/// Frame period of the display the window is on; egui otherwise assumes 60 Hz.
 	fn frame_period(&self) -> Option<Duration> {
 		self.monitor_period
@@ -2772,6 +2779,7 @@ impl eframe::App for Desktop {
 		self.frame_metrics.begin(ctx);
 		self.messaging.sync_reading_zoom(ctx);
 		self.poll(ctx);
+		self.sync_customization(ctx);
 		#[cfg(feature = "demo")]
 		if self.demo_typing
 			&& let Some(channel) = self.state.selected
@@ -3007,7 +3015,7 @@ impl eframe::App for Desktop {
 				.show_separator_line(false)
 				.frame(
 					egui::Frame::NONE
-						.fill(p.surface)
+						.fill(ui::design::window_palette(ui).surface)
 						.stroke(egui::Stroke::new(1.0, p.border))
 						.inner_margin(egui::Margin::symmetric(16, 0)),
 				)
@@ -3278,6 +3286,7 @@ impl eframe::App for Desktop {
 			self.sign_in_screen(ui);
 		}
 		let appearance = ctx.options(|options| options.theme_preference);
+		self.sync_customization(&ctx);
 		self.save_app_preferences();
 		self.save_reading_preferences(&ctx);
 		self.sync_own_presence(&ctx);

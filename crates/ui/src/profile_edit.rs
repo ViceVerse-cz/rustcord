@@ -275,18 +275,12 @@ fn form(ui: &mut egui::Ui, draft: &mut Draft) {
 		ui.horizontal(|ui| {
 			ui.spacing_mut().interact_size = egui::vec2(48.0, 32.0);
 			let mut rgb = [(*color >> 16) as u8, (*color >> 8) as u8, *color as u8];
-			if ui
-				.color_edit_button_srgb(&mut rgb)
+			if design::color_edit(ui, &mut rgb)
 				.on_hover_text("Choose profile color")
 				.changed()
 			{
 				*color = (u32::from(rgb[0]) << 16) | (u32::from(rgb[1]) << 8) | u32::from(rgb[2]);
 			}
-			ui.label(
-				egui::RichText::new(format!("#{color:06X}"))
-					.size(13.0)
-					.color(colors.muted),
-			);
 		});
 	}
 }

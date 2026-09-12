@@ -22,6 +22,7 @@ pub struct TimelineView {
 	pub(super) quick_delete: Option<(Id, Id)>,
 	pub(super) channel_reference: Option<Id>,
 	pub(super) reply_target: Option<Id>,
+	highlighted: Option<(Id, f64)>,
 	target_browsing: bool,
 	initial_read_checked: bool,
 	pub(super) unread_jump: bool,
@@ -674,6 +675,7 @@ impl TimelineView {
 			self.target_browsing = true;
 			self.mark_read = None;
 			if state.timeline.get(target).is_some() {
+				self.highlighted = Some((target, ui.input(|input| input.time) + 2.0));
 				self.following = false;
 				self.jump = false;
 				self.anchor = Some((target, 0.0));
@@ -681,6 +683,15 @@ impl TimelineView {
 			} else {
 				state.status =
 					"Message was not returned; it may have been removed or become unavailable";
+			}
+		}
+		if let Some((_, until)) = self.highlighted {
+			let remaining = until - ui.input(|input| input.time);
+			if remaining > 0.0 {
+				ui.ctx()
+					.request_repaint_after(std::time::Duration::from_secs_f64(remaining));
+			} else {
+				self.highlighted = None;
 			}
 		}
 		let mut scroll = egui::ScrollArea::vertical()
@@ -1395,6 +1406,14 @@ impl TimelineView {
 							);
 						}
 						self.toolbar = Some((*id, toolbar_rect));
+					}
+					if selected_reply == Some(*id)
+						|| self.highlighted.is_some_and(|(target, _)| target == *id)
+					{
+						ui.painter().set(
+							background,
+							egui::Shape::rect_filled(rect, 0.0, colors.accent.gamma_multiply(0.25)),
+						);
 					}
 				});
 				measurements.push((
@@ -3143,6 +3162,7 @@ mod tests {
 			assert_eq!(state.search_target, Some(Id(19)));
 			assert!(view.mark_read.is_none());
 			state.freshness = model::Freshness::Stale;
+			assert!(view.highlighted.is_none());
 			state.history_pending = false;
 			state.status = "Synthetic history failure";
 			frame(&mut view, &mut state, vec![]);
@@ -3155,6 +3175,12 @@ mod tests {
 				frame(&mut view, &mut state, vec![]);
 			}
 			assert!(state.search_target.is_none());
+			assert_eq!(view.highlighted.map(|(id, _)| id), found.then_some(Id(19)));
+			if let Some((_, until)) = &mut view.highlighted {
+				*until = -1.0;
+			}
+			frame(&mut view, &mut state, vec![]);
+			assert!(view.highlighted.is_none());
 			assert!(view.target_browsing && !view.following);
 			assert!(view.mark_read.is_none());
 			if !found {

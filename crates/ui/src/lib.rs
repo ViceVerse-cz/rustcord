@@ -197,6 +197,7 @@ pub struct MessagingUi {
 	reaction_picker: emoji_picker::Picker,
 	/// Set when the user picks a theme preset; the host persists it.
 	pub theme_variant_changed: Option<design::Variant>,
+	pub primary_color: Option<[u8; 3]>,
 }
 
 /// Context strip (reply/edit) drawn as the rounded top of the composer block.
@@ -491,7 +492,7 @@ impl MessagingUi {
 		egui::Panel::top("title-bar")
 			.exact_size(36.0)
 			.show_separator_line(false)
-			.frame(egui::Frame::new().fill(colors.base))
+			.frame(egui::Frame::new().fill(design::window_palette(ui).base))
 			.show(ui, |ui| {
 				let rect = ui.max_rect();
 				design::window_drag(ui, rect);
@@ -1056,7 +1057,7 @@ impl MessagingUi {
 			.show_separator_line(false)
 			.frame(
 				egui::Frame::new()
-					.fill(colors.chat)
+					.fill(design::window_palette(ui).chat)
 					.inner_margin(egui::Margin::symmetric(16, 0)),
 			)
 			.show(ui, |ui| {
@@ -2178,6 +2179,7 @@ impl MessagingUi {
 			self.reading_preferences.confirm_external_links,
 		);
 		let colors = crate::design::palette(ui);
+		let background = crate::design::window_palette(ui);
 		if !settings_open
 			&& !self.switcher.is_open()
 			&& !self.ime_active
@@ -2227,7 +2229,7 @@ impl MessagingUi {
 			.resizable(true)
 			.default_size(rail + f32::from(self.reading_preferences.sidebar_width).min(sidebar_max))
 			.size_range(rail + 190.0..=rail + sidebar_max)
-			.frame(egui::Frame::new().fill(colors.base).inner_margin(0))
+			.frame(egui::Frame::new().fill(background.base).inner_margin(0))
 			.show(ui, |ui| {
 				egui::Panel::bottom("account-footer")
 					.show_separator_line(false)
@@ -2247,7 +2249,7 @@ impl MessagingUi {
 						sw: 8,
 						..Default::default()
 					},
-					colors.sidebar,
+					background.sidebar,
 				);
 				self.sidebar(ui, state, &title, &mut commands);
 			});
@@ -2295,7 +2297,7 @@ impl MessagingUi {
 				.exact_size(width)
 				.frame(
 					egui::Frame::new()
-						.fill(colors.sidebar)
+						.fill(background.sidebar)
 						.inner_margin(egui::Margin::same(12)),
 				)
 				.show(ui, |ui| {
@@ -2317,7 +2319,7 @@ impl MessagingUi {
 					.exact_size(240.0)
 					.frame(
 						egui::Frame::new()
-							.fill(colors.sidebar)
+							.fill(background.sidebar)
 							.inner_margin(egui::Margin {
 								left: 8,
 								right: 8,
@@ -2351,7 +2353,7 @@ impl MessagingUi {
 		}
 		self.reaction_picker.sync(state, state.selected);
 		egui::CentralPanel::default()
-			.frame(egui::Frame::new().fill(colors.chat).inner_margin(0))
+			.frame(egui::Frame::new().fill(background.chat).inner_margin(0))
 			.show(ui, |ui| {
 				if state.selected.is_none() && self.guild.is_none() {
 					self.call_bar(ui, state, &mut commands);
@@ -2398,7 +2400,7 @@ impl MessagingUi {
 					.show_separator_line(false)
 					.frame(
 						egui::Frame::new()
-							.fill(colors.chat)
+							.fill(background.chat)
 							.inner_margin(egui::Margin {
 								left: 16,
 								right: 16,

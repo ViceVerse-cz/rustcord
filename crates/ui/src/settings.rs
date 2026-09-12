@@ -68,7 +68,7 @@ impl Page {
 			Self::Account => "my account profile logout",
 			Self::Profile => "profile edit display name about me bio pronouns color colour",
 			Self::Appearance => {
-				"appearance window tray minimize theme dark light system zoom reading layout sidebar people reset colour color preset animate animated gifs autoplay hide image links confirm confirmation external browser"
+				"appearance customization primary accent hex window tray minimize theme dark light system zoom reading layout sidebar people reset colour color preset animate animated gifs autoplay hide image links confirm confirmation external browser"
 			}
 			Self::Notifications => "notifications desktop system alerts",
 			Self::Activity => "game activity playing osu status presence sharing",
@@ -526,6 +526,28 @@ impl MessagingUi {
 		ui.add_space(8.0);
 		ui.label(design::eyebrow(ui, "Theme", colors.muted));
 		theme_preference_cards(ui);
+		ui.add_space(8.0);
+		ui.label(design::eyebrow(ui, "Customization", colors.muted));
+		design::card(ui, |ui| {
+			ui.horizontal(|ui| {
+				let label = ui.label("Primary color");
+				let mut color = self.primary_color.unwrap_or(design::DEFAULT_PRIMARY_COLOR);
+				if design::color_edit(ui, &mut color)
+					.labelled_by(label.id)
+					.on_hover_text("Choose primary color")
+					.changed()
+				{
+					self.primary_color = Some(color);
+				}
+				if ui
+					.add_enabled(self.primary_color.is_some(), egui::Button::new("Reset"))
+					.clicked()
+				{
+					self.primary_color = None;
+				}
+			});
+			ui.weak("Used for buttons, selection and message highlights.");
+		});
 		ui.add_space(8.0);
 		ui.label(design::eyebrow(ui, "Colour preset", colors.muted));
 		let current = design::variant();

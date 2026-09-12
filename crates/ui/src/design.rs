@@ -4,7 +4,7 @@
 //! (standard, deep black, ash grey, or a gradient recolour). Gradient variants paint a
 //! backdrop under translucent surfaces; see [`paint_backdrop`].
 use egui::{Color32, FontFamily, FontId, RichText, Stroke};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
 /// Recolour preset layered over the light/dark preference.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -73,6 +73,47 @@ impl Variant {
 	}
 }
 static VARIANT: AtomicU8 = AtomicU8::new(0);
+static PRIMARY_COLOR: AtomicU32 = AtomicU32::new(0);
+
+pub fn primary_color() -> Option<[u8; 3]> {
+	let value = PRIMARY_COLOR.load(Ordering::Relaxed);
+	(value != 0).then_some([(value >> 16) as u8, (value >> 8) as u8, value as u8])
+}
+pub fn set_primary_color(primary: Option<[u8; 3]>) {
+	// The high byte distinguishes custom black from the default accent.
+	PRIMARY_COLOR.store(
+		primary.map_or(0, |[r, g, b]| u32::from_be_bytes([1, r, g, b])),
+		Ordering::Relaxed,
+	);
+}
+/// Shared swatch and direct #RRGGBB input for app, profile and folder colors.
+pub fn color_edit(ui: &mut egui::Ui, color: &mut [u8; 3]) -> egui::Response {
+	let swatch = ui.color_edit_button_srgb(color);
+	let mut value = u32::from_be_bytes([0, color[0], color[1], color[2]]);
+	let hex = ui
+		.add(
+			egui::DragValue::new(&mut value)
+				.range(0..=0xFFFFFF)
+				.hexadecimal(6, false, true)
+				.prefix("#")
+				.custom_parser(|text| parse_hex_color(text).map(f64::from))
+				.update_while_editing(false),
+		)
+		.on_hover_text("Hex color: #RRGGBB. Click to type or paste.");
+	if hex.changed() {
+		let [_, r, g, b] = value.to_be_bytes();
+		*color = [r, g, b];
+	}
+	swatch | hex
+}
+fn parse_hex_color(text: &str) -> Option<u32> {
+	let text = text.trim();
+	let text = text.strip_prefix('#').unwrap_or(text);
+	if text.len() != 6 || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+		return None;
+	}
+	u32::from_str_radix(text, 16).ok()
+}
 pub fn variant() -> Variant {
 	Variant::from_u8(VARIANT.load(Ordering::Relaxed))
 }
@@ -124,7 +165,12 @@ const fn rgba(value: u32, alpha: u8) -> Color32 {
 		alpha,
 	)
 }
-const BLURPLE: Color32 = rgb(0x5865f2);
+pub const DEFAULT_PRIMARY_COLOR: [u8; 3] = [88, 101, 242];
+const PRIMARY: Color32 = Color32::from_rgb(
+	DEFAULT_PRIMARY_COLOR[0],
+	DEFAULT_PRIMARY_COLOR[1],
+	DEFAULT_PRIMARY_COLOR[2],
+);
 const MENTION_BG: Color32 = rgba(0x5865f2, 76);
 fn dark_common(
 	base: Color32,
@@ -147,7 +193,7 @@ fn dark_common(
 		text: rgb(0xdbdee1),
 		muted: rgb(0x9a9ba1),
 		link: rgb(0x00a8fc),
-		accent: BLURPLE,
+		accent: PRIMARY,
 		accent_text: Color32::WHITE,
 		positive: rgb(0x23a55a),
 		warning: rgb(0xf0b232),
@@ -175,7 +221,7 @@ fn gradient(stops: [u32; 2]) -> Palette {
 	p
 }
 pub fn colors(dark: bool, variant: Variant) -> Palette {
-	match variant {
+	let palette = match variant {
 		Variant::Standard if dark => dark_common(
 			rgb(0x121214),
 			rgb(0x1a1a1e),
@@ -197,7 +243,7 @@ pub fn colors(dark: bool, variant: Variant) -> Palette {
 			text: rgb(0x313338),
 			muted: rgb(0x5c5e66),
 			link: rgb(0x006ce7),
-			accent: BLURPLE,
+			accent: PRIMARY,
 			accent_text: Color32::WHITE,
 			positive: rgb(0x23a55a),
 			warning: rgb(0xf0b232),
@@ -230,25 +276,60 @@ pub fn colors(dark: bool, variant: Variant) -> Palette {
 		Variant::CrimsonMoon => gradient([0x8a1d3d, 0x130508]),
 		Variant::Forest => gradient([0x2f5f3d, 0x0b1a11]),
 		Variant::Sunset => gradient([0xd3653e, 0x3b1d63]),
+	};
+	customize(palette, primary_color())
+}
+fn customize(mut palette: Palette, primary: Option<[u8; 3]>) -> Palette {
+	if let Some([r, g, b]) = primary {
+		palette.accent = Color32::from_rgb(r, g, b);
+		palette.accent_text = if contrast(Color32::WHITE, palette.accent) >= 4.5 {
+			Color32::WHITE
+		} else {
+			Color32::BLACK
+		};
 	}
+	palette
 }
 pub fn palette(ui: &egui::Ui) -> Palette {
-	colors(ui.visuals().dark_mode, variant())
+	opaque_surfaces(colors(ui.visuals().dark_mode, variant()))
 }
 pub fn palette_for(ctx: &egui::Context) -> Palette {
-	colors(ctx.theme() == egui::Theme::Dark, variant())
+	opaque_surfaces(colors(ctx.theme() == egui::Theme::Dark, variant()))
+}
+/// Main surfaces preserve gradient presets; widgets and popouts use opaque surfaces.
+pub fn window_palette(ui: &egui::Ui) -> Palette {
+	colors(ui.visuals().dark_mode, variant())
+}
+fn opaque_surfaces(mut palette: Palette) -> Palette {
+	let backdrop = palette
+		.backdrop
+		.map_or(palette.chat.to_opaque(), |[top, bottom]| {
+			mix(top, bottom, 0.5)
+		});
+	for surface in [
+		&mut palette.base,
+		&mut palette.sidebar,
+		&mut palette.chat,
+		&mut palette.raised,
+		&mut palette.canvas,
+		&mut palette.surface,
+	] {
+		*surface = backdrop.blend(*surface);
+	}
+	palette
 }
 /// Paint the gradient backdrop behind every panel; a no-op for opaque variants.
 pub fn paint_backdrop(ctx: &egui::Context) {
-	let Some([top, bottom]) = palette_for(ctx).backdrop else {
+	let Some([top, bottom]) = colors(ctx.theme() == egui::Theme::Dark, variant()).backdrop else {
 		return;
 	};
 	let rect = ctx.content_rect();
 	let mut mesh = egui::Mesh::default();
-	let mid = Color32::from_rgb(
+	let mid = Color32::from_rgba_premultiplied(
 		((top.r() as u16 + bottom.r() as u16) / 2) as u8,
 		((top.g() as u16 + bottom.g() as u16) / 2) as u8,
 		((top.b() as u16 + bottom.b() as u16) / 2) as u8,
+		((top.a() as u16 + bottom.a() as u16) / 2) as u8,
 	);
 	mesh.colored_vertex(rect.left_top(), top);
 	mesh.colored_vertex(rect.right_top(), mid);
@@ -323,7 +404,7 @@ pub fn eyebrow(ui: &egui::Ui, text: impl Into<String>, color: Color32) -> RichTe
 pub fn apply(ctx: &egui::Context) {
 	let variant = variant();
 	for theme in [egui::Theme::Dark, egui::Theme::Light] {
-		let p = colors(theme == egui::Theme::Dark, variant);
+		let p = opaque_surfaces(colors(theme == egui::Theme::Dark, variant));
 		let mut style = (*ctx.style_of(theme)).clone();
 		style.text_styles.insert(
 			egui::TextStyle::Heading,
@@ -686,6 +767,59 @@ fn contrast(a: Color32, b: Color32) -> f32 {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[test]
+	fn hex_colors_accept_pasted_values_without_applying_partial_or_invalid_input() {
+		for text in ["#FF4000", "ff4000", " #Ff4000 "] {
+			assert_eq!(parse_hex_color(text), Some(0xFF4000));
+		}
+		assert_eq!(parse_hex_color("#000000"), Some(0));
+		assert_eq!(parse_hex_color("FFFFFF"), Some(0xFFFFFF));
+		for text in [
+			"",
+			"#FF4",
+			"#FF40000",
+			"#FF4000FF",
+			"#GG4000",
+			"+FF400",
+			"éFF400",
+		] {
+			assert_eq!(parse_hex_color(text), None);
+		}
+	}
+	#[test]
+	fn primary_color_preserves_readable_controls() {
+		for dark in [false, true] {
+			let base = colors(dark, Variant::Standard);
+			for rgb in [[0, 0, 0], [255, 255, 255], [255, 220, 0], [90, 40, 200]] {
+				let p = customize(base, Some(rgb));
+				assert_eq!(p.accent.to_array()[..3], rgb);
+				assert!(contrast(p.accent_text, p.accent) >= 4.5);
+				assert_eq!((p.text, p.raised), (base.text, base.raised));
+			}
+			assert_eq!(customize(base, None), base);
+			assert_eq!(base.accent, Color32::from_rgb(88, 101, 242));
+		}
+	}
+	#[test]
+	fn popup_surfaces_stay_opaque_for_every_preset() {
+		for variant in Variant::ALL {
+			for dark in [false, true] {
+				let base = colors(dark, variant);
+				let popup = opaque_surfaces(base);
+				for surface in [
+					popup.base,
+					popup.sidebar,
+					popup.chat,
+					popup.raised,
+					popup.canvas,
+					popup.surface,
+				] {
+					assert_eq!(surface.a(), 255);
+				}
+				assert_eq!(popup.text, base.text);
+			}
+		}
+	}
 	#[test]
 	fn role_colors_remain_readable_in_light_and_dark_palettes() {
 		for variant in Variant::ALL {
