@@ -79,7 +79,57 @@ fn main() {
 				.any(|text| text.contains("Make Serein yours") || text.contains("A new look."))
 		);
 	}
+	messaging.preview_settings("extensions");
+	for width in [320.0, 1120.0] {
+		for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+			ctx.set_theme(theme);
+			ui::design::apply(&ctx);
+			messaging
+				.extensions
+				.offer_import(messaging.extensions.entries[0].clone());
+			let mut labels = Vec::new();
+			for _ in 0..3 {
+				labels.clear();
+				let output = ctx.run_ui(
+					egui::RawInput {
+						screen_rect: Some(egui::Rect::from_min_size(
+							egui::Pos2::ZERO,
+							egui::vec2(width, 760.0),
+						)),
+						..Default::default()
+					},
+					|ui| {
+						let _ = messaging.show(ui, &mut state);
+					},
+				);
+				for shape in &output.shapes {
+					texts(&shape.shape, &mut labels);
+				}
+				output.drop_without_applying_deltas();
+			}
+			for label in [
+				"Enable extension",
+				"Allow this extension to",
+				"Cancel",
+				"Enable",
+				"Package details",
+			] {
+				assert!(
+					labels.iter().any(|text| text == label),
+					"Missing {label} at {width}"
+				);
+			}
+			assert!(
+				!messaging
+					.extensions
+					.requests
+					.iter()
+					.any(|request| matches!(request, ui::ExtensionRequest::Enable { .. }))
+			);
+		}
+	}
+
 	println!(
-		"Extension settings debug check passed: separate pages, filtered cards, search fields, no intro banner."
+		"Extension settings debug check passed: separate pages and consent dialog at narrow/wide widths in light/dark mode."
 	);
 }

@@ -814,66 +814,151 @@ impl ExtensionUi {
 		if let Some(mut consent) = self.consent.take() {
 			let mut close = false;
 			let ctx = ui.ctx().clone();
-			let modal = egui::Modal::new(egui::Id::unique("extension-consent")).show(&ctx, |ui| {
-				ui.set_width((ctx.content_rect().width() - 64.0).clamp(180.0, 440.0));
-				egui::ScrollArea::vertical()
-					.max_height((ctx.content_rect().height() - 80.0).max(160.0))
-					.show(ui, |ui| {
-						ui.label(design::semibold(ui, "Enable this extension?", 17.0));
-						entry_details(ui, &consent.entry);
-						if !consent.entry.reviewed {
-							ui.colored_label(
-								colors.warning,
-								"Unreviewed package — its source has not been reviewed for the catalog.",
+			let modal = egui::Modal::new(egui::Id::unique("extension-consent"))
+				.frame(
+					egui::Frame::new()
+						.fill(colors.chat.to_opaque())
+						.corner_radius(12)
+						.stroke(egui::Stroke::new(1.0, colors.border))
+						.inner_margin(24),
+				)
+				.show(&ctx, |ui| {
+					ui.set_width((ctx.content_rect().width() - 80.0).clamp(180.0, 420.0));
+					egui::ScrollArea::vertical()
+						.max_height((ctx.content_rect().height() - 180.0).max(100.0))
+						.show(ui, |ui| {
+							ui.label(
+								design::semibold(ui, "Enable extension", 22.0)
+									.color(colors.text_strong),
 							);
-						}
-						for capability in &consent.entry.manifest.capabilities {
-							let mut granted = consent.grants.contains(capability);
-							if ui
-								.checkbox(&mut granted, capability_label(*capability))
-								.changed()
-							{
-								if granted {
-									consent.grants.push(*capability);
-								} else {
-									consent.grants.retain(|grant| grant != capability);
+							ui.add_space(12.0);
+							ui.label(
+								design::semibold(ui, &consent.entry.manifest.name, 17.0)
+									.color(colors.text_strong),
+							);
+							ui.label(
+								egui::RichText::new(format!(
+									"by {}",
+									consent.entry.manifest.author
+								))
+								.size(13.0)
+								.color(colors.muted),
+							);
+							ui.horizontal_wrapped(|ui| {
+								ui.label(
+									egui::RichText::new(if consent.entry.reviewed {
+										"Reviewed release"
+									} else {
+										"Unreviewed"
+									})
+									.size(12.0)
+									.color(colors.muted),
+								);
+								ui.hyperlink_to(
+									egui::RichText::new("View source").size(12.0),
+									&consent.entry.manifest.source,
+								);
+							});
+							ui.add_space(16.0);
+							if !consent.entry.reviewed {
+								ui.colored_label(
+									colors.warning,
+									"Unreviewed package — its source has not been reviewed for the catalog.",
+								);
+							}
+							if !consent.entry.manifest.capabilities.is_empty() {
+								ui.label(design::semibold(ui, "Allow this extension to", 13.0));
+								ui.add_space(6.0);
+							}
+							for capability in &consent.entry.manifest.capabilities {
+								let mut granted = consent.grants.contains(capability);
+								let changed = egui::Frame::new()
+									.fill(colors.sidebar.to_opaque())
+									.corner_radius(8)
+									.inner_margin(12)
+									.show(ui, |ui| {
+										ui.set_width(ui.available_width());
+										ui.spacing_mut().icon_width = 20.0;
+										ui.spacing_mut().icon_spacing = 10.0;
+										ui.visuals_mut().widgets.inactive.bg_stroke =
+											egui::Stroke::new(1.0, colors.muted);
+										ui.checkbox(
+											&mut granted,
+											egui::RichText::new(capability_label(*capability))
+												.size(14.0),
+										)
+										.changed()
+									})
+									.inner;
+								if changed {
+									if granted {
+										consent.grants.push(*capability);
+									} else {
+										consent.grants.retain(|grant| grant != capability);
+									}
 								}
 							}
-						}
-						if consent.entry.manifest.capabilities.is_empty() {
-							ui.weak("No access to conversations or composer text.");
-						}
-						ui.weak(
-							"Disable removes downloaded code and local extension data. Re-enabling starts fresh.",
-						);
-						let ready = consent
-							.entry
-							.manifest
-							.capabilities
-							.iter()
-							.all(|capability| consent.grants.contains(capability));
-						ui.horizontal(|ui| {
-							if ui
-								.add_enabled(ready && !self.busy, egui::Button::new("Enable"))
-								.clicked()
-							{
-								self.queue(
-									ui.ctx(),
-									ExtensionRequest::Enable {
-										id: consent.entry.manifest.id.clone(),
-										grants: consent.grants.clone(),
-										sha256: consent.entry.sha256.clone(),
-										reviewed: consent.entry.reviewed,
-									},
-								);
-								close = true;
+							if consent.entry.manifest.capabilities.is_empty() {
+								ui.weak("No access to conversations or composer text.");
 							}
-							if ui.button("Cancel").clicked() {
-								close = true;
-							}
+							ui.add_space(12.0);
+							ui.label(
+								egui::RichText::new(
+									"Disabling removes the extension and its local data. Re-enabling starts fresh.",
+								)
+								.size(12.0)
+								.color(colors.muted),
+							);
+							ui.add_space(4.0);
+							ui.collapsing(
+								egui::RichText::new("Package details").size(12.0),
+								|ui| {
+									ui.label(
+										egui::RichText::new(format!(
+											"Version {} / {} / {:.1} KiB",
+											consent.entry.manifest.version,
+											consent.entry.manifest.license,
+											consent.entry.download_bytes as f64 / 1024.0
+										))
+										.size(12.0)
+										.color(colors.muted),
+									);
+								},
+							);
 						});
+					ui.add_space(16.0);
+					ui.separator();
+					ui.add_space(12.0);
+					let ready = consent
+						.entry
+						.manifest
+						.capabilities
+						.iter()
+						.all(|capability| consent.grants.contains(capability));
+					ui.columns(2, |columns| {
+						if design::secondary_button(&mut columns[0], "Cancel").clicked() {
+							close = true;
+						}
+						if columns[1]
+							.add_enabled_ui(ready && !self.busy, |ui| {
+								design::primary_button(ui, "Enable")
+							})
+							.inner
+							.clicked()
+						{
+							self.queue(
+								&ctx,
+								ExtensionRequest::Enable {
+									id: consent.entry.manifest.id.clone(),
+									grants: consent.grants.clone(),
+									sha256: consent.entry.sha256.clone(),
+									reviewed: consent.entry.reviewed,
+								},
+							);
+							close = true;
+						}
 					});
-			});
+				});
 			if !close && !modal.should_close() {
 				self.consent = Some(consent);
 			}
@@ -1130,26 +1215,6 @@ fn capability_label(capability: Capability) -> &'static str {
 			"Keep already-loaded deleted messages in memory until disabled or evicted"
 		}
 	}
-}
-fn entry_details(ui: &mut egui::Ui, entry: &ExtensionEntry) {
-	ui.weak(format!(
-		"{} · {} · {} · {:.1} KiB",
-		entry.manifest.author,
-		entry.manifest.version,
-		entry.manifest.license,
-		entry.download_bytes as f64 / 1024.0
-	));
-	ui.horizontal_wrapped(|ui| {
-		ui.label(if entry.reviewed {
-			"Reviewed release"
-		} else {
-			"Unreviewed"
-		});
-		ui.hyperlink_to("View source", &entry.manifest.source);
-		if entry.enabled {
-			ui.label("Enabled");
-		}
-	});
 }
 fn render_elements(
 	ui: &mut egui::Ui,
