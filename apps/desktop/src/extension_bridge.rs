@@ -173,6 +173,7 @@ impl Bridge {
 				Err(error) => {
 					if let Some((id, _, _)) = pending.as_ref().and_then(|p| p.invocation.as_ref()) {
 						self.disabled.insert(id.clone());
+						self.apply_theme(ctx);
 						self.entries(messaging);
 					}
 					messaging.extensions.report_error(error);
@@ -272,6 +273,18 @@ impl Bridge {
 						&& requested == id && !self.disabled.contains(&id)
 						&& self.installed.iter().any(|e| e.manifest.id == id)
 					{
+						if context.is_current(state)
+							&& let Some(appearance) = &output.appearance
+						{
+							if let Some(installed) = self
+								.installed
+								.iter_mut()
+								.find(|entry| entry.manifest.id == id)
+							{
+								installed.theme = Some(appearance.clone());
+							}
+							self.apply_theme(ctx);
+						}
 						messaging
 							.extensions
 							.present_output(id, invocation, context, output, state);
@@ -600,12 +613,27 @@ impl Bridge {
 			.set_entries(entries.into_values().collect());
 	}
 	fn apply_theme(&self, ctx: &egui::Context) {
-		ui::design::set_extension_theme(
-			self.installed
-				.iter()
-				.filter(|entry| !self.disabled.contains(&entry.manifest.id))
-				.find_map(|entry| entry.theme.as_ref()),
-		);
+		// Explicit theme first, then enabled plugin appearances in stable ID order.
+		let mut entries: Vec<_> = self
+			.installed
+			.iter()
+			.filter(|entry| {
+				entry.error.is_none()
+					&& !self.disabled.contains(&entry.manifest.id)
+					&& entry.theme.is_some()
+			})
+			.collect();
+		entries.sort_by_key(|entry| {
+			(
+				entry.manifest.kind == ExtensionKind::Plugin,
+				&entry.manifest.id,
+			)
+		});
+		let mut appearance = extensions::Theme::default();
+		for entry in &entries {
+			appearance.overlay(entry.theme.as_ref().unwrap());
+		}
+		ui::design::set_extension_theme((!entries.is_empty()).then_some(&appearance));
 		ui::design::apply(ctx);
 	}
 }

@@ -210,6 +210,19 @@ impl State {
 			_ => None,
 		};
 		if let Some(channel) = channel {
+			if self.preserve_deleted_messages
+				&& !matches!(event, Event::RecipientRemoved { .. })
+				&& let Some(window) = self
+					.resident
+					.entries
+					.iter_mut()
+					.find(|w| w.identity.id == channel)
+			{
+				window.timeline.retain_deleted_messages();
+				if window.timeline.display_iter().next().is_some() {
+					return;
+				}
+			}
 			self.resident.remove(channel);
 		}
 	}
@@ -431,6 +444,41 @@ mod tests {
 			},
 		);
 		assert!(state.timeline.get(Id(1001)).is_none());
+	}
+
+	#[test]
+	fn protected_dormant_deletions_survive_live_history_invalidation() {
+		for event in [Event::Message(message(1, 1099)), Event::Patch(patch(1))] {
+			let mut state = state();
+			load(&mut state, 1);
+			state.set_preserve_deleted_messages(true);
+			load(&mut state, 2);
+			apply(
+				&mut state,
+				Event::Delete {
+					channel: Id(1),
+					id: Id(1001),
+				},
+			);
+			apply(&mut state, event);
+			state.select(Id(1)).unwrap();
+			assert!(state.timeline.get_display(Id(1001)).is_some());
+			assert!(state.timeline.get(Id(1001)).is_none());
+			assert_eq!(state.timeline.row_count(), 1);
+			let request = state.request;
+			apply(
+				&mut state,
+				Event::History {
+					channel: Id(1),
+					request,
+					older: false,
+					messages: vec![message(1, 1099)],
+				},
+			);
+			assert!(state.timeline.get_display(Id(1001)).is_some());
+			state.set_preserve_deleted_messages(false);
+			assert!(state.timeline.get_display(Id(1001)).is_none());
+		}
 	}
 
 	#[test]

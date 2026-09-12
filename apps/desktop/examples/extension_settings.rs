@@ -129,6 +129,59 @@ fn main() {
 		}
 	}
 
+	messaging.extensions.reset_runtime();
+	let context = ui::ExtensionContext::panel(&state);
+	let old_channel = state.selected.take();
+	assert!(
+		context.is_current(&state),
+		"standalone panels survive channel navigation"
+	);
+	state.selected = old_channel;
+	let output: extensions::Output = serde_json::from_value(serde_json::json!({"panel": [
+        {"type":"heading", "text":"Custom appearance"},
+        {"type":"separator"},
+        {"type":"select", "id":"density", "label":"Density", "options":["Compact","Comfortable"], "value":"Compact"},
+        {"type":"slider", "id":"size", "label":"Text size", "min":10, "max":28, "value":16}
+    ]})).unwrap();
+	messaging.extensions.present_output(
+		"message-delete-protector".into(),
+		extensions::Invocation::default(),
+		context.clone(),
+		output,
+		&state,
+	);
+	let mut labels = Vec::new();
+	for _ in 0..3 {
+		labels.clear();
+		let output = ctx.run_ui(
+			egui::RawInput {
+				screen_rect: Some(egui::Rect::from_min_size(
+					egui::Pos2::ZERO,
+					egui::vec2(1120.0, 760.0),
+				)),
+				..Default::default()
+			},
+			|ui| {
+				let _ = messaging.show(ui, &mut state);
+			},
+		);
+		for shape in &output.shapes {
+			texts(&shape.shape, &mut labels);
+		}
+		output.drop_without_applying_deltas();
+	}
+	for label in ["Custom appearance", "Density", "Compact", "Text size"] {
+		assert!(
+			labels.iter().any(|text| text == label),
+			"native panel missing {label}"
+		);
+	}
+	state.generation += 1;
+	assert!(
+		!context.is_current(&state),
+		"account/session change invalidates standalone panels"
+	);
+
 	println!(
 		"Extension settings debug check passed: separate pages and consent dialog at narrow/wide widths in light/dark mode."
 	);

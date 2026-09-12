@@ -34,15 +34,25 @@ memory and leaked ABI buffers are destroyed afterward. Do not import WASI or any
 Input fields are `action`, optional `selected_message`, optional `composer`, optional
 `storage`, and `values` (input IDs mapped to strings; checkbox values are `true`/`false`).
 Only the explicitly selected action's context is included and only after capability consent.
-Output fields are optional `replacement`, optional `storage`, `panel` (array), and
+Output fields are optional `replacement`, optional `storage`, optional `appearance`, `panel` (array), and
 `preserve_deleted_messages` (boolean, defaults false). Only an `activation` action
 with the `deleted_messages` capability may request preservation. There is at most
 one activation action per plugin, invoked by the worker on enable/account load.
+Activation itself does not require deleted-message access: each returned effect
+requires its own capability. With `appearance`, return a [theme object](../../docs/theme-api.md)
+to customize app colors and native controls. With `storage`, activation receives
+the previously saved value so appearance settings can be restored.
 This added capability requires a host version that supports it.
 Storage is one opaque UTF-8 value, replacing the previous value when present.
 
 Panel elements use the `type` tag: `text` (`text`), `row` (`children`), `button` (`id`, `label`),
-`text_input` (`id`, `label`, `value`), and `checkbox` (`id`, `label`, `checked`). A button's ID
+`text_input` (`id`, `label`, `value`), `checkbox` (`id`, `label`, `checked`),
+`heading` (`text`), `separator`, `select` (`id`, `label`, `options`, `value`), and
+`slider` (`id`, `label`, `min`, `max`, `value`). Select options are 1-32 unique strings,
+each at most 128 UTF-8 bytes, and the selected value must match one. Sliders use
+32-bit integers with `min < max` and an in-range value. Select values and slider
+numbers return as strings in `values`. Headings/labels are bounded to 128 bytes.
+ A button's ID
 must name a manifest action with `surface: "panel"`. Panel actions receive current input
 values and granted storage; they do not receive a previous message or draft context.
 IDs must be lowercase ASCII letters, digits or hyphens, start with a letter/digit, and be

@@ -176,7 +176,7 @@ pub fn demo_check_examples() -> Result<bool, String> {
 			sha256,
 			download_bytes: starter.download_bytes,
 		};
-		let summary = stored.summary(&gate);
+		let summary = stored.summary(&gate, None);
 		if let Some(error) = summary.error {
 			return Err(error);
 		}
@@ -186,7 +186,7 @@ pub fn demo_check_examples() -> Result<bool, String> {
 			}
 			activated = true;
 			stored.grants.clear();
-			let denied = stored.summary(&gate);
+			let denied = stored.summary(&gate, None);
 			if denied.preserve_deleted_messages || denied.error.is_none() {
 				return Err("Message preservation must require explicit permission".into());
 			}
@@ -374,20 +374,21 @@ struct Stored {
 }
 
 impl Stored {
-	fn summary(&self, gate: &Gate) -> InstalledExtension {
+	fn summary(&self, gate: &Gate, storage: Option<String>) -> InstalledExtension {
 		let activation = self
 			.package
 			.manifest
 			.actions
 			.iter()
 			.find(|action| action.surface == Surface::Activation);
-		let result = activation.map_or(Ok(false), |action| {
+		let result = activation.map_or(Ok(extensions::Output::default()), |action| {
 			validate_grants(&self.package.manifest, &self.grants)?;
 			gate.check()?;
 			let output = extensions::invoke(
 				&self.package,
 				&Invocation {
 					action: action.id.clone(),
+					storage,
 					..Default::default()
 				},
 			)
@@ -398,15 +399,22 @@ impl Stored {
 			{
 				return Err("Deleted message access was not granted".into());
 			}
-			Ok(output.preserve_deleted_messages)
+			Ok(output)
 		});
 		InstalledExtension {
 			manifest: self.package.manifest.clone(),
-			theme: self.package.theme.clone(),
+			theme: self.package.theme.clone().or_else(|| {
+				result
+					.as_ref()
+					.ok()
+					.and_then(|output| output.appearance.clone())
+			}),
 			reviewed: self.reviewed,
 			sha256: self.sha256.clone(),
 			download_bytes: self.download_bytes,
-			preserve_deleted_messages: result.as_ref().copied().unwrap_or(false),
+			preserve_deleted_messages: result
+				.as_ref()
+				.is_ok_and(|output| output.preserve_deleted_messages),
 			error: result.err(),
 		}
 	}
@@ -618,7 +626,7 @@ fn enable(
 		sha256: sha256.to_ascii_lowercase(),
 		download_bytes: bytes.len() as u64,
 	};
-	let summary = stored.summary(gate);
+	let summary = stored.summary(gate, activation_storage(&stored, &directory)?);
 	if let Some(error) = &summary.error {
 		return Err(error.clone());
 	}
@@ -740,7 +748,16 @@ fn load(
 				remove_file(&entry.path().join("package.partial"))?;
 				remove_file(&entry.path().join("data.partial"))?;
 				installed.push(match stored {
-					Ok(stored) => stored.summary(gate),
+					Ok(stored) => match activation_storage(&stored, &entry.path()) {
+						Ok(storage) => stored.summary(gate, storage),
+						Err(error) => {
+							let mut summary = stored.summary(gate, None);
+							summary.theme = None;
+							summary.preserve_deleted_messages = false;
+							summary.error = Some(error);
+							summary
+						}
+					},
 					Err(error) => InstalledExtension {
 						manifest: Manifest {
 							api_version: extensions::API_VERSION,
@@ -766,6 +783,17 @@ fn load(
 		}
 	}
 	Ok(installed)
+}
+
+fn activation_storage(stored: &Stored, directory: &Path) -> Result<Option<String>, String> {
+	let path = directory.join("data.json");
+	if stored.grants.contains(&Capability::Storage) && path.exists() {
+		String::from_utf8(read_bounded(&path, MAX_STORAGE)?)
+			.map(Some)
+			.map_err(|_| "Plugin data is invalid".into())
+	} else {
+		Ok(None)
+	}
 }
 
 fn read_stored(path: &Path) -> Result<Stored, String> {

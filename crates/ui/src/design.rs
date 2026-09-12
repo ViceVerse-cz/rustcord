@@ -303,6 +303,7 @@ struct ExtensionPalette {
 }
 thread_local! {
 	static EXTENSION_THEME: std::cell::Cell<Option<[ExtensionPalette; 2]>> = const { std::cell::Cell::new(None) };
+	static EXTENSION_STYLE: std::cell::Cell<extensions::ThemeStyle> = std::cell::Cell::new(extensions::ThemeStyle::default());
 }
 const THEME_FIELDS: [&str; 18] = [
 	"base",
@@ -341,9 +342,10 @@ fn extension_palette(theme: &extensions::ThemePalette) -> Option<ExtensionPalett
 	};
 	Some(ExtensionPalette { colors, backdrop })
 }
-/// Install prevalidated color overrides; malformed themes reset to the built-in appearance.
+/// Install color and native control overrides; malformed themes reset to built-in appearance.
 /// Call [`apply`] after changing this value. No parsing or allocation runs while drawing.
 pub fn set_extension_theme(theme: Option<&extensions::Theme>) {
+	let theme = theme.filter(|theme| theme.validate().is_ok());
 	let palettes = theme.and_then(|theme| {
 		Some([
 			extension_palette(&theme.light)?,
@@ -351,6 +353,7 @@ pub fn set_extension_theme(theme: Option<&extensions::Theme>) {
 		])
 	});
 	EXTENSION_THEME.set(palettes);
+	EXTENSION_STYLE.set(theme.map_or_else(extensions::ThemeStyle::default, |theme| theme.style));
 }
 fn recolor(mut palette: Palette, theme: ExtensionPalette) -> Palette {
 	for (destination, color) in [
@@ -550,35 +553,49 @@ impl egui::Plugin for ClickableCursor {
 pub fn apply(ctx: &egui::Context) {
 	ctx.add_plugin(ClickableCursor);
 	let variant = variant();
+	let metrics = EXTENSION_STYLE.get();
+	let item_spacing = metrics.item_spacing.unwrap_or([8, 8]);
+	let button_padding = metrics.button_padding.unwrap_or([12, 6]);
 	for theme in [egui::Theme::Dark, egui::Theme::Light] {
 		let p = opaque_surfaces(colors(theme == egui::Theme::Dark, variant));
 		let mut style = (*ctx.style_of(theme)).clone();
 		style.text_styles.insert(
 			egui::TextStyle::Heading,
-			FontId::new(20.0, semibold_family(ctx)),
+			FontId::new(
+				f32::from(metrics.heading_size.unwrap_or(20)),
+				semibold_family(ctx),
+			),
 		);
-		style
-			.text_styles
-			.insert(egui::TextStyle::Body, FontId::proportional(15.0));
+		style.text_styles.insert(
+			egui::TextStyle::Body,
+			FontId::proportional(f32::from(metrics.body_size.unwrap_or(15))),
+		);
 		style.text_styles.insert(
 			egui::TextStyle::Button,
-			FontId::new(14.0, medium_family(ctx)),
+			FontId::new(
+				f32::from(metrics.button_size.unwrap_or(14)),
+				medium_family(ctx),
+			),
 		);
-		style
-			.text_styles
-			.insert(egui::TextStyle::Small, FontId::proportional(12.0));
-		style
-			.text_styles
-			.insert(egui::TextStyle::Monospace, FontId::monospace(14.0));
-		style.spacing.item_spacing = egui::vec2(8.0, 8.0);
-		style.spacing.button_padding = egui::vec2(12.0, 6.0);
-		style.spacing.interact_size.y = 32.0;
+		style.text_styles.insert(
+			egui::TextStyle::Small,
+			FontId::proportional(f32::from(metrics.small_size.unwrap_or(12))),
+		);
+		style.text_styles.insert(
+			egui::TextStyle::Monospace,
+			FontId::monospace(f32::from(metrics.monospace_size.unwrap_or(14))),
+		);
+		style.spacing.item_spacing =
+			egui::vec2(f32::from(item_spacing[0]), f32::from(item_spacing[1]));
+		style.spacing.button_padding =
+			egui::vec2(f32::from(button_padding[0]), f32::from(button_padding[1]));
+		style.spacing.interact_size.y = f32::from(metrics.control_height.unwrap_or(32));
 		style.spacing.menu_margin = egui::Margin::same(8);
 		style.visuals.panel_fill = p.chat;
 		style.visuals.interact_cursor = Some(egui::CursorIcon::PointingHand);
 		style.visuals.window_fill = p.raised.to_opaque();
-		style.visuals.window_corner_radius = 8.into();
-		style.visuals.menu_corner_radius = 8.into();
+		style.visuals.window_corner_radius = metrics.window_radius.unwrap_or(8).into();
+		style.visuals.menu_corner_radius = metrics.menu_radius.unwrap_or(8).into();
 		style.visuals.window_stroke = Stroke::new(1.0, p.border);
 		style.visuals.window_shadow = egui::epaint::Shadow {
 			offset: [0, 8],
@@ -610,7 +627,7 @@ pub fn apply(ctx: &egui::Context) {
 			&mut style.visuals.widgets.active,
 			&mut style.visuals.widgets.open,
 		] {
-			widget.corner_radius = 4.into();
+			widget.corner_radius = metrics.widget_radius.unwrap_or(4).into();
 			widget.fg_stroke = Stroke::new(1.0, p.text);
 			widget.bg_stroke = Stroke::NONE;
 			widget.expansion = 0.0;

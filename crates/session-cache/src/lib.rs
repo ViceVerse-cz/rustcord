@@ -50,6 +50,18 @@ impl Timeline {
 			}
 		}
 	}
+	/// Invalidate stale live history without losing opt-in deleted payloads.
+	pub fn retain_deleted_messages(&mut self) {
+		self.cancel_page();
+		self.messages.retain(|id, message| {
+			let keep = self.preserve_deleted_messages && self.deleted.contains(id);
+			if !keep && let Some(message) = message {
+				self.bytes -= message.bytes();
+				self.payload_count -= 1;
+			}
+			keep
+		});
+	}
 	pub fn is_deleted(&self, id: Id) -> bool {
 		self.deleted.contains(&id)
 	}

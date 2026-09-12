@@ -22,6 +22,7 @@ pub struct ExtensionEntry {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExtensionContext {
+	pub app_wide: bool,
 	pub generation: u64,
 	pub channel: Option<Id>,
 	pub draft: Option<String>,
@@ -29,6 +30,7 @@ pub struct ExtensionContext {
 impl ExtensionContext {
 	pub fn capture(state: &State, composer: bool) -> Self {
 		Self {
+			app_wide: false,
 			generation: state.generation,
 			channel: state.selected,
 			draft: composer.then(|| {
@@ -40,9 +42,16 @@ impl ExtensionContext {
 			}),
 		}
 	}
+	pub fn panel(state: &State) -> Self {
+		Self {
+			app_wide: true,
+			channel: None,
+			..Self::capture(state, false)
+		}
+	}
 	pub fn is_current(&self, state: &State) -> bool {
 		self.generation == state.generation
-			&& self.channel == state.selected
+			&& (self.app_wide || self.channel == state.selected)
 			&& self.draft.as_ref().is_none_or(|draft| {
 				state
 					.selected
@@ -410,10 +419,14 @@ impl ExtensionUi {
 		});
 	}
 	fn queue(&mut self, ctx: &egui::Context, request: ExtensionRequest) {
-		if self.requests.len() < 4
-			&& request_bytes(&request)
-				.saturating_add(self.requests.iter().map(request_bytes).sum::<usize>())
-				<= 4 * extensions::MAX_IO_BYTES
+		if self.requests.len()
+			< if matches!(&request, ExtensionRequest::Disable { .. }) {
+				extensions::MAX_PLUGINS * 2
+			} else {
+				4
+			} && request_bytes(&request)
+			.saturating_add(self.requests.iter().map(request_bytes).sum::<usize>())
+			<= 4 * extensions::MAX_IO_BYTES
 		{
 			self.requests.push(request);
 			ctx.request_repaint();
@@ -452,19 +465,17 @@ impl ExtensionUi {
 					.manifest
 					.actions
 					.iter()
-					.any(|action| action.surface == Surface::Composer)
+					.any(|action| matches!(action.surface, Surface::Composer | Surface::Panel))
 		}) {
 			return;
 		}
 		let mut selected = None;
 		ui.menu_button("Tools", |ui| {
 			for entry in self.entries.iter().filter(|entry| entry.enabled) {
-				for action in entry
-					.manifest
-					.actions
-					.iter()
-					.filter(|action| action.surface == Surface::Composer)
-				{
+				for action in
+					entry.manifest.actions.iter().filter(|action| {
+						matches!(action.surface, Surface::Composer | Surface::Panel)
+					}) {
 					if ui
 						.add_enabled(
 							!self.busy,
@@ -475,14 +486,22 @@ impl ExtensionUi {
 						)
 						.clicked()
 					{
-						selected = Some((entry.manifest.id.clone(), action.id.clone()));
+						selected = Some((
+							entry.manifest.id.clone(),
+							action.id.clone(),
+							action.surface == Surface::Composer,
+						));
 						ui.close();
 					}
 				}
 			}
 		});
-		if let Some((id, action)) = selected {
-			let context = ExtensionContext::capture(state, true);
+		if let Some((id, action, composer)) = selected {
+			let context = if composer {
+				ExtensionContext::capture(state, true)
+			} else {
+				ExtensionContext::panel(state)
+			};
 			let invocation = Invocation {
 				action,
 				composer: context.draft.clone(),
@@ -807,7 +826,7 @@ impl ExtensionUi {
 						action,
 						..Default::default()
 					},
-					context: ExtensionContext::capture(state, false),
+					context: ExtensionContext::panel(state),
 				},
 			);
 		}
@@ -980,7 +999,11 @@ impl ExtensionUi {
 			.iter()
 			.filter(|entry| {
 				(entry.enabled || entry.cleanup_pending)
-					&& entry.manifest.kind == ExtensionKind::Theme
+					&& (entry.manifest.kind == ExtensionKind::Theme
+						|| entry
+							.manifest
+							.capabilities
+							.contains(&Capability::Appearance))
 			})
 			.map(|entry| entry.manifest.id.clone())
 			.collect();
@@ -992,7 +1015,12 @@ impl ExtensionUi {
 	}
 	pub(crate) fn reset_theme_button(&mut self, ui: &mut egui::Ui) {
 		if !self.entries.iter().any(|entry| {
-			(entry.enabled || entry.cleanup_pending) && entry.manifest.kind == ExtensionKind::Theme
+			(entry.enabled || entry.cleanup_pending)
+				&& (entry.manifest.kind == ExtensionKind::Theme
+					|| entry
+						.manifest
+						.capabilities
+						.contains(&Capability::Appearance))
 		}) {
 			return;
 		}
@@ -1040,39 +1068,45 @@ impl ExtensionUi {
 		let mut open = true;
 		let mut applied = false;
 		let mut action = None;
-		egui::Window::new("Extension result")
-			.id(egui::Id::unique("extension-result"))
-			.open(&mut open)
-			.default_width(360.0)
-			.max_width(600.0)
-			.show(ctx, |ui| {
-				ui.weak(&result.id);
-				egui::ScrollArea::vertical()
-					.max_height(400.0)
-					.show(ui, |ui| {
-						if let Some(replacement) = &result.output.replacement {
-							ui.label("Proposed composer text");
-							ui.add(egui::Label::new(replacement).wrap());
-							if ui
-								.add_enabled(
-									!editing && result.context.draft.is_some(),
-									egui::Button::new("Apply to draft"),
-								)
-								.clicked()
-							{
-								if apply_proposal(state, &result.context, replacement) {
-									if let Some(channel) = state.selected {
-										changes.push(channel);
-									}
-									applied = true;
-								} else {
-									self.status = "The draft changed or the proposal exceeds the draft limit.".into();
+		egui::Window::new(
+			self.entries
+				.iter()
+				.find(|entry| entry.manifest.id == result.id)
+				.map_or("Extension tool", |entry| entry.manifest.name.as_str()),
+		)
+		.id(egui::Id::unique("extension-result"))
+		.open(&mut open)
+		.default_width(360.0)
+		.max_width(600.0)
+		.show(ctx, |ui| {
+			egui::ScrollArea::vertical()
+				.max_height(400.0)
+				.show(ui, |ui| {
+					if let Some(replacement) = &result.output.replacement {
+						ui.label("Proposed composer text");
+						ui.add(egui::Label::new(replacement).wrap());
+						if ui
+							.add_enabled(
+								!editing && result.context.draft.is_some(),
+								egui::Button::new("Apply to draft"),
+							)
+							.clicked()
+						{
+							if apply_proposal(state, &result.context, replacement) {
+								if let Some(channel) = state.selected {
+									changes.push(channel);
 								}
+								applied = true;
+							} else {
+								self.status =
+									"The draft changed or the proposal exceeds the draft limit."
+										.into();
 							}
 						}
-						render_elements(ui, &result.output.panel, &mut result.values, &mut action);
-					});
-			});
+					}
+					render_elements(ui, &result.output.panel, &mut result.values, &mut action);
+				});
+		});
 		if let Some(action) = action {
 			let mut invocation = result.invocation.clone();
 			invocation.action = action;
@@ -1208,6 +1242,7 @@ fn draw_native_preview(ui: &egui::Ui, rect: egui::Rect, entry: &ExtensionEntry) 
 
 fn capability_label(capability: Capability) -> &'static str {
 	match capability {
+		Capability::Appearance => "Customize app colors, typography and control styling",
 		Capability::SelectedMessage => "Read the message I choose for an action",
 		Capability::Composer => "Read my draft and propose text changes",
 		Capability::Storage => "Store up to 1 MiB of local data for this account",
@@ -1227,11 +1262,17 @@ fn render_elements(
 			Element::Text { text } => {
 				ui.add(egui::Label::new(text).wrap());
 			}
+			Element::Heading { text } => {
+				ui.add(egui::Label::new(egui::RichText::new(text).heading()).wrap());
+			}
+			Element::Separator => {
+				ui.separator();
+			}
 			Element::Row { children } => {
 				ui.horizontal_wrapped(|ui| render_elements(ui, children, values, action));
 			}
 			Element::Button { id, label } => {
-				if ui.button(label).clicked() {
+				if ui.push_id(id, |ui| ui.button(label)).inner.clicked() {
 					*action = Some(id.clone());
 				}
 			}
@@ -1240,6 +1281,7 @@ fn render_elements(
 				let label = ui.label(label);
 				ui.add(
 					egui::TextEdit::singleline(value)
+						.id_salt(id)
 						.char_limit(1024)
 						.desired_width(ui.available_width().min(320.0)),
 				)
@@ -1250,8 +1292,51 @@ fn render_elements(
 					.entry(id.clone())
 					.or_insert_with(|| checked.to_string());
 				let mut checked = value == "true";
-				if ui.checkbox(&mut checked, label).changed() {
+				if ui
+					.push_id(id, |ui| ui.checkbox(&mut checked, label))
+					.inner
+					.changed()
+				{
 					*value = checked.to_string();
+				}
+			}
+			Element::Select {
+				id,
+				label,
+				options,
+				value,
+			} => {
+				let selected = values.entry(id.clone()).or_insert_with(|| value.clone());
+				let label = ui.label(label);
+				egui::ComboBox::from_id_salt(id)
+					.selected_text(selected.as_str())
+					.show_ui(ui, |ui| {
+						for option in options {
+							ui.selectable_value(selected, option.clone(), option);
+						}
+					})
+					.response
+					.labelled_by(label.id);
+			}
+			Element::Slider {
+				id,
+				label,
+				min,
+				max,
+				value,
+			} => {
+				let stored = values
+					.entry(id.clone())
+					.or_insert_with(|| value.to_string());
+				let mut value = stored.parse::<i32>().unwrap_or(*value).clamp(*min, *max);
+				if ui
+					.push_id(id, |ui| {
+						ui.add(egui::Slider::new(&mut value, *min..=*max).text(label))
+					})
+					.inner
+					.changed()
+				{
+					*stored = value.to_string();
 				}
 			}
 		}

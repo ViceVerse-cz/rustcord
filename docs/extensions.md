@@ -1,7 +1,7 @@
 # Community extensions
 
 Serein extensions are local, opt-in tools for the native client. The Extensions
-page in Settings contains plugins and themes, links to their source, their
+and Themes pages in Settings contain packages, links to their source, their
 requested capabilities and their review status. A plugin cannot call Discord,
 send a message, read credentials, open files or make network requests.
 
@@ -94,15 +94,31 @@ tombstone reconciliation and disk-cache removal remain unchanged. Disabling clea
 retained deleted content across active and dormant windows. Logout, lost channel
 access and ordinary timeline eviction also clear it. The same 500-row / 4 MiB
 per-window budget includes both live and retained deleted payloads. Input is restricted to the granted context and bounded form values.
-Results can propose a composer replacement or return native text, rows,
-buttons, text inputs and checkboxes. Composer proposals require Apply, retain
+Results can propose a composer replacement or return native headings, text, rows,
+separators, buttons, text inputs, checkboxes, dropdowns and integer sliders. Standalone
+panel actions are available from the composer Tools menu as well as the shop. Composer proposals require Apply, retain
 the ordinary Send action and are discarded when their originating context is
 stale. Account/session changes invalidate outstanding results.
 
-Themes override existing named palette colors for light/dark appearance, with
-the existing two-color backdrop supported. They contain no code, CSS, fonts,
-images or URLs to fetch. Built-in colors fill omitted tokens and the existing
-user accent setting takes precedence. Reset returns to a built-in appearance.
+Themes override named colors and native typography, spacing, padding and corner
+radii. See the complete [theme API](theme-api.md) for fields, bounds and inheritance.
+
+Plugins can request the `appearance` capability to return an `appearance` object
+using that same theme schema. This works from activation or a user-invoked action,
+so creators can build native appearance settings panels with dropdowns and sliders.
+An action replaces that plugin's previous appearance object; omit it to leave the
+current appearance unchanged, or return `{}` to remove its overrides. A plugin can
+use granted `storage` to save choices and read them during activation on the next
+account load. Activation does not receive conversation text. The host overlays
+plugin appearances on the selected theme in ascending plugin-ID order; the last
+explicit value wins. The user's own accent color setting still takes precedence.
+Disabling a plugin removes its overrides; Ctrl+Shift+F12 resets community themes
+and appearance plugins.
+
+This supports app-wide palette changes and shared native control styling, not
+arbitrary code injection into egui, replacement of the app layout, custom fonts,
+network access, or automatic Discord actions. Fixed-size custom-painted components
+keep their existing geometry. Missing fields inherit the underlying theme.
 
 ## Resource and privacy limits
 

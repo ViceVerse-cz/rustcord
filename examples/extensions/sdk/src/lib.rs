@@ -19,6 +19,8 @@ pub struct Invocation {
 #[derive(Default, Serialize)]
 pub struct Output {
 	pub preserve_deleted_messages: bool,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub appearance: Option<Theme>,
 	pub replacement: Option<String>,
 	pub panel: Vec<Element>,
 	pub storage: Option<String>,
@@ -30,6 +32,10 @@ pub enum Element {
 	Text {
 		text: String,
 	},
+	Heading {
+		text: String,
+	},
+	Separator,
 	Row {
 		children: Vec<Element>,
 	},
@@ -46,6 +52,19 @@ pub enum Element {
 		id: String,
 		label: String,
 		checked: bool,
+	},
+	Select {
+		id: String,
+		label: String,
+		options: Vec<String>,
+		value: String,
+	},
+	Slider {
+		id: String,
+		label: String,
+		min: i32,
+		max: i32,
+		value: i32,
 	},
 }
 
@@ -87,4 +106,53 @@ macro_rules! export {
 			((pointer as u64) << 32) | length
 		}
 	};
+}
+
+// Declarative appearance values; the host validates token names and numeric bounds.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ThemePalette {
+	#[serde(default)]
+	pub colors: BTreeMap<String, String>,
+	#[serde(default)]
+	pub backdrop: Option<[String; 2]>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Theme {
+	#[serde(default)]
+	pub light: ThemePalette,
+	#[serde(default)]
+	pub dark: ThemePalette,
+	#[serde(default)]
+	pub style: ThemeStyle,
+}
+
+/// Native control metrics in logical pixels. Omitted fields inherit the active theme.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ThemeStyle {
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub body_size: Option<u8>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub heading_size: Option<u8>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub button_size: Option<u8>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub small_size: Option<u8>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub monospace_size: Option<u8>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub item_spacing: Option<[u8; 2]>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub button_padding: Option<[u8; 2]>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub control_height: Option<u8>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub widget_radius: Option<u8>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub window_radius: Option<u8>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub menu_radius: Option<u8>,
 }
