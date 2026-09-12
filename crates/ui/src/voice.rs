@@ -2120,7 +2120,8 @@ fn best_fit(count: usize, area: egui::Vec2, cap: f32) -> (usize, egui::Vec2) {
 			continue;
 		}
 		let width = width.min(height * 16.0 / 9.0).min(cap);
-		if width > best.1.x {
+		// Prefer side-by-side tiles when the size cap makes multiple layouts tie.
+		if width >= best.1.x {
 			best = (columns, egui::vec2(width, width * 9.0 / 16.0));
 		}
 	}
