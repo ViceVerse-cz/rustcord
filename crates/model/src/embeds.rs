@@ -10,7 +10,12 @@ pub struct EmbedMedia {
 	pub proxy_url: Option<String>,
 	pub width: u32,
 	pub height: u32,
+	/// Discord's decoded ThumbHash (`placeholder_version` 1); painted until real pixels arrive.
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	pub placeholder: Vec<u8>,
 }
+/// ThumbHash payloads are 5 header bytes plus AC coefficients; Discord's never exceed ~30.
+pub const MAX_PLACEHOLDER_BYTES: usize = 64;
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(default)]
 pub struct EmbedAuthor {
@@ -55,12 +60,13 @@ fn string_bytes(value: &Option<String>) -> usize {
 }
 impl EmbedMedia {
 	fn bytes(&self) -> usize {
-		string_bytes(&self.url) + string_bytes(&self.proxy_url)
+		string_bytes(&self.url) + string_bytes(&self.proxy_url) + self.placeholder.capacity()
 	}
 	fn valid(&self) -> bool {
 		[&self.url, &self.proxy_url]
 			.into_iter()
 			.all(|s| s.as_ref().is_none_or(|s| s.len() <= 2048))
+			&& self.placeholder.len() <= MAX_PLACEHOLDER_BYTES
 	}
 }
 impl EmbedAuthor {

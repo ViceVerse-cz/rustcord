@@ -17,9 +17,19 @@ pub struct EmbedDto {
 	footer: Option<FooterDto>,
 	#[serde(deserialize_with = "model::deserialize_embed_fields")]
 	fields: Vec<EmbedField>,
-	image: Option<EmbedMedia>,
-	thumbnail: Option<EmbedMedia>,
-	video: Option<EmbedMedia>,
+	image: Option<MediaDto>,
+	thumbnail: Option<MediaDto>,
+	video: Option<MediaDto>,
+}
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct MediaDto {
+	url: Option<String>,
+	proxy_url: Option<String>,
+	width: u32,
+	height: u32,
+	placeholder: Option<String>,
+	placeholder_version: Option<u32>,
 }
 #[derive(Deserialize, Default)]
 #[serde(default)]
@@ -52,12 +62,13 @@ fn url(value: Option<String>, limited: &mut bool) -> Option<String> {
 		valid
 	})
 }
-fn media(value: Option<EmbedMedia>, limited: &mut bool) -> Option<EmbedMedia> {
+fn media(value: Option<MediaDto>, limited: &mut bool) -> Option<EmbedMedia> {
 	value.map(|m| EmbedMedia {
 		url: url(m.url, limited),
 		proxy_url: url(m.proxy_url, limited),
 		width: m.width,
 		height: m.height,
+		placeholder: crate::attachments::placeholder(m.placeholder, m.placeholder_version),
 	})
 }
 fn icon(original: Option<String>, proxy: Option<String>, limited: &mut bool) -> Option<EmbedMedia> {
@@ -65,11 +76,12 @@ fn icon(original: Option<String>, proxy: Option<String>, limited: &mut bool) -> 
 		return None;
 	}
 	media(
-		Some(EmbedMedia {
+		Some(MediaDto {
 			url: original,
 			proxy_url: proxy,
 			width: 32,
 			height: 32,
+			..Default::default()
 		}),
 		limited,
 	)
