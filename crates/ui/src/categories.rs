@@ -123,7 +123,7 @@ fn kind_label(kind: u8) -> &'static str {
 }
 
 impl MessagingUi {
-	pub(super) fn channel_list(&mut self, ui: &mut egui::Ui, state: &State) -> Option<Id> {
+	pub(super) fn channel_list(&mut self, ui: &mut egui::Ui, state: &mut State) -> Option<Id> {
 		let key = (
 			state.generation,
 			state.revision,
@@ -192,12 +192,14 @@ impl MessagingUi {
 		}
 		let colors = design::palette(ui);
 		let mut selected = None;
-		if self.channel_cache.rows.is_empty() {
+		if self.guild.is_some() && self.channel_cache.rows.is_empty() {
 			ui.label(RichText::new("No conversations available here.").color(colors.muted));
 		}
 		let dm_list = self.guild.is_none();
 		let row_height = if dm_list { 44.0 } else { 34.0 };
-		let row_count = self.channel_cache.rows.len();
+		// Friends and the section heading share the DM list's existing virtualized scroller.
+		let prefix = if dm_list { 2 } else { 0 };
+		let row_count = self.channel_cache.rows.len().max(usize::from(dm_list)) + prefix;
 		let previous_spacing = ui.spacing().item_spacing.y;
 		ui.spacing_mut().item_spacing.y = 0.0;
 		egui::ScrollArea::vertical()
@@ -205,7 +207,38 @@ impl MessagingUi {
 			.auto_shrink([false, false])
 			.show_rows(ui, row_height, row_count, |ui, range| {
 				for index in range {
-					match self.channel_cache.rows[index] {
+					if index < prefix {
+						ui.allocate_ui_with_layout(
+							egui::vec2(ui.available_width(), row_height),
+							egui::Layout::left_to_right(egui::Align::Center),
+							|ui| {
+								if index == 0 {
+									if ui
+										.add_sized(
+											[ui.available_width(), 38.0],
+											egui::Button::new("Friends")
+												.selected(state.selected.is_none()),
+										)
+										.clicked()
+									{
+										state.selected = None;
+										self.search.open = false;
+									}
+								} else {
+									ui.add_space(8.0);
+									ui.label(design::eyebrow(ui, "Direct Messages", colors.muted));
+								}
+							},
+						);
+						continue;
+					}
+					let Some(row) = self.channel_cache.rows.get(index - prefix).copied() else {
+						ui.label(
+							RichText::new("No conversations available here.").color(colors.muted),
+						);
+						continue;
+					};
+					match row {
 						CachedRow::Participant(entry) => {
 							let entry = &state.voice.roster[entry];
 							ui.horizontal(|ui| {
@@ -558,6 +591,115 @@ impl MessagingUi {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[test]
+	fn friends_scrolls_with_dms_while_find_stays_pinned() {
+		for width in [220.0, 320.0] {
+			let ctx = egui::Context::default();
+			design::apply(&ctx);
+			let mut state = test_support::demo_state();
+			state.channels = (1..=60)
+				.map(|id| {
+					let mut c = channel(id, 3, 0, None);
+					c.guild = None;
+					c
+				})
+				.collect();
+			let mut view = MessagingUi::default();
+			let render = |view: &mut MessagingUi, state: &mut State, events| {
+				let mut output = ctx.run_ui(
+					egui::RawInput {
+						screen_rect: Some(egui::Rect::from_min_size(
+							egui::Pos2::ZERO,
+							egui::vec2(width, 380.0),
+						)),
+						events,
+						..Default::default()
+					},
+					|ui| view.sidebar(ui, state, "Direct Messages", &mut vec![]),
+				);
+				output.textures_delta.clear();
+				output
+					.shapes
+					.iter()
+					.filter_map(|s| match &s.shape {
+						egui::Shape::Text(t) => {
+							let rect = egui::Rect::from_min_size(t.pos, t.galley.size());
+							s.clip_rect
+								.intersects(rect)
+								.then(|| (t.galley.job.text.clone(), rect))
+						}
+						_ => None,
+					})
+					.collect::<Vec<_>>()
+			};
+			render(&mut view, &mut state, vec![]);
+			let before = render(&mut view, &mut state, vec![]);
+			let find = before
+				.iter()
+				.find(|(s, _)| s == "Find conversation")
+				.unwrap()
+				.1;
+			let friends = before
+				.iter()
+				.find(|(s, _)| s == "Friends")
+				.unwrap()
+				.1
+				.center();
+			for pressed in [true, false] {
+				render(
+					&mut view,
+					&mut state,
+					vec![
+						egui::Event::PointerMoved(friends),
+						egui::Event::PointerButton {
+							pos: friends,
+							button: egui::PointerButton::Primary,
+							pressed,
+							modifiers: egui::Modifiers::NONE,
+						},
+					],
+				);
+			}
+			assert!(state.selected.is_none());
+			let mut after = vec![];
+			for _ in 0..12 {
+				after = render(
+					&mut view,
+					&mut state,
+					vec![
+						egui::Event::PointerMoved(egui::pos2(100.0, 250.0)),
+						egui::Event::MouseWheel {
+							phase: egui::TouchPhase::Move,
+							unit: egui::MouseWheelUnit::Point,
+							delta: egui::vec2(0.0, -100.0),
+							modifiers: egui::Modifiers::NONE,
+						},
+					],
+				);
+			}
+			assert_eq!(
+				after
+					.iter()
+					.find(|(s, _)| s == "Find conversation")
+					.unwrap()
+					.1,
+				find
+			);
+			assert!(
+				!after
+					.iter()
+					.any(|(s, _)| s == "Friends" || s == "DIRECT MESSAGES")
+			);
+			let visible_dms = after
+				.iter()
+				.filter(|(s, _)| s.starts_with("Synthetic "))
+				.count();
+			assert!(
+				visible_dms > 0 && visible_dms < 12,
+				"list remains virtualized: {visible_dms}"
+			);
+		}
+	}
 	fn channel(id: u64, kind: u8, position: i32, parent_id: Option<Id>) -> Channel {
 		Channel {
 			last_message: None,
@@ -642,7 +784,7 @@ mod tests {
 					let mut scroll = egui::scroll_area::State::load(&ctx, id).unwrap_or_default();
 					scroll.offset.y = offset;
 					scroll.store(&ctx, id);
-					view.channel_list(ui, &state);
+					view.channel_list(ui, &mut state);
 					assert_eq!(ui.spacing().item_spacing.y, 8.0);
 				},
 			);
@@ -816,7 +958,7 @@ mod tests {
 						..Default::default()
 					},
 					|ui| {
-						assert!(view.channel_list(ui, &state).is_none());
+						assert!(view.channel_list(ui, &mut state).is_none());
 						assert!(ui.min_rect().right() <= ui.max_rect().right() + 1.0);
 					},
 				);
@@ -952,7 +1094,7 @@ mod tests {
 			..MessagingUi::default()
 		};
 		let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-			assert!(view.channel_list(ui, &state).is_none());
+			assert!(view.channel_list(ui, &mut state).is_none());
 		});
 		output.textures_delta.clear();
 		assert!(view.collapsed_categories.is_empty());
@@ -975,7 +1117,7 @@ mod tests {
 				..Default::default()
 			};
 			let mut output = ctx.run_ui(input, |ui| {
-				assert!(view.channel_list(ui, &state).is_none());
+				assert!(view.channel_list(ui, &mut state).is_none());
 			});
 			output.textures_delta.clear();
 		}
@@ -1006,7 +1148,7 @@ mod tests {
 					..Default::default()
 				},
 				|ui| {
-					picked = view.channel_list(ui, &state).or(picked);
+					picked = view.channel_list(ui, &mut state).or(picked);
 				},
 			)
 			.drop_without_applying_deltas();

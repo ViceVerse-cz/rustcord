@@ -991,9 +991,12 @@ impl Picker {
 											egui::Sense::hover(),
 										);
 										paint_emoji(ui, rect, image.as_ref(), fallback);
-										ui.label(
-											crate::design::semibold(ui, code, 15.0)
-												.color(colors.text_strong),
+										ui.add(
+											egui::Label::new(
+												crate::design::semibold(ui, code, 15.0)
+													.color(colors.text_strong),
+											)
+											.truncate(),
 										);
 									}
 									None => {

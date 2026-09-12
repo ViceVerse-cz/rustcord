@@ -28,13 +28,15 @@
 
 ## Downloads & Installation
 
-### Homebrew (macOS) *(Placeholder)*
+### Homebrew (macOS, Apple Silicon)
 
 ```sh
-# Coming soon: install via Homebrew Cask
-brew tap ViceVerse-cz/serein
+brew tap ViceVerse-cz/serein https://github.com/ViceVerse-cz/Serein.git
 brew install --cask serein
 ```
+
+The explicit repository URL keeps the cask in this repository; a separate
+`homebrew-serein` tap is not required.
 
 ### Pre-built Releases
 
@@ -42,7 +44,7 @@ Pre-compiled release packages are published on the GitHub [Releases](https://git
 
 | Platform | Format | Architectures | Details |
 |---|---|---|---|
-| **macOS** | `.zip` archive | Apple Silicon (`aarch64`), Intel (`x86_64`) | Signed and notarized `.app` bundle |
+| **macOS** | `.zip` archive | Apple Silicon (`aarch64`) | Signed and notarized `.app` bundle |
 | **Linux** | `.deb` package / binary | `x86_64` | Ubuntu/Debian native package |
 | **Windows** | `.zip` archive | `x86_64` | Standalone executable package |
 

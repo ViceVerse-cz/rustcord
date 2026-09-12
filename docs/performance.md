@@ -3454,6 +3454,49 @@ This is not a native screenshot or timing benchmark. Native application control
 is unavailable; CPU/RSS/p95 frame comparisons and native visual inspection remain
 unmeasured. No speed or live-service compatibility improvement is claimed.
 
+## DM sidebar scrolling and stacked group avatars - September 12, 2026
+
+Baseline `0e355da`; Windows, Ryzen 7 7800X3D, 33,410,678,784 bytes RAM,
+Rust 1.98.1. Standard release packages include voice; separate snapshots exclude
+the unrelated obsolete `dist/voice` directory, which remains untouched.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Executable bytes | 63,095,808 | 63,097,856 | +2,048 (+0.0032%) |
+| Installed bytes | 73,315,659 | 73,317,707 | +2,048 (+0.0028%) |
+| Compress-Archive ZIP bytes | 43,546,895 | 43,547,211 | +316 (+0.0007%) |
+
+Friends and the DM section heading are two prefix rows in the existing virtualized
+list. No additional scroller, cached row collection or per-frame full-list traversal.
+Groups without custom icons paint at most two member avatars via the existing bounded
+avatar cache/request path; cold groups may fetch those two images. No new dependencies,
+cache limits, storage fields or network transports. Synthetic tests check pinned-search
+geometry, Friends navigation, bounded visible rows and stacked artwork at 24/32/144 points.
+Native screenshot/control is unavailable, so visual inspection and CPU/RSS/p95 frame
+comparisons remain unmeasured. These tests do not establish native smoothness or live
+Discord interoperability; no speed improvement is claimed.
+
+## Clickable hand cursor - September 12, 2026
+
+Baseline `ec0ce95`; Windows, Ryzen 7 7800X3D, 33,410,678,784 bytes RAM,
+Rust 1.98.1. Standard release packages include voice; separate snapshots exclude
+the unrelated obsolete `dist/voice` directory, left untouched.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Executable bytes | 63,097,856 | 63,100,928 | +3,072 (+0.0049%) |
+| Installed bytes | 73,319,066 | 73,322,138 | +3,072 (+0.0042%) |
+| Compress-Archive ZIP bytes | 43,547,590 | 43,548,491 | +901 (+0.0021%) |
+
+Standard buttons use egui's cursor style. The stateless custom-control hook is
+registered once per context and returns immediately when an explicit cursor is
+already chosen; otherwise it inspects only egui's small hovered-widget set.
+No full-widget traversal, retained cache, new dependency or repaint request.
+Synthetic tests verify hand/default/text/resize/grab output in both themes,
+including disabled controls and repeated theme application. Native cursor capture,
+CPU/RSS and p95 frame measurements are unavailable because native application
+control is disabled. No native latency or speed improvement is claimed.
+
 ## Community extensions - September 12, 2026
 
 Baseline `0e355da`, implementation `46e81a1`; Windows 11 (10.0.26200),

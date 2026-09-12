@@ -908,23 +908,6 @@ impl MessagingUi {
 						self.switcher.open(&ctx);
 					}
 					ui.add_space(8.0);
-					if ui
-						.add_sized(
-							[ui.available_width(), 38.0],
-							egui::Button::new("Friends").selected(state.selected.is_none()),
-						)
-						.clicked()
-					{
-						state.selected = None;
-						self.search.open = false;
-					}
-				}
-				if self.guild.is_none() {
-					ui.horizontal(|ui| {
-						ui.add_space(8.0);
-						ui.label(design::eyebrow(ui, "Direct Messages", colors.muted));
-					});
-					ui.add_space(4.0);
 				}
 				let select = self.channel_list(ui, state);
 				if let Some(id) = select

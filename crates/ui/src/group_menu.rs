@@ -436,9 +436,10 @@ mod tests {
 					t.galley.job.text.clone(),
 					t.galley.rect.translate(t.pos.to_vec2()),
 				)),
-				egui::Shape::Circle(c) if c.radius == 72.0 => out.push((
+				// Target the edit affordance, independent of the avatar artwork underneath.
+				egui::Shape::Circle(c) if c.radius == 18.0 => out.push((
 					"icon".into(),
-					Rect::from_center_size(c.center, egui::Vec2::splat(144.0)),
+					Rect::from_center_size(c.center, egui::Vec2::splat(36.0)),
 				)),
 				egui::Shape::Vec(shapes) => {
 					for shape in shapes {

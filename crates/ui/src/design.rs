@@ -498,7 +498,31 @@ pub fn eyebrow(ui: &egui::Ui, text: impl Into<String>, color: Color32) -> RichTe
 	semibold(ui, text.into().to_uppercase(), 12.0).color(color)
 }
 
+// Registered once per context, including when appearance settings reapply the theme.
+struct ClickableCursor;
+impl egui::Plugin for ClickableCursor {
+	fn debug_name(&self) -> &'static str {
+		"Clickable cursor"
+	}
+	fn on_end_pass(&mut self, ui: &mut egui::Ui) {
+		let ctx = ui.ctx();
+		// Text, resize, drag and other explicitly chosen cursors take precedence.
+		if ctx.output(|output| output.cursor_icon) != egui::CursorIcon::Default {
+			return;
+		}
+		let hovered = ctx.interaction_snapshot(|snapshot| snapshot.hovered.clone());
+		if hovered.into_iter().any(|id| {
+			ctx.read_response(id).is_some_and(|response| {
+				response.enabled() && response.hovered() && response.sense.senses_click()
+			})
+		}) {
+			ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+		}
+	}
+}
+
 pub fn apply(ctx: &egui::Context) {
+	ctx.add_plugin(ClickableCursor);
 	let variant = variant();
 	for theme in [egui::Theme::Dark, egui::Theme::Light] {
 		let p = opaque_surfaces(colors(theme == egui::Theme::Dark, variant));
@@ -525,6 +549,7 @@ pub fn apply(ctx: &egui::Context) {
 		style.spacing.interact_size.y = 32.0;
 		style.spacing.menu_margin = egui::Margin::same(8);
 		style.visuals.panel_fill = p.chat;
+		style.visuals.interact_cursor = Some(egui::CursorIcon::PointingHand);
 		style.visuals.window_fill = p.raised.to_opaque();
 		style.visuals.window_corner_radius = 8.into();
 		style.visuals.menu_corner_radius = 8.into();
@@ -863,6 +888,69 @@ fn contrast(a: Color32, b: Color32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+	#[test]
+	fn clickable_cursor_preserves_disabled_text_and_specialized_controls() {
+		use egui::{CursorIcon, Sense};
+		for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+			for (kind, expected) in [
+				("button", CursorIcon::PointingHand),
+				("checkbox", CursorIcon::PointingHand),
+				("custom", CursorIcon::PointingHand),
+				("click-drag", CursorIcon::PointingHand),
+				("disabled", CursorIcon::Default),
+				("disabled-custom", CursorIcon::Default),
+				("hover", CursorIcon::Default),
+				("text", CursorIcon::Text),
+				("resize", CursorIcon::ResizeHorizontal),
+				("drag", CursorIcon::Grab),
+			] {
+				let ctx = egui::Context::default();
+				ctx.set_theme(theme);
+				super::apply(&ctx);
+				super::apply(&ctx);
+				let mut center = egui::Pos2::ZERO;
+				let mut text = String::from("Editable text");
+				let mut actual = CursorIcon::Default;
+				for _ in 0..3 {
+					let output = ctx.run_ui(
+						egui::RawInput {
+							events: vec![egui::Event::PointerMoved(center)],
+							..Default::default()
+						},
+						|ui| {
+							let response = match kind {
+								"button" => ui.button("Action"),
+								"checkbox" => ui.checkbox(&mut false, "Toggle"),
+								"disabled" => ui.add_enabled(false, egui::Button::new("Disabled")),
+								"text" => ui.text_edit_singleline(&mut text),
+								_ => {
+									ui.add_enabled_ui(kind != "disabled-custom", |ui| {
+										ui.allocate_exact_size(
+											egui::vec2(100.0, 32.0),
+											match kind {
+												"hover" => Sense::hover(),
+												"click-drag" => Sense::click_and_drag(),
+												_ => Sense::click(),
+											},
+										)
+										.1
+									})
+									.inner
+								}
+							};
+							center = response.rect.center();
+							if matches!(kind, "resize" | "drag") {
+								response.on_hover_cursor(expected);
+							}
+						},
+					);
+					actual = output.platform_output.cursor_icon;
+					output.drop_without_applying_deltas();
+				}
+				assert_eq!(actual, expected, "{kind}");
+			}
+		}
+	}
 	use super::*;
 	#[test]
 	fn hex_colors_accept_pasted_values_without_applying_partial_or_invalid_input() {
