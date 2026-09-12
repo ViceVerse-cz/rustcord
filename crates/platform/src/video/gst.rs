@@ -13,6 +13,7 @@ use std::{
 		Arc, Mutex,
 		atomic::{AtomicBool, AtomicU64, Ordering},
 	},
+	task::Poll,
 };
 
 const CHUNK: usize = 64 * 1024;
@@ -235,21 +236,23 @@ impl Decoder {
 		Ok(())
 	}
 
-	pub fn read_video(&mut self) -> Result<Option<Sample>, &'static str> {
-		let sample = loop {
-			if self.video_done {
-				return Ok(None);
-			}
-			let Some(sample) = self.pull(&self.video.clone())? else {
+	pub fn poll_video(&mut self) -> Result<Poll<Option<Sample>>, &'static str> {
+		if self.video_done {
+			return Ok(Poll::Ready(None));
+		}
+		let sample = match self.pull(&self.video)? {
+			Poll::Pending => return Ok(Poll::Pending),
+			Poll::Ready(None) => {
 				self.video_done = true;
-				return Ok(None);
-			};
-			let pts = stream_time(&sample)?;
-			if pts > self.last_video_pts {
-				self.last_video_pts = pts;
-				break sample;
+				return Ok(Poll::Ready(None));
 			}
+			Poll::Ready(Some(sample)) => sample,
 		};
+		let pts = stream_time(&sample)?;
+		if pts <= self.last_video_pts {
+			return Ok(Poll::Pending);
+		}
+		self.last_video_pts = pts;
 		let (width, height) = frame_dimensions(&sample)?;
 		let buffer = sample.buffer().ok_or(INVALID)?;
 		let caps = sample.caps().ok_or(INVALID)?;
@@ -268,24 +271,28 @@ impl Decoder {
 		for (source, target) in data.chunks(stride).zip(rgba.chunks_exact_mut(row)) {
 			target.copy_from_slice(&source[..row]);
 		}
-		Ok(Some(Sample::Video {
+		Ok(Poll::Ready(Some(Sample::Video {
 			pts: self.last_video_pts,
 			width,
 			height,
 			rgba,
-		}))
+		})))
 	}
 
-	pub fn read_audio(&mut self) -> Result<Option<Sample>, &'static str> {
-		let Some(audio) = self.audio.clone() else {
-			return Ok(None);
+	pub fn poll_audio(&mut self) -> Result<Poll<Option<Sample>>, &'static str> {
+		let Some(audio) = &self.audio else {
+			return Ok(Poll::Ready(None));
 		};
 		if self.audio_done {
-			return Ok(None);
+			return Ok(Poll::Ready(None));
 		}
-		let Some(sample) = self.pull(&audio)? else {
-			self.audio_done = true;
-			return Ok(None);
+		let sample = match self.pull(audio)? {
+			Poll::Pending => return Ok(Poll::Pending),
+			Poll::Ready(None) => {
+				self.audio_done = true;
+				return Ok(Poll::Ready(None));
+			}
+			Poll::Ready(Some(sample)) => sample,
 		};
 		let pts = stream_time(&sample)?;
 		let buffer = sample.buffer().ok_or(INVALID)?;
@@ -311,26 +318,23 @@ impl Decoder {
 				})
 			})
 			.collect();
-		Ok(Some(Sample::Audio { pts, frames }))
+		Ok(Poll::Ready(Some(Sample::Audio { pts, frames })))
 	}
 
-	/// Wait for one sample; `None` means the stream ended. Errors posted on the bus win.
-	fn pull(&self, sink: &gst_app::AppSink) -> Result<Option<gst::Sample>, &'static str> {
-		loop {
-			if self.shared.failed.load(Ordering::Acquire) {
-				return Err(INVALID);
-			}
-			if let Some(sample) = sink.try_pull_sample(gst::ClockTime::from_mseconds(250)) {
-				return Ok(Some(sample));
-			}
-			if sink.is_eos() {
-				return Ok(None);
-			}
-			check_bus(&self.pipeline)?;
-			if self.shared.failed.load(Ordering::Acquire) {
-				return Err(INVALID);
-			}
+	/// A full sibling queue can stop demuxing this track. Return control to the worker so
+	/// it can drain the other track, process cancellation, and apply its stall deadline.
+	fn pull(&self, sink: &gst_app::AppSink) -> Result<Poll<Option<gst::Sample>>, &'static str> {
+		if self.shared.failed.load(Ordering::Acquire) {
+			return Err(INVALID);
 		}
+		check_bus(&self.pipeline)?;
+		if let Some(sample) = sink.try_pull_sample(gst::ClockTime::ZERO) {
+			return Ok(Poll::Ready(Some(sample)));
+		}
+		if sink.is_eos() {
+			return Ok(Poll::Ready(None));
+		}
+		Ok(Poll::Pending)
 	}
 }
 
@@ -480,6 +484,20 @@ mod tests {
 	use super::*;
 	const FIXTURE: &[u8] = include_bytes!("../../../../apps/desktop/tests/fixtures/video.mov");
 
+	fn wait_for_sample(
+		decoder: &mut Decoder,
+		poll: fn(&mut Decoder) -> Result<Poll<Option<Sample>>, &'static str>,
+	) -> Option<Sample> {
+		let started = std::time::Instant::now();
+		loop {
+			if let Poll::Ready(sample) = poll(decoder).unwrap() {
+				return sample;
+			}
+			assert!(started.elapsed().as_secs() < 20, "sample timed out");
+			std::thread::sleep(std::time::Duration::from_millis(1));
+		}
+	}
+
 	#[test]
 	fn native_mov_decodes_audio_video_and_seeks() {
 		let mut decoder = Decoder::open(Box::new(std::io::Cursor::new(FIXTURE))).unwrap();
@@ -490,13 +508,25 @@ mod tests {
 		);
 		assert!((2.9..3.1).contains(&info.duration));
 		let (mut videos, mut audio_frames, mut last_pts) = (0, 0, -1.0);
-		for _ in 0..1_000 {
-			let video = decoder.read_video().unwrap();
-			let audio = decoder.read_audio().unwrap();
-			if video.is_none() && audio.is_none() {
-				break;
+		let started = std::time::Instant::now();
+		while !decoder.video_done || !decoder.audio_done {
+			assert!(started.elapsed().as_secs() < 20, "asymmetric drain stalled");
+			let mut samples = Vec::new();
+			// Fill audio eagerly, as the player does. Blocking here deadlocks when the
+			// bounded video branch fills, or at video EOF before audio has drained.
+			for _ in 0..16 {
+				match decoder.poll_audio().unwrap() {
+					Poll::Ready(Some(sample)) => samples.push(sample),
+					Poll::Ready(None) | Poll::Pending => break,
+				}
 			}
-			for sample in [video, audio].into_iter().flatten() {
+			if let Poll::Ready(Some(sample)) = decoder.poll_video().unwrap() {
+				samples.push(sample);
+			}
+			if samples.is_empty() {
+				std::thread::sleep(std::time::Duration::from_millis(1));
+			}
+			for sample in samples {
 				match sample {
 					Sample::Video {
 						pts,
@@ -521,10 +551,11 @@ mod tests {
 		// GStreamer trims the last B-frames of this edit-listed fixture; all output stays ordered.
 		assert!((66..=72).contains(&videos), "{videos}");
 		assert!(audio_frames >= 140_000, "{audio_frames}");
-		assert!(decoder.read_video().unwrap().is_none());
-		assert!(decoder.read_audio().unwrap().is_none());
+		assert!(wait_for_sample(&mut decoder, Decoder::poll_video).is_none());
+		assert!(wait_for_sample(&mut decoder, Decoder::poll_audio).is_none());
 		decoder.seek(1.0).unwrap();
-		let Some(Sample::Video { pts, .. }) = decoder.read_video().unwrap() else {
+		let Some(Sample::Video { pts, .. }) = wait_for_sample(&mut decoder, Decoder::poll_video)
+		else {
 			panic!("no frame after seek");
 		};
 		assert!((0.9..1.2).contains(&pts), "{pts}");
@@ -532,8 +563,8 @@ mod tests {
 		let silent = include_bytes!("../../../../apps/desktop/tests/fixtures/video-silent.mov");
 		let mut decoder = Decoder::open(Box::new(std::io::Cursor::new(silent.as_slice()))).unwrap();
 		assert_eq!(decoder.info().sample_rate, 0);
-		assert!(decoder.read_audio().unwrap().is_none());
-		assert!(decoder.read_video().unwrap().is_some());
+		assert!(wait_for_sample(&mut decoder, Decoder::poll_audio).is_none());
+		assert!(wait_for_sample(&mut decoder, Decoder::poll_video).is_some());
 		assert!(Decoder::open(Box::new(std::io::Cursor::new(vec![0_u8; 64]))).is_err());
 	}
 }

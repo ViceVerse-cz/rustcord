@@ -63,7 +63,9 @@ impl Video {
 			player.state = update.state;
 			player.position = update.position;
 			player.duration = update.duration;
-			if let Some((width, height, rgba)) = update.frame.take() {
+			let frame = update.frame.take();
+			drop(update);
+			if let Some((width, height, rgba)) = frame {
 				player.accept_frame(ctx, width as usize, height as usize, &rgba);
 			}
 		}
@@ -200,6 +202,7 @@ fn play_decoded(
 	use platform::video::Sample;
 	use std::{
 		collections::VecDeque,
+		task::Poll::{Pending, Ready},
 		time::{Duration, Instant},
 	};
 	let info = decoder.info();
@@ -307,7 +310,7 @@ fn play_decoded(
 					VideoState::Playing
 				};
 				changed = update.state != state
-					|| update.position != current.min(info.duration)
+					|| (update.position * 10.) as u64 != (current.min(info.duration) * 10.) as u64
 					|| frame.is_some();
 				update.state = state;
 				update.position = current.min(info.duration);
@@ -343,11 +346,13 @@ fn play_decoded(
 			let mut decoded = false;
 			// Request each track independently so short/missing audio cannot hold video EOF hostage.
 			if !audio_ended && !paused && pending_audio.is_none() {
-				match decoder.read_audio()? {
-					Some(Sample::Audio {
+				let sample = decoder.poll_audio()?;
+				decoded |= sample.is_ready();
+				match sample {
+					Ready(Some(Sample::Audio {
 						pts,
 						frames: samples,
-					}) => {
+					})) => {
 						let packet_start =
 							((pts - target) * f64::from(info.sample_rate)).round() as i64;
 						let skip = (queued_audio as i64 - packet_start).max(0) as usize;
@@ -363,24 +368,26 @@ fn play_decoded(
 							pending_audio = Some((samples, skip));
 						}
 					}
-					None => {
+					Ready(None) => {
 						audio_ended = true;
 						eof.store(true, Ordering::Release);
 					}
+					Pending => {}
 					_ => return Err("Unexpected video audio track"),
 				}
-				decoded = true;
 			}
 			// Two frames (<=16 MiB) ahead, plus one bounded audio packet and one second of PCM.
 			if !video_ended && frames.len() < 2 {
 				let read_started = Instant::now();
-				match decoder.read_video()? {
-					Some(Sample::Video {
+				let sample = decoder.poll_video()?;
+				decoded |= sample.is_ready();
+				match sample {
+					Ready(Some(Sample::Video {
 						pts,
 						width,
 						height,
 						rgba,
-					}) => {
+					})) => {
 						if pts >= target - 0.01 {
 							seek_preview = None;
 							frames.push_back((pts, width, height, rgba));
@@ -388,12 +395,13 @@ fn play_decoded(
 							seek_preview = Some((target, width, height, rgba));
 						}
 					}
-					None => {
+					Ready(None) => {
 						video_ended = true;
 						if preview_needed && let Some(frame) = seek_preview.take() {
 							frames.push_back(frame);
 						}
 					}
+					Pending => {}
 					_ => return Err("Unexpected video track"),
 				}
 				// Freeze the silent/finished-audio clock across a blocking buffer refill.
@@ -402,7 +410,6 @@ fn play_decoded(
 				{
 					last_tick = Instant::now();
 				}
-				decoded = true;
 			}
 			if !decoded {
 				std::thread::sleep(Duration::from_millis(5));
@@ -415,6 +422,42 @@ fn play_decoded(
 mod tests {
 	use super::*;
 	use std::time::{Duration, Instant};
+	/// Synthetic local clip only; zero-volume output, no account or microphone access.
+	#[test]
+	#[ignore = "SEREIN_VIDEO_SAMPLE supplies an offline clip; opens muted local output"]
+	fn local_video_keeps_up_with_realtime() {
+		let path = std::env::var("SEREIN_VIDEO_SAMPLE").expect("SEREIN_VIDEO_SAMPLE path");
+		assert!(std::fs::metadata(&path).unwrap().len() <= 100 * 1024 * 1024);
+		let bytes = std::fs::read(path).unwrap();
+		let session = Arc::new(Session::new(0.));
+		let worker_session = session.clone();
+		let started = Instant::now();
+		let thread = std::thread::spawn(move || {
+			let decoder = platform::video::Decoder::open(Box::new(std::io::Cursor::new(bytes)))?;
+			play_decoded(decoder, &worker_session, &eframe::egui::Context::default())
+		});
+		while !thread.is_finished() {
+			let update = session.update.lock().unwrap();
+			let deadline = update.duration + 5.;
+			drop(update);
+			if started.elapsed().as_secs_f64() > deadline {
+				session.cancelled.store(true, Ordering::Release);
+				let _ = thread.join();
+				panic!("playback could not keep up with realtime");
+			}
+			std::thread::sleep(Duration::from_millis(20));
+		}
+		assert_eq!(thread.join().unwrap(), Ok(()));
+		let update = session.update.lock().unwrap();
+		assert_eq!(update.state, VideoState::Ended);
+		assert!(update.position >= update.duration - 0.1);
+		eprintln!(
+			"{:.3}s clip played in {:.3}s",
+			update.duration,
+			started.elapsed().as_secs_f64()
+		);
+	}
+
 	#[test]
 	#[ignore = "opens the local audio output device at zero volume; explicit offline playback check"]
 	fn inline_video_plays_pauses_seeks_and_cancels() {

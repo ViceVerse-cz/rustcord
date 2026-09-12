@@ -126,6 +126,23 @@ opt-level = 3
 [profile.dev.package.aead]
 opt-level = 3
 
+# Inline video must keep up with its audio clock under `cargo run` too. Optimize
+# native-frame copies, AAC/MDCT, and egui's pixel conversion; keep app logic debuggable.
+[profile.dev.package.platform]
+opt-level = 3
+
+[profile.dev.package.symphonia-codec-aac]
+opt-level = 3
+
+[profile.dev.package.symphonia-core]
+opt-level = 3
+
+[profile.dev.package.epaint]
+opt-level = 3
+
+[profile.dev.package.ecolor]
+opt-level = 3
+
 [patch.crates-io]
 # Replace an affected SHAKE dependency while retaining the compatible HPKE API.
 hpke-rs = { path = "vendor/hpke-rs" }
