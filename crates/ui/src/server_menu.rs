@@ -26,6 +26,54 @@ pub(super) struct ServerMenu {
 }
 
 impl ServerMenu {
+	pub fn settings_item(&mut self, ui: &mut egui::Ui, state: &State, guild: Id) -> bool {
+		if (state.can_manage_guild(guild)
+			|| state.can_open_role_settings(guild)
+			|| state.can_open_emoji_settings(guild)
+			|| state.can_open_integration_settings(guild)
+			|| state.can_open_audit_log_settings(guild)
+			|| state.can_open_member_settings(guild))
+			&& menu_row(
+				ui,
+				icons::Icon::Gear,
+				"Server Settings",
+				design::palette(ui).text,
+			)
+			.clicked()
+		{
+			self.settings_requested = Some(guild);
+			ui.close();
+			return true;
+		}
+		false
+	}
+	pub fn leave_item(&mut self, ui: &mut egui::Ui, state: &mut State, guild: Id) -> bool {
+		if state.leave_server_reason(guild).is_some() {
+			return false;
+		}
+		let available = !state.server_action_pending()
+			&& !state.server_invite_pending()
+			&& (state.demo || state.gateway_connected);
+		if ui
+			.add_enabled_ui(available, |ui| {
+				menu_row(
+					ui,
+					icons::Icon::ArrowRight,
+					"Leave server",
+					design::palette(ui).danger,
+				)
+			})
+			.inner
+			.clicked()
+		{
+			state.clear_server_action_result(guild);
+			self.dialog = Some(Dialog::Leave(guild));
+			self.generation = state.generation;
+			ui.close();
+			return true;
+		}
+		false
+	}
 	pub fn open_invite(&mut self, state: &mut State, guild: Id, channel: Id) {
 		if !state.can_create_server_invite(guild, channel) {
 			return;
@@ -87,17 +135,7 @@ impl ServerMenu {
 					let available = !state.server_action_pending()
 						&& !state.server_invite_pending()
 						&& (state.demo || state.gateway_connected);
-					if (state.can_manage_guild(guild)
-						|| state.can_open_role_settings(guild)
-						|| state.can_open_emoji_settings(guild)
-						|| state.can_open_integration_settings(guild)
-						|| state.can_open_audit_log_settings(guild)
-						|| state.can_open_member_settings(guild))
-						&& menu_row(ui, icons::Icon::Gear, "Server Settings", colors.text).clicked()
-					{
-						self.settings_requested = Some(guild);
-						ui.close();
-					}
+					self.settings_item(ui, state, guild);
 					if ui
 						.add_enabled_ui(available, |ui| {
 							menu_row(ui, icons::Icon::AddPeople, "Create invite", colors.text)
@@ -115,18 +153,7 @@ impl ServerMenu {
 						ui.close();
 					}
 					ui.separator();
-					if ui
-						.add_enabled_ui(available, |ui| {
-							menu_row(ui, icons::Icon::ArrowRight, "Leave server", colors.danger)
-						})
-						.inner
-						.clicked()
-					{
-						state.clear_server_action_result(guild);
-						self.dialog = Some(Dialog::Leave(guild));
-						self.generation = state.generation;
-						ui.close();
-					}
+					self.leave_item(ui, state, guild);
 					if !available {
 						ui.small(if state.server_action_pending() {
 							"A server action is in progress."
@@ -370,6 +397,54 @@ mod tests {
 		}
 		output.drop_without_applying_deltas();
 		(response.unwrap(), text)
+	}
+	#[test]
+	fn shared_server_items_hide_settings_without_access_and_leave_for_owners() {
+		for (owner, known) in [(false, true), (true, true), (false, false)] {
+			let ctx = egui::Context::default();
+			design::apply(&ctx);
+			let mut state = test_support::chat_demo_state();
+			let guild = Id(10);
+			let mut snapshot = test_support::permission_snapshot(&state);
+			for permissions in &mut snapshot.guilds {
+				permissions.owner = known.then_some(if owner {
+					state.user.as_ref().unwrap().id
+				} else {
+					Id(u64::MAX)
+				});
+				if let Some(roles) = &mut permissions.roles {
+					for role in roles {
+						role.bits = 0;
+					}
+				}
+			}
+			state.apply(client_core::Envelope {
+				generation: state.generation,
+				event: client_core::Event::Permissions(client_core::permissions::Event::Snapshot(
+					snapshot,
+				)),
+			});
+			let mut menu = ServerMenu::default();
+			let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+				ui.set_width(232.0);
+				menu.settings_item(ui, &state, guild);
+				menu.leave_item(ui, &mut state, guild);
+			});
+			let mut text = vec![];
+			for shape in &output.shapes {
+				labels(&shape.shape, &mut text);
+			}
+			assert_eq!(
+				text.iter().any(|(label, _)| label == "Server Settings"),
+				owner && known
+			);
+			assert_eq!(
+				text.iter().any(|(label, _)| label == "Leave server"),
+				!owner && known
+			);
+			assert!(menu.settings_requested.is_none() && menu.dialog.is_none());
+			output.drop_without_applying_deltas();
+		}
 	}
 	#[test]
 	fn server_menu_requires_explicit_invite_and_leave_confirmation() {

@@ -386,6 +386,15 @@ impl MessagingUi {
 						}
 					};
 					response.context_menu(|ui| {
+						if let Item::Server(id) = item {
+							ui.set_width(232.0);
+							let settings = self.server_menu.settings_item(ui, state, id);
+							let leave = self.server_menu.leave_item(ui, state, id);
+							if settings || leave {
+								self.guild = Some(id);
+							}
+							ui.separator();
+						}
 						if ui
 							.add_enabled(
 								!state.folders_pending,
