@@ -759,6 +759,30 @@ impl Desktop {
 			state.status = "Offline fixture · pinned messages popout opened at startup";
 		}
 		#[cfg(feature = "demo")]
+		if demo
+			&& let Some(rest) = std::env::args().find_map(|arg| {
+				arg.strip_prefix("--demo-account")
+					.map(|rest| rest.trim_start_matches('=').to_owned())
+			}) {
+			// `--demo-account` or `--demo-account=status` for the written-status variant.
+			if let Some(Command::EditProfile { user, request, .. }) = state.load_own_profile() {
+				let profile = ui::synthetic_own_profile(state.user.as_ref().expect("demo user"));
+				state.apply(client_core::Envelope {
+					generation: state.generation,
+					event: Event::ProfileEdited {
+						user,
+						request,
+						result: Ok(Box::new(profile)),
+					},
+				});
+			}
+			if rest == "status" {
+				messaging.own_presence.custom_status = "Shipping a nicer popout".into();
+			}
+			messaging.preview_account_menu(state.generation);
+			state.status = "Offline fixture · account popout opened at startup";
+		}
+		#[cfg(feature = "demo")]
 		if demo && std::env::args().any(|arg| arg == "--demo-emoji") {
 			messaging.preview_emoji_picker();
 			state.status = "Offline fixture · emoji popout opened at startup";

@@ -379,6 +379,11 @@ impl MessagingUi {
 	pub fn preview_pins(&mut self) {
 		self.search.preview_pins();
 	}
+	/// Fixture-only: open the account popout above the footer card at startup.
+	#[cfg(any(test, feature = "demo"))]
+	pub fn preview_account_menu(&mut self, generation: u64) {
+		self.account_menu.preview(generation);
+	}
 	#[cfg(any(test, feature = "demo"))]
 	pub fn preview_emoji_picker(&mut self) {
 		self.emoji_picker.preview();
