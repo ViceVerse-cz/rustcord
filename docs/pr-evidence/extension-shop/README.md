@@ -1,6 +1,6 @@
 # Native extension shop evidence
 
-Baseline d00bd04, after c306df4. These are actual native wgpu framebuffer captures
+Baseline d00bd04, after ae697f4. These are actual native wgpu framebuffer captures
 of offline synthetic data, not browser renders or generated mockups.
 
 ```sh

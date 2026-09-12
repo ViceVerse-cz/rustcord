@@ -3525,6 +3525,45 @@ validation, and camera rekeys. Native screenshot/interaction tools were unavaila
 (missing Computer Use pipe; no Orca CLI), so native CPU, RSS, GPU, startup and frame
 timings are unmeasured. No real device or Discord call was exercised.
 
+## Extension shop previews - September 12, 2026
+
+Baseline `d00bd04`, after `ae697f4` (includes main through `65c5f4b`);
+Windows 11, Ryzen 7 7800X3D, Rust 1.98.1, release/wgpu. Standard packages
+include voice. Package snapshots precede this note; development evidence and
+preview PNGs are not bundled in the standard executable/package.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Executable bytes | 65,071,104 | 65,398,272 | +327,168 (+0.503%) |
+| Installed bytes | 71,389,398 | 71,719,314 | +329,916 (+0.462%) |
+| Compress-Archive ZIP bytes | 42,431,635 | 42,538,459 | +106,824 (+0.252%) |
+| Native capture workload peak WorkingSet64, median bytes | 232,865,792 | 234,192,896 | +1,327,104 (+0.57%) |
+| Sampled process CPU, median ms | 406.250 | 437.500 | +31.250 |
+
+Native method: existing `profile_preview --demo --page=extensions`, 1120x760
+logical / 1400x950 framebuffer, 125% display scale. One warmup per variant,
+then five alternating launches, 100 ms WorkingSet64/TotalProcessorTime samples
+until the fixture exits. This measures synthetic startup, rendering, GPU readback
+and PNG writing together, not idle CPU, interactive startup p95 or frame p95.
+Both executables ran from C:, with no concurrent Cargo builds. GPU allocations
+and child processes are not included. Completion was verified using each saved
+1400x950 PNG and stdout marker; PowerShell's polled ExitCode was unavailable.
+Sampled peaks ranged from 160 to 234 MB across the series; 100 ms sampling
+can miss brief PNG-write peaks. The median difference is within this noise,
+not evidence of a precise RAM regression or speed improvement.
+
+The baseline example harness seeds the same starter catalog without changing
+application UI. The after fixture preloads all three local thumbnails; production
+loads only visible cards. The shop keeps up to eight 640x360 RGBA thumbnails
+(7,372,800 pixel bytes), rejects oversized inputs, and evicts offscreen images.
+It uses the existing worker/HTTPS client and adds no dependency or idle animation.
+These component limits are not whole-process RAM or GPU measurements.
+
+Native dark/light, narrow and theme-page screenshots were captured and inspected
+using the existing wgpu framebuffer example. Keyboard/consent/cache behavior is
+covered by offline egui tests; no OS input automation or live Discord claim is
+made. Raw measurements: [metrics.json](pr-evidence/extension-shop/metrics.json).
+
 ## Community extensions - September 12, 2026
 
 Baseline `0e355da`, implementation `46e81a1`; Windows 11 (10.0.26200),
@@ -3587,40 +3626,3 @@ disabled notifications. The old behavior fails that regression; the fix passes.
 Native restart interaction, CPU/RSS and save latency are unmeasured: the native
 Computer Use pipe was unavailable (OS error 2), and Orca CLI was absent. No live
 Discord session or system notification was exercised for this verification.
-
-## Extension shop previews - September 12, 2026
-
-Baseline `d00bd04`, after `c306df4` (includes main through `4ddba82`);
-Windows 11, Ryzen 7 7800X3D, Rust 1.98.1, release/wgpu. Standard packages
-include voice. Package snapshots precede this note; development evidence and
-preview PNGs are not bundled in the standard executable/package.
-
-| Metric / method | Baseline | After | Delta |
-| --- | ---: | ---: | ---: |
-| Executable bytes | 65,071,104 | 65,256,448 | +185,344 (+0.285%) |
-| Installed bytes | 71,389,398 | 71,576,932 | +187,534 (+0.263%) |
-| Compress-Archive ZIP bytes | 42,431,635 | 42,498,422 | +66,787 (+0.157%) |
-| Native capture workload peak WorkingSet64, median bytes | 232,525,824 | 233,938,944 | +1,413,120 (+0.61%) |
-| Sampled process CPU, median ms | 390.625 | 421.875 | +31.250 |
-
-Native method: existing `profile_preview --demo --page=extensions`, 1120x760
-logical / 1400x950 framebuffer, 125% display scale. One warmup per variant,
-then five alternating launches, 100 ms WorkingSet64/TotalProcessorTime samples
-until the fixture exits. This measures synthetic startup, rendering, GPU readback
-and PNG writing together, not idle CPU, interactive startup p95 or frame p95.
-Both executables ran from C:, with no concurrent Cargo builds. GPU allocations
-and child processes are not included. Completion was verified using each saved
-1400x950 PNG and stdout marker; PowerShell's polled ExitCode was unavailable.
-The small timing differences are not a speed improvement claim.
-
-The baseline example harness seeds the same starter catalog without changing
-application UI. The after fixture preloads all three local thumbnails; production
-loads only visible cards. The shop keeps up to eight 640x360 RGBA thumbnails
-(7,372,800 pixel bytes), rejects oversized inputs, and evicts offscreen images.
-It uses the existing worker/HTTPS client and adds no dependency or idle animation.
-These component limits are not whole-process RAM or GPU measurements.
-
-Native dark/light, narrow and theme-page screenshots were captured and inspected
-using the existing wgpu framebuffer example. Keyboard/consent/cache behavior is
-covered by offline egui tests; no OS input automation or live Discord claim is
-made. Raw measurements: [metrics.json](pr-evidence/extension-shop/metrics.json).
