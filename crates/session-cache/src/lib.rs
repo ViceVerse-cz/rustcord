@@ -839,6 +839,7 @@ mod tests {
 			channel: Id(1),
 			author: model::User {
 				avatar: None,
+				webhook: false,
 				discriminator: 0,
 				id: Id(2),
 				name: "Synthetic".into(),

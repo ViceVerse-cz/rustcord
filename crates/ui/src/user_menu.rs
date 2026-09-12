@@ -56,7 +56,7 @@ pub(super) fn contents(
 		*profile = Some(user.clone());
 		ui.close();
 	}
-	if state.user.as_ref().is_some_and(|own| own.id == user.id) {
+	if user.webhook || state.user.as_ref().is_some_and(|own| own.id == user.id) {
 		return;
 	}
 	let dm = state

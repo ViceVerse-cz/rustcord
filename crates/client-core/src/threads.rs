@@ -127,6 +127,7 @@ mod tests {
 				id: Id(9),
 				name: "Synthetic member".into(),
 				avatar: None,
+				webhook: false,
 				discriminator: 0,
 			}),
 			guilds: vec![
@@ -238,6 +239,7 @@ mod tests {
 				id: Id(9),
 				name: "Synthetic".into(),
 				avatar: None,
+				webhook: false,
 				discriminator: 0,
 			},
 			content: "Synthetic thread history".into(),

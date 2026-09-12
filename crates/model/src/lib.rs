@@ -59,6 +59,9 @@ impl<'de> Deserialize<'de> for Id {
 }
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct User {
+	/// Set only for message authors with a service-provided webhook_id.
+	#[serde(default)]
+	pub webhook: bool,
 	pub id: Id,
 	pub name: String,
 	pub avatar: Option<String>,

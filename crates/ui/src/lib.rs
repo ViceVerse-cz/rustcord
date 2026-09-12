@@ -2592,7 +2592,11 @@ impl MessagingUi {
 				.iter()
 				.find(|channel| Some(channel.id) == state.selected)
 				.and_then(|channel| channel.guild);
-			if state
+			if user.webhook {
+				if state.profile.is_some() {
+					commands.push(state.clear_profile());
+				}
+			} else if state
 				.profile
 				.as_ref()
 				.is_none_or(|p| p.user != user.id || p.guild != profile_guild)
@@ -2828,6 +2832,7 @@ mod composer_tests {
 			id: Id(1),
 			name: "Alex".into(),
 			avatar: None,
+			webhook: false,
 			discriminator: 0,
 		};
 		let mut state = State {
@@ -4164,6 +4169,7 @@ mod composer_tests {
 								id: Id(id),
 								name: format!("Synthetic {id}"),
 								avatar: None,
+								webhook: false,
 								discriminator: 0,
 							},
 							nick: None,
@@ -4563,12 +4569,48 @@ mod composer_tests {
 	}
 
 	#[test]
+	fn webhook_profile_does_not_request_a_user_profile() {
+		for webhook in [false, true] {
+			let mut user = test_support::message(1, Id(22)).author;
+			user.webhook = webhook;
+			let mut state = State {
+				auth: client_core::auth::AuthState::Authenticated,
+				gateway_connected: true,
+				..Default::default()
+			};
+			let mut messaging = MessagingUi {
+				profile: Some(user),
+				..Default::default()
+			};
+			let mut commands = vec![];
+			let output = egui::Context::default().run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(1120.0, 900.0),
+					)),
+					..Default::default()
+				},
+				|ui| commands = messaging.show(ui, &mut state),
+			);
+			output.drop_without_applying_deltas();
+			assert_eq!(
+				commands
+					.iter()
+					.any(|command| matches!(command, Command::Profile { .. })),
+				!webhook
+			);
+			assert_eq!(state.profile.is_some(), !webhook);
+		}
+	}
+	#[test]
 	fn profile_uses_open_conversation_not_browsed_sidebar_server() {
 		for guild in [None, Some(Id(10))] {
 			let user = model::User {
 				id: Id(2),
 				name: "Synthetic".into(),
 				avatar: None,
+				webhook: false,
 				discriminator: 0,
 			};
 			let mut state = State {

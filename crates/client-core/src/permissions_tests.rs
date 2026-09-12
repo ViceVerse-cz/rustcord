@@ -19,6 +19,7 @@ fn user() -> User {
 		id: Id(2),
 		name: "Synthetic member".into(),
 		avatar: None,
+		webhook: false,
 		discriminator: 0,
 	}
 }

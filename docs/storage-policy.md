@@ -1,5 +1,11 @@
 # Local storage policy and audit
 
+Schema 13 adds a constrained webhook boolean to cached message authors. It comes
+from the service message webhook_id and follows the existing bounded author data
+through message, reply, and profile views. Legacy rows default to unknown (false)
+until refreshed; no name, bot flag, or profile error is used to infer a webhook.
+The migration preserves existing messages, settings, and drafts.
+
 Group conversation actions (September 11): names and icon hashes are session
 navigation metadata, with icon capacity included in channel/event byte counts.
 The editor retains one name (100 characters), one bounded PNG data URI, and one

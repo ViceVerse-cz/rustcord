@@ -343,6 +343,7 @@ mod tests {
 			id: model::Id(1),
 			name: "Synthetic user".into(),
 			avatar: None,
+			webhook: false,
 			discriminator: 0,
 		}
 	}

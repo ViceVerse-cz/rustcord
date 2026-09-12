@@ -75,6 +75,7 @@ impl UserDto {
 				.take(128)
 				.collect(),
 			avatar: self.avatar.filter(|hash| model::valid_avatar_hash(hash)),
+			webhook: false,
 			discriminator: self
 				.discriminator
 				.parse::<u16>()
@@ -494,6 +495,8 @@ fn mention_roles<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Id>, D::E
 #[derive(Deserialize)]
 pub struct MessageDto {
 	#[serde(default)]
+	pub webhook_id: Option<Id>,
+	#[serde(default)]
 	pub poll: Option<extra_content::Object>,
 	#[serde(default)]
 	pub sticker_items: Option<extra_content::Array>,
@@ -562,6 +565,8 @@ impl MessageDto {
 		let unsupported_reference = self.message_reference.is_some() && reply_to.is_none();
 		let reply_deleted =
 			reply_to.is_some() && matches!(self.referenced_message, model::Patch::Null);
+		let mut author = self.author.into_model();
+		author.webhook = self.webhook_id.is_some();
 		Message {
 			extra_content: model::ExtraContent {
 				poll: self.poll.is_some(),
@@ -573,7 +578,7 @@ impl MessageDto {
 			reactions: Some(self.reactions.0),
 			id: self.id,
 			channel: self.channel_id,
-			author: self.author.into_model(),
+			author,
 			content: self.content,
 			mention_roles: self.mention_roles,
 			mention_everyone: self.mention_everyone,
@@ -722,6 +727,21 @@ pub struct ErrorBody {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[test]
+	fn webhook_authors_require_explicit_message_metadata() {
+		let mut wire = serde_json::json!({"id":"100","channel_id":"2","author":{"id":"3","username":"Synthetic webhook","bot":true},"content":"webhook"});
+		let read =
+			|wire: &serde_json::Value| decode::<MessageDto>(&serde_json::to_vec(wire).unwrap());
+		assert!(!read(&wire).unwrap().into_model().author.webhook);
+		wire["webhook_id"] = serde_json::json!("3");
+		let author = read(&wire).unwrap().into_model().author;
+		assert!(author.webhook);
+		assert_eq!(author.name, "Synthetic webhook");
+		wire["webhook_id"] = serde_json::Value::Null;
+		assert!(!read(&wire).unwrap().into_model().author.webhook);
+		wire["webhook_id"] = serde_json::json!("invalid");
+		assert!(read(&wire).is_err());
+	}
 	#[test]
 	fn notification_metadata_is_service_derived_and_role_mentions_are_bounded() {
 		let wire = || {
