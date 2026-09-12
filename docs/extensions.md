@@ -43,6 +43,38 @@ The in-app catalog reads the default branch. A new catalog entry is not publicly
 available through that endpoint until its pull request is merged. Empty catalogs
 are valid; imports allow development before a release is listed.
 
+## Shop previews
+
+Catalog entries may include a short `description` (at most 256 characters and
+1,024 UTF-8 bytes, without control characters) and a `preview` object:
+
+```json
+"preview": {
+  "url": "https://example.org/releases/v1/preview.png",
+  "sha256": "<64 hexadecimal SHA-256 digits>",
+  "download_bytes": 12345
+}
+```
+
+Use an original or licensed PNG/JPEG screenshot showing the theme or plugin in
+use. Pin its URL to an immutable release or source commit, then record the exact
+file size and digest. Prefer a 16:9 image; the shop preserves its aspect ratio.
+Existing entries without an image remain valid and show a built-in illustration.
+Previews describe the listed version, including when an installed version has
+an update available; they are creator-provided, not proof of compatibility.
+
+Only visible shop cards request previews. Images use the credential-free,
+public-IP-pinned HTTPS downloader with a five-second deadline and must match their
+own hash and byte count. Preview loading does not block shop actions; an action
+cancels preview-only work before starting.
+Decoding runs on the existing cancellable worker: at most 256 KiB compressed,
+4,096 pixels per edge, 4,194,304 source pixels, and 32 MiB decoder allocation
+budget. Only a static image is decoded; thumbnails shrink to at most 640 x 360.
+Missing, invalid or unavailable images fall back without blocking installation.
+The UI retains at most eight thumbnails (at most 7,372,800 RGBA bytes), clears
+changed-image metadata and releases them with its extension runtime state.
+There is no preview disk cache, telemetry, new dependency, or plugin permission.
+
 ## Host contract
 
 The `extensions` crate defines the versioned manifest, capability, action,
@@ -83,5 +115,6 @@ bugs in the runtime or host; keep Serein updated.
 The complete ABI and numeric limits are documented in
 [`examples/extensions/README.md`](../examples/extensions/README.md). The demo uses
 a separate bounded temporary `serein-extension-demo` profile; it can import local
-fixtures but cannot download a catalog or package. `Ctrl+Shift+F12` resets a
+fixtures and browse the embedded starter catalog/previews but cannot download a
+catalog, preview or package. `Ctrl+Shift+F12` resets a
 community theme if its colors make controls difficult to read.

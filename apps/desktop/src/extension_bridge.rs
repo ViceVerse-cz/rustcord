@@ -14,6 +14,7 @@ struct Pending {
 	generation: u64,
 	cleanup: bool,
 	reconcile: bool,
+	preview: Option<(String, String)>,
 	invocation: Option<(String, Invocation, ExtensionContext)>,
 }
 #[derive(Default)]
@@ -49,6 +50,7 @@ impl Bridge {
 						generation: *generation,
 						cleanup: true,
 						reconcile: false,
+						preview: None,
 						invocation: None,
 					},
 				);
@@ -84,6 +86,7 @@ impl Bridge {
 		}
 		let scope = (state.generation, account.clone());
 		if self.scope.as_ref() != Some(&scope) {
+			self.cancel_previews(messaging);
 			self.host.as_mut().unwrap().cancel();
 			self.pending.retain(|_, pending| pending.cleanup);
 			self.picker = None;
@@ -109,6 +112,7 @@ impl Bridge {
 				.as_ref()
 				.is_some_and(|(_, _, context)| !context.is_current(state))
 		}) {
+			self.cancel_previews(messaging);
 			self.host.as_mut().unwrap().cancel();
 			self.pending.retain(|_, pending| pending.cleanup);
 			self.submit(
@@ -131,6 +135,32 @@ impl Bridge {
 			{
 				if let Err(error) = outcome {
 					messaging.extensions.status = error;
+				}
+				continue;
+			}
+			if let Some((id, sha256)) = pending.as_ref().and_then(|p| p.preview.as_ref()) {
+				if self
+					.catalog
+					.get(id)
+					.and_then(|e| e.preview.as_ref())
+					.is_some_and(|p| p.sha256 == *sha256)
+				{
+					let image = match outcome {
+						Ok(Event::Preview {
+							id: returned,
+							image,
+						}) if returned == *id => image,
+						_ => None,
+					};
+					messaging.extensions.receive_preview(id.clone(), image);
+				} else if !self
+					.pending
+					.values()
+					.any(|p| p.preview.as_ref().is_some_and(|(next, _)| next == id))
+					&& !messaging.extensions.requests.iter().any(
+						|request| matches!(request, ExtensionRequest::Preview { id: next } if next == id),
+					) {
+					messaging.extensions.retry_preview(id);
 				}
 				continue;
 			}
@@ -182,6 +212,8 @@ impl Bridge {
 					self.imported = Some(source);
 					messaging.extensions.offer_import(ExtensionEntry {
 						manifest,
+						description: String::new(),
+						preview: None,
 						sha256,
 						reviewed: false,
 						download_bytes,
@@ -228,7 +260,7 @@ impl Bridge {
 							.present_output(id, invocation, context, output, state);
 					}
 				}
-				Ok(Event::LoggedOut) => {}
+				Ok(Event::LoggedOut | Event::Preview { .. }) => {}
 			}
 		}
 		if let Some(receiver) = &self.picker {
@@ -253,12 +285,51 @@ impl Bridge {
 			}
 		}
 		for request in std::mem::take(&mut messaging.extensions.requests) {
+			if !matches!(request, ExtensionRequest::Preview { .. })
+				&& !self.pending.is_empty()
+				&& self
+					.pending
+					.values()
+					.all(|pending| pending.preview.is_some())
+			{
+				self.cancel_previews(messaging);
+				self.host.as_mut().unwrap().cancel();
+				self.pending.clear();
+			}
 			match request {
 				ExtensionRequest::RefreshCatalog => {
-					if demo {
-						messaging.extensions.status = "Offline demo: import a local synthetic package. Catalog networking is disabled.".into();
+					self.submit(
+						Job::RefreshCatalog { demo },
+						None,
+						state.generation,
+						ctx,
+						messaging,
+					);
+				}
+				ExtensionRequest::Preview { id } => {
+					if self.picker.is_some()
+						|| self
+							.pending
+							.values()
+							.any(|pending| pending.preview.is_none())
+					{
+						messaging.extensions.retry_preview(&id);
+						continue;
+					}
+					if let Some(preview) = self
+						.catalog
+						.get(&id)
+						.and_then(|entry| entry.preview.clone())
+					{
+						self.submit(
+							Job::Preview { id, preview, demo },
+							None,
+							state.generation,
+							ctx,
+							messaging,
+						);
 					} else {
-						self.submit(Job::RefreshCatalog, None, state.generation, ctx, messaging);
+						messaging.extensions.receive_preview(id, None);
 					}
 				}
 				ExtensionRequest::Import if self.picker.is_none() => {
@@ -287,7 +358,7 @@ impl Bridge {
 						}
 						self.submit(
 							Job::Enable {
-								source,
+								source: Box::new(source),
 								grants,
 								account: account.clone(),
 							},
@@ -304,6 +375,7 @@ impl Bridge {
 				ExtensionRequest::Disable { id } => {
 					if let Some(entry) = self.installed.iter().find(|e| e.manifest.id == id) {
 						let kind = entry.manifest.kind;
+						self.cancel_previews(messaging);
 						self.pending.retain(|_, pending| pending.cleanup);
 						messaging.extensions.remove_runtime(&id);
 						self.disabled.insert(id.clone());
@@ -350,9 +422,22 @@ impl Bridge {
 				}
 			}
 		}
-		messaging.extensions.busy = self.picker.is_some() || self.host.as_ref().unwrap().busy();
-		if !messaging.extensions.busy {
+		messaging.extensions.busy = self.picker.is_some()
+			|| self
+				.pending
+				.values()
+				.any(|pending| pending.preview.is_none());
+		if !self.host.as_ref().unwrap().busy() {
 			self.pending.retain(|_, pending| pending.cleanup);
+		}
+	}
+	fn cancel_previews(&self, messaging: &mut ui::MessagingUi) {
+		for (id, _) in self
+			.pending
+			.values()
+			.filter_map(|pending| pending.preview.as_ref())
+		{
+			messaging.extensions.retry_preview(id);
 		}
 	}
 	fn submit(
@@ -363,6 +448,10 @@ impl Bridge {
 		ctx: &egui::Context,
 		messaging: &mut ui::MessagingUi,
 	) {
+		let preview = match &job {
+			Job::Preview { id, preview, .. } => Some((id.clone(), preview.sha256.clone())),
+			_ => None,
+		};
 		let cleanup = matches!(job, Job::Disable { .. } | Job::Logout { .. });
 		let reconcile = cleanup || matches!(job, Job::Enable { .. });
 		match self.host.as_mut().unwrap().submit(job, ctx) {
@@ -372,12 +461,19 @@ impl Bridge {
 					Pending {
 						cleanup,
 						reconcile,
+						preview,
 						generation,
 						invocation,
 					},
 				);
 			}
-			Err(error) => messaging.extensions.report_error(error),
+			Err(error) => {
+				if let Some((id, _)) = preview {
+					messaging.extensions.receive_preview(id, None);
+				} else {
+					messaging.extensions.report_error(error);
+				}
+			}
 		}
 	}
 	fn source_for(&self, id: &str, sha256: &str, reviewed: bool) -> Option<InstallSource> {
@@ -403,6 +499,8 @@ impl Bridge {
 					id.clone(),
 					ExtensionEntry {
 						manifest: entry.manifest.clone(),
+						description: entry.description.clone(),
+						preview: entry.preview.clone(),
 						sha256: entry.sha256.clone(),
 						reviewed: true,
 						download_bytes: entry.download_bytes,
@@ -424,6 +522,9 @@ impl Bridge {
 				installed.manifest.id.clone(),
 				ExtensionEntry {
 					manifest: installed.manifest.clone(),
+					description: catalog
+						.map_or_else(String::new, |entry| entry.description.clone()),
+					preview: catalog.and_then(|entry| entry.preview.clone()),
 					sha256: catalog
 						.map_or_else(|| installed.sha256.clone(), |entry| entry.sha256.clone()),
 					reviewed: installed.reviewed,
@@ -480,6 +581,8 @@ mod tests {
 			manifest: manifest.clone(),
 		};
 		let catalog = CatalogEntry {
+			description: String::new(),
+			preview: None,
 			manifest,
 			sha256: "b".repeat(64),
 			source_commit: "c".repeat(40),

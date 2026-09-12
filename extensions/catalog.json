@@ -15,7 +15,13 @@
       "release_url": "https://raw.githubusercontent.com/ViceVerse-cz/rustcord/cb637f07ea9ff643325533820fd1ba052a00176d/extensions/ocean.serein-extension",
       "sha256": "ec95e43e6167d95393b279062b41587408ad270ebcc61a5eed2a71865c8387cd",
       "download_bytes": 960,
-      "source_commit": "cb637f07ea9ff643325533820fd1ba052a00176d"
+      "source_commit": "cb637f07ea9ff643325533820fd1ba052a00176d",
+      "description": "Deep navy surfaces and cool ocean accents for calmer conversations.",
+      "preview": {
+        "url": "https://raw.githubusercontent.com/ViceVerse-cz/Serein/c52e1e9c3d454ecacc867cc298dad53d9efa2759/extensions/previews/ocean.png",
+        "sha256": "7fd9532d983c52ec9f86a345d23e2c6822597ca29a34833958be816e0bcc1913",
+        "download_bytes": 85376
+      }
     },
     {
       "manifest": {
@@ -41,7 +47,13 @@
       "release_url": "https://raw.githubusercontent.com/ViceVerse-cz/rustcord/cb637f07ea9ff643325533820fd1ba052a00176d/examples/extensions/packages/composer-uppercase.serein-extension",
       "sha256": "94a949113efca1d9da51e7240467d54d1c648af425f4ce03e0d16f4aa045808a",
       "download_bytes": 213284,
-      "source_commit": "cb637f07ea9ff643325533820fd1ba052a00176d"
+      "source_commit": "cb637f07ea9ff643325533820fd1ba052a00176d",
+      "description": "Turn your draft into uppercase, then review it before sending.",
+      "preview": {
+        "url": "https://raw.githubusercontent.com/ViceVerse-cz/Serein/c52e1e9c3d454ecacc867cc298dad53d9efa2759/extensions/previews/composer-uppercase.png",
+        "sha256": "1052cad5a577aa31b975b017321d1633d4e4a3bb5efc7a6efee4faf9b78cf68e",
+        "download_bytes": 88641
+      }
     },
     {
       "manifest": {
@@ -67,7 +79,13 @@
       "release_url": "https://raw.githubusercontent.com/ViceVerse-cz/rustcord/cb637f07ea9ff643325533820fd1ba052a00176d/examples/extensions/packages/message-word-count.serein-extension",
       "sha256": "234036c94dac2dbd7f654a6c9685de0e1ac7861bbee038bed860e58ff21b6abe",
       "download_bytes": 199814,
-      "source_commit": "cb637f07ea9ff643325533820fd1ba052a00176d"
+      "source_commit": "cb637f07ea9ff643325533820fd1ba052a00176d",
+      "description": "Count the words in a message with one quick action.",
+      "preview": {
+        "url": "https://raw.githubusercontent.com/ViceVerse-cz/Serein/c52e1e9c3d454ecacc867cc298dad53d9efa2759/extensions/previews/message-word-count.png",
+        "sha256": "4014f31db44fac27b5154378346fd03b16b201ca4259a1bbfe34b087d0904cf0",
+        "download_bytes": 85441
+      }
     }
   ]
 }

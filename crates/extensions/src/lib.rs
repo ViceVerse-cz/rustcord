@@ -9,6 +9,7 @@ pub use runtime::invoke;
 pub const API_VERSION: u32 = 1;
 pub const MAX_PACKAGE_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_MODULE_BYTES: usize = 4 * 1024 * 1024;
+pub const MAX_PREVIEW_BYTES: usize = 256 * 1024;
 pub const MAX_CATALOG_BYTES: usize = 1024 * 1024;
 pub const MAX_IO_BYTES: usize = 256 * 1024;
 pub const MAX_STORAGE_BYTES: usize = 1024 * 1024;
@@ -119,11 +120,38 @@ pub struct Catalog {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CatalogEntry {
+	#[serde(default)]
+	pub description: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub preview: Option<Preview>,
 	pub manifest: Manifest,
 	pub release_url: String,
 	pub sha256: String,
 	pub download_bytes: u64,
 	pub source_commit: String,
+}
+
+/// A creator-supplied shop image, pinned independently from executable packages.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Preview {
+	pub url: String,
+	pub sha256: String,
+	pub download_bytes: u64,
+}
+
+impl Preview {
+	pub fn validate(&self) -> Result<(), Error> {
+		if !valid_https_url(&self.url)
+			|| self.sha256.len() != 64
+			|| !self.sha256.bytes().all(|b| b.is_ascii_hexdigit())
+			|| self.download_bytes == 0
+			|| self.download_bytes > MAX_PREVIEW_BYTES as u64
+		{
+			return Err(Error::Invalid);
+		}
+		Ok(())
+	}
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -367,6 +395,15 @@ pub fn parse_catalog(bytes: &[u8]) -> Result<Catalog, Error> {
 	let mut ids = BTreeSet::new();
 	for entry in &catalog.entries {
 		entry.manifest.validate()?;
+		if entry.description.len() > 1024
+			|| entry.description.chars().count() > 256
+			|| entry.description.chars().any(char::is_control)
+		{
+			return Err(Error::Invalid);
+		}
+		if let Some(preview) = &entry.preview {
+			preview.validate()?;
+		}
 		if !ids.insert(&entry.manifest.id)
 			|| !valid_https_url(&entry.release_url)
 			|| entry.sha256.len() != 64

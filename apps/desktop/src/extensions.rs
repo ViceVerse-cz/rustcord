@@ -2,7 +2,7 @@
 use std::{
 	collections::VecDeque,
 	fs::{self, File, OpenOptions},
-	io::{Read, Write},
+	io::{Cursor, Read, Write},
 	net::{IpAddr, Ipv4Addr},
 	path::{Path, PathBuf},
 	sync::{
@@ -14,7 +14,8 @@ use std::{
 };
 
 use extensions::{
-	Capability, Catalog, CatalogEntry, ExtensionKind, Invocation, Manifest, Output, Package, Theme,
+	Capability, Catalog, CatalogEntry, ExtensionKind, Invocation, Manifest, Output, Package,
+	Preview, Theme,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -43,12 +44,19 @@ pub enum Job {
 	Load {
 		account: Option<String>,
 	},
-	RefreshCatalog,
+	RefreshCatalog {
+		demo: bool,
+	},
+	Preview {
+		id: String,
+		preview: Preview,
+		demo: bool,
+	},
 	InspectImport {
 		path: PathBuf,
 	},
 	Enable {
-		source: InstallSource,
+		source: Box<InstallSource>,
 		grants: Vec<Capability>,
 		account: Option<String>,
 	},
@@ -80,6 +88,10 @@ pub struct InstalledExtension {
 pub enum Event {
 	Loaded(Vec<InstalledExtension>),
 	Catalog(Catalog),
+	Preview {
+		id: String,
+		image: Option<eframe::egui::ColorImage>,
+	},
 	Imported {
 		manifest: Manifest,
 		source: InstallSource,
@@ -275,6 +287,10 @@ fn validate_job(job: &Job) -> Result<(), String> {
 				return Err("Plugin input exceeds 256 KiB".into());
 			}
 		}
+		Job::Preview { id, preview, .. } => {
+			valid_id(id)?;
+			preview.validate().map_err(|e| e.to_string())?;
+		}
 		Job::Disable { id, .. } => valid_id(id)?,
 		Job::Enable { grants, .. } if grants.len() > 3 => {
 			return Err("Invalid plugin grants".into());
@@ -291,11 +307,19 @@ fn run(root: &Path, job: Job, gate: &Gate) -> Result<Event, String> {
 	gate.check()?;
 	match job {
 		Job::Load { account } => load(root, account.as_deref(), gate).map(Event::Loaded),
-		Job::RefreshCatalog => {
-			let bytes = download(CATALOG_URL, MAX_CATALOG, gate)?;
+		Job::RefreshCatalog { demo } => {
+			let bytes = if demo {
+				include_bytes!("../../../extensions/catalog.json").to_vec()
+			} else {
+				download(CATALOG_URL, MAX_CATALOG, gate, Duration::from_secs(60))?
+			};
 			extensions::parse_catalog(&bytes)
 				.map(Event::Catalog)
 				.map_err(|e| e.to_string())
+		}
+		Job::Preview { id, preview, demo } => {
+			let image = load_preview(&id, &preview, demo, gate);
+			Ok(Event::Preview { id, image })
 		}
 		Job::InspectImport { path } => {
 			let bytes = read_bounded(&path, MAX_PACKAGE)?;
@@ -315,7 +339,7 @@ fn run(root: &Path, job: Job, gate: &Gate) -> Result<Event, String> {
 			source,
 			grants,
 			account,
-		} => enable(root, source, grants, account.as_deref(), gate).map(Event::Enabled),
+		} => enable(root, *source, grants, account.as_deref(), gate).map(Event::Enabled),
 		Job::Disable { id, kind, account } => {
 			let scope = scope(root, kind, account.as_deref())?;
 			disable(&scope, &id, gate)?;
@@ -386,7 +410,12 @@ fn enable(
 ) -> Result<InstalledExtension, String> {
 	let (bytes, manifest, sha256, reviewed) = match source {
 		InstallSource::Catalog(entry) => {
-			let bytes = download(&entry.release_url, MAX_PACKAGE, gate)?;
+			let bytes = download(
+				&entry.release_url,
+				MAX_PACKAGE,
+				gate,
+				Duration::from_secs(60),
+			)?;
 			if bytes.len() as u64 != entry.download_bytes {
 				return Err("Extension download size changed".into());
 			}
@@ -747,11 +776,95 @@ fn remove_owned_directory(path: &Path) -> Result<(), String> {
 	fs::remove_dir_all(path).map_err(|_| "Extension cleanup failed; it will retry on launch".into())
 }
 
+fn load_preview(
+	id: &str,
+	preview: &Preview,
+	demo: bool,
+	gate: &Gate,
+) -> Option<eframe::egui::ColorImage> {
+	gate.check().ok()?;
+	preview.validate().ok()?;
+	let bytes = if demo {
+		demo_preview(id)?.to_vec()
+	} else {
+		download(
+			&preview.url,
+			preview.download_bytes as usize,
+			gate,
+			Duration::from_secs(5),
+		)
+		.ok()?
+	};
+	gate.check().ok()?;
+	let image = decode_preview(&bytes, preview)?;
+	gate.check().ok()?;
+	Some(image)
+}
+
+fn demo_preview(id: &str) -> Option<&'static [u8]> {
+	#[cfg(feature = "demo")]
+	{
+		match id {
+			"serein-ocean" => Some(include_bytes!("../../../extensions/previews/ocean.png")),
+			"composer-uppercase" => Some(include_bytes!(
+				"../../../extensions/previews/composer-uppercase.png"
+			)),
+			"message-word-count" => Some(include_bytes!(
+				"../../../extensions/previews/message-word-count.png"
+			)),
+			_ => None,
+		}
+	}
+	#[cfg(not(feature = "demo"))]
+	{
+		let _ = id;
+		None
+	}
+}
+
+fn decode_preview(bytes: &[u8], preview: &Preview) -> Option<eframe::egui::ColorImage> {
+	use image::ImageDecoder;
+	if bytes.len() > extensions::MAX_PREVIEW_BYTES
+		|| bytes.len() as u64 != preview.download_bytes
+		|| !digest(bytes).eq_ignore_ascii_case(&preview.sha256)
+	{
+		return None;
+	}
+	let format = image::guess_format(bytes).ok()?;
+	if !matches!(format, image::ImageFormat::Png | image::ImageFormat::Jpeg) {
+		return None;
+	}
+	let mut reader = image::ImageReader::with_format(Cursor::new(bytes), format);
+	let mut limits = image::Limits::default();
+	limits.max_image_width = Some(4096);
+	limits.max_image_height = Some(4096);
+	limits.max_alloc = Some(32 * 1024 * 1024);
+	reader.limits(limits);
+	let decoder = reader.into_decoder().ok()?;
+	let (width, height) = decoder.dimensions();
+	if width == 0
+		|| height == 0
+		|| u64::from(width) * u64::from(height) > 4 * 1024 * 1024
+		|| decoder.total_bytes() > 32 * 1024 * 1024
+	{
+		return None;
+	}
+	let mut image = image::DynamicImage::from_decoder(decoder).ok()?;
+	if image.width() > 640 || image.height() > 360 {
+		image = image.thumbnail(640, 360);
+	}
+	let image = image.into_rgba8();
+	Some(eframe::egui::ColorImage::from_rgba_unmultiplied(
+		[image.width() as usize, image.height() as usize],
+		image.as_raw(),
+	))
+}
+
 fn digest(bytes: &[u8]) -> String {
 	format!("{:x}", Sha256::digest(bytes))
 }
 
-fn download(raw: &str, limit: usize, gate: &Gate) -> Result<Vec<u8>, String> {
+fn download(raw: &str, limit: usize, gate: &Gate, timeout: Duration) -> Result<Vec<u8>, String> {
 	tokio::runtime::Builder::new_current_thread()
 		.enable_all()
 		.build()
@@ -760,7 +873,7 @@ fn download(raw: &str, limit: usize, gate: &Gate) -> Result<Vec<u8>, String> {
 			tokio::select! {
 				biased;
 				_ = gate.wake_cancel.notified() => Err("Extension operation cancelled".into()),
-				result = tokio::time::timeout(Duration::from_secs(60), download_https(raw, limit, gate)) => result.map_err(|_| "Extension download timed out")?,
+				result = tokio::time::timeout(timeout, download_https(raw, limit, gate)) => result.map_err(|_| "Extension download timed out")?,
 			}
 		})
 }
@@ -993,7 +1106,8 @@ mod tests {
 		assert!(loaded[0].error.is_some());
 		disable(&directory, "broken", &gate()).unwrap();
 		let mut host = ExtensionHost::new(root);
-		host.queue.push_back((0, Job::RefreshCatalog));
+		host.queue
+			.push_back((0, Job::RefreshCatalog { demo: false }));
 		host.queue.push_back((
 			1,
 			Job::Logout {
@@ -1007,6 +1121,74 @@ mod tests {
 		cancelled.generation.fetch_add(1, Ordering::Release);
 		assert!(atomic_write(&profile.0.join("cancelled.json"), b"no", &cancelled).is_err());
 		assert!(!profile.0.join("cancelled.json").exists());
+	}
+
+	#[cfg(feature = "demo")]
+	#[test]
+	fn shop_preview_demo_catalog_and_images_are_local_and_hash_pinned() {
+		let Event::Catalog(catalog) = run(
+			Path::new("unused"),
+			Job::RefreshCatalog { demo: true },
+			&gate(),
+		)
+		.unwrap() else {
+			panic!("Expected local catalog");
+		};
+		assert_eq!(catalog.entries.len(), 3);
+		for entry in catalog.entries {
+			let Event::Preview { image, .. } = run(
+				Path::new("unused"),
+				Job::Preview {
+					id: entry.manifest.id,
+					preview: entry.preview.unwrap(),
+					demo: true,
+				},
+				&gate(),
+			)
+			.unwrap() else {
+				panic!("Expected preview");
+			};
+			assert!(image.is_some());
+		}
+	}
+
+	#[test]
+	fn shop_preview_checks_hash_size_format_and_decode_bounds() {
+		fn encoded(width: u32, height: u32, format: image::ImageFormat) -> Vec<u8> {
+			let mut output = Cursor::new(Vec::new());
+			image::DynamicImage::new_rgb8(width, height)
+				.write_to(&mut output, format)
+				.unwrap();
+			output.into_inner()
+		}
+		fn metadata(bytes: &[u8]) -> Preview {
+			Preview {
+				url: "https://example.org/preview.png".into(),
+				sha256: digest(bytes),
+				download_bytes: bytes.len() as u64,
+			}
+		}
+		for format in [image::ImageFormat::Png, image::ImageFormat::Jpeg] {
+			let bytes = encoded(1280, 720, format);
+			let mut preview = metadata(&bytes);
+			assert_eq!(decode_preview(&bytes, &preview).unwrap().size, [640, 360]);
+			preview.sha256 = "0".repeat(64);
+			assert!(decode_preview(&bytes, &preview).is_none());
+			preview = metadata(&bytes);
+			preview.download_bytes += 1;
+			assert!(decode_preview(&bytes, &preview).is_none());
+		}
+		for (width, height) in [(4097, 1), (2049, 2048)] {
+			let bytes = encoded(width, height, image::ImageFormat::Png);
+			assert!(decode_preview(&bytes, &metadata(&bytes)).is_none());
+		}
+		let gif = encoded(1, 1, image::ImageFormat::Gif);
+		assert!(decode_preview(&gif, &metadata(&gif)).is_none());
+		let too_large = vec![0; extensions::MAX_PREVIEW_BYTES + 1];
+		assert!(decode_preview(&too_large, &metadata(&too_large)).is_none());
+		let cancelled = gate();
+		cancelled.generation.fetch_add(1, Ordering::Release);
+		assert!(load_preview("synthetic", &metadata(b"bad"), false, &cancelled).is_none());
 	}
 
 	#[test]
@@ -1035,6 +1217,14 @@ mod tests {
 		}
 		let cancelled = gate();
 		cancelled.generation.fetch_add(1, Ordering::Release);
-		assert!(download("https://github.com/example", 100, &cancelled).is_err());
+		assert!(
+			download(
+				"https://github.com/example",
+				100,
+				&cancelled,
+				Duration::from_secs(60)
+			)
+			.is_err()
+		);
 	}
 }

@@ -183,6 +183,8 @@ fn validates_themes_catalog_and_path_safe_identifiers() {
 	assert!(parse_package(&vec![b' '; MAX_PACKAGE_BYTES + 1]).is_err());
 	assert!(parse_catalog(br#"{"api_version":2,"entries":[]}"#).is_err());
 	let entry = CatalogEntry {
+		description: String::new(),
+		preview: None,
 		manifest: returning("{}").manifest,
 		release_url: "https://example.com/p.json".into(),
 		sha256: "a".repeat(64),
@@ -223,4 +225,49 @@ fn shipped_rust_examples_execute_through_the_real_abi() {
 	assert!(
 		matches!(&invoke(&counter,&input).unwrap().panel[0],Element::Text{text} if text == "Words: 3")
 	);
+}
+
+#[test]
+fn catalog_preview_metadata_is_optional_and_bounded() {
+	let mut catalog: serde_json::Value =
+		serde_json::from_slice(include_bytes!("../../../extensions/catalog.json")).unwrap();
+	for entry in catalog["entries"].as_array_mut().unwrap() {
+		entry.as_object_mut().unwrap().remove("description");
+		entry.as_object_mut().unwrap().remove("preview");
+	}
+	let parsed = parse_catalog(&serde_json::to_vec(&catalog).unwrap()).unwrap();
+	assert!(
+		parsed
+			.entries
+			.iter()
+			.all(|entry| entry.preview.is_none() && entry.description.is_empty())
+	);
+	catalog["entries"][0]["description"] = serde_json::json!("A preview of the creator's theme.");
+	catalog["entries"][0]["preview"] = serde_json::json!({"url": "https://example.org/theme.png", "sha256": "a".repeat(64), "download_bytes": 100});
+	assert!(parse_catalog(&serde_json::to_vec(&catalog).unwrap()).is_ok());
+	for value in [
+		serde_json::json!("http://example.org/preview.png"),
+		serde_json::json!("https://name:secret@example.org/preview.png"),
+	] {
+		let mut invalid = catalog.clone();
+		invalid["entries"][0]["preview"]["url"] = value;
+		assert!(parse_catalog(&serde_json::to_vec(&invalid).unwrap()).is_err());
+	}
+	for (field, value) in [
+		("sha256", serde_json::json!("invalid")),
+		("download_bytes", serde_json::json!(0)),
+		(
+			"download_bytes",
+			serde_json::json!(extensions::MAX_PREVIEW_BYTES + 1),
+		),
+	] {
+		let mut invalid = catalog.clone();
+		invalid["entries"][0]["preview"][field] = value;
+		assert!(parse_catalog(&serde_json::to_vec(&invalid).unwrap()).is_err());
+	}
+	for description in ["x".repeat(257), "\u{1F980}".repeat(257), "bad\ntext".into()] {
+		let mut invalid = catalog.clone();
+		invalid["entries"][0]["description"] = serde_json::json!(description);
+		assert!(parse_catalog(&serde_json::to_vec(&invalid).unwrap()).is_err());
+	}
 }
