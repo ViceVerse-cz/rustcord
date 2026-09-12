@@ -11,6 +11,7 @@ mod game_activity;
 mod group_icon;
 mod reading_settings;
 mod screen;
+mod startup;
 mod toggle_setting;
 mod uploads;
 mod video;
@@ -27,6 +28,7 @@ use zeroize::Zeroizing;
 
 fn main() -> eframe::Result {
 	let demo = std::env::args().any(|arg| arg == "--demo");
+	let start_minimized = startup::minimized_launch(demo, std::env::args());
 	if !cfg!(feature = "demo")
 		&& std::env::args().any(|arg| arg == "--demo" || arg.starts_with("--demo-"))
 	{
@@ -38,6 +40,7 @@ fn main() -> eframe::Result {
 			let builder = egui::ViewportBuilder::default()
 				.with_inner_size([1120.0, 760.0])
 				.with_min_inner_size([760.0, 520.0])
+				.with_active(!start_minimized)
 				.with_app_id("org.serein.desktop");
 			if cfg!(target_os = "macos") {
 				// Discord-style inline title bar: traffic lights sit over the app's own strip.
@@ -60,7 +63,14 @@ fn main() -> eframe::Result {
 	eframe::run_native(
 		"Serein",
 		options,
-		Box::new(move |cc| Ok(Box::new(Desktop::new(cc, demo)?))),
+		Box::new(move |cc| {
+			let desktop = Desktop::new(cc, demo)?;
+			if start_minimized {
+				cc.egui_ctx
+					.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+			}
+			Ok(Box::new(desktop))
+		}),
 	)
 }
 /// Opt-in aggregate CPU callback timings; no payloads, per-frame logs, or repaint timer.
@@ -153,6 +163,7 @@ struct Desktop {
 	app_settings: app_settings::Settings,
 	game_activity: toggle_setting::Settings,
 	tray_setting: toggle_setting::Settings,
+	startup: startup::Startup,
 	tray: Option<platform::tray::Tray>,
 	tray_error: Option<&'static str>,
 	/// `--demo-reply`: keeps two synthetic typists active on the selected fixture channel.
@@ -594,6 +605,7 @@ impl Desktop {
 			.map_or(10_000, |m| m.id.0.max(10_000));
 		let mut messaging = ui::MessagingUi::default();
 		messaging.tray_available = platform::tray::supported();
+		let startup = startup::Startup::new(&cc.egui_ctx, &runtime, &mut messaging, demo);
 		#[cfg(feature = "demo")]
 		if demo && std::env::args().any(|arg| arg == "--demo-game-activity") {
 			messaging.share_game_activity = true;
@@ -816,6 +828,7 @@ impl Desktop {
 			app_settings,
 			game_activity,
 			tray_setting,
+			startup,
 			tray: None,
 			tray_error: None,
 			#[cfg(feature = "demo")]
@@ -2770,6 +2783,12 @@ impl eframe::App for Desktop {
 	}
 	fn logic(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
 		self.frame_metrics.begin(ctx);
+		self.startup.sync(
+			ctx,
+			&self.runtime,
+			&mut self.messaging,
+			self.fixture_only || self.state.demo,
+		);
 		self.messaging.sync_reading_zoom(ctx);
 		self.poll(ctx);
 		#[cfg(feature = "demo")]
@@ -2988,6 +3007,7 @@ impl eframe::App for Desktop {
 				|| self.messaging.has_edit()
 				|| self.uploads.has_unsent()
 				|| self.forgetting
+				|| self.messaging.startup_busy
 				|| self.avatar_cleanup.is_some()
 				|| self.cache_pending > 0
 				|| self.cache_clears.pending()
@@ -3282,6 +3302,12 @@ impl eframe::App for Desktop {
 		self.save_reading_preferences(&ctx);
 		self.sync_own_presence(&ctx);
 		self.sync_game_activity(&ctx);
+		self.startup.sync(
+			&ctx,
+			&self.runtime,
+			&mut self.messaging,
+			self.fixture_only || self.state.demo,
+		);
 		self.sync_tray(&ctx);
 		if appearance != self.appearance {
 			self.appearance = appearance;

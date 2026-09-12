@@ -81,7 +81,7 @@ impl eframe::App for Preview {
 			return;
 		}
 		self.frames = self.frames.saturating_add(1);
-		if self.frames >= 5 && !self.requested {
+		if self.frames >= 5 && self.started.elapsed() >= Duration::from_secs(1) && !self.requested {
 			self.requested = true;
 			let (send, receive) = std::sync::mpsc::sync_channel(1);
 			self.screenshot = Some(receive);
@@ -114,12 +114,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let args: Vec<_> = std::env::args().skip(1).collect();
 	let value = |prefix: &str| args.iter().find_map(|arg| arg.strip_prefix(prefix));
 	if !args.iter().any(|arg| arg == "--demo") {
-		return Err("Usage: profile_preview --demo --output=PATH.png [--page=profile|account] [--width=1120] [--height=760] [--light]".into());
+		return Err("Usage: profile_preview --demo --output=PATH.png [--page=profile|account|appearance|general] [--width=1120] [--height=760] [--light]".into());
 	}
 	let output = PathBuf::from(value("--output=").ok_or("Missing --output=PATH.png")?);
 	let page = value("--page=").unwrap_or("profile").to_owned();
-	if !matches!(page.as_str(), "profile" | "account") {
-		return Err("Page must be profile or account".into());
+	if !matches!(
+		page.as_str(),
+		"profile" | "account" | "appearance" | "general"
+	) {
+		return Err("Page must be profile, account, appearance or general".into());
 	}
 	let width: f32 = value("--width=").unwrap_or("1120").parse()?;
 	let height: f32 = value("--height=").unwrap_or("760").parse()?;
@@ -152,6 +155,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 				prime_profile(&mut state);
 			}
 			let mut messaging = ui::MessagingUi::default();
+			messaging.tray_available = platform::tray::supported();
+			messaging.startup_available = platform::startup::available();
+			messaging.startup_enabled = args.iter().any(|arg| arg == "--startup-enabled");
+			messaging.startup_minimized = args.iter().any(|arg| arg == "--startup-minimized");
 			messaging.preview_settings(&page);
 			Ok(Box::new(Preview {
 				messaging,

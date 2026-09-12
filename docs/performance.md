@@ -1,5 +1,52 @@
 # Initial performance evidence
 
+## Windows automatic startup — September 12, 2026
+
+Baseline `073f0d23adb85c37b9a3779bd30da05ff05d3480`; Windows 11 Home
+10.0.26200, Ryzen 7 7800X3D (16 logical processors), 33,410,678,784 bytes RAM,
+Rust 1.98.1 MSVC. Both standard `cargo xtask package` builds include voice and
+exclude demo/developer features. Separate clean `dist` directories; one
+PowerShell `Compress-Archive -CompressionLevel Optimal` per revision. Measurements
+precede this report's addition to the bundled documentation. The existing Windows
+dependency gains its registry API feature; no dependency is added.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Executable bytes | 62,928,384 | 62,967,296 | +38,912 (+0.062%) |
+| Installed package file bytes | 69,153,081 | 69,193,907 | +40,826 (+0.059%) |
+| ZIP bytes | 41,627,780 | 41,645,300 | +17,520 (+0.042%) |
+
+One separate release `--features demo` launch per revision, `--demo
+--demo-settings=appearance` before and `--demo --demo-settings=general` after,
+five-second warmup, then 50 process samples at requested 200 ms intervals
+(10.921 / 10.524 seconds elapsed). No input during sampling; same viewport/theme
+as the screenshots. Windows process counters, not GPU memory or frame timing:
+
+| Idle settings metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Sampled peak / settled working-set bytes | 171,323,392 | 168,386,560 | -2,936,832 |
+| Sampled peak / settled private bytes | 398,921,728 | 397,230,080 | -1,691,648 |
+| Process CPU seconds over sample | 0.015625 | 0 | -0.015625 |
+
+This is a single noisy sample with different settings-page contents; baseline
+sampling overlapped compilation. CPU is near counter resolution, so these numbers
+do not establish an improvement. Startup peaks, GPU/helper-process memory, p95
+frame times and native interaction latency are not measured.
+
+Startup registration has no polling loop: one bounded off-thread load, then an
+operation only after an explicit setting change. Registry round-trip tests use
+random synthetic keys outside Windows startup locations. No sign-out/sign-in or
+saved-account launch was performed; startup p95 and live compatibility are unmeasured.
+
+Native framebuffer evidence uses the existing `profile_preview --demo` example,
+extended only with settings-page selection and a one-second wait for modal fade-in.
+Before is Appearance (startup absent), after is General, using the same 1120×760
+logical viewport, Windows 125% scale, default dark theme and wgpu renderer.
+The Computer Use native pipe is unavailable, so native keyboard/pointer automation
+and screen-reader validation remain unverified; synthetic UI pointer tests cover
+both dark/light at 760 and 1120 logical pixels. The native tray test separately
+verifies late registration after minimizing, restore, restart, Quit and cleanup.
+
 ## Invite input alignment — September 12, 2026
 
 Baseline `a2ad207ca9225ef8973ab3e865ad14a1d5083e0e`, Windows 11 Home
