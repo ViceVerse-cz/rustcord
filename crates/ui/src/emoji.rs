@@ -61,10 +61,13 @@ pub(crate) fn lookup(text: &str) -> Option<usize> {
 	if text.is_ascii() || text.contains('\u{fe0e}') || text.len() > 128 {
 		return None;
 	}
-	let normalized;
+	let mut normalized = [0; 128];
 	let key = if text.contains('\u{fe0f}') {
-		normalized = text.replace('\u{fe0f}', "");
-		normalized.as_str()
+		let mut len = 0;
+		for c in text.chars().filter(|c| *c != '\u{fe0f}') {
+			len += c.encode_utf8(&mut normalized[len..]).len();
+		}
+		std::str::from_utf8(&normalized[..len]).expect("normalized UTF-8")
 	} else {
 		text
 	};

@@ -4,7 +4,7 @@ use crate::{
 	avatars::Avatars,
 	design,
 	icons::{self, Icon},
-	markdown::Formatted,
+	markdown::FormatCache,
 };
 use client_core::{State, profile::ProfileView};
 use egui::{Color32, CornerRadius, Pos2, Rect, RichText, Stroke, UiBuilder, Vec2, pos2, vec2};
@@ -360,6 +360,7 @@ pub fn show(
 	state: &State,
 	avatars: &mut Avatars,
 	opening: &mut Option<String>,
+	formatted: &mut FormatCache,
 	confirm_links: bool,
 	anchor: Pos2,
 ) -> Option<Action> {
@@ -709,7 +710,7 @@ pub fn show(
 											if !bio.is_empty() {
 												section(ui, &theme, &mut sections, "ABOUT ME");
 												let mut linked_user = None;
-												Formatted::parse(bio).show_with_images(
+												formatted.get(user.id, bio).show_with_images(
 													ui,
 													opening,
 													&[],
@@ -1062,6 +1063,7 @@ mod tests {
 							&state,
 							&mut images,
 							&mut opening,
+							&mut FormatCache::default(),
 							true,
 							pos2(20.0, 70.0),
 						);
@@ -1155,6 +1157,7 @@ mod tests {
 						&state,
 						&mut images,
 						&mut opening,
+						&mut FormatCache::default(),
 						true,
 						anchor
 					)
@@ -1190,6 +1193,7 @@ mod tests {
 				&state,
 				&mut images,
 				&mut opening,
+				&mut FormatCache::default(),
 				true,
 				right_anchor,
 			);
@@ -1220,6 +1224,7 @@ mod tests {
 						&state,
 						&mut images,
 						&mut opening,
+						&mut FormatCache::default(),
 						true,
 						anchor
 					),
@@ -1252,6 +1257,7 @@ mod tests {
 				&state,
 				&mut images,
 				&mut opening,
+				&mut FormatCache::default(),
 				true,
 				anchor,
 			);
@@ -1282,6 +1288,7 @@ mod tests {
 						&state,
 						&mut images,
 						&mut opening,
+						&mut FormatCache::default(),
 						true,
 						anchor,
 					);

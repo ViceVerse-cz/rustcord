@@ -45,6 +45,7 @@ pub struct TimelineView {
 	anchor: Option<(Id, f32)>,
 	following: bool,
 	formatted: FormatCache,
+	pending_formatted: FormatCache,
 	// Exact revealed content prevents a reload that resets model revisions from revealing edits.
 	// Pruned with the active window: at most its 500 records / 4 MiB content budget.
 	revealed: BTreeMap<Id, Revealed>,
@@ -888,8 +889,14 @@ impl TimelineView {
 															.display_text()
 															.chars()
 															.take(120)
+															.map(|c| {
+																if matches!(c, '\n' | '\r') {
+																	' '
+																} else {
+																	c
+																}
+															})
 															.collect::<String>()
-															.replace(['\n', '\r'], " ")
 													}
 												} else {
 													"Earlier message · View original".into()
@@ -1423,6 +1430,7 @@ impl TimelineView {
 							&mut self.opening,
 							profile,
 							&mut self.channel_reference,
+							&mut self.pending_formatted,
 						),
 						upload,
 						(&mut self.restore_pending, &mut self.cancel_upload),

@@ -107,6 +107,7 @@ pub struct MessagingUi {
 	profile: Option<model::User>,
 	user_action: Option<user_menu::Action>,
 	profile_link: Option<String>,
+	profile_formatted: markdown::FormatCache,
 	pub reading_preferences: model::ReadingPreferences,
 	pub show_hidden_channels: bool,
 	pub reading_status: &'static str,
@@ -2654,6 +2655,7 @@ impl MessagingUi {
 				state,
 				&mut self.avatars,
 				&mut self.profile_link,
+				&mut self.profile_formatted,
 				self.reading_preferences.confirm_external_links,
 				anchor,
 			) {
