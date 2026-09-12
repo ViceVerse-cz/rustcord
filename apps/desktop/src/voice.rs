@@ -385,7 +385,6 @@ impl Voice {
 			}
 		}
 		let mut failure = None;
-		let mut camera_paused = false;
 		let mut command = None;
 		if let Some(live) = &mut self.live {
 			let call = state.voice.active.as_ref().expect("matching active call");
@@ -437,7 +436,6 @@ impl Voice {
 						}
 					}
 					Notice::WaitingForPeer => {
-						camera_paused = true;
 						ui.voice_privacy_code = None;
 						live.audio.set_ready(false);
 						live.device_deadline = None;
@@ -448,7 +446,6 @@ impl Voice {
 						});
 					}
 					Notice::Progress(phase) => {
-						camera_paused = true;
 						ui.voice_privacy_code = None;
 						live.audio.set_ready(false);
 						live.device_deadline = None;
@@ -529,13 +526,6 @@ impl Voice {
 		let command = if let Some(error) = failure {
 			self.fail(state, error)
 		} else {
-			if camera_paused && state.voice.active.as_ref().is_some_and(|call| call.camera) {
-				self.stop_camera();
-				ui.voice_camera_preview = None;
-				ui.voice_camera_status =
-					"Camera stopped while the call reconnected; turn it on again when ready";
-				return state.set_call_camera(false);
-			}
 			self.poll_camera(state, ui, ctx).or(command)
 		};
 		if command.is_some() {
@@ -565,12 +555,9 @@ impl Voice {
 				.as_ref()
 				.is_some_and(|live| live.camera_negotiated);
 		let requested = state.voice.active.as_ref().is_some_and(|call| call.camera);
-		let secure =
-			state.voice.active.as_ref().is_some_and(|call| {
-				call.phase == Phase::Connected && state.can_camera(call.channel)
-			});
+		let preview_allowed = camera_preview_allowed(state);
 		let error = self.camera.as_ref().and_then(|camera| camera.error());
-		if !requested || !secure || !ui.voice_camera_available || error.is_some() {
+		if !requested || !preview_allowed || !ui.voice_camera_available || error.is_some() {
 			self.stop_camera();
 			ui.voice_camera_preview = None;
 			if requested {
@@ -785,9 +772,72 @@ impl Drop for Voice {
 	}
 }
 
+// A peer joining/leaving rekeys media without revoking the local camera gesture.
+fn camera_preview_allowed(state: &State) -> bool {
+	state.voice.active.as_ref().is_some_and(|call| {
+		(matches!(call.phase, Phase::Connected | Phase::Waiting)
+			|| (call.connected_at.is_some()
+				&& matches!(call.phase, Phase::Securing | Phase::OpeningAudio)))
+			&& state.can_camera(call.channel)
+	})
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[test]
+	fn local_camera_survives_peer_rekeys_but_requires_join_and_permission() {
+		for mut state in [
+			test_support::call_demo_state(),
+			test_support::voice_demo_state(),
+		] {
+			state.demo = false;
+			let mut role = state.permissions.guilds[&Id(10)].roles.as_ref().unwrap()[0].clone();
+			role.bits |= model::permissions::STREAM;
+			state.apply(client_core::Envelope {
+				generation: state.generation,
+				event: Event::Permissions(client_core::permissions::Event::Role {
+					guild: Id(10),
+					role,
+				}),
+			});
+			for phase in [
+				Phase::Waiting,
+				Phase::Securing,
+				Phase::OpeningAudio,
+				Phase::Connected,
+				Phase::Waiting,
+			] {
+				state.voice.active.as_mut().unwrap().phase = phase;
+				assert!(
+					camera_preview_allowed(&state),
+					"phase={phase:?}, channel={:?}, can_call={}, permission={:?}",
+					state.voice.active.as_ref().unwrap().channel,
+					state.can_call(state.voice.active.as_ref().unwrap().channel),
+					state.permission(
+						state.voice.active.as_ref().unwrap().channel,
+						model::permissions::STREAM
+					)
+				);
+			}
+			state.voice.active.as_mut().unwrap().connected_at = None;
+			for phase in [
+				Phase::Connecting,
+				Phase::Securing,
+				Phase::OpeningAudio,
+				Phase::Failed,
+			] {
+				state.voice.active.as_mut().unwrap().phase = phase;
+				assert!(!camera_preview_allowed(&state));
+			}
+			state.voice.active.as_mut().unwrap().phase = Phase::Waiting;
+			state.gateway_connected = false;
+			assert!(!camera_preview_allowed(&state));
+			state.voice.active = None;
+			assert!(!camera_preview_allowed(&state));
+		}
+	}
+
 	#[test]
 	fn audio_opening_has_a_deadline_that_clears_on_readiness_or_security_pause() {
 		let now = Instant::now();
