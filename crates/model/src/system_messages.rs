@@ -23,15 +23,17 @@ impl SystemMessage {
 	}
 }
 
-/// Public message type IDs known to produce a service description.
+/// Message type IDs with a known service description (including unofficial user types).
 pub(super) fn is_system(kind: u8) -> bool {
 	matches!(
 		kind,
-		1..=12 | 14..=18 | 21 | 22 | 24..=29 | 31 | 32 | 36..=39 | 44 | 46
+		1..=12 | 14..=18 | 21 | 22 | 24..=32 | 36..=39 | 44 | 46 | 55 | 58..=62 | 65 | 67
 	)
 }
 
 // Public message type IDs: https://docs.discord.com/developers/resources/message#message-types
+// Unofficial user types 55, 58..=62, 65, 67: https://docs.discord.food/resources/message#message-types
+// Checked 2026-09-12. Descriptions do not grant moderation or calling capabilities.
 // Do not infer missing call outcomes, subscription details, or thread contents.
 pub(super) fn describe(message: &Message) -> Option<SystemMessage> {
 	if !is_system(message.kind) {
@@ -119,6 +121,7 @@ pub(super) fn describe(message: &Message) -> Option<SystemMessage> {
 		27 => vec![actor(), plain(" started a Stage.")],
 		28 => vec![plain("The Stage ended.")],
 		29 => vec![actor(), plain(" became a Stage speaker.")],
+		30 => vec![actor(), plain(" requested to speak.")],
 		31 => vec![actor(), plain(" changed the Stage topic.")],
 		32 => vec![plain("Server application premium subscription.")],
 		36 => vec![plain("Server alert mode enabled.")],
@@ -127,6 +130,14 @@ pub(super) fn describe(message: &Message) -> Option<SystemMessage> {
 		39 => vec![plain("A server incident was reported as a false alarm.")],
 		44 => vec![plain("Purchase notification.")],
 		46 => vec![plain("Poll results.")],
+		55 => vec![actor(), plain(" upgraded the stream to HD.")],
+		58 => vec![actor(), plain(" deleted a reported message.")],
+		59 => vec![actor(), plain(" timed out "), target(), plain(".")],
+		60 => vec![actor(), plain(" kicked "), target(), plain(".")],
+		61 => vec![actor(), plain(" banned "), target(), plain(".")],
+		62 => vec![actor(), plain(" resolved a report.")],
+		65 => vec![actor(), plain(" started a voice hangout.")],
+		67 => vec![actor(), plain(" accepted your friend request.")],
 		_ => return None,
 	};
 	Some(SystemMessage {
@@ -196,6 +207,32 @@ mod tests {
 		}
 	}
 
+	#[test]
+	fn newer_service_types_keep_names_actionable_and_missing_targets_honest() {
+		for (kind, expected) in [
+			(30, "Robin requested to speak."),
+			(55, "Robin upgraded the stream to HD."),
+			(58, "Robin deleted a reported message."),
+			(59, "Robin timed out Casey."),
+			(60, "Robin kicked Casey."),
+			(61, "Robin banned Casey."),
+			(62, "Robin resolved a report."),
+			(65, "Robin started a voice hangout."),
+			(67, "Robin accepted your friend request."),
+		] {
+			let mut message = message(kind);
+			message.content.clear();
+			let system = message.system_message().unwrap();
+			assert_eq!(message.display_text(), expected);
+			assert_eq!(system.segments[0].user.as_ref().unwrap().id, Id(3));
+			assert!(!system.content_shown);
+			if matches!(kind, 59..=61) {
+				assert_eq!(system.segments[2].user.as_ref().unwrap().id, Id(4));
+				message.mentions.clear();
+				assert!(message.display_text().contains("a member"));
+			}
+		}
+	}
 	#[test]
 	fn names_and_values_are_strong_and_clickable() {
 		let join = message(7).system_message().unwrap();

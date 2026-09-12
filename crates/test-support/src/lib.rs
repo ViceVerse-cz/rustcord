@@ -815,6 +815,15 @@ pub fn system_demo_state() -> State {
 		(4, "welcome-and-updates"),
 		(18, "Introductions"),
 		(3, ""),
+		(67, ""),
+		(30, ""),
+		(55, ""),
+		(58, ""),
+		(59, ""),
+		(60, ""),
+		(61, ""),
+		(62, ""),
+		(65, ""),
 		(222, ""),
 	]
 	.into_iter()

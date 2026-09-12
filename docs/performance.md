@@ -3316,3 +3316,23 @@ directory left untouched. Voice is compiled into the standard executable. Source
 and documentation are included; these measurements precede adding this result table.
 The separate debug `--demo --demo-friends` process launched and remained responsive;
 that establishes startup only, not visual correctness or native interaction coverage.
+
+## Additional system message types — September 12, 2026
+
+Baseline `f359777a542807b483a7c9e40b00522e6fb13888`, Windows / Ryzen 7 7800X3D /
+approximately 32 GB RAM / Rust 1.98.1. Standard `cargo xtask package`, including voice;
+separate baseline/after snapshots, compressed with PowerShell `Compress-Archive`.
+
+| Metric (bytes) | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Executable | 62,923,264 | 62,928,384 | +5,120 (+0.008%) |
+| Installed package | 73,127,597 | 73,133,926 | +6,329 (+0.009%) |
+| ZIP | 43,489,018 | 43,491,438 | +2,420 (+0.006%) |
+
+Both snapshots exclude an unrelated obsolete `dist/voice` directory; voice is linked
+in the executable. Measurements precede this result table. No dependencies, retained
+fields, caches, wire parsing or reducer logic change: only bounded system descriptions
+and existing gutter-icon selection. The synthetic UI check covers 12 rows at 280/900-point
+widths, light/dark, in a tall viewport for full-fixture coverage. Native screenshot/control
+is unavailable; process CPU/RSS/frame and visual comparison remain unmeasured. No speed
+improvement or live Discord interoperability is claimed.
