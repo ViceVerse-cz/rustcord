@@ -48,6 +48,10 @@ fn main() -> eframe::Result {
 		demo_check_extensions();
 		return Ok(());
 	}
+	#[cfg(target_os = "windows")]
+	let icon = include_bytes!("../../../packaging/windows/serein.png").as_slice();
+	#[cfg(target_os = "linux")]
+	let icon = include_bytes!("../../../packaging/linux/hicolor/256x256/apps/serein.png").as_slice();
 	let options = eframe::NativeOptions {
 		viewport: {
 			let builder = egui::ViewportBuilder::default()
@@ -55,6 +59,9 @@ fn main() -> eframe::Result {
 				.with_min_inner_size([760.0, 520.0])
 				.with_active(!start_minimized)
 				.with_app_id("org.serein.desktop");
+			#[cfg(any(target_os = "windows", target_os = "linux"))]
+			let builder = builder
+				.with_icon(eframe::icon_data::from_png_bytes(icon).expect("bundled app icon"));
 			if cfg!(target_os = "macos") {
 				// Discord-style inline title bar: traffic lights sit over the app's own strip.
 				builder

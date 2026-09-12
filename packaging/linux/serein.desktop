@@ -3,5 +3,7 @@ Type=Application
 Name=Serein
 Comment=Experimental unofficial native Discord client
 Exec=serein
+Icon=serein
+StartupWMClass=org.serein.desktop
 Terminal=false
 Categories=Network;InstantMessaging;

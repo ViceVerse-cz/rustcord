@@ -39,6 +39,9 @@ opus2 = { version = "=0.4.0", default-features = false, features = ["backend-lib
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 arboard = "=3.6.1"
 
+[build-dependencies]
+find-msvc-tools = "=0.1.12"
+
 [dev-dependencies]
 test-support.workspace = true
 

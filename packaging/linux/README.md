@@ -16,7 +16,7 @@ It excludes stale archives, nested voice outputs, logs, and stale license/source
 files. Temporary files are removed when packaging finishes or raises an error.
 
 The archive installs `/usr/bin/serein`, a launcher in
-`/usr/share/applications/serein.desktop`, and documentation, notices, licenses and
+`/usr/share/applications/org.serein.desktop.desktop`, and documentation, notices, licenses and
 applicable modified component source under `/usr/share/doc/serein`. No maintainer
 scripts, background updater, automatic launch or user-profile writes are added.
 For a deliberate manual installation, use the local file:

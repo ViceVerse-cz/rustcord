@@ -248,6 +248,16 @@ fn package() -> Result<(), String> {
 	} else {
 		root.clone()
 	};
+	if cfg!(target_os = "macos") {
+		let status = std::process::Command::new("sh")
+			.arg("packaging/macos/compile-icon.sh")
+			.arg(&resources)
+			.status()
+			.map_err(|e| e.to_string())?;
+		if !status.success() {
+			return Err("macOS app icon compilation failed".into());
+		}
+	}
 	std::fs::create_dir_all(resources.join("docs")).map_err(|e| e.to_string())?;
 	std::fs::create_dir_all(resources.join("licenses")).map_err(|e| e.to_string())?;
 	for file in [

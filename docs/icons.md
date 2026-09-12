@@ -1,3 +1,20 @@
+# Application icon
+
+Desktop application artwork comes from the owner-supplied `Serein-icon-pack-v2`.
+Windows embeds the multi-resolution ICO in the executable using the Windows SDK
+resource compiler (or windres for GNU builds); the window and tray use its PNG.
+Linux installs the supplied hicolor PNG/SVG icons with the Debian package and
+references `serein` in the desktop launcher. Wayland uses `org.serein.desktop`
+as the application ID, matching the installed `org.serein.desktop.desktop` launcher.
+
+macOS packaging runs `packaging/macos/compile-icon.sh` with Xcode's `actool` to
+compile `Serein.icon` into `Assets.car`. The native icon has default, dark, and
+system monochrome appearances; dark uses Apple’s native dark background.
+macOS controls appearance selection. The supplied ICNS remains the fallback
+for older systems. Bare `cargo run` has no app bundle and cannot demonstrate
+the native Dock/Finder appearance variants; use the packaged app for that.
+The icon compilation requires full Xcode with Icon Composer support.
+
 # Server icons and service images
 
 Implemented September 10, 2026. Server names/icons load from the existing account's navigation snapshot. `GUILD_UPDATE` applies name/icon patches without dropping omitted fields; explicit null removes the icon, invalid hashes fall back to initials, and a new hash requests a new image key. Unknown-guild and old-session patches cannot create navigation entries. Both full names and selection are exposed to accessibility.

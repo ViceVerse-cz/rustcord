@@ -5887,6 +5887,7 @@ dependencies = [
  "discord-voice",
  "eframe",
  "extensions",
+ "find-msvc-tools",
  "getrandom 0.4.3",
  "image",
  "local-store",

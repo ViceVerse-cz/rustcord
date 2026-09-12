@@ -1,0 +1,46 @@
+{
+  "fill": {
+    "automatic-gradient": "extended-srgb:0.45882,0.65098,0.95686,1.00000"
+  },
+  "fill-specializations": [
+    {
+      "appearance": "dark",
+      "value": "system-dark"
+    }
+  ],
+  "groups": [
+    {
+      "lighting": "individual",
+      "layers": [
+        {
+          "image-name": "01-bubble-body.svg",
+          "name": "01-bubble-body",
+          "glass": true
+        },
+        {
+          "image-name": "02-upper-wave.svg",
+          "name": "02-upper-wave",
+          "glass": true
+        },
+        {
+          "image-name": "03-lower-wave.svg",
+          "name": "03-lower-wave",
+          "glass": true
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.3
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.35
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": [
+      "macOS"
+    ]
+  }
+}
