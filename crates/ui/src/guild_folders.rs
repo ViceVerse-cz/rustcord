@@ -187,8 +187,10 @@ impl MessagingUi {
 		badges: &BTreeMap<Id, (bool, u32)>,
 	) {
 		if self.folder_ui.generation != state.generation {
+			// Folders the owner left open survive a restart and a session change.
 			self.folder_ui = FolderUi {
 				generation: state.generation,
+				expanded: self.expanded_folders.iter().copied().collect(),
 				..Default::default()
 			};
 		}
@@ -374,6 +376,9 @@ impl MessagingUi {
 								} else {
 									self.folder_ui.expanded.insert(id);
 								}
+								// Bounded mirror of the open set, saved as a device preference.
+								self.expanded_folders =
+									self.folder_ui.expanded.iter().copied().take(256).collect();
 							}
 							response.on_hover_text_with(|| {
 								format!("{name} · {} servers", folder.guild_ids.len())

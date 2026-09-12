@@ -192,6 +192,8 @@ pub struct MessagingUi {
 	pub voice_device_status: &'static str,
 	pub voice_push_to_talk: bool,
 	pub voice_noise_suppression: bool,
+	/// Server folders the owner left open; restored from device preferences at startup.
+	pub expanded_folders: Vec<u64>,
 	pub voice_ptt_active: bool,
 	pub voice_privacy_code: Option<String>,
 	/// Latest media activity, capped at 64 IDs (512 bytes) by the voice host.
@@ -378,6 +380,16 @@ impl MessagingUi {
 				progress
 			};
 		}
+	}
+	/// Fixture-only: open the join-server dialog at startup.
+	#[cfg(any(test, feature = "demo"))]
+	pub fn preview_join_server(&mut self, generation: u64) {
+		self.join_server.open(generation);
+	}
+	/// Fixture-only: open the screen-share picker for the fixture call at startup.
+	#[cfg(any(test, feature = "demo"))]
+	pub fn preview_screen_share(&mut self, state: &State) {
+		self.screen.launch(state);
 	}
 	/// Fixture-only: open the pinned messages popout on the next frame.
 	#[cfg(any(test, feature = "demo"))]
@@ -756,7 +768,9 @@ impl MessagingUi {
 							);
 							inner.spacing_mut().item_spacing.x = 12.0;
 							inner.push_id(member.user.id.0, |ui| {
-								let avatar = self.avatars.show(ui, &member.user, 32.0, state.demo);
+								// The member list opens profiles from its context menu only.
+								let avatar =
+									self.avatars.show_plain(ui, &member.user, 32.0, state.demo);
 								user_menu::show(
 									&avatar,
 									state,
@@ -764,9 +778,6 @@ impl MessagingUi {
 									&mut self.profile,
 									&mut self.user_action,
 								);
-								if avatar.clicked() {
-									self.profile = Some(member.user.clone());
-								}
 								if let Some(status) = status {
 									design::presence_dot(
 										ui,
@@ -834,9 +845,6 @@ impl MessagingUi {
 								&mut self.profile,
 								&mut self.user_action,
 							);
-							if response.clicked() {
-								self.profile = Some(member.user.clone());
-							}
 						}
 					}
 				}
@@ -879,7 +887,6 @@ impl MessagingUi {
 					egui::Stroke::new(1.0, colors.border),
 				);
 			});
-		self.voice_connection_panel(ui, state, commands);
 		egui::Frame::new()
 			.inner_margin(egui::Margin {
 				left: 8,
@@ -890,34 +897,75 @@ impl MessagingUi {
 			.show(ui, |ui| {
 				let ctx = ui.ctx().clone();
 				if self.guild.is_none() {
-					let find = ui
-						.add_enabled_ui(
-							!self.ime_active
-								&& !ctx.input(|input| {
-									input
-										.events
-										.iter()
-										.any(|event| matches!(event, egui::Event::Ime(_)))
-								}),
-							|ui| {
-								ui.add_sized(
-									[ui.available_width(), 30.0],
-									egui::Button::new("Find conversation").truncate(),
-								)
+					// Search and Friends share one row; Friends is the compact glyph beside it.
+					ui.horizontal(|ui| {
+						ui.spacing_mut().item_spacing.x = 6.0;
+						let find = ui
+							.add_enabled_ui(
+								!self.ime_active
+									&& !ctx.input(|input| {
+										input
+											.events
+											.iter()
+											.any(|event| matches!(event, egui::Event::Ime(_)))
+									}),
+								|ui| {
+									ui.add_sized(
+										[(ui.available_width() - 36.0).max(60.0), 30.0],
+										egui::Button::new("Find conversation").truncate(),
+									)
+								},
+							)
+							.inner
+							.on_hover_text("Search loaded conversations (Ctrl/Cmd+K)");
+						find.widget_info(|| {
+							egui::WidgetInfo::labeled(
+								egui::WidgetType::Button,
+								ui.is_enabled(),
+								"Find conversation, Ctrl or Command K",
+							)
+						});
+						if find.clicked() {
+							self.switcher.open(&ctx);
+						}
+						let friends = state.selected.is_none();
+						let (rect, response) =
+							ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::click());
+						let hovered = response.hovered() || response.has_focus();
+						if friends || hovered {
+							ui.painter().rect_filled(
+								rect,
+								6,
+								if friends {
+									colors.selected
+								} else {
+									colors.hover
+								},
+							);
+						}
+						icons::paint(
+							ui.painter(),
+							icons::Icon::People,
+							rect.shrink(7.0),
+							if friends || hovered {
+								colors.text_strong
+							} else {
+								colors.muted
 							},
-						)
-						.inner
-						.on_hover_text("Search loaded conversations (Ctrl/Cmd+K)");
-					find.widget_info(|| {
-						egui::WidgetInfo::labeled(
-							egui::WidgetType::Button,
-							ui.is_enabled(),
-							"Find conversation, Ctrl or Command K",
-						)
+						);
+						response.widget_info(|| {
+							egui::WidgetInfo::selected(
+								egui::WidgetType::Button,
+								true,
+								friends,
+								"Friends",
+							)
+						});
+						if response.on_hover_text("Friends").clicked() {
+							state.selected = None;
+							self.search.open = false;
+						}
 					});
-					if find.clicked() {
-						self.switcher.open(&ctx);
-					}
 					ui.add_space(8.0);
 				}
 				if let Some(guild) = self.guild
@@ -949,132 +997,168 @@ impl MessagingUi {
 				}
 			});
 	}
+	/// Account card; while in a call it grows upward with the call header and quick actions.
 	fn account_card(&mut self, ui: &mut egui::Ui, state: &mut State, commands: &mut Vec<Command>) {
 		let colors = design::palette(ui);
 		let mut anchor = None;
+		let in_call = state.voice.active.is_some();
 		egui::Frame::new()
 			.fill(colors.raised)
 			.corner_radius(8)
-			.inner_margin(egui::Margin::symmetric(8, 6))
+			.inner_margin(0)
 			.show(ui, |ui| {
 				ui.set_width(ui.available_width());
-				ui.horizontal(|ui| {
-					ui.spacing_mut().item_spacing.x = 8.0;
-					if let Some(user) = &state.user {
-						let avatar = self.avatars.show(ui, user, 32.0, state.demo);
-						avatar.widget_info(|| {
-							egui::WidgetInfo::labeled(
-								egui::WidgetType::Button,
-								true,
-								"Profile and status",
-							)
-						});
-						if avatar.has_focus() {
-							ui.painter().rect_stroke(
-								avatar.rect.expand(2.0),
-								4,
-								egui::Stroke::new(1.0, colors.accent),
-								egui::StrokeKind::Inside,
-							);
-						}
-						user_menu::show(
-							&avatar,
-							state,
-							user,
-							&mut self.profile,
-							&mut self.user_action,
-						);
-						design::presence_dot(
-							ui,
-							avatar.rect,
-							profiles::presence_color(self.own_presence.status.wire()),
-							colors.raised,
-						);
-						anchor = Some(avatar.on_hover_text("Profile and status"));
-					}
-					ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-						ui.spacing_mut().item_spacing.x = 2.0;
-						let settings = icons::button(ui, icons::Icon::Gear, 32.0, "User settings");
-						if settings.clicked() {
-							self.settings.open = true;
-							egui::Popup::close_all(ui.ctx());
-						}
-						self.mute_toggle(ui, state, commands, true, 32.0);
-						self.mute_toggle(ui, state, commands, false, 32.0);
-						ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-							let identity = ui
-								.vertical(|ui| {
-									ui.spacing_mut().item_spacing.y = 0.0;
-									ui.add(
-										egui::Label::new(
-											design::semibold(
-												ui,
-												state
-													.user
-													.as_ref()
-													.map_or("Your account", |u| u.name.as_str()),
-												14.0,
-											)
-											.color(colors.text_strong),
-										)
-										.truncate()
-										.selectable(false),
-									);
-									ui.add(
-										egui::Label::new(
-											RichText::new(
-												if !self.own_presence.custom_status.is_empty() {
-													self.own_presence.custom_status.clone()
-												} else if let Some(game) = self
-													.own_game
-													.as_deref()
-													.filter(|_| self.share_game_activity)
-												{
-													game.to_owned()
-												} else if state.demo {
-													"Offline preview".to_owned()
-												} else if state.gateway_connected {
-													self.own_presence.status.label().to_owned()
-												} else {
-													"Reconnecting…".to_owned()
-												},
-											)
-											.size(12.0)
-											.color(colors.muted),
-										)
-										.truncate()
-										.selectable(false),
-									);
-								})
-								.response;
-							let identity = ui
-								.interact(
-									identity.rect,
-									ui.id().with("account-identity"),
-									egui::Sense::click(),
-								)
-								.on_hover_text("Profile and status");
-							identity.widget_info(|| {
-								egui::WidgetInfo::labeled(
-									egui::WidgetType::Button,
-									true,
-									"Profile and status",
-								)
-							});
-							if let Some(avatar) = anchor.take() {
-								if identity.has_focus() {
+				ui.spacing_mut().item_spacing.y = 0.0;
+				if in_call {
+					self.voice_card_section(ui, state, commands);
+					let (line, _) = ui.allocate_exact_size(
+						egui::vec2(ui.available_width(), 1.0),
+						egui::Sense::hover(),
+					);
+					ui.painter().rect_filled(line, 0, colors.border);
+				}
+				egui::Frame::new()
+					.inner_margin(egui::Margin::symmetric(8, 6))
+					.show(ui, |ui| {
+						ui.set_width(ui.available_width());
+						ui.horizontal(|ui| {
+							ui.spacing_mut().item_spacing.x = 8.0;
+							if let Some(user) = &state.user {
+								let avatar = self.avatars.show(ui, user, 32.0, state.demo);
+								avatar.widget_info(|| {
+									egui::WidgetInfo::labeled(
+										egui::WidgetType::Button,
+										true,
+										"Profile and status",
+									)
+								});
+								if avatar.has_focus() {
 									ui.painter().rect_stroke(
-										identity.rect.expand(2.0),
+										avatar.rect.expand(2.0),
 										4,
 										egui::Stroke::new(1.0, colors.accent),
 										egui::StrokeKind::Inside,
 									);
 								}
-								anchor = Some(avatar.union(identity));
+								user_menu::show(
+									&avatar,
+									state,
+									user,
+									&mut self.profile,
+									&mut self.user_action,
+								);
+								design::presence_dot(
+									ui,
+									avatar.rect,
+									profiles::presence_color(self.own_presence.status.wire()),
+									colors.raised,
+								);
+								anchor = Some(avatar.on_hover_text("Profile and status"));
 							}
+							ui.with_layout(
+								egui::Layout::right_to_left(egui::Align::Center),
+								|ui| {
+									ui.spacing_mut().item_spacing.x = 2.0;
+									let settings =
+										icons::button(ui, icons::Icon::Gear, 32.0, "User settings");
+									if settings.clicked() {
+										self.settings.open = true;
+										egui::Popup::close_all(ui.ctx());
+									}
+									self.mute_toggle_with_settings(ui, state, commands, true);
+									ui.add_space(4.0);
+									self.mute_toggle_with_settings(ui, state, commands, false);
+									ui.with_layout(
+										egui::Layout::left_to_right(egui::Align::Center),
+										|ui| {
+											let identity = ui
+												.vertical(|ui| {
+													ui.spacing_mut().item_spacing.y = 0.0;
+													ui.add(
+														egui::Label::new(
+															design::semibold(
+																ui,
+																state
+																	.user
+																	.as_ref()
+																	.map_or("Your account", |u| {
+																		u.name.as_str()
+																	}),
+																14.0,
+															)
+															.color(colors.text_strong),
+														)
+														.truncate()
+														.selectable(false),
+													);
+													ui.add(
+														egui::Label::new(
+															RichText::new(
+																if !self
+																	.own_presence
+																	.custom_status
+																	.is_empty()
+																{
+																	self.own_presence
+																		.custom_status
+																		.clone()
+																} else if let Some(game) = self
+																	.own_game
+																	.as_deref()
+																	.filter(|_| {
+																		self.share_game_activity
+																	}) {
+																	game.to_owned()
+																} else if state.demo {
+																	"Offline preview".to_owned()
+																} else if state.gateway_connected {
+																	self.own_presence
+																		.status
+																		.label()
+																		.to_owned()
+																} else {
+																	"Reconnecting…".to_owned()
+																},
+															)
+															.size(12.0)
+															.color(colors.muted),
+														)
+														.truncate()
+														.selectable(false),
+													);
+												})
+												.response;
+											let identity = ui
+												.interact(
+													identity.rect,
+													ui.id().with("account-identity"),
+													egui::Sense::click(),
+												)
+												.on_hover_text("Profile and status");
+											identity.widget_info(|| {
+												egui::WidgetInfo::labeled(
+													egui::WidgetType::Button,
+													true,
+													"Profile and status",
+												)
+											});
+											if let Some(avatar) = anchor.take() {
+												if identity.has_focus() {
+													ui.painter().rect_stroke(
+														identity.rect.expand(2.0),
+														4,
+														egui::Stroke::new(1.0, colors.accent),
+														egui::StrokeKind::Inside,
+													);
+												}
+												anchor = Some(avatar.union(identity));
+											}
+										},
+									);
+								},
+							);
 						});
 					});
-				});
 			});
 		if let Some(anchor) = anchor {
 			self.account_menu(&anchor, state, commands);
@@ -1122,7 +1206,9 @@ impl MessagingUi {
 						}
 						Some(c) if c.guild.is_none() => {
 							if let Some(user) = c.recipients.first() {
-								let avatar = self.avatars.show(ui, user, 24.0, state.demo);
+								// Header avatar identifies the conversation; the profile is a
+								// context-menu action, not a click target.
+								let avatar = self.avatars.show_plain(ui, user, 24.0, state.demo);
 								if dm {
 									user_menu::show(
 										&avatar,
@@ -1141,9 +1227,6 @@ impl MessagingUi {
 										profiles::presence_color(status),
 										colors.sidebar,
 									);
-								}
-								if avatar.clicked() {
-									self.profile = Some(user.clone());
 								}
 							} else {
 								icons::inline(ui, icons::Icon::People, 22.0, colors.muted);
@@ -2639,7 +2722,8 @@ impl MessagingUi {
 		}
 		self.search
 			.overlays(&ctx, state, &mut self.avatars, &mut commands);
-		self.join_server.show(&ctx, state, &mut commands);
+		self.join_server
+			.show(&ctx, state, &mut self.avatars, &mut commands);
 		if let Some(anchor) = self.pins_anchor {
 			let dm = state
 				.channels

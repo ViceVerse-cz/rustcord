@@ -956,27 +956,49 @@ impl Avatars {
 		size: f32,
 		demo: bool,
 	) -> egui::Response {
-		let (_, response) = ui.allocate_exact_size(egui::Vec2::splat(size), egui::Sense::click());
+		self.user_avatar(ui, user, size, demo, true)
+	}
+	/// Avatar that never opens a profile: rows that already own their click keep it quiet.
+	pub fn show_plain(
+		&mut self,
+		ui: &mut egui::Ui,
+		user: &User,
+		size: f32,
+		demo: bool,
+	) -> egui::Response {
+		self.user_avatar(ui, user, size, demo, false)
+	}
+	fn user_avatar(
+		&mut self,
+		ui: &mut egui::Ui,
+		user: &User,
+		size: f32,
+		demo: bool,
+		opens_profile: bool,
+	) -> egui::Response {
+		let (_, response) = ui.allocate_exact_size(
+			egui::Vec2::splat(size),
+			if opens_profile {
+				egui::Sense::click()
+			} else {
+				egui::Sense::hover()
+			},
+		);
 		let response = response.on_hover_text(&user.name);
 		let rect = ui
 			.layout()
 			.align_size_within_rect(egui::Vec2::splat(size), response.rect);
 		self.paint_user(ui, user, size, rect, demo);
-		if response.hovered() || response.has_focus() {
-			ui.painter().circle_stroke(
-				ui.layout()
-					.align_size_within_rect(egui::Vec2::splat(size), response.rect)
-					.center(),
-				size * 0.5,
-				egui::Stroke::new(1.5, crate::design::palette(ui).accent),
-			);
-		}
 		response.widget_info(|| {
-			egui::WidgetInfo::labeled(
-				egui::WidgetType::Button,
-				ui.is_enabled(),
-				format!("View profile for {}", user.name),
-			)
+			if opens_profile {
+				egui::WidgetInfo::labeled(
+					egui::WidgetType::Button,
+					ui.is_enabled(),
+					format!("View profile for {}", user.name),
+				)
+			} else {
+				egui::WidgetInfo::labeled(egui::WidgetType::Image, ui.is_enabled(), &user.name)
+			}
 		});
 		response
 	}

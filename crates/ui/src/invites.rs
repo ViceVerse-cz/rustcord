@@ -88,7 +88,7 @@ pub fn estimated_height(message: &Message) -> f32 {
 	codes(message).len() as f32 * (CARD_HEIGHT + 4.0)
 }
 /// Splits the protocol's "● N online · M members" description into its two counts.
-fn counts(description: &str) -> Option<(&str, &str)> {
+pub(super) fn counts(description: &str) -> Option<(&str, &str)> {
 	let (online, members) = description.split_once(" · ")?;
 	let online = online
 		.trim_start_matches('●')
@@ -97,7 +97,7 @@ fn counts(description: &str) -> Option<(&str, &str)> {
 	let members = members.trim().strip_suffix(" members")?;
 	Some((online, members))
 }
-fn dot_stat(ui: &mut egui::Ui, color: egui::Color32, value: &str, label: &str) {
+pub(super) fn dot_stat(ui: &mut egui::Ui, color: egui::Color32, value: &str, label: &str) {
 	let colors = crate::design::palette(ui);
 	let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
 	ui.painter().circle_filled(rect.center(), 4.0, color);

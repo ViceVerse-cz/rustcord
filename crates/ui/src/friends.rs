@@ -202,13 +202,9 @@ impl MessagingUi {
 									.max_rect(rect.shrink2(vec2(0.0, 12.0)))
 									.layout(egui::Layout::left_to_right(egui::Align::Center)),
 							);
-							if self
-								.avatars
-								.show(&mut row, user, 40.0, state.demo)
-								.clicked()
-							{
-								self.profile = Some(user.clone());
-							}
+							// The friends surfaces keep their own row actions; the profile
+							// stays behind the context menu instead of every click.
+							self.avatars.show_plain(&mut row, user, 40.0, state.demo);
 							let width = (row.available_width() - 88.0).max(1.0);
 							row.allocate_ui_with_layout(
 								vec2(width, 44.0),
@@ -401,12 +397,9 @@ impl MessagingUi {
 									egui::WidgetInfo::labeled(
 										egui::WidgetType::Button,
 										true,
-										format!("Profile: {}", user.name),
+										&user.name,
 									)
 								});
-								if response.clicked() {
-									self.profile = Some((*user).clone());
-								}
 								user_menu::show(
 									&response,
 									state,
@@ -421,10 +414,8 @@ impl MessagingUi {
 									),
 								));
 								let avatar =
-									self.avatars.show(&mut avatar_ui, user, 40.0, state.demo);
-								if avatar.clicked() {
-									self.profile = Some((*user).clone());
-								}
+									self.avatars
+										.show_plain(&mut avatar_ui, user, 40.0, state.demo);
 								if let Some(status) = status {
 									design::presence_dot(
 										ui,

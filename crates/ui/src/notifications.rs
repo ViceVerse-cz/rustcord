@@ -56,6 +56,21 @@ pub(super) fn rail_pill(
 	ui.painter()
 		.rect_filled(pill, 4, design::palette(ui).text_strong);
 }
+/// Green speaker badge on the rail avatar of the conversation you are calling in.
+fn call_badge(ui: &egui::Ui, rect: egui::Rect) {
+	let colors = design::palette(ui);
+	// Inset from the corner so neither the ring nor the glyph meets the list's clip rect.
+	let center = rect.right_top() + egui::vec2(-10.0, 10.0);
+	ui.painter()
+		.circle_filled(center, 13.0, design::window_palette(ui).base);
+	ui.painter().circle_filled(center, 11.0, colors.positive);
+	crate::icons::paint(
+		ui.painter(),
+		crate::icons::Icon::Speaker,
+		egui::Rect::from_center_size(center, egui::Vec2::splat(12.0)),
+		egui::Color32::WHITE,
+	);
+}
 fn indicator(ui: &egui::Ui, rect: egui::Rect, unread: bool, count: u32) {
 	rail_pill(ui, rect, false, false, unread);
 	if count > 0 {
@@ -143,13 +158,24 @@ impl MessagingUi {
 					.scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
 					.show(ui, |ui| {
 						ui.spacing_mut().item_spacing.y = 12.0;
+						// Your own call keeps its conversation on the rail, like Discord's.
+						let call = state
+							.voice
+							.active
+							.as_ref()
+							.filter(|call| call.guild.is_none())
+							.map(|call| call.channel);
 						// Existing channel metadata bounds this list; only visible avatar rows request images.
 						for channel in state.channels.iter().filter(|c| {
 							c.guild.is_none()
-								&& c.supports_text() && (state.channel_unread(c) == Some(true)
+								&& c.supports_text() && (Some(c.id) == call
+								|| state.channel_unread(c) == Some(true)
 								|| state.unread_count(c.id) > 0)
 						}) {
-							let response = if let Some(user) = channel.recipients.first() {
+							let in_call = Some(channel.id) == call;
+							let response = if channel.kind == 3 {
+								self.avatars.show_group(ui, channel, 48.0, state.demo)
+							} else if let Some(user) = channel.recipients.first() {
 								self.avatars.show(ui, user, 48.0, state.demo)
 							} else {
 								design::avatar(ui, &channel.name, 48.0)
@@ -166,14 +192,26 @@ impl MessagingUi {
 								);
 							}
 							let count = state.unread_count(channel.id);
-							indicator(ui, response.rect, true, count);
+							let unread = state.channel_unread(channel) == Some(true) || count > 0;
+							indicator(ui, response.rect, unread, count);
+							if in_call {
+								call_badge(ui, response.rect);
+							}
 							response.widget_info(|| {
 								egui::WidgetInfo::labeled(
 									egui::WidgetType::Button,
 									true,
 									format!(
-										"Open {}, unread, {} notifications",
-										channel.name, count
+										"Open {}{}, {} notifications",
+										channel.name,
+										if in_call {
+											", in a call"
+										} else if unread {
+											", unread"
+										} else {
+											""
+										},
+										count
 									),
 								)
 							});
@@ -182,7 +220,9 @@ impl MessagingUi {
 									format!(
 										"{} · {}",
 										channel.name,
-										if state.channel_unread(channel).is_some() {
+										if in_call {
+											"You are in this call"
+										} else if state.channel_unread(channel).is_some() {
 											"Unread activity; count may be a lower bound"
 										} else {
 											"Session activity · read sync unavailable"

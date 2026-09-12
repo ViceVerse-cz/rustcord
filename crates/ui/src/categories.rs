@@ -198,8 +198,8 @@ impl MessagingUi {
 		}
 		let dm_list = self.guild.is_none();
 		let row_height = if dm_list { 44.0 } else { 34.0 };
-		// Friends and the section heading share the DM list's existing virtualized scroller.
-		let prefix = if dm_list { 2 } else { 0 };
+		// The section heading shares the DM list's existing virtualized scroller.
+		let prefix = if dm_list { 1 } else { 0 };
 		let row_count = self.channel_cache.rows.len().max(usize::from(dm_list)) + prefix;
 		let previous_spacing = ui.spacing().item_spacing.y;
 		ui.spacing_mut().item_spacing.y = 0.0;
@@ -213,22 +213,8 @@ impl MessagingUi {
 							egui::vec2(ui.available_width(), row_height),
 							egui::Layout::left_to_right(egui::Align::Center),
 							|ui| {
-								if index == 0 {
-									if ui
-										.add_sized(
-											[ui.available_width(), 38.0],
-											egui::Button::new("Friends")
-												.selected(state.selected.is_none()),
-										)
-										.clicked()
-									{
-										state.selected = None;
-										self.search.open = false;
-									}
-								} else {
-									ui.add_space(8.0);
-									ui.label(design::eyebrow(ui, "Direct Messages", colors.muted));
-								}
+								ui.add_space(8.0);
+								ui.label(design::eyebrow(ui, "Direct Messages", colors.muted));
 							},
 						);
 						continue;
@@ -597,7 +583,7 @@ impl MessagingUi {
 mod tests {
 	use super::*;
 	#[test]
-	fn friends_scrolls_with_dms_while_find_stays_pinned() {
+	fn find_and_friends_stay_pinned_while_the_dm_list_scrolls() {
 		for width in [220.0, 320.0] {
 			let ctx = egui::Context::default();
 			design::apply(&ctx);
@@ -644,12 +630,8 @@ mod tests {
 				.find(|(s, _)| s == "Find conversation")
 				.unwrap()
 				.1;
-			let friends = before
-				.iter()
-				.find(|(s, _)| s == "Friends")
-				.unwrap()
-				.1
-				.center();
+			// Friends is the icon-only button pinned to the right of the search row.
+			let friends = egui::pos2(width - 8.0 - 15.0, find.center().y);
 			for pressed in [true, false] {
 				render(
 					&mut view,
@@ -690,11 +672,7 @@ mod tests {
 					.1,
 				find
 			);
-			assert!(
-				!after
-					.iter()
-					.any(|(s, _)| s == "Friends" || s == "DIRECT MESSAGES")
-			);
+			assert!(!after.iter().any(|(s, _)| s == "DIRECT MESSAGES"));
 			let visible_dms = after
 				.iter()
 				.filter(|(s, _)| s.starts_with("Synthetic "))

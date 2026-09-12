@@ -21,6 +21,8 @@ pub struct AppPreferences {
 	pub voice_output: Option<String>,
 	pub input_percent: u16,
 	pub output_percent: u16,
+	/// Expanded server folders, bounded so one device preference stays small.
+	pub expanded_folders: Vec<u64>,
 }
 impl Default for AppPreferences {
 	fn default() -> Self {
@@ -34,6 +36,7 @@ impl Default for AppPreferences {
 			voice_output: None,
 			input_percent: 100,
 			output_percent: 100,
+			expanded_folders: Vec::new(),
 		}
 	}
 }
@@ -41,6 +44,7 @@ impl AppPreferences {
 	pub fn is_valid(&self) -> bool {
 		self.input_percent <= 200
 			&& self.output_percent <= 200
+			&& self.expanded_folders.len() <= 256
 			&& [&self.voice_input, &self.voice_output]
 				.into_iter()
 				.all(|value| value.as_ref().is_none_or(|value| value.len() <= 1024))

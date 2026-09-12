@@ -47,114 +47,345 @@ impl JoinDialog {
 			..Self::default()
 		};
 	}
-	pub fn show(&mut self, ctx: &egui::Context, state: &mut State, commands: &mut Vec<Command>) {
+	pub fn show(
+		&mut self,
+		ctx: &egui::Context,
+		state: &mut State,
+		avatars: &mut crate::avatars::Avatars,
+		commands: &mut Vec<Command>,
+	) {
 		if self.generation != Some(state.generation) {
 			*self = Self::default();
 			return;
 		}
 		let colors = design::palette_for(ctx);
+		let narrow = ctx.content_rect().width() < 460.0;
+		let margin = if narrow { 16 } else { 24 };
 		let mut close = false;
-		let mut ready = false;
-		let mut member = false;
-		let mut loading = false;
-		let mut accepted = false;
 		let modal = egui::Modal::new(egui::Id::unique("join-server-dialog"))
 			.frame(
 				egui::Frame::new()
 					.fill(colors.chat)
 					.stroke(egui::Stroke::new(1.0, colors.border))
-					.corner_radius(14)
-					.inner_margin(24),
+					.corner_radius(16)
+					.inner_margin(margin),
 			)
 			.show(ctx, |ui| {
-				ui.set_width((ctx.content_rect().width() - 80.0).clamp(180.0, 490.0));
-				ui.horizontal(|ui| {
-					ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-						close = icons::button(ui, icons::Icon::Close, 24.0, "Close dialog").clicked();
-					});
+				ui.set_width(
+					(ctx.content_rect().width() - f32::from(margin) * 2.0 - 32.0)
+						.clamp(180.0, 460.0),
+				);
+				ui.horizontal_top(|ui| {
+					let width = (ui.available_width() - 32.0).max(1.0);
+					ui.allocate_ui_with_layout(
+						egui::vec2(width, 28.0),
+						egui::Layout::top_down(egui::Align::Min),
+						|ui| {
+							ui.set_width(width);
+							ui.spacing_mut().item_spacing.y = 4.0;
+							ui.add(
+								egui::Label::new(
+									design::semibold(ui, "Join a Server", 22.0)
+										.color(colors.text_strong),
+								)
+								.wrap(),
+							);
+							ui.add(
+								egui::Label::new(
+									egui::RichText::new(
+										"Enter an invite below to join an existing server.",
+									)
+									.size(14.0)
+									.color(colors.muted),
+								)
+								.wrap(),
+							);
+						},
+					);
+					close = icons::button(ui, icons::Icon::Close, 28.0, "Close dialog").clicked();
 				});
-				let body_height = (ctx.content_rect().height() - 220.0).clamp(100.0, 450.0);
-				egui::ScrollArea::vertical().max_height(body_height).min_scrolled_height(body_height).show(ui, |ui| {
-					ui.vertical_centered(|ui| {
-						ui.label(design::semibold(ui, "Join a Server", 28.0).color(colors.text_strong));
-						ui.add_space(8.0);
-						ui.label("Enter an invite below to join an existing server");
-					});
-					ui.add_space(18.0);
-					let label = ui.label(design::semibold(ui, "Invite link *", 16.0));
-					let input = invite_input(ui, &mut self.input, std::mem::take(&mut self.focus));
-					let input = input.labelled_by(label.id);
-					if input.changed() {
-						self.status = "";
-					}
-					ui.add_space(16.0);
-					ui.colored_label(colors.muted, "Invites should look like");
-					ui.horizontal_wrapped(|ui| {
-						ui.code("hTKzmak");
-						ui.code("https://discord.gg/hTKzmak");
-						ui.code("https://discord.gg/wumpus-friends");
-					});
-					ui.add_space(16.0);
-					egui::Frame::new().fill(colors.base).corner_radius(10).inner_margin(14).show(ui, |ui| {
-						ui.label(design::semibold(ui, "Don't have an invite?", 17.0));
-						ui.hyperlink_to("Explore discoverable communities in Discord ↗", "https://discord.com/servers");
-					});
-					ui.add_space(16.0);
-					let parsed = input_code(&self.input);
-					let preview = parsed.as_ref()
-						.and_then(|code| state.invites.get(code))
-						.filter(|(at, _)| at.elapsed().as_secs() < 300);
-					loading = preview.is_some_and(|(_, value)| value.is_none());
-					ready = if let Some((_, Some(Ok(preview)))) = preview {
-						ui.label(design::semibold(ui, preview.embed.title.as_deref().unwrap_or("Server invite"), 20.0));
-						member = state.guild(preview.guild).is_some();
-						ui.label(if member { "You are already a member of this server." } else { "Review this server, then choose Join Server to confirm." });
-						true
+				ui.add_space(18.0);
+				let body_height = (ctx.content_rect().height() - 260.0).clamp(120.0, 460.0);
+				let (ready, member, loading, accepted, parsed) = egui::ScrollArea::vertical()
+					.id_salt("join-server-body")
+					.max_height(body_height)
+					.show(ui, |ui| self.body(ui, state, avatars))
+					.inner;
+				ui.add_space(18.0);
+				ui.scope(|ui| {
+					let busy = loading || state.invite_join.pending;
+					let enabled = !state.demo && !busy && !member && !accepted;
+					let text = if busy {
+						"Please wait…"
+					} else if ready {
+						"Join Server"
 					} else {
-						if let Some((_, Some(Err(error)))) = preview { ui.colored_label(colors.danger, error.label()); }
-						false
+						"Check Invite"
 					};
-					accepted = parsed.as_deref() == Some(&state.invite_join.code) && matches!(state.invite_join.result, Some(Ok(_)));
-					if parsed.as_deref() == Some(&state.invite_join.code) {
-						if accepted { ui.label("Invite accepted. Waiting for server access; complete any server rules in Discord."); }
-						if let Some(Err(error)) = state.invite_join.result { ui.colored_label(colors.danger, error.label()); }
-					}
-					if state.demo { ui.colored_label(colors.muted, "Offline demo — joining servers is disabled."); }
-					ui.colored_label(colors.muted, self.status);
-				});
-				let parsed = input_code(&self.input);
-					ui.add_space(16.0);
-					ui.horizontal(|ui| {
-						if ui.button("Back").clicked() { close = true; }
-						ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-							let busy = loading || state.invite_join.pending;
-							let enabled = !state.demo && !busy && !member && !accepted;
-							let text = if busy { "Please wait…" } else if ready { "Join Server" } else { "Check Invite" };
-							let clicked = ui.add_enabled(enabled, egui::Button::new(egui::RichText::new(text).color(colors.accent_text)).fill(colors.accent).min_size(egui::vec2(132.0, 44.0))).clicked();
-							if clicked {
-								if let Some(code) = parsed {
-									let command = if ready {
-										state.join_invite(code)
-									} else {
-										// Only an explicit retry may discard a completed failed lookup.
-										state.invites.remove(&code);
-										state.request_join_preview(code)
-										};
-									if let Some(command) = command {
-										commands.push(command);
-										self.status = "";
-									} else {
-										self.status = "Unable to proceed. Check your connection or try again after the current request.";
-									}
-								} else {
-									self.status = "Enter a valid Discord invite link or invite code.";
-								}
-							}
-						});
+					ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+						let clicked = ui
+							.add_enabled(
+								enabled,
+								egui::Button::new(
+									design::medium(ui, text, 15.0).color(colors.accent_text),
+								)
+								.fill(colors.accent)
+								.stroke(egui::Stroke::NONE)
+								.corner_radius(8)
+								.min_size(egui::vec2(140.0, 44.0)),
+							)
+							.clicked();
+						if clicked {
+							self.submit(state, parsed, ready, commands);
+						}
 					});
+				});
 			});
 		if close || modal.should_close() {
 			*self = Self::default();
+		}
+	}
+
+	/// Field, examples and the resolved invite preview; returns the lookup state for the footer.
+	fn body(
+		&mut self,
+		ui: &mut egui::Ui,
+		state: &State,
+		avatars: &mut crate::avatars::Avatars,
+	) -> (bool, bool, bool, bool, Option<String>) {
+		let colors = design::palette(ui);
+		let label = ui.label(design::eyebrow(ui, "Invite link", colors.muted));
+		ui.add_space(6.0);
+		let input = invite_input(ui, &mut self.input, std::mem::take(&mut self.focus))
+			.labelled_by(label.id);
+		if input.changed() {
+			self.status = "";
+		}
+		ui.add_space(10.0);
+		ui.add(
+			egui::Label::new(
+				egui::RichText::new("Invites look like")
+					.size(12.0)
+					.color(colors.muted),
+			)
+			.wrap(),
+		);
+		ui.add_space(2.0);
+		ui.add(
+			egui::Label::new(
+				egui::RichText::new("hTKzmak · discord.gg/hTKzmak · discord.gg/wumpus-friends")
+					.size(12.0)
+					.monospace()
+					.color(colors.muted),
+			)
+			.wrap(),
+		);
+		let parsed = input_code(&self.input);
+		let entry = parsed
+			.as_ref()
+			.and_then(|code| state.invites.get(code))
+			.filter(|(at, _)| at.elapsed().as_secs() < 300);
+		let loading = entry.is_some_and(|(_, value)| value.is_none());
+		let preview = entry
+			.and_then(|(_, value)| value.as_ref())
+			.and_then(|value| value.as_ref().ok());
+		let lookup_error = entry
+			.and_then(|(_, value)| value.as_ref())
+			.and_then(|value| value.as_ref().err());
+		let member = preview.is_some_and(|preview| state.guild(preview.guild).is_some());
+		let ready = preview.is_some();
+		let accepted = parsed.as_deref() == Some(state.invite_join.code.as_str())
+			&& matches!(state.invite_join.result, Some(Ok(_)));
+		let join_error = (parsed.as_deref() == Some(state.invite_join.code.as_str()))
+			.then_some(state.invite_join.result.as_ref())
+			.flatten()
+			.and_then(|result| result.as_ref().err());
+		if loading || preview.is_some() {
+			ui.add_space(16.0);
+			egui::Frame::new()
+				.fill(colors.base)
+				.corner_radius(10)
+				.inner_margin(14)
+				.show(ui, |ui| {
+					ui.set_width(ui.available_width());
+					ui.horizontal(|ui| {
+						ui.spacing_mut().item_spacing.x = 14.0;
+						let (icon, _) =
+							ui.allocate_exact_size(egui::Vec2::splat(52.0), egui::Sense::hover());
+						match preview.and_then(|p| p.embed.thumbnail.as_ref()) {
+							Some(media) => {
+								let mut icon_ui =
+									ui.new_child(egui::UiBuilder::new().max_rect(icon));
+								avatars.show_embed(&mut icon_ui, media, icon.size(), state.demo);
+							}
+							None => {
+								ui.painter().rect_filled(icon, 16, colors.raised);
+								let initial = preview
+									.and_then(|p| p.embed.title.as_deref())
+									.and_then(|title| title.chars().next())
+									.map(|c| c.to_uppercase().to_string());
+								ui.painter().text(
+									icon.center(),
+									egui::Align2::CENTER_CENTER,
+									initial.as_deref().unwrap_or("?"),
+									egui::FontId::proportional(20.0),
+									colors.muted,
+								);
+							}
+						}
+						ui.vertical(|ui| {
+							ui.spacing_mut().item_spacing.y = 4.0;
+							ui.add(
+								egui::Label::new(
+									design::semibold(
+										ui,
+										preview
+											.and_then(|p| p.embed.title.as_deref())
+											.unwrap_or("Checking invite…"),
+										17.0,
+									)
+									.color(colors.text_strong),
+								)
+								.truncate(),
+							);
+							match preview
+								.and_then(|p| p.embed.description.as_deref())
+								.and_then(crate::invites::counts)
+							{
+								Some((online, members)) => {
+									ui.horizontal(|ui| {
+										ui.spacing_mut().item_spacing.x = 6.0;
+										crate::invites::dot_stat(
+											ui,
+											colors.positive,
+											online,
+											"Online",
+										);
+										ui.add_space(6.0);
+										crate::invites::dot_stat(
+											ui,
+											colors.muted,
+											members,
+											"Members",
+										);
+									});
+								}
+								None => {
+									ui.add(
+										egui::Label::new(
+											egui::RichText::new(if member {
+												"You are already a member."
+											} else if loading {
+												"Fetching server details…"
+											} else {
+												"Review this server, then choose Join Server."
+											})
+											.size(13.0)
+											.color(colors.muted),
+										)
+										.truncate(),
+									);
+								}
+							}
+							if preview.is_some() {
+								ui.add(
+									egui::Label::new(
+										egui::RichText::new(if member {
+											"You are already a member of this server."
+										} else {
+											"Choose Join Server to confirm."
+										})
+										.size(12.0)
+										.color(colors.muted),
+									)
+									.wrap(),
+								);
+							}
+						});
+					});
+				});
+		}
+		for (text, danger) in [
+			(lookup_error.map(|error| error.label()), true),
+			(join_error.map(|error| error.label()), true),
+			(
+				accepted.then_some(
+					"Invite accepted. Waiting for server access; complete any server rules in Discord.",
+				),
+				false,
+			),
+			(
+				state
+					.demo
+					.then_some("Offline preview — joining servers is disabled."),
+				false,
+			),
+			((!self.status.is_empty()).then_some(self.status), false),
+		] {
+			let Some(text) = text else { continue };
+			ui.add_space(12.0);
+			let (fill, color) = if danger {
+				(colors.danger.gamma_multiply(0.14), colors.danger)
+			} else {
+				(colors.base, colors.muted)
+			};
+			egui::Frame::new()
+				.fill(fill)
+				.corner_radius(8)
+				.inner_margin(egui::Margin::symmetric(12, 10))
+				.show(ui, |ui| {
+					ui.set_width(ui.available_width());
+					ui.add(
+						egui::Label::new(egui::RichText::new(text).size(13.0).color(color)).wrap(),
+					);
+				});
+		}
+		ui.add_space(16.0);
+		egui::Frame::new()
+			.fill(colors.base)
+			.corner_radius(10)
+			.inner_margin(14)
+			.show(ui, |ui| {
+				ui.set_width(ui.available_width());
+				ui.spacing_mut().item_spacing.y = 4.0;
+				ui.label(design::semibold(ui, "Don't have an invite?", 15.0));
+				ui.hyperlink_to(
+					egui::RichText::new("Explore discoverable communities in Discord ↗")
+						.size(13.0)
+						.color(colors.link),
+					"https://discord.com/servers",
+				);
+			});
+		(ready, member, loading, accepted, parsed)
+	}
+
+	/// Look the invite up, or join once a preview is on screen; never both in one click.
+	fn submit(
+		&mut self,
+		state: &mut State,
+		parsed: Option<String>,
+		ready: bool,
+		commands: &mut Vec<Command>,
+	) {
+		let Some(code) = parsed else {
+			self.status = "Enter a valid Discord invite link or invite code.";
+			return;
+		};
+		let command = if ready {
+			state.join_invite(code)
+		} else {
+			// Only an explicit retry may discard a completed failed lookup.
+			state.invites.remove(&code);
+			state.request_join_preview(code)
+		};
+		match command {
+			Some(command) => {
+				commands.push(command);
+				self.status = "";
+			}
+			None => {
+				self.status = "Unable to proceed. Check your connection or try again after the current request.";
+			}
 		}
 	}
 }
@@ -233,6 +464,7 @@ mod tests {
 		size: egui::Vec2,
 		events: Vec<egui::Event>,
 	) -> Vec<(String, egui::Rect)> {
+		let mut avatars = crate::avatars::Avatars::default();
 		fn labels(shape: &egui::Shape, output: &mut Vec<(String, egui::Rect)>) {
 			match shape {
 				egui::Shape::Text(text) => output.push((
@@ -253,7 +485,7 @@ mod tests {
 				events,
 				..Default::default()
 			},
-			|ui| dialog.show(ui.ctx(), state, commands),
+			|ui| dialog.show(ui.ctx(), state, &mut avatars, commands),
 		);
 		let mut texts = vec![];
 		for shape in &output.shapes {
@@ -338,7 +570,10 @@ mod tests {
 				Err(client_core::auth::Failure::Forbidden),
 			);
 			let texts = frame(&ctx, &mut dialog, &mut state, &mut commands, size, vec![]);
-			assert!(texts.iter().any(|(text, _)| text == "Permission denied"));
+			assert!(
+				texts.iter().any(|(text, _)| text == "Permission denied"),
+				"{texts:?}"
+			);
 			assert!(commands.is_empty(), "no automatic retries");
 			click(
 				&ctx,
@@ -391,7 +626,22 @@ mod tests {
 				},
 			});
 			assert!(state.guild(model::Id(12)).is_none());
-			click(&ctx, &mut dialog, &mut state, &mut commands, size, "Back");
+			// The dialog now closes from the header control or Escape; there is no Back button.
+			assert!(!texts.iter().any(|(text, _)| text == "Back"));
+			frame(
+				&ctx,
+				&mut dialog,
+				&mut state,
+				&mut commands,
+				size,
+				vec![egui::Event::Key {
+					key: egui::Key::Escape,
+					physical_key: None,
+					pressed: true,
+					repeat: false,
+					modifiers: egui::Modifiers::NONE,
+				}],
+			);
 			assert!(dialog.generation.is_none());
 			dialog.open(state.generation);
 			state.generation += 1;

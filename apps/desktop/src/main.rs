@@ -378,6 +378,28 @@ fn hydrate_cache_result(state: &mut State, safety: &cache::HistorySafety, outcom
 	}
 }
 
+/// Soft radial accent glow behind the pre-session screens instead of a flat canvas.
+fn accent_glow(ui: &egui::Ui) {
+	let accent = ui::design::palette(ui).accent;
+	let rect = ui.max_rect();
+	let glow = rect.center() - egui::vec2(0.0, rect.height() * 0.1);
+	let radius = rect.width().max(rect.height()) * 0.55;
+	let mut mesh = egui::Mesh::default();
+	let alpha = if ui.visuals().dark_mode { 0.16 } else { 0.10 };
+	mesh.colored_vertex(glow, accent.gamma_multiply(alpha));
+	const SEGMENTS: u32 = 48;
+	for i in 0..=SEGMENTS {
+		let angle = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+		mesh.colored_vertex(
+			glow + egui::vec2(angle.cos(), angle.sin()) * radius,
+			egui::Color32::TRANSPARENT,
+		);
+	}
+	for i in 1..=SEGMENTS {
+		mesh.add_triangle(0, i, i + 1);
+	}
+	ui.painter().add(egui::Shape::mesh(mesh));
+}
 fn recovery_draft(state: &State, channel: model::Id) -> String {
 	state
 		.drafts
@@ -897,6 +919,17 @@ impl Desktop {
 			});
 			state.history_targeted = true;
 			state.status = "Offline fixture · unread strip and older-messages bar shown";
+		}
+		#[cfg(feature = "demo")]
+		if demo && std::env::args().any(|arg| arg == "--demo-join-server") {
+			messaging.preview_join_server(state.generation);
+			state.status = "Offline fixture · join-server dialog opened at startup";
+		}
+		#[cfg(feature = "demo")]
+		if demo && std::env::args().any(|arg| arg == "--demo-screen-share") {
+			// Pairs with `--demo-call`: synthetic sources, never a real capture.
+			messaging.preview_screen_share(&state);
+			state.status = "Offline fixture · screen-share picker opened at startup";
 		}
 		#[cfg(feature = "demo")]
 		if demo && std::env::args().any(|arg| arg == "--demo-login") {
@@ -2160,30 +2193,153 @@ impl Desktop {
 			self.state.command_rejected(command);
 		}
 	}
+	/// Boot stage while a saved login is being restored, so launch shows progress
+	/// instead of a welcome card the user cannot act on yet.
+	fn restoring(&self) -> Option<&'static str> {
+		// Fixture-only preview of the restore screen, e.g. `--demo --demo-restoring`.
+		#[cfg(feature = "demo")]
+		if self.fixture_only && std::env::args().any(|arg| arg == "--demo-restoring") {
+			return Some("Checking your saved login");
+		}
+		if self.fixture_only
+			|| self.state.demo
+			|| self.login.is_some()
+			|| self.forgetting
+			|| matches!(
+				self.state.auth,
+				AuthState::Failed | AuthState::Expired | AuthState::Challenged
+			) {
+			return None;
+		}
+		if self
+			.store
+			.as_ref()
+			.is_some_and(|store| store.remaining(std::time::Instant::now()).is_some())
+		{
+			return Some("Checking your saved login");
+		}
+		self.connection.is_some().then_some("Connecting to Discord")
+	}
+	/// Restore screen for returning accounts: no sign-in controls, just the stage,
+	/// an indeterminate bar and a way out to the welcome screen.
+	fn restoring_screen(&mut self, ui: &mut egui::Ui, stage: &'static str) {
+		let p = ui::design::palette(ui);
+		egui::CentralPanel::default()
+			.frame(egui::Frame::NONE.fill(ui::design::window_palette(ui).canvas))
+			.show(ui, |ui| {
+				accent_glow(ui);
+				ui::design::window_drag(ui, ui.max_rect());
+				let header = egui::Frame::NONE
+					.inner_margin(egui::Margin {
+						left: (16.0 + ui::design::TRAFFIC_LIGHT_INSET) as i8,
+						right: if ui::design::WINDOW_CONTROLS_WIDTH > 0.0 {
+							0
+						} else {
+							16
+						},
+						top: if ui::design::WINDOW_CONTROLS_WIDTH > 0.0 {
+							0
+						} else {
+							16
+						},
+						bottom: 0,
+					})
+					.show(ui, |ui| {
+						ui.horizontal(|ui| {
+							ui.label(ui::design::semibold(ui, "Serein", 16.0).color(p.muted));
+							ui.with_layout(
+								egui::Layout::right_to_left(egui::Align::Center),
+								ui::design::window_controls,
+							);
+						});
+					});
+				ui::design::window_drag(ui, header.response.rect);
+				let time = ui.input(|i| i.time) as f32;
+				ui.ctx().request_repaint();
+				ui.vertical_centered(|ui| {
+					ui.add_space((ui.available_height() * 0.5 - 150.0).max(12.0));
+					// App mark with a slow breathing halo; the only motion besides the bar.
+					let (rect, _) =
+						ui.allocate_exact_size(egui::vec2(72.0, 72.0), egui::Sense::hover());
+					let mark = egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(56.0));
+					let pulse = 0.5 + 0.5 * (time * 1.6).sin();
+					ui.painter().rect_filled(
+						mark.expand(4.0 + 4.0 * pulse),
+						18,
+						p.accent.gamma_multiply(0.10 + 0.10 * pulse),
+					);
+					ui.painter().rect_filled(mark, 14, p.accent);
+					ui::icons::paint(
+						ui.painter(),
+						ui::icons::Icon::Discord,
+						mark.shrink(13.0),
+						p.accent_text,
+					);
+					ui.add_space(18.0);
+					ui.label(ui::design::semibold(ui, "Welcome back", 24.0).color(p.text_strong));
+					ui.add_space(6.0);
+					ui.label(
+						egui::RichText::new(format!("{stage}…"))
+							.size(15.0)
+							.color(p.muted),
+					);
+					ui.add_space(22.0);
+					// Indeterminate track: progress is unknown, so a sweeping segment.
+					let width = ui.available_width().min(260.0);
+					let (track, _) =
+						ui.allocate_exact_size(egui::vec2(width, 4.0), egui::Sense::hover());
+					ui.painter().rect_filled(track, 2, p.raised);
+					let span = track.width() * 0.35;
+					let travel = (track.width() + span) * ((time * 0.5).fract());
+					let left = (track.left() + travel - span).max(track.left());
+					let right = (track.left() + travel).min(track.right());
+					if right > left {
+						ui.painter().rect_filled(
+							egui::Rect::from_min_max(
+								egui::pos2(left, track.top()),
+								egui::pos2(right, track.bottom()),
+							),
+							2,
+							p.accent,
+						);
+					}
+					ui.add_space(18.0);
+					for detail in [self.credential_status, self.state.status]
+						.into_iter()
+						.filter(|detail| !detail.is_empty() && *detail != "Disconnected")
+					{
+						ui.add(
+							egui::Label::new(egui::RichText::new(detail).size(12.0).color(p.muted))
+								.wrap(),
+						);
+					}
+					ui.add_space(26.0);
+					ui.allocate_ui_with_layout(
+						egui::vec2(220.0, 0.0),
+						egui::Layout::top_down(egui::Align::Center),
+						|ui| {
+							if ui::design::secondary_button(ui, "Use a different account").clicked()
+							{
+								if let Some(store) = &mut self.store {
+									store.cancel_load();
+								}
+								self.connection = None;
+								self.pending_save = None;
+								self.state.auth = AuthState::Unauthenticated;
+								self.state.status = "Disconnected";
+								self.credential_status = "Saved-login restore cancelled";
+							}
+						},
+					);
+				});
+			});
+	}
 	fn sign_in_screen(&mut self, ui: &mut egui::Ui) {
 		let p = ui::design::palette(ui);
 		egui::CentralPanel::default()
 			.frame(egui::Frame::NONE.fill(ui::design::window_palette(ui).canvas))
 			.show(ui, |ui| {
-				// Soft radial accent glow behind the card instead of a flat canvas.
-				let rect = ui.max_rect();
-				let glow = rect.center() - egui::vec2(0.0, rect.height() * 0.1);
-				let radius = rect.width().max(rect.height()) * 0.55;
-				let mut mesh = egui::Mesh::default();
-				let alpha = if ui.visuals().dark_mode { 0.16 } else { 0.10 };
-				mesh.colored_vertex(glow, p.accent.gamma_multiply(alpha));
-				const SEGMENTS: u32 = 48;
-				for i in 0..=SEGMENTS {
-					let angle = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
-					mesh.colored_vertex(
-						glow + egui::vec2(angle.cos(), angle.sin()) * radius,
-						egui::Color32::TRANSPARENT,
-					);
-				}
-				for i in 1..=SEGMENTS {
-					mesh.add_triangle(0, i, i + 1);
-				}
-				ui.painter().add(egui::Shape::mesh(mesh));
+				accent_glow(ui);
 				let header = egui::Frame::NONE
 					.inner_margin(egui::Margin {
 						left: (16.0 + ui::design::TRAFFIC_LIGHT_INSET) as i8,
@@ -3563,6 +3719,8 @@ impl eframe::App for Desktop {
 					self.logout(&ctx);
 				}
 			}
+		} else if let Some(stage) = self.restoring() {
+			self.restoring_screen(ui, stage);
 		} else {
 			self.sign_in_screen(ui);
 		}

@@ -34,6 +34,7 @@ impl Settings {
 			voice_output: ui.voice_output.clone(),
 			input_percent: ui.voice_gain.input_percent,
 			output_percent: ui.voice_gain.output_percent,
+			expanded_folders: ui.expanded_folders.clone(),
 		};
 		if value != self.current {
 			self.state.touched = true;
@@ -55,5 +56,6 @@ impl Settings {
 		ui.voice_output.clone_from(&value.voice_output);
 		ui.voice_gain.input_percent = value.input_percent;
 		ui.voice_gain.output_percent = value.output_percent;
+		ui.expanded_folders.clone_from(&value.expanded_folders);
 	}
 }
