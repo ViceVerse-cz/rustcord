@@ -59,6 +59,19 @@ pub enum Sample {
 	},
 }
 
+// These backends read tracks independently. Linux must yield when a sibling pipeline
+// queue needs draining, so the player uses the same polling interface on every OS.
+#[cfg(not(target_os = "linux"))]
+impl Decoder {
+	pub fn poll_video(&mut self) -> Result<std::task::Poll<Option<Sample>>, &'static str> {
+		self.read_video().map(std::task::Poll::Ready)
+	}
+
+	pub fn poll_audio(&mut self) -> Result<std::task::Poll<Option<Sample>>, &'static str> {
+		self.read_audio().map(std::task::Poll::Ready)
+	}
+}
+
 /// The shared inline-player texture bound: 1080p worth of pixels within a 1920 px square.
 pub fn check_dimensions(width: u32, height: u32) -> Result<(), &'static str> {
 	if width == 0 || height == 0 {
@@ -71,7 +84,7 @@ pub fn check_dimensions(width: u32, height: u32) -> Result<(), &'static str> {
 }
 
 /// Rotate a packed RGBA frame clockwise by a quarter-turn multiple; returns the new dimensions.
-#[cfg(not(target_os = "windows"))]
+#[cfg(any(target_os = "macos", all(test, target_os = "linux")))]
 pub(crate) fn rotate_rgba(
 	rgba: &[u8],
 	width: u32,

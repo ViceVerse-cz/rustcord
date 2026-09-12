@@ -438,10 +438,6 @@ impl VideoUi {
 				*channel == message.channel && *id == message.id && file == attachment
 			}) {
 			self.seen = true;
-			if matches!(self.state, VideoState::Loading | VideoState::Playing) {
-				ui.ctx()
-					.request_repaint_after(std::time::Duration::from_millis(33));
-			}
 		}
 	}
 }

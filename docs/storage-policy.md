@@ -457,7 +457,7 @@ never publish, persist or initialize account transports.
 
 Video data is memory-only. One lazy worker handles the latest requested attachment,
 with a replaceable pending request and cancellation fencing. The network source retains
-one 16 KiB range; responses are checked for exact range/total/body lengths and reject
+up to eight 256 KiB ranges (2 MiB, including an in-flight range); responses are checked for exact range/total/body lengths and reject
 redirects and content encoding. Encoded attachment size is capped at 100 MiB.
 The application queues at most two 1080p RGBA frames, one replaceable display frame,
 one UI texture, one second of stereo float PCM (at most 768,000 bytes), and one decoded

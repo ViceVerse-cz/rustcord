@@ -489,7 +489,11 @@ unsafe extern "C-unwind" fn output_frame(
 	// SAFETY: VideoToolbox keeps the image buffer alive for the duration of the callback.
 	match unsafe { copy_rgba(&*image) } {
 		Ok((width, height, rgba)) => {
-			let (width, height, rgba) = super::rotate_rgba(&rgba, width, height, output.rotation);
+			let (width, height, rgba) = if output.rotation == 0 {
+				(width, height, rgba)
+			} else {
+				super::rotate_rgba(&rgba, width, height, output.rotation)
+			};
 			output.frames.push(Decoded {
 				pts: ticks,
 				width,

@@ -3178,3 +3178,65 @@ Active capture memory/CPU, sustained video bandwidth, frame latency and Linux na
 runtime are unmeasured. These idle samples cannot establish camera performance or
 Discord interoperability. Native screenshots could not be inspected or exported:
 the tool reported `native pipe is unavailable ... (os error 2)` after retry/reset.
+
+
+### Inline video debug playback and range buffering (September 12, 2026)
+
+Baseline `67561d3`; macOS 27.0 (26A428), Apple M1 Pro, 16 GiB RAM, Rust 1.98.1.
+The reported problem used `cargo run`, so these decoder measurements intentionally use
+**debug** builds. Targeted optimization now covers platform frame copies, Symphonia AAC/core,
+and egui pixel conversion (epaint/ecolor), following the existing voice dev-profile policy.
+Application logic remains unoptimized. No dependency was added.
+
+A generated 12-second H.264/AAC clip contains 360 1920x1080 frames at 30 fps and
+577,536 mono PCM frames at 48 kHz. Both revisions decode every frame and seek to the midpoint.
+One warmup plus five measured executions of the same native decoder test, with compilation
+finished; elapsed decode time comes from the test, CPU time and maximum RSS from macOS
+`/usr/bin/time -l`. Hardware decoder/system-service CPU is not included in process CPU time.
+
+| Debug decoder metric (five-run median) | Baseline | After | Delta |
+| --- | --- | --- | --- |
+| Decode elapsed, ms | 7,062 | 1,645 | -5,417 (-76.7%) |
+| Test-process user + system CPU, seconds | 5.87 | 0.46 | -5.41 (-92.2%) |
+| Test-process maximum RSS, bytes | 65,388,544 | 64,143,360 | -1,245,184 (-1.9%) |
+
+Elapsed samples (ms): baseline 7062, 7050, 7140, 7063, 7057;
+after 1571, 1645, 1669, 1677, 1630. These are local decoder measurements, **not**
+whole-app CPU, GPU usage, frame latency, or live CDN playback measurements. Small memory
+differences are noisy. A separate muted debug player check played the clip through EOF in
+12.341 seconds; pause/seek/cancel, silent video and video continuing after short audio passed.
+
+The credential-free HTTP reader now retains eight 256 KiB ranges (2 MiB maximum,
+including the incoming range), replacing one 16 KiB slot. A loopback HTTP regression reads
+64 alternating 4 KiB samples from two tracks 4 MiB apart, imposing 10 ms latency on each
+response. It checks returned bytes as well as request count. One warmup and five measured
+runs: baseline median 823.958 ms / 64 requests; after median 28.323 ms / 2 requests
+(-96.6% elapsed, -96.9% requests). Fetched payload falls from 1 MiB to 512 KiB for that
+256 KiB read workload. This is synthetic latency evidence; the memory-only cache still
+refills synchronously, so sustained slow networks can still buffer. Eviction, malformed
+responses and cancellation are covered by the source tests.
+
+Linux polling now yields when an appsink has no sample, allowing the sibling bounded
+queue to drain instead of blocking the player. The Linux fixture test exercises asymmetric
+track consumption; native Linux execution is not established by the macOS measurements.
+The worker requests clock-only repaints at 10 Hz, preserves immediate frame/state updates,
+and releases its update lock before UI texture conversion. The redundant unrotated macOS
+frame copy is removed. No layout change or new media persistence is introduced.
+
+Reproduction (FFmpeg 9.0.1 used here; generated content only):
+
+```sh
+ffmpeg -f lavfi -i testsrc2=size=1920x1080:rate=30 \
+  -f lavfi -i sine=frequency=440:sample_rate=48000 -t 12 \
+  -c:v libx264 -preset ultrafast -crf 25 -pix_fmt yuv420p \
+  -c:a aac -movflags +faststart /tmp/serein-video-1080p.mp4
+SEREIN_VIDEO_SAMPLE=/tmp/serein-video-1080p.mp4 cargo test --locked -p platform \
+  decodes_local_sample -- --ignored --nocapture
+SEREIN_VIDEO_SAMPLE=/tmp/serein-video-1080p.mp4 cargo test --locked -p serein \
+  --features demo local_video_keeps_up_with_realtime -- --ignored --nocapture
+cargo test --locked -p serein alternating_tracks_reuse_buffered_ranges -- --nocapture
+```
+
+For medians, build once and invoke each emitted test executable directly, one warmup and
+five measured runs. The player test is explicitly ignored by default because it opens the
+local output device at zero volume. It never uses an account or microphone.

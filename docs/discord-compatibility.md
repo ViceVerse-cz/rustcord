@@ -749,6 +749,10 @@ centered play button on the picture, and a translucent bar over its lower edge w
 elapsed/total time and volume that hides while playing until the pointer or keyboard focus
 returns. Every platform decodes through the same credential-free, validated Discord CDN
 range reader; no attachment is opened as an OS URL and no webview is involved.
+The reader retains up to eight 256 KiB ranges to avoid refetching data when the decoder
+switches between audio and video. Linux polls both bounded output queues without waiting
+on one track while the other needs draining. Clock-only UI updates run at 10 Hz; decoded
+frames and playback-state changes request immediate repaint.
 
 * Windows: Media Foundation. Windows codec availability controls playback (including HEVC).
 * macOS: a bounded Rust MPEG-4 demuxer feeds VideoToolbox (H.264 and HEVC, including

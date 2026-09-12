@@ -1,5 +1,6 @@
 //! Decoder-driven attachment ranges. No file cache or eager whole-video download.
 use std::{
+	collections::VecDeque,
 	io::{self, Read, Seek, SeekFrom},
 	sync::{
 		Arc,
@@ -10,7 +11,8 @@ use std::{
 use tokio::runtime::Handle;
 
 const MAX_BYTES: usize = 100 * 1024 * 1024;
-const CHUNK: usize = 16 * 1024;
+const CHUNK: usize = 256 * 1024;
+const CACHE_CHUNKS: usize = 8;
 const INVALID: &str = "Video download failed or changed; reload the conversation";
 const UNSUPPORTED: &str = "Video server does not support buffering; download to play externally";
 
@@ -63,8 +65,7 @@ pub(super) fn source(
 		cancelled,
 		len,
 		position: 0,
-		cache_start: 0,
-		cache: Vec::new(),
+		cache: VecDeque::new(),
 	}))
 }
 
@@ -82,8 +83,7 @@ struct Source {
 	cancelled: Arc<AtomicBool>,
 	len: usize,
 	position: usize,
-	cache_start: usize,
-	cache: Vec<u8>,
+	cache: VecDeque<(usize, Vec<u8>)>,
 }
 fn invalid() -> io::Error {
 	io::Error::new(io::ErrorKind::InvalidData, INVALID)
@@ -101,6 +101,11 @@ impl Source {
 		}
 	}
 	fn fill(&mut self) -> io::Result<()> {
+		// Retain both tracks across demuxer seeks. Evict before transfer so encoded
+		// payloads, including the new range, stay within eight chunks / 2 MiB.
+		if self.cache.len() == CACHE_CHUNKS {
+			self.cache.pop_front();
+		}
 		let (client, url, runtime) = match &self.input {
 			Input::Http {
 				client,
@@ -170,8 +175,7 @@ impl Source {
 			}
 		})?;
 		self.check_cancelled()?;
-		self.cache = bytes;
-		self.cache_start = start;
+		self.cache.push_back((start, bytes));
 		Ok(())
 	}
 }
@@ -188,13 +192,18 @@ impl Read for Source {
 			self.position += count;
 			return Ok(count);
 		}
-		if self.position < self.cache_start || self.position >= self.cache_start + self.cache.len()
-		{
+		if let Some(index) = self.cache.iter().position(|(start, bytes)| {
+			self.position >= *start && self.position < start + bytes.len()
+		}) {
+			let range = self.cache.remove(index).ok_or_else(invalid)?;
+			self.cache.push_back(range);
+		} else {
 			self.fill()?;
 		}
-		let offset = self.position - self.cache_start;
-		count = count.min(self.cache.len() - offset);
-		output[..count].copy_from_slice(&self.cache[offset..offset + count]);
+		let (start, bytes) = self.cache.back().ok_or_else(invalid)?;
+		let offset = self.position - start;
+		count = count.min(bytes.len() - offset);
+		output[..count].copy_from_slice(&bytes[offset..offset + count]);
 		self.position += count;
 		Ok(count)
 	}
@@ -218,6 +227,87 @@ impl Seek for Source {
 mod tests {
 	use super::*;
 	use std::{io::Write, net::TcpListener, sync::atomic::AtomicUsize};
+
+	#[test]
+	fn alternating_tracks_reuse_buffered_ranges() {
+		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+		let address = listener.local_addr().unwrap();
+		let url = url::Url::parse(&format!("http://{address}/tracks.mov")).unwrap();
+		let expected = 8 * 1024 * 1024;
+		let requests = Arc::new(AtomicUsize::new(0));
+		let observed = requests.clone();
+		let stopped = Arc::new(AtomicBool::new(false));
+		let stop = stopped.clone();
+		let server = std::thread::spawn(move || {
+			loop {
+				let (mut socket, _) = listener.accept().unwrap();
+				if stop.load(Ordering::Acquire) {
+					break;
+				}
+				socket
+					.set_read_timeout(Some(Duration::from_secs(2)))
+					.unwrap();
+				let mut header = Vec::new();
+				while !header.ends_with(b"\r\n\r\n") {
+					assert!(header.len() < 8192);
+					let mut byte = [0];
+					socket.read_exact(&mut byte).unwrap();
+					header.push(byte[0]);
+				}
+				let header = String::from_utf8(header).unwrap().to_ascii_lowercase();
+				let range = header
+					.lines()
+					.find_map(|line| line.strip_prefix("range: bytes="))
+					.unwrap();
+				let (start, end) = range.split_once('-').unwrap();
+				let start = start.parse::<usize>().unwrap();
+				let end = end.parse::<usize>().unwrap();
+				let count = end - start + 1;
+				assert!(count <= 256 * 1024 && end < expected);
+				observed.fetch_add(1, Ordering::Release);
+				std::thread::sleep(Duration::from_millis(10));
+				write!(socket, "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{end}/{expected}\r\nContent-Length: {count}\r\nConnection: close\r\n\r\n").unwrap();
+				socket
+					.write_all(&vec![(start / (4 * 1024 * 1024)) as u8; count])
+					.unwrap();
+			}
+		});
+		let runtime = tokio::runtime::Builder::new_multi_thread()
+			.worker_threads(1)
+			.enable_all()
+			.build()
+			.unwrap();
+		let mut input = source(
+			Some(url),
+			expected,
+			Arc::new(AtomicBool::new(false)),
+			runtime.handle().clone(),
+		)
+		.unwrap();
+		assert_eq!(requests.load(Ordering::Acquire), 0);
+		let started = std::time::Instant::now();
+		for sample in 0..32 {
+			for track in 0..2 {
+				input
+					.seek(SeekFrom::Start(
+						(track * 4 * 1024 * 1024 + sample * 4096) as u64,
+					))
+					.unwrap();
+				let mut bytes = [0; 4096];
+				input.read_exact(&mut bytes).unwrap();
+				assert!(bytes.iter().all(|byte| *byte == track as u8));
+			}
+		}
+		let elapsed = started.elapsed();
+		let count = requests.load(Ordering::Acquire);
+		stopped.store(true, Ordering::Release);
+		std::net::TcpStream::connect(address).unwrap();
+		server.join().unwrap();
+		eprintln!(
+			"alternating tracks: {count} requests, {elapsed:?}, 64 reads, 10 ms response delay"
+		);
+		assert_eq!(count, 2);
+	}
 
 	#[test]
 	fn cancellation_interrupts_a_stalled_range_body() {
@@ -272,11 +362,15 @@ mod tests {
 			listener.local_addr().unwrap()
 		))
 		.unwrap();
-		let expected = CHUNK * 3;
+		let expected = CHUNK * (CACHE_CHUNKS + 1);
 		let requests = Arc::new(AtomicUsize::new(0));
 		let observed = requests.clone();
 		let server = std::thread::spawn(move || {
-			for (index, start) in [0, CHUNK * 2, 0].into_iter().enumerate() {
+			let starts = [0, CHUNK * CACHE_CHUNKS]
+				.into_iter()
+				.chain((1..CACHE_CHUNKS).map(|chunk| chunk * CHUNK))
+				.chain([CHUNK * CACHE_CHUNKS]);
+			for (index, start) in starts.enumerate() {
 				let (mut socket, _) = listener.accept().unwrap();
 				socket
 					.set_read_timeout(Some(Duration::from_secs(2)))
@@ -295,10 +389,11 @@ mod tests {
 				assert!(!header.contains("authorization:"));
 				assert!(!header.contains("cookie:"));
 				observed.fetch_add(1, Ordering::Release);
-				let total = expected + usize::from(index == 2);
+				let changed = index == CACHE_CHUNKS + 1;
+				let total = expected + usize::from(changed);
 				write!(socket, "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{}/{total}\r\nContent-Length: {CHUNK}\r\nConnection: close\r\n\r\n", start + CHUNK - 1).unwrap();
 				let result = socket.write_all(&vec![(start / CHUNK) as u8; CHUNK]);
-				if index != 2 {
+				if !changed {
 					result.unwrap();
 				}
 			}
@@ -326,14 +421,31 @@ mod tests {
 		assert_eq!(requests.load(Ordering::Acquire), 1);
 		input.seek(SeekFrom::End(-32)).unwrap();
 		input.read_exact(&mut bytes).unwrap();
-		assert_eq!(bytes, [2; 32]);
+		assert_eq!(bytes, [CACHE_CHUNKS as u8; 32]);
 		assert_eq!(requests.load(Ordering::Acquire), 2);
 		assert_eq!(input.read(&mut bytes).unwrap(), 0);
 		assert!(input.seek(SeekFrom::End(1)).is_err());
 		assert!(input.seek(SeekFrom::Start(u64::MAX)).is_err());
 		assert!(input.seek(SeekFrom::Current(i64::MIN)).is_err());
+		for chunk in 1..CACHE_CHUNKS {
+			// Keep the first range hot while loading enough others to evict the tail.
+			input.seek(SeekFrom::Start(0)).unwrap();
+			input.read_exact(&mut bytes).unwrap();
+			assert_eq!(bytes, [0; 32]);
+			input.seek(SeekFrom::Start((chunk * CHUNK) as u64)).unwrap();
+			input.read_exact(&mut bytes).unwrap();
+			assert_eq!(bytes, [chunk as u8; 32]);
+		}
+		assert_eq!(requests.load(Ordering::Acquire), CACHE_CHUNKS + 1);
 		input.seek(SeekFrom::Start(0)).unwrap();
-		assert!(input.read(&mut bytes).is_err());
+		input.read_exact(&mut bytes).unwrap();
+		assert_eq!(bytes, [0; 32]);
+		input.seek(SeekFrom::End(-32)).unwrap();
+		assert_eq!(
+			input.read(&mut bytes).unwrap_err().kind(),
+			io::ErrorKind::InvalidData
+		);
+		assert_eq!(requests.load(Ordering::Acquire), CACHE_CHUNKS + 2);
 		server.join().unwrap();
 		cancelled.store(true, Ordering::Release);
 		assert_eq!(
