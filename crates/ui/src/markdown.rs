@@ -674,6 +674,9 @@ impl Formatted {
 			},
 		);
 	}
+	/// One galley per run: emoji occupy fixed-width slots inside the text layout, so rows
+	/// holding artwork grow before any text on them is positioned. Separate widgets would
+	/// leave text placed earlier on the row misaligned with text placed after the emoji.
 	fn show_emoji(
 		spans: &[(String, Style)],
 		ui: &mut egui::Ui,
@@ -681,19 +684,20 @@ impl Formatted {
 		images: &mut crate::avatars::Avatars,
 		demo: bool,
 	) -> egui::Response {
-		let mut response: Option<egui::Response> = None;
-		let mut pending = Vec::new();
+		struct Inline {
+			text: String,
+			custom: Option<model::Id>,
+			image: Option<egui::Image<'static>>,
+		}
 		let size = crate::emoji::inline_size(ui);
-		let flush = |pending: &mut Vec<(String, Style)>, ui: &mut egui::Ui| {
-			let job = Self::layout(pending, ui);
-			pending.clear();
-			if link {
-				ui.add(egui::Link::new(job))
-			} else {
-				ui.add(egui::Label::new(job).wrap().selectable(true))
-			}
-		};
+		let body = egui::TextStyle::Body.resolve(ui.style());
+		let mut job = LayoutJob::default();
+		let mut source = String::new();
+		let mut inlines: Vec<Inline> = Vec::new();
+		// Label overwrites the first section's leading space with the wrap indentation.
+		job.append("", 0.0, Self::format(ui, &Style::default()));
 		for (text, style) in spans {
+			let format = Self::format(ui, style);
 			let mut start = 0;
 			let mut offset = 0;
 			while offset < text.len() {
@@ -724,38 +728,148 @@ impl Formatted {
 					continue;
 				}
 				if offset > start {
-					pending.push((text[start..offset].to_owned(), *style));
+					job.append(&text[start..offset], 0.0, format.clone());
+					source.push_str(&text[start..offset]);
 				}
-				if !pending.is_empty() {
-					let next = flush(&mut pending, ui);
-					response = Some(response.map_or(next.clone(), |r| r.union(next)));
-				}
-				let next = crate::emoji::selectable(
-					ui,
-					cluster,
-					|ui| {
-						if let Some((id, _)) = custom {
-							images.custom_image(ui.ctx(), id, size, demo)
-						} else {
-							image
-						}
-					},
+				// One zero-width glyph plus leading space forms an unbroken inline slot; its
+				// character is expanded to the wire text below so selection copies the original.
+				job.append(
+					"\u{200b}",
 					size,
-					link,
+					TextFormat {
+						color: egui::Color32::TRANSPARENT,
+						line_height: Some(size),
+						..format.clone()
+					},
 				);
-				response = Some(response.map_or(next.clone(), |r| r.union(next)));
+				inlines.push(Inline {
+					text: cluster.to_owned(),
+					custom: custom.map(|(id, _)| id),
+					image,
+				});
+				source.push_str(cluster);
 				offset += len;
 				start = offset;
 			}
 			if start < text.len() {
-				pending.push((text[start..].to_owned(), *style));
+				job.append(&text[start..], 0.0, format);
+				source.push_str(&text[start..]);
 			}
 		}
-		if !pending.is_empty() || response.is_none() {
-			let next = flush(&mut pending, ui);
-			response = Some(response.map_or(next.clone(), |r| r.union(next)));
+		let mut label = egui::Label::new(job).wrap().selectable(true);
+		if link {
+			label = label.sense(egui::Sense::click());
 		}
-		response.expect("text or emoji response")
+		let (pos, mut galley, mut response) = label.layout_in_ui(ui);
+		response.widget_info(|| {
+			egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), &source)
+		});
+		let mut slots: Vec<(usize, egui::Rect)> = Vec::new();
+		if !inlines.is_empty() {
+			let wrap = galley.job.wrap.max_width;
+			let galley_mut = std::sync::Arc::make_mut(&mut galley);
+			let mut next = 0;
+			for placed in &mut galley_mut.rows {
+				let row = std::sync::Arc::make_mut(&mut placed.row);
+				let mut glyphs = Vec::with_capacity(row.glyphs.len());
+				for glyph in &row.glyphs {
+					// Placeholders are the only glyphs with the artwork line height; a literal
+					// zero-width space in message text keeps the body font's row height.
+					if next >= inlines.len() || glyph.chr != '\u{200b}' || glyph.line_height != size
+					{
+						glyphs.push(*glyph);
+						continue;
+					}
+					let index = next;
+					next += 1;
+					let left = glyph.pos.x - size;
+					slots.push((
+						index,
+						egui::Rect::from_min_size(
+							pos + placed.pos.to_vec2() + egui::vec2(left, 0.0),
+							egui::vec2(size, row.size.y),
+						),
+					));
+					// One hit target: selection endpoints never split a sequence or markup.
+					for chr in inlines[index].text.chars() {
+						let mut slot = *glyph;
+						slot.chr = chr;
+						slot.pos.x = left;
+						slot.advance_width = size;
+						glyphs.push(slot);
+					}
+				}
+				row.glyphs = glyphs;
+			}
+			// Selection and copy read the galley's text: expose exactly the original characters.
+			galley_mut.job = std::sync::Arc::new(LayoutJob::simple(
+				source,
+				body,
+				ui.visuals().text_color(),
+				wrap,
+			));
+		}
+		if ui.is_rect_visible(response.rect) {
+			egui::text_selection::LabelSelectionState::label_text_selection(
+				ui,
+				&response,
+				pos,
+				galley,
+				ui.visuals().text_color(),
+				Stroke::NONE,
+			);
+			for (index, rect) in &slots {
+				if !ui.is_rect_visible(*rect) {
+					continue;
+				}
+				let inline = &inlines[*index];
+				let image = match inline.custom {
+					Some(id) => images.custom_image(ui.ctx(), id, size, demo),
+					None => inline.image.clone(),
+				};
+				if let Some(image) = image {
+					let painted = image.calc_size(egui::Vec2::splat(size), image.size());
+					image.paint_at(ui, egui::Rect::from_center_size(rect.center(), painted));
+				} else {
+					ui.painter().text(
+						rect.center(),
+						egui::Align2::CENTER_CENTER,
+						"?",
+						egui::FontId::proportional(size),
+						ui.visuals().weak_text_color(),
+					);
+				}
+			}
+			if link && response.hovered() {
+				ui.set_cursor_icon(egui::CursorIcon::PointingHand);
+			}
+		}
+		let slot_at = |point: egui::Pos2| {
+			slots
+				.iter()
+				.find(|(_, rect)| rect.contains(point))
+				.map(|(index, _)| *index)
+		};
+		if let Some(index) = response.hover_pos().and_then(slot_at) {
+			response = response.on_hover_text_at_pointer(&inlines[index].text);
+		}
+		let menu = response.id.with("emoji-menu");
+		if response.secondary_clicked() {
+			let target = response
+				.interact_pointer_pos()
+				.and_then(slot_at)
+				.map(|index| inlines[index].text.clone());
+			ui.data_mut(|data| data.insert_temp(menu, target));
+		}
+		if let Some(text) = ui.data(|data| data.get_temp::<Option<String>>(menu).flatten()) {
+			egui::Popup::context_menu(&response).id(menu).show(|ui| {
+				if ui.button("Copy emoji").clicked() {
+					ui.ctx().copy_text(text);
+					ui.close();
+				}
+			});
+		}
+		response
 	}
 	fn push(&mut self, text: &str, style: Style) {
 		if !text.is_empty() {
@@ -768,52 +882,44 @@ impl Formatted {
 			+ self.links.capacity() * size_of::<String>()
 			+ self.links.iter().map(String::capacity).sum::<usize>()
 	}
-	fn layout(spans: &[(String, Style)], ui: &egui::Ui) -> LayoutJob {
-		let mut job = LayoutJob::default();
+	fn format(ui: &egui::Ui, style: &Style) -> TextFormat {
 		let visuals = ui.visuals();
 		let body = egui::TextStyle::Body.resolve(ui.style());
-		for (text, style) in spans {
-			let color = if style.link.is_some() {
-				visuals.hyperlink_color
-			} else if style.strong {
-				visuals.strong_text_color()
-			} else if style.quote {
-				visuals.weak_text_color()
+		let color = if style.link.is_some() {
+			visuals.hyperlink_color
+		} else if style.strong {
+			visuals.strong_text_color()
+		} else if style.quote {
+			visuals.weak_text_color()
+		} else {
+			visuals.text_color()
+		};
+		TextFormat {
+			valign: ui.text_valign(),
+			font_id: if style.code {
+				FontId::monospace(body.size)
 			} else {
-				visuals.text_color()
-			};
-			job.append(
-				text,
-				0.0,
-				TextFormat {
-					valign: ui.text_valign(),
-					font_id: if style.code {
-						FontId::monospace(body.size)
-					} else {
-						body.clone()
-					},
-					color,
-					background: if style.code {
-						visuals.code_bg_color
-					} else {
-						egui::Color32::TRANSPARENT
-					},
-					italics: style.italic,
-					strikethrough: if style.strike {
-						Stroke::new(1.0, color)
-					} else {
-						Stroke::NONE
-					},
-					underline: if style.link.is_some() {
-						Stroke::new(1.0, color)
-					} else {
-						Stroke::NONE
-					},
-					..Default::default()
-				},
-			);
+				body
+			},
+			color,
+			background: if style.code {
+				visuals.code_bg_color
+			} else {
+				egui::Color32::TRANSPARENT
+			},
+			italics: style.italic,
+			strikethrough: if style.strike {
+				Stroke::new(1.0, color)
+			} else {
+				Stroke::NONE
+			},
+			underline: if style.link.is_some() {
+				Stroke::new(1.0, color)
+			} else {
+				Stroke::NONE
+			},
+			..Default::default()
 		}
-		job
 	}
 }
 
@@ -1491,20 +1597,26 @@ mod tests {
 		let mut end = egui::Pos2::ZERO;
 		let mut custom_rect = egui::Rect::NOTHING;
 		for shape in &output.shapes {
-			if let egui::Shape::Text(text) = &shape.shape {
-				if text.galley.text() == "A " {
-					start = text.pos + egui::vec2(0.0, 5.0);
-				}
-				if text.galley.text() == "<:serein_wave:9001>" {
-					custom_rect = egui::Rect::from_min_size(text.pos, text.galley.size());
-				}
-				if text.galley.text().starts_with(" Z") {
-					end = text.pos + egui::vec2(text.galley.size().x, 5.0);
-				}
+			// Text and artwork share one galley so rows with emoji grow before text is placed.
+			if let egui::Shape::Text(text) = &shape.shape
+				&& text.galley.text() == source
+			{
+				let row = &text.galley.rows[0];
+				start = text.pos + egui::vec2(0.0, 5.0);
+				end = text.pos + egui::vec2(row.size.x, 5.0);
+				let markup = row
+					.glyphs
+					.iter()
+					.find(|glyph| glyph.chr == '<')
+					.expect("custom emoji glyph");
+				custom_rect = egui::Rect::from_min_size(
+					text.pos + egui::vec2(markup.pos.x, 0.0),
+					egui::vec2(markup.advance_width, row.size.y),
+				);
 			}
 		}
 		output.textures_delta.clear();
-		assert!(end.x > start.x);
+		assert!(end.x > start.x && custom_rect.width() > 0.0);
 		for events in [
 			vec![
 				egui::Event::PointerMoved(start),
