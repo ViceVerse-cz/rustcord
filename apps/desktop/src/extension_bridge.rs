@@ -244,13 +244,23 @@ impl Bridge {
 						"Package inspected. Review its source and capabilities before enabling."
 							.into();
 				}
+				Ok(Event::ThemeSelected(id)) => {
+					for entry in &mut self.installed {
+						entry.active_theme = id.as_deref() == Some(entry.manifest.id.as_str());
+					}
+					self.apply_theme(ctx);
+					self.entries(messaging);
+				}
 				Ok(Event::Enabled(installed)) => {
 					messaging.extensions.remove_runtime(&installed.manifest.id);
 					let theme = installed.manifest.kind == ExtensionKind::Theme;
-					self.installed.retain(|old| {
-						old.manifest.id != installed.manifest.id
-							&& !(theme && old.manifest.kind == ExtensionKind::Theme)
-					});
+					if theme {
+						for old in &mut self.installed {
+							old.active_theme = false;
+						}
+					}
+					self.installed
+						.retain(|old| old.manifest.id != installed.manifest.id);
 					self.disabled.remove(&installed.manifest.id);
 					self.installed.push(installed);
 					self.imported = None;
@@ -327,6 +337,15 @@ impl Bridge {
 				self.pending.clear();
 			}
 			match request {
+				ExtensionRequest::SelectTheme { id } => {
+					self.submit(
+						Job::SelectTheme { id },
+						None,
+						state.generation,
+						ctx,
+						messaging,
+					);
+				}
 				ExtensionRequest::RefreshCatalog => {
 					self.submit(
 						Job::RefreshCatalog { demo },
@@ -491,7 +510,7 @@ impl Bridge {
 			_ => None,
 		};
 		let cleanup = matches!(job, Job::Disable { .. } | Job::Logout { .. });
-		let reconcile = cleanup || matches!(job, Job::Enable { .. });
+		let reconcile = cleanup || matches!(job, Job::Enable { .. } | Job::SelectTheme { .. });
 		match self.host.as_mut().unwrap().submit(job, ctx) {
 			Ok(token) => {
 				self.pending.insert(
@@ -537,6 +556,11 @@ impl Bridge {
 	}
 
 	fn entries(&self, messaging: &mut ui::MessagingUi) {
+		messaging.extensions.active_theme = self
+			.installed
+			.iter()
+			.find(|entry| entry.active_theme && !self.disabled.contains(&entry.manifest.id))
+			.map(|entry| entry.manifest.id.clone());
 		let mut entries: BTreeMap<String, ExtensionEntry> = self
 			.catalog
 			.iter()
@@ -593,9 +617,7 @@ impl Bridge {
 				manifest: installed.manifest.clone(),
 				description: available.map_or_else(String::new, |entry| entry.description.clone()),
 				preview: available.and_then(|entry| entry.preview.clone()),
-				theme_preview: available
-					.and_then(|entry| entry.theme_preview.clone())
-					.or_else(|| installed.theme.clone()),
+				theme_preview: installed.theme.clone(),
 				sha256: available
 					.map_or_else(|| installed.sha256.clone(), |entry| entry.sha256.clone()),
 				reviewed: available.map_or(installed.reviewed, |entry| entry.reviewed),
@@ -621,6 +643,7 @@ impl Bridge {
 				entry.error.is_none()
 					&& !self.disabled.contains(&entry.manifest.id)
 					&& entry.theme.is_some()
+					&& (entry.manifest.kind == ExtensionKind::Plugin || entry.active_theme)
 			})
 			.collect();
 		entries.sort_by_key(|entry| {
