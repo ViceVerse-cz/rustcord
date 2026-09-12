@@ -282,6 +282,7 @@ async fn run_inner(
 					json_send(&mut ws,json!({"op":3,"d":{"t":heartbeat_nonce,"seq_ack":seq_ack}})).await?;
 					awaiting_ack=Some(heartbeat_nonce);heartbeat_at=now+Duration::from_millis(interval);
 				}
+				if encryption.is_some() && !discovering && !resuming && dave.should_wait_for_peer() {dave.wait_for_peer()?;}
 				let enabled=dave.ready && encryption.is_some() && !discovering && !resuming;
 				let waiting=dave.waiting && encryption.is_some() && !discovering && !resuming;
 				if (!enabled && ready_announced) || (!waiting && waiting_announced) {ready_announced=false;waiting_announced=false;emit(Status::Securing).map_err(|_|"Call interface closed")?;}
@@ -904,6 +905,16 @@ mod tests {
 			))
 			.await
 			.unwrap();
+			if !guild {
+				// Discord announces the already connected DM peer to the joiner before any welcome.
+				ws.send(Message::Text(
+					json!({"op":11,"d":{"user_ids":["1","2"]}})
+						.to_string()
+						.into(),
+				))
+				.await
+				.unwrap();
+			}
 			let mut audio_announced = false;
 			let package = loop {
 				match ws.next().await.unwrap().unwrap() {

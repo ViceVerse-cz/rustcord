@@ -122,6 +122,8 @@ pub(crate) struct Dave {
 	own: u64,
 	peer: Option<u64>,
 	participants: Vec<u64>,
+	/// Clients the voice server announced as connected; a DM peer is allowed before it arrives.
+	announced: Vec<u64>,
 	pub waiting: bool,
 	channel: u64,
 	pub pending: Option<u16>,
@@ -148,6 +150,7 @@ impl Dave {
 			own,
 			peer,
 			participants: std::iter::once(own).chain(peer).collect(),
+			announced: vec![own],
 			waiting: false,
 			channel,
 			pending: None,
@@ -163,7 +166,21 @@ impl Dave {
 	}
 	/// Only this device remains announced in the call.
 	pub fn alone(&self) -> bool {
-		self.participants.len() == 1
+		self.announced.len() == 1
+	}
+	/// A sole announced member with a pending epoch-zero group has nobody to negotiate with.
+	/// Discord does not always announce a transition for a fresh sole member; waiting must not
+	/// depend on it.
+	pub fn should_wait_for_peer(&self) -> bool {
+		!self.ready
+			&& !self.waiting
+			&& self.pending.is_none()
+			&& self.alone()
+			&& self.session.group().is_some()
+			&& self
+				.session
+				.epoch()
+				.is_some_and(|epoch| epoch.as_u64() == 0)
 	}
 	pub fn connect(&mut self, users: &[u64]) -> Result<bool, &'static str> {
 		if users.len() > MAX_PARTICIPANTS
@@ -184,9 +201,16 @@ impl Dave {
 				next.push(*user);
 			}
 		}
-		let changed = next != self.participants;
+		let mut announced = self.announced.clone();
+		for user in users {
+			if !announced.contains(user) {
+				announced.push(*user);
+			}
+		}
+		let changed = next != self.participants || announced != self.announced;
 		if changed {
 			self.participants = next;
+			self.announced = announced;
 			self.ready = false;
 			self.waiting = false;
 		}
@@ -197,9 +221,10 @@ impl Dave {
 		if user == self.own {
 			return Err("Discord removed this device from the call");
 		}
-		let before = self.participants.len();
+		let before = self.participants.len() + self.announced.len();
 		self.participants.retain(|id| *id != user);
-		let changed = before != self.participants.len();
+		self.announced.retain(|id| *id != user);
+		let changed = before != self.participants.len() + self.announced.len();
 		if changed {
 			self.ready = false;
 			self.waiting = false;
@@ -209,9 +234,7 @@ impl Dave {
 	/// Epoch zero has no media ratchets in Davey. Remain joined without opening audio devices.
 	pub fn wait_for_peer(&mut self) -> Result<(), &'static str> {
 		self.validate_group()?;
-		if self.participants.len() != 1
-			|| self.session.epoch().is_none_or(|epoch| epoch.as_u64() != 0)
-		{
+		if !self.alone() || self.session.epoch().is_none_or(|epoch| epoch.as_u64() != 0) {
 			return Err("Unexpected sole-member DAVE transition");
 		}
 		self.pending = None;
