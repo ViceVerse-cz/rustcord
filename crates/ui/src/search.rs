@@ -315,9 +315,11 @@ impl SearchUi {
 						}
 					});
 			});
+		// Context accessors lock internally; never read popup memory inside input().
+		let submenu_open = egui::Popup::is_any_open(ctx);
 		if ctx.input(|i| {
 			i.pointer.any_pressed()
-				&& !egui::Popup::is_any_open(ctx)
+				&& !submenu_open
 				&& i.pointer
 					.interact_pos()
 					.is_some_and(|pos| !anchor.contains(pos) && !popup.response.rect.contains(pos))
