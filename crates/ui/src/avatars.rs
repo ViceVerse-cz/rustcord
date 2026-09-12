@@ -1017,6 +1017,7 @@ mod tests {
 			name: "Synthetic user".into(),
 			avatar: None,
 			webhook: false,
+			kind: Default::default(),
 			discriminator: 0,
 		};
 		let mut response_rect = egui::Rect::NOTHING;

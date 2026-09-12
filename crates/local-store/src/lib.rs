@@ -118,7 +118,7 @@ impl LocalStore {
 	fn initialize(mut connection: Connection) -> Result<Self> {
 		connection.busy_timeout(std::time::Duration::from_secs(2))?;
 		let version: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
-		if version > 13 {
+		if version > 14 {
 			return Err(StoreError::Incompatible);
 		}
 		connection.execute_batch("PRAGMA page_size=4096; PRAGMA max_page_count=16384; PRAGMA cache_size=-2048; PRAGMA temp_store=MEMORY; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA wal_autocheckpoint=256; PRAGMA journal_size_limit=8388608; PRAGMA secure_delete=ON; PRAGMA auto_vacuum=INCREMENTAL;
@@ -182,12 +182,20 @@ impl LocalStore {
 			[],
 			|row| row.get(0),
 		)?;
+		let has_account_kind: bool = connection.query_row(
+			"SELECT EXISTS(SELECT 1 FROM pragma_table_info('messages') WHERE name='account_kind')",
+			[],
+			|row| row.get(0),
+		)?;
 		let has_webhook: bool = connection.query_row(
 			"SELECT EXISTS(SELECT 1 FROM pragma_table_info('messages') WHERE name='webhook')",
 			[],
 			|row| row.get(0),
 		)?;
 		let transaction = connection.transaction()?;
+		if !has_account_kind {
+			transaction.execute_batch("ALTER TABLE messages ADD COLUMN account_kind INTEGER NOT NULL DEFAULT 0 CHECK(typeof(account_kind)='integer' AND account_kind BETWEEN 0 AND 2);")?;
+		}
 		if !has_webhook {
 			transaction.execute_batch("ALTER TABLE messages ADD COLUMN webhook INTEGER NOT NULL DEFAULT 0 CHECK(typeof(webhook)='integer' AND webhook IN (0,1));")?;
 		}
@@ -216,7 +224,7 @@ impl LocalStore {
             CREATE TABLE IF NOT EXISTS minimize_to_tray(
                 singleton INTEGER PRIMARY KEY CHECK(singleton=1),
                 enabled INTEGER NOT NULL CHECK(typeof(enabled)='integer' AND enabled IN (0,1))
-            ); PRAGMA user_version=13;")?;
+            ); PRAGMA user_version=14;")?;
 		let has_animate_gifs: bool = transaction.query_row(
 			"SELECT EXISTS(SELECT 1 FROM pragma_table_info('reading_preferences') WHERE name='animate_gifs')",
 			[],
@@ -526,7 +534,7 @@ impl LocalStore {
 				return Err(StoreError::Capacity);
 			}
 			transaction.prepare_cached(
-                "INSERT OR REPLACE INTO messages(account,channel,id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions,extra_content,message_kind,reply_deleted,webhook) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)")?.execute(
+                "INSERT OR REPLACE INTO messages(account,channel,id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions,extra_content,message_kind,reply_deleted,webhook,account_kind) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)")?.execute(
                 params![
                     account,
                     channel,
@@ -546,7 +554,8 @@ impl LocalStore {
                     message.extra_content.bits(),
                     message.kind,
                     message.reply_deleted,
-                    message.author.webhook
+                    message.author.webhook,
+                    message.author.kind as u8
                 ],
             )?;
 		}
@@ -576,11 +585,17 @@ impl LocalStore {
 		Ok(())
 	}
 	pub fn load_channel(&self, account: Id, channel: Id) -> Result<Vec<Message>> {
-		let mut query = self.0.prepare("SELECT id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions,extra_content,message_kind,reply_deleted,webhook FROM messages WHERE account=?1 AND channel=?2 ORDER BY length(id),id LIMIT 500")?;
+		let mut query = self.0.prepare("SELECT id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions,extra_content,message_kind,reply_deleted,webhook,account_kind FROM messages WHERE account=?1 AND channel=?2 ORDER BY length(id),id LIMIT 500")?;
 		let mut rows = query.query(params![account.to_string(), channel.to_string()])?;
 		let mut messages = Vec::new();
 		let mut bytes = 0;
 		while let Some(row) = rows.next()? {
+			let account_kind = match row.get_ref(17)? {
+				rusqlite::types::ValueRef::Integer(0) => model::AccountKind::Human,
+				rusqlite::types::ValueRef::Integer(1) => model::AccountKind::Bot,
+				rusqlite::types::ValueRef::Integer(2) => model::AccountKind::App,
+				_ => return Err(StoreError::Incompatible),
+			};
 			let webhook = match row.get_ref(16)? {
 				rusqlite::types::ValueRef::Integer(0) => false,
 				rusqlite::types::ValueRef::Integer(1) => true,
@@ -665,6 +680,7 @@ impl LocalStore {
 					name: row.get(2)?,
 					avatar: row.get(7)?,
 					webhook,
+					kind: account_kind,
 					discriminator: row.get(8)?,
 				},
 				content: row.get(3)?,
@@ -884,6 +900,51 @@ mod tests {
 		));
 	}
 	#[test]
+	fn account_kinds_survive_cache_and_migrate_legacy_without_guessing() {
+		let mut store = LocalStore::initialize(Connection::open_in_memory().unwrap()).unwrap();
+		store.0.execute("INSERT INTO messages(account,channel,id,author,name,content,edited,unsupported) VALUES('1','2','100','3','Synthetic','body',0,0)", []).unwrap();
+		let mut message = store.load_channel(Id(1), Id(2)).unwrap().remove(0);
+		for kind in [
+			model::AccountKind::Human,
+			model::AccountKind::Bot,
+			model::AccountKind::App,
+		] {
+			message.author.kind = kind;
+			store
+				.save_channel(Id(1), Id(2), &[message.clone()])
+				.unwrap();
+			assert_eq!(
+				store.load_channel(Id(1), Id(2)).unwrap()[0].author.kind,
+				kind
+			);
+		}
+		store
+			.0
+			.execute_batch("ALTER TABLE messages DROP COLUMN account_kind; PRAGMA user_version=13;")
+			.unwrap();
+		let store = LocalStore::initialize(store.0).unwrap();
+		assert_eq!(
+			store.load_channel(Id(1), Id(2)).unwrap()[0].author.kind,
+			model::AccountKind::Human
+		);
+		assert!(
+			store
+				.0
+				.execute("UPDATE messages SET account_kind=3", [])
+				.is_err()
+		);
+		store
+			.0
+			.execute_batch(
+				"PRAGMA ignore_check_constraints=ON; UPDATE messages SET account_kind=3;",
+			)
+			.unwrap();
+		assert!(matches!(
+			store.load_channel(Id(1), Id(2)),
+			Err(StoreError::Incompatible)
+		));
+	}
+	#[test]
 	fn app_preferences_round_trip_and_reject_invalid_replacement() {
 		let store = LocalStore::initialize(Connection::open_in_memory().unwrap()).unwrap();
 		assert_eq!(store.app_preferences().unwrap(), AppPreferences::default());
@@ -957,7 +1018,7 @@ mod tests {
 			.0
 			.pragma_query_value(None, "user_version", |row| row.get(0))
 			.unwrap();
-		assert_eq!(version, 13);
+		assert_eq!(version, 14);
 		for invalid in ["-1", "2", "1.5", "'bad'"] {
 			assert!(
 				store
@@ -1040,7 +1101,7 @@ mod tests {
 				.0
 				.pragma_query_value(None, "user_version", |row| row.get(0))
 				.unwrap();
-			assert_eq!(version, 13);
+			assert_eq!(version, 14);
 			let mut messages = store.load_channel(Id(1), Id(2)).unwrap();
 			assert_eq!(messages[0].kind, expected_kind);
 			assert_eq!(messages[0].extra_content.bits(), expected_markers);
@@ -1313,7 +1374,7 @@ mod tests {
 			.0
 			.pragma_query_value(None, "user_version", |row| row.get(0))
 			.unwrap();
-		assert_eq!(version, 13);
+		assert_eq!(version, 14);
 		assert_eq!(
 			store.reading_preferences().unwrap(),
 			ReadingPreferences::default()
@@ -1630,7 +1691,7 @@ mod tests {
 			.0
 			.pragma_query_value(None, "user_version", |row| row.get(0))
 			.unwrap();
-		assert_eq!(version, 13);
+		assert_eq!(version, 14);
 		let messages: Vec<_> = (0..32_u8)
 			.map(|bits| {
 				let mut message = legacy[0].clone();
@@ -1716,6 +1777,7 @@ mod tests {
 			name: "Mentioned user".into(),
 			avatar: None,
 			webhook: false,
+			kind: Default::default(),
 			discriminator: 0,
 		}];
 		store.save_channel(Id(1), Id(2), &messages).unwrap();
@@ -1821,7 +1883,7 @@ mod tests {
 			.0
 			.pragma_query_value(None, "user_version", |r| r.get(0))
 			.unwrap();
-		assert_eq!(version, 13);
+		assert_eq!(version, 14);
 		for (json, error) in [
 			("broken JSON".to_owned(), StoreError::Incompatible),
 			(
@@ -1913,6 +1975,7 @@ mod tests {
 					name: "Synthetic".into(),
 					avatar: Some("0123456789abcdef0123456789abcdef".into()),
 					webhook: false,
+					kind: Default::default(),
 					discriminator: 1234,
 				},
 				content: "synthetic".into(),

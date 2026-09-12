@@ -319,6 +319,7 @@ mod tests {
 			name: "Synthetic".into(),
 			avatar: None,
 			webhook: false,
+			kind: Default::default(),
 			discriminator: 0,
 		};
 		let mut state = State {
@@ -459,6 +460,7 @@ mod tests {
 					name: "Different account".into(),
 					avatar: None,
 					webhook: false,
+					kind: Default::default(),
 					discriminator: 0,
 				},
 				guilds: vec![],

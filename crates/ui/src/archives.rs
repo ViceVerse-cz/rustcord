@@ -150,6 +150,7 @@ mod tests {
 					name: "Synthetic member".into(),
 					avatar: None,
 					webhook: false,
+					kind: Default::default(),
 					discriminator: 0,
 				}),
 				auth: client_core::auth::AuthState::Authenticated,

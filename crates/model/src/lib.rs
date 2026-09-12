@@ -59,6 +59,8 @@ impl<'de> Deserialize<'de> for Id {
 }
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct User {
+	#[serde(default)]
+	pub kind: AccountKind,
 	/// Set only for message authors with a service-provided webhook_id.
 	#[serde(default)]
 	pub webhook: bool,
@@ -68,6 +70,14 @@ pub struct User {
 	pub discriminator: u16,
 }
 impl User {
+	pub fn account_label(&self) -> Option<&'static str> {
+		match (self.kind, self.webhook) {
+			(AccountKind::App, _) => Some("APP"),
+			(_, true) => Some("WEBHOOK"),
+			(AccountKind::Bot, _) => Some("BOT"),
+			_ => None,
+		}
+	}
 	pub fn heap_bytes(&self) -> usize {
 		self.name.capacity() + self.avatar.as_ref().map_or(0, String::capacity)
 	}
@@ -99,6 +109,15 @@ impl User {
 			)
 		}
 	}
+}
+/// Explicit service metadata, never inferred from a name or a failed profile request.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum AccountKind {
+	#[default]
+	Human = 0,
+	Bot = 1,
+	App = 2,
 }
 pub fn valid_avatar_hash(hash: &str) -> bool {
 	let hash = hash.strip_prefix("a_").unwrap_or(hash);

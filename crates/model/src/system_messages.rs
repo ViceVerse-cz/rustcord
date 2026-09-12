@@ -159,6 +159,7 @@ mod tests {
 				name: "Robin".into(),
 				avatar: None,
 				webhook: false,
+				kind: Default::default(),
 				discriminator: 0,
 			},
 			mentions: vec![User {
@@ -166,6 +167,7 @@ mod tests {
 				name: "Casey".into(),
 				avatar: None,
 				webhook: false,
+				kind: Default::default(),
 				discriminator: 0,
 			}],
 			content: "general".into(),

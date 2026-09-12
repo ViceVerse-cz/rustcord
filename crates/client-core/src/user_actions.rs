@@ -456,6 +456,7 @@ impl State {
 									avatar: None,
 									discriminator: 0,
 									webhook: false,
+									kind: Default::default(),
 								},
 								format!("User ID: {user}"),
 							)
@@ -953,6 +954,7 @@ mod tests {
 			name: "Synthetic".into(),
 			avatar: None,
 			webhook: false,
+			kind: Default::default(),
 			discriminator: 0,
 		};
 		State {

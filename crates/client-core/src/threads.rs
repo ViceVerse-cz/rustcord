@@ -128,6 +128,7 @@ mod tests {
 				name: "Synthetic member".into(),
 				avatar: None,
 				webhook: false,
+				kind: Default::default(),
 				discriminator: 0,
 			}),
 			guilds: vec![
@@ -240,6 +241,7 @@ mod tests {
 				name: "Synthetic".into(),
 				avatar: None,
 				webhook: false,
+				kind: Default::default(),
 				discriminator: 0,
 			},
 			content: "Synthetic thread history".into(),

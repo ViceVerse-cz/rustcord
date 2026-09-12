@@ -53,6 +53,7 @@ impl Snapshot {
 							avatar: None,
 							discriminator: 0,
 							webhook: false,
+							kind: Default::default(),
 						},
 						format!("User ID: {}", r.id),
 					)

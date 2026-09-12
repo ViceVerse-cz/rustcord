@@ -3408,3 +3408,27 @@ workload does not exercise note saves, status menus, UI timing or process RSS.
 Native CPU/memory/frame and before/after visual inspection are unmeasured: native
 application controls are unavailable. Offline interaction tests are not screenshots
 or proof of real Discord persistence.
+
+## Account-type badges - September 12, 2026
+
+Baseline `72c24cd`; Windows, Ryzen 7 7800X3D, 33,410,678,784 bytes RAM,
+Rust 1.98.1. Standard release packages include voice. Separate snapshots exclude
+the unrelated obsolete `dist/voice` directory, left untouched.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Executable bytes | 63,087,104 | 63,095,808 | +8,704 (+0.014%) |
+| Installed bytes | 73,302,329 | 73,312,974 | +10,645 (+0.015%) |
+| Compress-Archive ZIP bytes | 43,542,936 | 43,546,477 | +3,541 (+0.008%) |
+| 100,000-event reducer median | 42.1168 ms | 42.6705 ms | +0.5537 ms (+1.315%) |
+| Retained estimated bytes | 236,992-237,477 | 236,992-237,477 | unchanged, 500 records |
+
+Isolated revision-specific release binaries; one warmup each then five alternating
+runs with no concurrent task build. Baseline samples (ms): 42.1168, 41.9057,
+40.3950, 42.2955, 42.3955. After: 42.2008, 44.7333, 42.6705, 46.0183, 42.6672.
+This small difference is within observed run variability, not a speed claim.
+The reducer workload does not measure badge rendering or SQLite migration.
+Native `--demo` startup was responsive; it is not visual proof of the new badges.
+Native screenshot/control is unavailable, so before/after inspection, CPU/RSS and
+p95 UI frame comparisons remain unmeasured. Synthetic UI tests cover both surfaces,
+long names and light/dark layouts; no live Discord compatibility is claimed.

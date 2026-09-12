@@ -1,4 +1,5 @@
 //! Native egui views; emits commands without owning transports or session credentials.
+mod account_badge;
 mod account_menu;
 mod archives;
 mod audio;
@@ -775,15 +776,24 @@ impl MessagingUi {
 								} else {
 									colors.muted
 								};
-								let name = egui::Label::new(
-									design::medium(ui, name, 15.0).color(text_color),
-								)
-								.truncate()
-								.selectable(false);
+								let show_name = |ui: &mut egui::Ui| {
+									ui.horizontal(|ui| {
+										ui.spacing_mut().item_spacing.x = 5.0;
+										account_badge::name(
+											ui,
+											&member.user,
+											name,
+											15.0,
+											text_color,
+											egui::Sense::hover(),
+											0.0,
+										);
+									});
+								};
 								if let Some(subtitle) = subtitle {
 									ui.vertical(|ui| {
 										ui.spacing_mut().item_spacing.y = 1.0;
-										ui.add(name);
+										show_name(ui);
 										ui.add(
 											egui::Label::new(
 												RichText::new(subtitle)
@@ -795,7 +805,7 @@ impl MessagingUi {
 										);
 									});
 								} else {
-									ui.add(name);
+									show_name(ui);
 								}
 							});
 							user_menu::show(
@@ -2882,6 +2892,7 @@ mod composer_tests {
 			name: "Alex".into(),
 			avatar: None,
 			webhook: false,
+			kind: Default::default(),
 			discriminator: 0,
 		};
 		let mut state = State {
@@ -4219,6 +4230,7 @@ mod composer_tests {
 								name: format!("Synthetic {id}"),
 								avatar: None,
 								webhook: false,
+								kind: Default::default(),
 								discriminator: 0,
 							},
 							nick: None,
@@ -4267,6 +4279,10 @@ mod composer_tests {
 		{
 			member.roles.push(Id(8));
 		}
+		let rows = &mut state.members.as_mut().unwrap().rows;
+		rows[0].as_mut().unwrap().user.kind = model::AccountKind::Bot;
+		rows[1].as_mut().unwrap().user.kind = model::AccountKind::App;
+		rows[2].as_mut().unwrap().user.webhook = true;
 		let mut messaging = MessagingUi::default();
 		let context = egui::Context::default();
 		let output = context.run_ui(
@@ -4286,7 +4302,14 @@ mod composer_tests {
 		for shape in &output.shapes {
 			collect_text(&shape.shape, &mut text);
 		}
-		for heading in ["Founders — 2", "Online — 1", "Offline — 97"] {
+		for heading in [
+			"BOT",
+			"APP",
+			"WEBHOOK",
+			"Founders — 2",
+			"Online — 1",
+			"Offline — 97",
+		] {
 			assert!(
 				text.iter().any(|label| label == heading),
 				"Missing {heading}"
@@ -4660,6 +4683,7 @@ mod composer_tests {
 				name: "Synthetic".into(),
 				avatar: None,
 				webhook: false,
+				kind: Default::default(),
 				discriminator: 0,
 			};
 			let mut state = State {

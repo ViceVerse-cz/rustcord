@@ -490,3 +490,14 @@ One off-thread operation and one fixed-size completion may exist at a time. Fail
 writes restore the last known setting and display an error. Demo mode does not read
 or write the startup entry. Automatic launches use the existing saved-login behavior;
 ordinary manual launches remain visible even when Start Serein minimized is selected.
+
+### Account-type badges (schema 14)
+
+Cached messages retain one checked `account_kind` integer: 0 (ordinary/unknown), 1 (bot),
+2 (explicit application-generated author). The existing independent `webhook` marker
+continues to control webhook profile behavior. Migration adds the column transactionally;
+legacy messages default to 0 until service history refreshes, without guessing from names.
+Unknown stored values are rejected. No new table, cache, queue, payload collection or
+network request is introduced; account, item, byte and page limits remain unchanged.
+Older schema-13 clients cannot reopen a schema-14 cache. User metadata serialized in
+bounded existing caches defaults missing kinds to ordinary/unknown.

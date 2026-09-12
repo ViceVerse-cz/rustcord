@@ -633,6 +633,7 @@ impl Formatted {
 								name: format!("User {id}"),
 								avatar: None,
 								webhook: false,
+								kind: Default::default(),
 								discriminator: 0,
 							}));
 						}
@@ -1762,6 +1763,7 @@ mod tests {
 			name: "Synthetic Robin".into(),
 			avatar: None,
 			webhook: false,
+			kind: Default::default(),
 			discriminator: 0,
 		}];
 		let parsed = Formatted::parse("<@42> <@!43> `<@44>` \\<@45>");
@@ -1830,6 +1832,7 @@ mod tests {
 			name: "Synthetic Robin".into(),
 			avatar: None,
 			webhook: false,
+			kind: Default::default(),
 			discriminator: 0,
 		}];
 		for key in [egui::Key::Tab, egui::Key::Enter] {

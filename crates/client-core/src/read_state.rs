@@ -398,6 +398,7 @@ mod navigation_tests {
 				name: "Synthetic".into(),
 				avatar: None,
 				webhook: false,
+				kind: Default::default(),
 				discriminator: 0,
 			},
 			content: "Synthetic unread message".into(),
