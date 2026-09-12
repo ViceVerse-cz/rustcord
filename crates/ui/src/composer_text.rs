@@ -324,6 +324,7 @@ mod tests {
 			id: model::Id(42),
 			name: "Zoë".into(),
 			avatar: None,
+			webhook: false,
 			discriminator: 0,
 		}]
 	}

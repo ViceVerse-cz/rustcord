@@ -550,6 +550,7 @@ mod tests {
 					id: Id(90),
 					name: "Žofie Example".into(),
 					avatar: None,
+					webhook: false,
 					discriminator: 0,
 				}],
 				member_list_id: None,

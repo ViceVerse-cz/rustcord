@@ -105,6 +105,7 @@ pub fn message(id: u64, channel: Id) -> Message {
 		channel,
 		author: User {
 			avatar: None,
+			webhook: false,
 			discriminator: 0,
 			id: Id(if id.is_multiple_of(2) { 1 } else { 2 }),
 			name: if id.is_multiple_of(2) {
@@ -191,6 +192,7 @@ pub fn message(id: u64, channel: Id) -> Message {
 				id: Id(2),
 				name: "Robin (synthetic)".into(),
 				avatar: None,
+				webhook: false,
 				discriminator: 0,
 			}]
 		} else {
@@ -237,6 +239,7 @@ pub fn demo_state() -> State {
 			permissions: model::permissions::Snapshot::default(),
 			user: User {
 				avatar: None,
+				webhook: false,
 				discriminator: 0,
 				id: Id(1),
 				name: "You (synthetic)".into(),
@@ -330,6 +333,7 @@ pub fn demo_state() -> State {
 							id: Id(3),
 							name: "Casey (synthetic)".into(),
 							avatar: None,
+							webhook: false,
 							discriminator: 0,
 						},
 					],
@@ -461,6 +465,7 @@ pub fn demo_state() -> State {
 						id: Id(1001 + i as u64),
 						name: name.into(),
 						avatar: None,
+						webhook: false,
 						discriminator: 0,
 					},
 					format!("{}.synthetic", name.to_lowercase()),
@@ -544,6 +549,7 @@ pub fn voice_demo_state() -> State {
 				id: Id(id),
 				name: name.into(),
 				avatar: None,
+				webhook: false,
 				discriminator: 0,
 			},
 			nick: None,
@@ -826,6 +832,7 @@ pub fn system_demo_state() -> State {
 			id: Id(42),
 			name: "Casey (synthetic)".into(),
 			avatar: None,
+			webhook: false,
 			discriminator: 0,
 		}];
 		state.timeline.insert(m, false, false).unwrap();

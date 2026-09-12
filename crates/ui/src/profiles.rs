@@ -366,13 +366,18 @@ pub fn show(
 	let colors = design::palette(ui);
 	let viewport = ui.ctx().content_rect();
 	let bounds = viewport.shrink(8.0);
+	let view = view.filter(|_| !user.webhook);
 	let data = view.and_then(|v| v.data.as_ref());
 	let theme = Theme::new(&colors, data.and_then(|d| d.theme_colors));
 	let guild = state
 		.selected
 		.and_then(|id| state.channels.iter().find(|c| c.id == id))
 		.and_then(|c| c.guild);
-	let (status, custom, activities) = presence(state, user.id, guild);
+	let (status, custom, activities) = if user.webhook {
+		(None, None, [].as_slice())
+	} else {
+		presence(state, user.id, guild)
+	};
 	let dm_channel = state
 		.channels
 		.iter()
@@ -571,6 +576,8 @@ pub fn show(
 								if !pronouns.is_empty() {
 									identity.push(pronouns.to_owned());
 								}
+							} else if user.webhook {
+								identity.push("Webhook".into());
 							} else {
 								identity.push(user.name.clone());
 							}
@@ -605,7 +612,7 @@ pub fn show(
 								ui.add_space(4.0);
 								ui.add(egui::Label::new(RichText::new(custom).size(13.0)).wrap());
 							}
-							if view.is_none_or(|v| v.loading) {
+							if !user.webhook && view.is_none_or(|v| v.loading) {
 								ui.add_space(4.0);
 								ui.horizontal(|ui| {
 									ui.spinner();
@@ -906,7 +913,13 @@ pub fn show(
 							.add_sized(
 								[ui.available_width(), 32.0],
 								egui::Button::new(
-									RichText::new("Copy user ID").size(13.0).strong(),
+									RichText::new(if user.webhook {
+										"Copy webhook ID"
+									} else {
+										"Copy user ID"
+									})
+									.size(13.0)
+									.strong(),
 								)
 								.corner_radius(RADIUS),
 							)
@@ -1014,6 +1027,60 @@ mod tests {
 		}
 	}
 	#[test]
+	fn webhook_card_does_not_show_user_errors_or_retry() {
+		for webhook in [false, true] {
+			for dark in [false, true] {
+				let mut user = test_support::message(1, Id(22)).author;
+				user.webhook = webhook;
+				let view = ProfileView {
+					user: user.id,
+					guild: None,
+					request: 1,
+					loading: false,
+					error: Some("Unsupported service response"),
+					data: None,
+				};
+				let state = State {
+					demo: true,
+					..Default::default()
+				};
+				let ctx = egui::Context::default();
+				ctx.set_visuals(if dark {
+					egui::Visuals::dark()
+				} else {
+					egui::Visuals::light()
+				});
+				let mut images = Avatars::default();
+				let mut opening = None;
+				let mut painted = String::new();
+				for _ in 0..3 {
+					let output = ctx.run_ui(input(vec2(400.0, 700.0), vec![]), |ui| {
+						show(
+							ui,
+							&user,
+							Some(&view),
+							&state,
+							&mut images,
+							&mut opening,
+							true,
+							pos2(20.0, 70.0),
+						);
+					});
+					for shape in &output.shapes {
+						text(&shape.shape, &mut painted);
+					}
+					output.drop_without_applying_deltas();
+				}
+				assert_eq!(painted.contains("Webhook"), webhook);
+				assert_eq!(painted.contains("Copy webhook ID"), webhook);
+				assert_eq!(painted.contains("Unsupported service response"), !webhook);
+				assert_eq!(painted.contains("Retry profile"), !webhook);
+				assert!(!painted.contains("Loading profile"));
+				assert!(images.take_requests().is_empty());
+			}
+		}
+	}
+	#[test]
 	fn dm_presence_does_not_use_a_visible_guild_snapshot() {
 		let mut state = test_support::demo_state();
 		let user = test_support::message(1, Id(22)).author;
@@ -1058,6 +1125,7 @@ mod tests {
 			id: Id(2),
 			name: "Synthetic person".into(),
 			avatar: None,
+			webhook: false,
 			discriminator: 0,
 		};
 		let profile = ProfileView {
@@ -1168,6 +1236,7 @@ mod tests {
 			id: Id(2),
 			name: "Synthetic person".into(),
 			avatar: None,
+			webhook: false,
 			discriminator: 0,
 		};
 		let state = State::default();

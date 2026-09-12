@@ -309,6 +309,7 @@ mod tests {
 			id: Id(2),
 			name: "Synthetic".into(),
 			avatar: None,
+			webhook: false,
 			discriminator: 0,
 		};
 		let mut state = State {

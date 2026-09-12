@@ -3111,3 +3111,25 @@ release runs per revision on the same Ryzen 7 7800X3D host. Base milliseconds:
 Both retain 500 timeline records / 236,992..237,477 estimated bytes. This small
 sequential difference is noise, not a demonstrated improvement. The workload
 checks reducer cost; it does not exercise friend rendering or measure RSS.
+
+
+## Webhook profile identification - September 12, 2026
+
+| Metric / method | Baseline | After | Delta |
+| --- | --- | --- | --- |
+| serein.exe, bytes | 62,353,920 | 62,359,040 | +5,120 (+0.008%) |
+| Installed package (217 files), bytes | 68,551,968 | 68,556,749 | +4,781 (+0.007%) |
+| Optimal ZIP, bytes | 41,416,919 | 41,416,036 | -883 (-0.002%) |
+| 100,000-event replay median, ms | 41.2358 | 39.9020 | -1.3338 (-3.23%) |
+
+Baseline `28a73c7`; Windows x64, Ryzen 7 7800X3D, Rust 1.98.1, locked dependencies.
+Both packages use `cargo xtask package`, including voice. Package snapshots precede
+this measurement note. ZIPs use .NET ZipFile with Optimal compression, no enclosing folder.
+Replay uses the release binary directly: one warmup and five measured runs per revision.
+Before milliseconds: 41.2358, 40.9357, 41.1552, 42.4197, 41.4996. After: 44.1445, 41.145, 39.5414, 39.8563, 39.902.
+Both retain 500 records / 236,992..237,477 estimated timeline bytes. Sequential timings
+are subject to noise; no responsiveness improvement is claimed. This reducer workload
+is not a UI frame-time, RSS, or live compatibility measurement.
+Native CPU/RSS, frame/startup timing and screenshots are unmeasured: native computer-use
+failed with "native pipe is unavailable ... The system cannot find the file specified.
+(os error 2)". No live Discord account was used.

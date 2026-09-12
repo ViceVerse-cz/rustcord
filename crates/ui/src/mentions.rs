@@ -629,6 +629,7 @@ mod tests {
 			id: Id(id),
 			name: name.into(),
 			avatar: None,
+			webhook: false,
 			discriminator: 0,
 		}
 	}

@@ -432,6 +432,7 @@ mod tests {
 					id: Id(1),
 					name: "Synthetic".into(),
 					avatar: None,
+					webhook: false,
 					discriminator: 0,
 				},
 				channels: state.channels.clone(),

@@ -389,6 +389,7 @@ mod tests {
 			id: Id(id),
 			name: "Synthetic".into(),
 			avatar: None,
+			webhook: false,
 			discriminator: 0,
 		};
 		State {

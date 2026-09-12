@@ -1022,6 +1022,7 @@ mod tests {
 				id: Id(4),
 				name: "Synthetic".into(),
 				avatar: None,
+				webhook: false,
 				discriminator: 0,
 			},
 			content: String::new(),

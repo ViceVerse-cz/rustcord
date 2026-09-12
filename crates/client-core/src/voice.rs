@@ -689,6 +689,7 @@ mod tests {
 				id: Id(1),
 				name: "Owner".into(),
 				avatar: None,
+				webhook: false,
 				discriminator: 0,
 			}),
 			guilds: vec![model::Guild {
@@ -810,6 +811,7 @@ mod tests {
 				id: Id(2),
 				name: "x".repeat(MAX_ROSTER_BYTES),
 				avatar: None,
+				webhook: false,
 				discriminator: 0,
 			},
 			nick: None,
@@ -922,6 +924,7 @@ mod tests {
 				id: Id(1),
 				name: "Owner".into(),
 				avatar: None,
+				webhook: false,
 				discriminator: 0,
 			}),
 			guilds: vec![model::Guild {
@@ -1066,6 +1069,7 @@ mod tests {
 				id: Id(1),
 				name: "Owner".into(),
 				avatar: None,
+				webhook: false,
 				discriminator: 0,
 			}),
 			channels: vec![Channel {
@@ -1080,6 +1084,7 @@ mod tests {
 					id: Id(3),
 					name: "Peer".into(),
 					avatar: None,
+					webhook: false,
 					discriminator: 0,
 				}],
 				icon: None,
@@ -1153,6 +1158,7 @@ mod tests {
 				id: Id(1),
 				name: "Owner".into(),
 				avatar: None,
+				webhook: false,
 				discriminator: 0,
 			}),
 			channels: vec![Channel {
@@ -1167,6 +1173,7 @@ mod tests {
 					id: Id(3),
 					name: "Peer".into(),
 					avatar: None,
+					webhook: false,
 					discriminator: 0,
 				}],
 				icon: None,

@@ -1,5 +1,12 @@
 # Discord compatibility — checked 2026-09-10
 
+Webhook author profiles (September 12, 2026): the documented message
+[`webhook_id`](https://docs.discord.com/developers/resources/message#message-object)
+marks the author as a webhook. Its popout shows the message's name/avatar and a
+Webhook label, with no user-profile request or retry. Ordinary bot/user profiles
+retain their existing behavior. Synthetic parser, cache, and UI checks cover this
+path; live webhook interoperability and native visual verification are unverified.
+
 ## Group conversation actions — September 11, 2026
 
 Group DM rows and the conversation header expose Edit Group, Mute/Unmute
