@@ -8,6 +8,8 @@ pub struct Relationship {
 	#[serde(rename = "type")]
 	pub kind: u8,
 	#[serde(default)]
+	pub nickname: model::Patch<String>,
+	#[serde(default)]
 	pub user: Option<crate::UserDto>,
 }
 #[derive(Deserialize)]
@@ -15,6 +17,16 @@ pub struct Snapshot(
 	#[serde(deserialize_with = "crate::read_state::entries")] pub Vec<Relationship>,
 );
 impl Snapshot {
+	pub fn nicknames(&self) -> Vec<(Id, String)> {
+		self.0
+			.iter()
+			.filter(|r| r.kind == 1)
+			.filter_map(|r| match &r.nickname {
+				model::Patch::Value(text) => Some((r.id, text.clone())),
+				_ => None,
+			})
+			.collect()
+	}
 	pub fn requests(
 		&self,
 		users: &[crate::UserDto],
@@ -94,6 +106,17 @@ mod tests {
 	use super::*;
 	#[test]
 	fn relationships_decode_only_bounded_typed_account_state() {
+		for (json, expected) in [
+			(r#"{"id":"2","type":1}"#, model::Patch::Absent),
+			(r#"{"id":"2","type":1,"nickname":null}"#, model::Patch::Null),
+			(
+				r#"{"id":"2","type":1,"nickname":"Bestie"}"#,
+				model::Patch::Value("Bestie".into()),
+			),
+		] {
+			let row: Relationship = crate::decode(json.as_bytes()).unwrap();
+			assert_eq!(row.nickname, expected);
+		}
 		let rows: Snapshot = crate::decode(
 			br#"[{"id":"1","type":2,"user":{"id":"1","username":"ignored"}},{"id":"2","type":1}]"#,
 		)

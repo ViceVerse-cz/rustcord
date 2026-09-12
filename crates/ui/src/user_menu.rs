@@ -2,12 +2,23 @@
 use client_core::{Command, State};
 use model::User;
 
-pub(super) use client_core::user_actions::Action;
+#[derive(Clone, PartialEq, Eq)]
+pub(super) enum Action {
+	Note(User),
+	Nickname(User),
+	CloseDm(model::Id),
+	Block { user: model::Id, blocked: bool },
+	Mute { channel: model::Id, muted: bool },
+}
+impl std::fmt::Debug for Action {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.write_str("User menu action")
+	}
+}
 
 pub(super) fn prepare(action: Action, state: &mut State) -> Option<Command> {
 	match action {
-		Action::AddFriend { username } => state.add_friend(&username),
-		Action::ResolveFriend { user, accept } => state.resolve_friend_request(user, accept),
+		Action::Note(_) | Action::Nickname(_) => None,
 		Action::CloseDm(channel) => state.close_dm(channel),
 		Action::Block { user, blocked } => state.set_user_blocked(user, blocked),
 		Action::Mute { channel, muted } => state.set_dm_muted(channel, muted),
@@ -66,6 +77,29 @@ pub(super) fn contents(
 		.iter()
 		.find(|c| c.guild.is_none() && c.kind == 1 && c.recipients.iter().any(|u| u.id == user.id));
 	let enabled = (state.demo || state.gateway_connected) && !state.user_action_pending();
+	ui.separator();
+	if ui
+		.add_enabled(enabled, egui::Button::new("Add Note"))
+		.clicked()
+	{
+		*action = Some(Action::Note(user.clone()));
+		ui.close();
+	}
+	if ui
+		.add_enabled(
+			enabled && state.friends().any(|friend| friend.id == user.id),
+			egui::Button::new(if state.friend_nickname(user.id).is_some() {
+				"Edit Friend Nickname"
+			} else {
+				"Add Friend Nickname"
+			}),
+		)
+		.on_disabled_hover_text("Private nicknames are available for confirmed friends.")
+		.clicked()
+	{
+		*action = Some(Action::Nickname(user.clone()));
+		ui.close();
+	}
 	ui.separator();
 	if let Some(dm) = dm {
 		let muted = state.dm_muted(dm.id) == Some(true);
@@ -217,7 +251,14 @@ mod tests {
 				}
 				let (_, text) = frame(&ctx, &state, user, vec![], &mut profile, &mut action);
 				assert!(profile.is_none() && action.is_none());
-				for expected in ["Profile", "Mute", "Close DM", "Block"] {
+				for expected in [
+					"Profile",
+					"Add Note",
+					"Add Friend Nickname",
+					"Mute",
+					"Close DM",
+					"Block",
+				] {
 					let rect = text
 						.iter()
 						.find(|(s, _)| s == expected)
@@ -338,7 +379,7 @@ mod tests {
 						matches!(
 							c,
 							Command::UserAction {
-								action: Action::CloseDm(model::Id(22)),
+								action: client_core::user_actions::Action::CloseDm(model::Id(22)),
 								..
 							}
 						)

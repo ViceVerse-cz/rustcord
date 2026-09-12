@@ -10,16 +10,40 @@ pub const MAX_RELATIONSHIPS: usize = 4000;
 pub const MAX_RELATIONSHIP_BYTES: usize = 128 * 1024;
 pub const MAX_FRIEND_BYTES: usize = 2 * 1024 * 1024;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Action {
+	LoadNote(Id),
+	Note { user: Id, text: String },
+	Nickname { user: Id, text: String },
 	AddFriend { username: String },
 	ResolveFriend { user: Id, accept: bool },
 	CloseDm(Id),
 	Block { user: Id, blocked: bool },
 	Mute { channel: Id, muted: bool },
 }
+impl std::fmt::Debug for Action {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("UserAction")
+			.field("kind", &std::mem::discriminant(self))
+			.finish_non_exhaustive()
+	}
+}
 
 pub enum Event {
+	NoteChanged {
+		user: Id,
+		text: String,
+	},
+	NoteLoaded {
+		user: Id,
+		request: u64,
+		result: Result<String, Failure>,
+	},
+	Nicknames(Vec<(Id, String)>),
+	Nickname {
+		user: Id,
+		text: String,
+	},
 	Requests(Option<Vec<(model::User, String, bool)>>),
 	Request {
 		user: Id,
@@ -46,6 +70,8 @@ pub enum Event {
 }
 #[derive(Default)]
 pub struct Actions {
+	note: Option<(Id, String)>,
+	nicknames: BTreeMap<Id, String>,
 	requests: BTreeMap<Id, (model::User, String, bool)>,
 	requests_known: bool,
 	last_requested: Option<String>,
@@ -66,6 +92,55 @@ impl Actions {
 	}
 }
 impl State {
+	pub fn user_note(&self, user: Id) -> Option<&str> {
+		self.user_actions
+			.note
+			.as_ref()
+			.filter(|(id, _)| *id == user)
+			.map(|(_, text)| text.as_str())
+	}
+	pub fn friend_nickname(&self, user: Id) -> Option<&str> {
+		self.user_actions.nicknames.get(&user).map(String::as_str)
+	}
+	pub fn user_display_name<'a>(&'a self, user: &'a model::User) -> &'a str {
+		self.friend_nickname(user.id).unwrap_or(&user.name)
+	}
+	pub fn conversation_name<'a>(&'a self, channel: &'a model::Channel) -> &'a str {
+		if channel.kind == 1
+			&& let Some(user) = channel.recipients.first()
+		{
+			self.friend_nickname(user.id).unwrap_or(&channel.name)
+		} else {
+			&channel.name
+		}
+	}
+	pub fn load_user_note(&mut self, user: Id) -> Option<Command> {
+		if user.0 == 0 || self.user_action_pending() {
+			return None;
+		}
+		if self.user_note(user).is_none() {
+			self.user_actions.note = None;
+		}
+		self.request_user_action(Action::LoadNote(user))
+	}
+	pub fn set_user_note(&mut self, user: Id, text: String) -> Option<Command> {
+		if self.user_note(user).is_none() || !valid_personal_text(&text, false) {
+			return None;
+		}
+		self.request_user_action(Action::Note {
+			user,
+			text: text.as_str().to_owned(),
+		})
+	}
+	pub fn set_friend_nickname(&mut self, user: Id, text: String) -> Option<Command> {
+		if !self.friends().any(|friend| friend.id == user) || !valid_personal_text(&text, true) {
+			return None;
+		}
+		self.request_user_action(Action::Nickname {
+			user,
+			text: text.as_str().to_owned(),
+		})
+	}
 	pub fn pending_friends(&self) -> impl Iterator<Item = &(model::User, String, bool)> {
 		self.user_actions
 			.requests
@@ -244,6 +319,93 @@ impl State {
 	}
 	pub(crate) fn apply_user_action(&mut self, event: Event) -> Result<(), &'static str> {
 		match event {
+			Event::NoteChanged { user, text } => {
+				if user.0 == 0 || !valid_personal_text(&text, false) {
+					return Err("Invalid note");
+				}
+				let mut active = self.user_note(user).is_some();
+				if let Some((
+					Action::LoadNote(target) | Action::Note { user: target, .. },
+					_,
+					observed,
+				)) = &mut self.user_actions.pending
+					&& *target == user
+				{
+					*observed = true;
+					active = true;
+				}
+				if active {
+					self.user_actions.note = Some((user, text.as_str().to_owned()));
+				}
+			}
+			Event::NoteLoaded {
+				user,
+				request,
+				result,
+			} => {
+				if !matches!(&self.user_actions.pending, Some((Action::LoadNote(id), sequence, _)) if *id == user && *sequence == request)
+				{
+					return Ok(());
+				}
+				match result {
+					Ok(text) if valid_personal_text(&text, false) => {
+						if !self
+							.user_actions
+							.pending
+							.as_ref()
+							.is_some_and(|(_, _, observed)| *observed)
+						{
+							self.user_actions.note = Some((user, text.as_str().to_owned()));
+						}
+						self.user_actions.pending = None;
+						self.user_actions.status = None;
+					}
+					result => {
+						return self.apply_user_action(Event::Written {
+							action: Action::LoadNote(user),
+							request,
+							result: Err(result.err().unwrap_or(Failure::Protocol)),
+						});
+					}
+				}
+			}
+			Event::Nicknames(entries) => {
+				if entries.len() > MAX_RELATIONSHIPS
+					|| entries
+						.iter()
+						.any(|(id, text)| id.0 == 0 || !valid_personal_text(text, true))
+				{
+					return Err("Invalid friend nicknames");
+				}
+				self.user_actions.nicknames.clear();
+				for (user, text) in entries {
+					self.apply_user_action(Event::Nickname { user, text })?;
+				}
+			}
+			Event::Nickname { user, text } => {
+				if user.0 == 0 || !valid_personal_text(&text, true) {
+					return Err("Invalid friend nickname");
+				}
+				if let Some((Action::Nickname { user: target, .. }, _, observed)) =
+					&mut self.user_actions.pending
+					&& *target == user
+				{
+					*observed = true;
+				}
+				if text.is_empty() || !self.user_actions.friends.contains_key(&user) {
+					self.user_actions.nicknames.remove(&user);
+				} else {
+					if !self.user_actions.nicknames.contains_key(&user)
+						&& self.user_actions.nicknames.len() >= MAX_RELATIONSHIPS
+					{
+						return Err("Nickname capacity exceeded");
+					}
+					// At most 4000 tightly allocated 128-byte strings plus map overhead.
+					self.user_actions
+						.nicknames
+						.insert(user, text.as_str().to_owned());
+				}
+			}
 			Event::Requests(entries) => {
 				self.user_actions.requests.clear();
 				self.user_actions.requests_known = false;
@@ -380,7 +542,14 @@ impl State {
 						.map(|(u, n, _)| (u.clone(), n.clone()))
 				});
 				if !friend {
+					if let Some((Action::Nickname { user: target, .. }, _, observed)) =
+						&mut self.user_actions.pending
+						&& *target == user
+					{
+						*observed = true;
+					}
 					self.user_actions.friends.remove(&user);
+					self.user_actions.nicknames.remove(&user);
 				} else if let Some((record, name)) = profile {
 					let entries = &mut self.user_actions.friends;
 					if user != record.id || !valid_friend(&record, &name) {
@@ -467,6 +636,16 @@ impl State {
 				}
 				if !observed {
 					match action {
+						Action::LoadNote(_) => {}
+						Action::Note { user, ref text } => {
+							self.user_actions.note = Some((user, text.clone()))
+						}
+						Action::Nickname { user, ref text } => {
+							self.apply_user_action(Event::Nickname {
+								user,
+								text: text.clone(),
+							})?;
+						}
 						Action::AddFriend { ref username } => {
 							self.user_actions.last_requested = Some(username.clone())
 						}
@@ -500,6 +679,9 @@ impl State {
 					"Request completed · latest service settings shown"
 				} else {
 					match action {
+						Action::LoadNote(_) => "Note loaded",
+						Action::Note { .. } => "Note saved",
+						Action::Nickname { .. } => "Nickname saved",
 						Action::AddFriend { .. } => {
 							"Friend request sent · waiting for service update"
 						}
@@ -522,6 +704,7 @@ impl State {
 	fn store_relationship(&mut self, user: Id, blocked: bool) -> Result<(), &'static str> {
 		if blocked {
 			self.user_actions.friends.remove(&user);
+			self.user_actions.nicknames.remove(&user);
 			self.user_actions.requests.remove(&user);
 		}
 		let entries = &mut self.user_actions.relationships;
@@ -539,6 +722,14 @@ impl State {
 	}
 }
 
+pub fn valid_personal_text(text: &str, nickname: bool) -> bool {
+	let limit = if nickname { 32 } else { 256 };
+	text.len() <= limit * 4
+		&& text.chars().count() <= limit
+		&& !text
+			.chars()
+			.any(|c| c.is_control() && (nickname || !matches!(c, '\n' | '\t')))
+}
 pub fn valid_username(name: &str) -> bool {
 	(2..=32).contains(&name.len())
 		&& !name.contains("..")
@@ -564,6 +755,99 @@ fn valid_friend(user: &model::User, username: &str) -> bool {
 mod tests {
 	use super::*;
 	use crate::{Envelope, Event as CoreEvent};
+	#[test]
+	fn personal_edits_are_bounded_confirmed_and_reconcile_newer_service_state() {
+		let mut state = state();
+		let user = state.channels[0].recipients[0].clone();
+		assert!(
+			state
+				.set_user_note(user.id, "Must load first".into())
+				.is_none()
+		);
+		assert!(
+			state
+				.set_friend_nickname(user.id, "Not a friend".into())
+				.is_none()
+		);
+		let Command::UserAction { request, .. } = state.load_user_note(user.id).unwrap() else {
+			panic!()
+		};
+		state
+			.apply_user_action(Event::NoteChanged {
+				user: user.id,
+				text: "Newest note".into(),
+			})
+			.unwrap();
+		state
+			.apply_user_action(Event::NoteLoaded {
+				user: user.id,
+				request,
+				result: Ok("Stale read".into()),
+			})
+			.unwrap();
+		assert_eq!(state.user_note(user.id), Some("Newest note"));
+		let write = state
+			.set_user_note(user.id, "Private draft".into())
+			.unwrap();
+		finish(&mut state, write, Err(Failure::Forbidden));
+		assert_eq!(state.user_note(user.id), Some("Newest note"));
+		let write = state.set_user_note(user.id, String::new()).unwrap();
+		finish(&mut state, write, Ok(()));
+		assert_eq!(state.user_note(user.id), Some(""));
+		assert!(!valid_personal_text(&"🌙".repeat(257), false));
+		assert!(!valid_personal_text("bad\nname", true));
+		assert!(valid_personal_text(&"🌙".repeat(32), true));
+		state
+			.apply_user_action(Event::Relationships(Some(vec![])))
+			.unwrap();
+		state
+			.apply_user_action(Event::Friends(Some(vec![(
+				user.clone(),
+				"synthetic".into(),
+			)])))
+			.unwrap();
+		let write = state
+			.set_friend_nickname(user.id, "Private name".into())
+			.unwrap();
+		finish(&mut state, write, Ok(()));
+		assert_eq!(state.user_display_name(&user), "Private name");
+		assert_eq!(state.conversation_name(&state.channels[0]), "Private name");
+		let write = state
+			.set_friend_nickname(user.id, "Late result".into())
+			.unwrap();
+		state
+			.apply_user_action(Event::Nickname {
+				user: user.id,
+				text: "Newest name".into(),
+			})
+			.unwrap();
+		finish(&mut state, write, Ok(()));
+		assert_eq!(state.friend_nickname(user.id), Some("Newest name"));
+		let write = state
+			.set_friend_nickname(user.id, "Removed friend".into())
+			.unwrap();
+		state
+			.apply_user_action(Event::Friend {
+				user: user.id,
+				friend: false,
+				profile: None,
+			})
+			.unwrap();
+		finish(&mut state, write, Ok(()));
+		assert_eq!(state.friend_nickname(user.id), None);
+		assert!(
+			!format!(
+				"{:?}",
+				Action::Note {
+					user: user.id,
+					text: "PRIVATE".into()
+				}
+			)
+			.contains("PRIVATE")
+		);
+		state.logout();
+		assert_eq!(state.user_note(user.id), None);
+	}
 	#[test]
 	fn friend_requests_validate_bound_and_reconcile_without_duplicate_writes() {
 		let mut state = state();

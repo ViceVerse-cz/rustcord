@@ -733,6 +733,38 @@ normal-user creation/leaving, service challenges and restricted guilds remain un
 
 ### Account menu and session presence (September 12, 2026)
 
+The account card now opens a compact status submenu with Online, Idle, Do Not Disturb
+and Invisible, including the latter two explanations. Custom text opens its own bounded
+editor with Apply/Clear. This reuses session presence publication; no automatic expiry,
+emoji picker, account switching or public-profile editing is claimed.
+
+### Private notes and friend nicknames (September 12, 2026)
+
+Shared user menus expose Add Note and Add/Edit Friend Nickname; the latter requires a
+confirmed friend and never changes a server nickname. Notes load before editing,
+failed writes retain the draft, and clearing is explicit. Private names appear in
+Friends/search, DM navigation/header/composer, message author labels and profile cards.
+Public names, usernames and IDs remain unchanged.
+
+These normal-user routes are **unofficial and live-unverified**:
+GET/PUT `/users/@me/notes/{id}` and PATCH `/users/@me/relationships/{id}`.
+Note 404 means no saved note; removal sends an empty note or a null nickname.
+Sources checked September 12:
+[HTTP implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/http.py),
+[nickname edits](https://github.com/dolfies/discord.py-self/blob/master/discord/relationship.py),
+[note Gateway updates](https://github.com/dolfies/discord.py-self/blob/master/discord/state.py).
+READY/relationship patches restore private names and USER_NOTE_UPDATE refreshes the
+single active note. Newer service events beat outstanding local acknowledgements.
+
+Client limits: 256 Unicode characters/1024 UTF-8 bytes per note, 32/128 per nickname;
+one retained note and at most 4000 tightly allocated nickname strings plus bounded
+map overhead. Reads are capped at 2 KiB. State resets at account boundaries; no private
+notes or nicknames are added to local storage/logging. Offline fixtures and local HTTP
+tests are not proof of live persistence or synchronization. Native screenshots remain
+unavailable in the current agent environment.
+
+### Session presence publication
+
 Click the footer avatar or account name to preview the global profile, select Online,
 Idle, Do Not Disturb or Invisible, and apply/clear a custom status. Presence choices
 last for this login session; they do not write Discord account settings or local storage.
