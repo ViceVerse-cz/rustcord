@@ -24,6 +24,8 @@ pub enum Operation {
 	LoadDrafts,
 	LoadGifFavorites,
 	SaveGifFavorites(Vec<model::Gif>),
+	LoadChannelPreferences,
+	SaveChannelPreferences(model::ChannelPreferences),
 	LoadChannel {
 		channel: Id,
 		request: u64,
@@ -61,6 +63,8 @@ pub enum Outcome {
 	MinimizeToTraySaved(Result<(), StoreError>),
 	Drafts(BTreeMap<Id, String>),
 	GifFavorites(Vec<model::Gif>),
+	ChannelPreferences(Result<model::ChannelPreferences, StoreError>),
+	ChannelPreferencesSaved(Result<(), StoreError>),
 	Channel {
 		channel: Id,
 		request: u64,
@@ -164,6 +168,9 @@ impl Cache {
 		}
 	}
 	pub fn queue(&self, generation: u64, account: Id, operation: Operation) -> bool {
+		if matches!(&operation, Operation::SaveChannelPreferences(value) if !value.is_valid()) {
+			return false;
+		}
 		let epoch = self.history.epoch();
 		if matches!(
 			operation,
@@ -208,8 +215,20 @@ fn execute(
 	epoch: u64,
 	operation: Operation,
 ) -> Outcome {
-	// Settings completions are account-independent and have their own pending/error state.
+	// Settings completions have their own pending/error state, independent of history.
 	match &operation {
+		Operation::LoadChannelPreferences => {
+			return Outcome::ChannelPreferences(match store {
+				Ok(store) => store.channel_preferences(account),
+				Err(error) => Err(*error),
+			});
+		}
+		Operation::SaveChannelPreferences(value) => {
+			return Outcome::ChannelPreferencesSaved(match store {
+				Ok(store) => store.save_channel_preferences(account, value),
+				Err(error) => Err(*error),
+			});
+		}
 		Operation::LoadAppPreferences => {
 			return Outcome::AppPreferences(match store {
 				Ok(store) => store.app_preferences(),
@@ -302,6 +321,8 @@ fn execute(
 		}
 		Operation::LoadChannel { .. } => "Could not read cached history",
 		Operation::LoadAppPreferences
+		| Operation::LoadChannelPreferences
+		| Operation::SaveChannelPreferences(_)
 		| Operation::SaveAppPreferences(_)
 		| Operation::LoadReadingPreferences
 		| Operation::SaveReadingPreferences(_)
@@ -313,6 +334,8 @@ fn execute(
 	let result = match store {
 		Ok(store) => match operation {
 			Operation::LoadAppPreferences
+			| Operation::LoadChannelPreferences
+			| Operation::SaveChannelPreferences(_)
 			| Operation::SaveAppPreferences(_)
 			| Operation::LoadReadingPreferences
 			| Operation::SaveReadingPreferences(_)

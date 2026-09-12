@@ -3,8 +3,22 @@ use model::Id;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
+pub struct MuteConfig {
+	#[serde(default)]
+	pub end_time: Option<crate::Timestamp>,
+}
+impl MuteConfig {
+	pub fn until(&self) -> Option<i64> {
+		self.end_time
+			.as_ref()
+			.and_then(|at| i64::try_from(at.0 / 1_000_000_000).ok())
+	}
+}
+#[derive(Deserialize)]
 pub struct Override {
 	pub channel_id: Id,
+	#[serde(default)]
+	pub mute_config: Option<MuteConfig>,
 	#[serde(default)]
 	pub muted: Option<bool>,
 	#[serde(default)]

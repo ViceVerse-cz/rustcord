@@ -109,6 +109,7 @@ pub struct Setting {
 	pub suppress_everyone: Option<bool>,
 	pub suppress_roles: Option<bool>,
 	pub channels: Vec<(Id, Option<bool>, Option<u8>)>,
+	pub channel_mute_until: Vec<(Id, i64)>,
 }
 pub enum Event {
 	Settings {
@@ -127,6 +128,7 @@ impl Event {
 						.iter()
 						.map(|e| {
 							e.channels.capacity() * size_of::<(Id, Option<bool>, Option<u8>)>()
+								+ e.channel_mute_until.capacity() * size_of::<(Id, i64)>()
 						})
 						.sum::<usize>()
 			}
@@ -140,6 +142,101 @@ pub struct Preferences {
 	dnd: Option<bool>,
 }
 impl State {
+	pub fn guild_channel_muted(&self, channel: Id) -> Option<bool> {
+		let guild = self.channel(channel)?.guild?;
+		let setting = self.notification_preferences.settings.get(&Some(guild));
+		let muted = setting.and_then(|s| {
+			s.channels
+				.iter()
+				.find(|(id, ..)| *id == channel)
+				.and_then(|(_, muted, _)| *muted)
+		});
+		if muted == Some(true)
+			&& setting.is_some_and(|s| {
+				s.channel_mute_until
+					.iter()
+					.any(|(id, until)| *id == channel && *until <= Self::permission_time())
+			}) {
+			return Some(false);
+		}
+		muted.or_else(|| (self.demo || setting.is_some()).then_some(false))
+	}
+	pub fn channel_notification_level(&self, channel: Id) -> Option<u8> {
+		let guild = self.channel(channel)?.guild?;
+		let setting = self.notification_preferences.settings.get(&Some(guild))?;
+		setting
+			.channels
+			.iter()
+			.find(|(id, ..)| *id == channel)
+			.and_then(|(_, _, level)| *level)
+			.or(Some(3))
+	}
+	pub(crate) fn confirm_channel_mute_timer(
+		&mut self,
+		channel: Id,
+		muted: Option<bool>,
+		until: Option<i64>,
+	) -> Result<(), &'static str> {
+		let Some(guild) = self.channel(channel).and_then(|c| c.guild) else {
+			return Ok(());
+		};
+		let Some(setting) = self.notification_preferences.settings.get_mut(&Some(guild)) else {
+			return Ok(());
+		};
+		setting.channel_mute_until.retain(|(id, _)| *id != channel);
+		if muted == Some(true)
+			&& let Some(until) = until
+		{
+			if setting.channel_mute_until.len() >= MAX_NAV {
+				return Err("Mute timers exceed safe capacity");
+			}
+			setting.channel_mute_until.push((channel, until));
+		}
+		Ok(())
+	}
+	pub(crate) fn confirm_channel_preferences(
+		&mut self,
+		guild: Id,
+		channel: Id,
+		muted: Option<bool>,
+		level: Option<u8>,
+	) -> Result<(), &'static str> {
+		let preferences = &mut self.notification_preferences;
+		let existing = preferences.settings.get(&Some(guild));
+		if existing.is_none() && preferences.settings.len() >= MAX_NAV {
+			return Err("Notification settings exceed safe capacity");
+		}
+		if !existing.is_some_and(|s| s.channels.iter().any(|(id, ..)| *id == channel))
+			&& preferences
+				.settings
+				.values()
+				.map(|s| s.channels.len())
+				.sum::<usize>()
+				>= MAX_NAV
+		{
+			return Err("Notification settings exceed safe capacity");
+		}
+		let setting = preferences
+			.settings
+			.entry(Some(guild))
+			.or_insert_with(|| Setting {
+				guild: Some(guild),
+				..Setting::default()
+			});
+		if let Some((_, m, l)) = setting.channels.iter_mut().find(|(id, ..)| *id == channel) {
+			if muted.is_some() {
+				*m = muted;
+			}
+			if level.is_some() {
+				*l = level;
+			}
+		} else {
+			setting.channels.push((channel, muted, level));
+		}
+		self.read_state.activity.clear_notifications();
+		Ok(())
+	}
+
 	/// Per-DM notification override; absent settings remain unknown outside the fixture.
 	pub fn dm_muted(&self, channel: Id) -> Option<bool> {
 		if let Some(muted) = self.pending_dm_muted(channel) {
@@ -288,6 +385,12 @@ impl State {
 			{
 				let muted = if channel.guild.is_none() && id == channel.id {
 					self.pending_dm_muted(id).or(*muted)
+				} else if setting
+					.channel_mute_until
+					.iter()
+					.any(|(channel, until)| *channel == id && *until <= Self::permission_time())
+				{
+					Some(false)
 				} else {
 					*muted
 				};
@@ -326,6 +429,21 @@ impl State {
 					|| overrides.saturating_add(old_overrides) > MAX_NAV
 					|| keys.len() != entries.len()
 					|| entries.iter().any(|s| {
+						if s.channel_mute_until.len() > s.channels.len()
+							|| s.channel_mute_until
+								.iter()
+								.map(|(id, _)| *id)
+								.collect::<BTreeSet<_>>()
+								.len() != s.channel_mute_until.len()
+							|| s.channel_mute_until.iter().any(|(id, until)| {
+								*until < 0
+									|| !s
+										.channels
+										.iter()
+										.any(|(c, m, _)| c == id && *m == Some(true))
+							}) {
+							return true;
+						}
 						s.channels
 							.iter()
 							.map(|(id, ..)| *id)
@@ -575,6 +693,7 @@ mod tests {
 					level: Some(0),
 					suppress_everyone: Some(false),
 					suppress_roles: Some(false),
+					channel_mute_until: vec![],
 					channels: vec![],
 				}],
 				replace: true,

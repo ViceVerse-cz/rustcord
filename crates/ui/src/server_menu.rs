@@ -26,6 +26,18 @@ pub(super) struct ServerMenu {
 }
 
 impl ServerMenu {
+	pub fn open_invite(&mut self, state: &mut State, guild: Id, channel: Id) {
+		if !state.can_create_server_invite(guild, channel) {
+			return;
+		}
+		state.clear_server_action_result(guild);
+		self.dialog = Some(Dialog::Invite {
+			guild,
+			channel: Some(channel),
+		});
+		self.generation = state.generation;
+		self.invite.open();
+	}
 	pub fn header(
 		&mut self,
 		ui: &mut egui::Ui,

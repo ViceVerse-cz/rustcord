@@ -1,6 +1,7 @@
 //! Single UI-thread state owner. Adapters deliver generation-tagged typed events.
 pub mod archives;
 pub mod auth;
+pub mod channel_actions;
 pub mod fingerprint;
 pub mod forum;
 pub mod gifs;
@@ -46,6 +47,12 @@ pub const EVENT_SLOTS: usize = 8; // UI drain batch; reliable events share a 32 
 pub const COMMAND_SLOTS: usize = 16; // ordinary commands <=16 KiB; one pending group icon <=350 KiB
 
 pub enum Command {
+	ChannelAction {
+		guild: Id,
+		channel: Id,
+		request: u64,
+		action: channel_actions::Action,
+	},
 	ServerAdmin {
 		guild: Id,
 		request: u64,
@@ -177,6 +184,7 @@ pub enum Command {
 	},
 }
 pub enum Event {
+	ChannelAction(channel_actions::Event),
 	ServerAdmin(server_admin::Event),
 	ServerSettings(server_settings::Event),
 	JoinInvite {
@@ -350,6 +358,7 @@ pub struct State {
 	pub folders_error: Option<&'static str>,
 	pub user_actions: user_actions::Actions,
 	pub server_actions: server_actions::Actions,
+	pub channel_actions: channel_actions::Actions,
 	pub server_settings: server_settings::Editor,
 	pub server_admin: server_admin::View,
 	pub server_members_shortcuts: BTreeMap<Id, bool>,
@@ -422,6 +431,7 @@ impl Default for State {
 			folders_error: None,
 			user_actions: user_actions::Actions::default(),
 			server_actions: server_actions::Actions::default(),
+			channel_actions: channel_actions::Actions::default(),
 			server_settings: server_settings::Editor::default(),
 			server_admin: server_admin::View::default(),
 			server_members_shortcuts: BTreeMap::new(),
@@ -906,6 +916,23 @@ impl State {
 			});
 			return;
 		}
+		if let Command::ChannelAction {
+			guild,
+			channel,
+			request,
+			..
+		} = command
+		{
+			let _ = self.apply_channel_action(channel_actions::Event::Finished {
+				guild,
+				channel,
+				request,
+				result: Err(auth::Failure::ProtocolAt(
+					"Channel action was not queued; try again",
+				)),
+			});
+			return;
+		}
 		if let Command::ServerAction { action, request } = command {
 			let _ = self.apply_server_action(server_actions::Event::Written {
 				action,
@@ -1213,6 +1240,7 @@ impl State {
 		self.timeline
 			.set_preserve_deleted_messages(self.preserve_deleted_messages);
 		self.invalidate_resident_event(&envelope.event);
+		self.observe_channel_action(&envelope.event);
 		if let Event::ChannelCreated(channel) = &envelope.event {
 			self.observe_dm_reopened(channel.id);
 			self.observe_group_change(channel.id, true);
@@ -1334,6 +1362,7 @@ impl State {
 			Event::NotificationPreferences(event) => self.apply_notification_preferences(event),
 			Event::UserAction(event) => self.apply_user_action(event),
 			Event::ServerAction(event) => self.apply_server_action(event),
+			Event::ChannelAction(event) => self.apply_channel_action(event),
 			Event::ServerSettings(event) => self.apply_server_settings(event),
 			Event::ServerAdmin(event) => self.apply_server_admin(event),
 			Event::GroupAction(event) => self.apply_group_action(event),
@@ -1697,12 +1726,14 @@ impl State {
 				self.notification_preferences = notifications::Preferences::default();
 				self.cancel_user_action();
 				self.cancel_server_action();
+				self.cancel_channel_action();
 				self.cancel_server_settings();
 				self.cancel_server_admin();
 				self.cancel_group_action();
 				self.cancel_invite_join();
 				self.user_actions.reset();
 				self.server_actions.reset();
+				self.channel_actions.reset();
 				self.server_settings.reset();
 				self.server_admin.reset();
 				self.server_members_shortcuts.clear();
@@ -2027,6 +2058,7 @@ impl State {
 				self.cancel_message_actions();
 				self.cancel_user_action();
 				self.cancel_server_action();
+				self.cancel_channel_action();
 				self.cancel_server_settings();
 				self.cancel_server_admin();
 				self.cancel_group_action();
@@ -2055,6 +2087,7 @@ impl State {
 				self.cancel_message_actions();
 				self.cancel_user_action();
 				self.cancel_server_action();
+				self.cancel_channel_action();
 				self.cancel_server_settings();
 				self.cancel_server_admin();
 				self.cancel_group_action();
@@ -2239,6 +2272,7 @@ impl State {
 			}
 			self.cancel_user_action();
 			self.cancel_server_action();
+			self.cancel_channel_action();
 			self.cancel_server_settings();
 			self.cancel_server_admin();
 			self.cancel_group_action();
@@ -2293,6 +2327,11 @@ impl Event {
 					model::server_roles::Result::Catalog { .. }
 				) | model::server_admin::Result::Member(_)),
 				..
+			}) | Event::ChannelAction(channel_actions::Event::Finished {
+				result: Ok(
+					channel_actions::Outcome::Channel { .. } | channel_actions::Outcome::Deleted
+				),
+				..
 			}) | Event::Permissions(_)
 				| Event::Resync
 				| Event::PermissionsChanged
@@ -2322,6 +2361,9 @@ impl Event {
 						_ => 0,
 					})
 					.sum(),
+				Self::ChannelAction(channel_actions::Event::Finished { result, .. }) => {
+					result.as_ref().map_or(0, channel_actions::Outcome::bytes)
+				}
 				Self::Edited { result, .. } => result.as_ref().map_or(0, Message::bytes),
 				Self::ServerSettings(event) => {
 					event.result.as_ref().map_or(0, |value| {

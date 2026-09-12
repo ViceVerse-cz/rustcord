@@ -1,5 +1,13 @@
 # Local storage policy and audit
 
+Channel shortcuts (September 12, schema 15): favorites and pins are device-local,
+account-isolated SQLite preferences. Both lists together contain at most 256 IDs,
+with at most 4 KiB retained vector storage and an 8 KiB serialized record. Loading
+and saving run on the existing bounded cache worker; corrupt/oversized records and
+save failures are shown. Shortcuts survive restart and are removed on account
+logout. They do not sync to Discord. Channel edit drafts, authoritative settings,
+pending actions and locally observed mute expiry times remain bounded session RAM.
+
 Community extensions (September 12): packages and grants are stored under the
 application data directory's `extensions` subtree. Plugin data/grants are
 account-isolated; declarative themes are device preferences. Up to eight installed

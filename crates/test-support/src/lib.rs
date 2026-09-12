@@ -1125,6 +1125,7 @@ mod tests {
 		state
 			.apply_notification_preferences(n::Event::Settings {
 				entries: vec![n::Setting {
+					channel_mute_until: vec![],
 					guild: None,
 					muted: Some(false),
 					suppress_everyone: Some(false),
@@ -1238,6 +1239,7 @@ mod tests {
 			.unwrap()
 			.clone();
 		let setting = n::Setting {
+			channel_mute_until: vec![],
 			guild: channel.guild,
 			muted: Some(false),
 			suppress_everyone: Some(false),
@@ -1317,6 +1319,7 @@ mod tests {
 		state
 			.apply_notification_preferences(n::Event::Settings {
 				entries: vec![n::Setting {
+					channel_mute_until: vec![],
 					guild: None,
 					muted: Some(false),
 					suppress_everyone: Some(false),
@@ -1341,6 +1344,7 @@ mod tests {
 		state
 			.apply_notification_preferences(n::Event::Settings {
 				entries: vec![n::Setting {
+					channel_mute_until: vec![],
 					guild: None,
 					muted: Some(false),
 					suppress_everyone: Some(false),
@@ -1359,6 +1363,7 @@ mod tests {
 		state
 			.apply_notification_preferences(n::Event::Settings {
 				entries: vec![n::Setting {
+					channel_mute_until: vec![],
 					guild: None,
 					muted: Some(false),
 					suppress_everyone: Some(false),

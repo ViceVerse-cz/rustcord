@@ -1,0 +1,136 @@
+﻿{
+    "BaselineCommit":  "f1edbcf200fcf2bf051b0d7d378b310c678a5a4f",
+    "AfterBranch":  "feat/server-channel-menu",
+    "Replay":  {
+                   "after":  [
+                                 "Synthetic reducer replay: 100000 events in 48.9268ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+                                 "Synthetic reducer replay: 100000 events in 42.0104ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+                                 "Synthetic reducer replay: 100000 events in 45.7572ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+                                 "Synthetic reducer replay: 100000 events in 41.5661ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+                                 "Synthetic reducer replay: 100000 events in 46.6492ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+                                 "Synthetic reducer replay: 100000 events in 42.409ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility."
+                             ],
+                   "baseline":  [
+                                    "Synthetic reducer replay: 100000 events in 44.9328ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+                                    "Synthetic reducer replay: 100000 events in 46.0853ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+                                    "Synthetic reducer replay: 100000 events in 42.8627ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+                                    "Synthetic reducer replay: 100000 events in 47.3063ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+                                    "Synthetic reducer replay: 100000 events in 49.8822ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+                                    "Synthetic reducer replay: 100000 events in 41.0222ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility."
+                                ]
+               },
+    "Native":  {
+                   "after":  {
+                                 "WarmupSeconds":  5,
+                                 "IntervalSeconds":  1,
+                                 "Samples":  [
+                                                 {
+                                                     "WorkingSet":  167342080,
+                                                     "PrivateBytes":  395743232,
+                                                     "CpuSeconds":  0
+                                                 },
+                                                 {
+                                                     "WorkingSet":  167342080,
+                                                     "PrivateBytes":  395743232,
+                                                     "CpuSeconds":  0
+                                                 },
+                                                 {
+                                                     "WorkingSet":  167342080,
+                                                     "PrivateBytes":  395743232,
+                                                     "CpuSeconds":  0
+                                                 },
+                                                 {
+                                                     "WorkingSet":  167342080,
+                                                     "PrivateBytes":  395743232,
+                                                     "CpuSeconds":  0
+                                                 },
+                                                 {
+                                                     "WorkingSet":  167342080,
+                                                     "PrivateBytes":  395743232,
+                                                     "CpuSeconds":  0
+                                                 },
+                                                 {
+                                                     "WorkingSet":  167342080,
+                                                     "PrivateBytes":  395743232,
+                                                     "CpuSeconds":  0
+                                                 },
+                                                 {
+                                                     "WorkingSet":  167342080,
+                                                     "PrivateBytes":  395743232,
+                                                     "CpuSeconds":  0
+                                                 },
+                                                 {
+                                                     "WorkingSet":  167342080,
+                                                     "PrivateBytes":  395743232,
+                                                     "CpuSeconds":  0
+                                                 },
+                                                 {
+                                                     "WorkingSet":  167342080,
+                                                     "PrivateBytes":  395743232,
+                                                     "CpuSeconds":  0
+                                                 },
+                                                 {
+                                                     "WorkingSet":  167342080,
+                                                     "PrivateBytes":  395743232,
+                                                     "CpuSeconds":  0
+                                                 }
+                                             ]
+                             },
+                   "baseline":  {
+                                    "WarmupSeconds":  5,
+                                    "IntervalSeconds":  1,
+                                    "Samples":  [
+                                                    {
+                                                        "WorkingSet":  168701952,
+                                                        "PrivateBytes":  397275136,
+                                                        "CpuSeconds":  0.046875
+                                                    },
+                                                    {
+                                                        "WorkingSet":  169160704,
+                                                        "PrivateBytes":  397578240,
+                                                        "CpuSeconds":  0.171875
+                                                    },
+                                                    {
+                                                        "WorkingSet":  169218048,
+                                                        "PrivateBytes":  397578240,
+                                                        "CpuSeconds":  0.171875
+                                                    },
+                                                    {
+                                                        "WorkingSet":  169218048,
+                                                        "PrivateBytes":  397578240,
+                                                        "CpuSeconds":  0.171875
+                                                    },
+                                                    {
+                                                        "WorkingSet":  169218048,
+                                                        "PrivateBytes":  397578240,
+                                                        "CpuSeconds":  0.171875
+                                                    },
+                                                    {
+                                                        "WorkingSet":  169218048,
+                                                        "PrivateBytes":  397578240,
+                                                        "CpuSeconds":  0.171875
+                                                    },
+                                                    {
+                                                        "WorkingSet":  169218048,
+                                                        "PrivateBytes":  397578240,
+                                                        "CpuSeconds":  0.171875
+                                                    },
+                                                    {
+                                                        "WorkingSet":  169218048,
+                                                        "PrivateBytes":  397578240,
+                                                        "CpuSeconds":  0.1875
+                                                    },
+                                                    {
+                                                        "WorkingSet":  169218048,
+                                                        "PrivateBytes":  397578240,
+                                                        "CpuSeconds":  0.1875
+                                                    },
+                                                    {
+                                                        "WorkingSet":  169218048,
+                                                        "PrivateBytes":  397578240,
+                                                        "CpuSeconds":  0.1875
+                                                    }
+                                                ]
+                                }
+               }
+}

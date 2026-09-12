@@ -11,6 +11,7 @@ pub use attachments::DownloadUi;
 mod avatars;
 pub use avatars::{EMBED_EDGE, GifFrames, LARGE_EDGE, fit_edge};
 mod categories;
+mod channel_menu;
 mod composer_text;
 pub mod design;
 mod embeds;
@@ -96,6 +97,13 @@ pub struct MessagingUi {
 	pub own_presence_status: &'static str,
 	group_menu: group_menu::GroupMenu,
 	server_menu: server_menu::ServerMenu,
+	channel_menu: channel_menu::ChannelMenu,
+	pub channel_preferences: model::ChannelPreferences,
+	pub channel_preferences_changed: bool,
+	pub channel_preferences_loaded: bool,
+	pub channel_preferences_reload: bool,
+	pub channel_preferences_save_pending: bool,
+	pub channel_preferences_status: &'static str,
 	join_server: join_server::JoinDialog,
 	folder_ui: guild_folders::FolderUi,
 	member_cache_key: Option<(u64, u64, Option<Id>, bool)>,
@@ -464,6 +472,14 @@ impl MessagingUi {
 			startup_disable_requested: self.startup_disable_requested,
 			..Self::default()
 		};
+	}
+	pub fn restore_channel_preferences(&mut self, preferences: model::ChannelPreferences) {
+		if !self.channel_preferences_changed && preferences.is_valid() {
+			self.channel_preferences = preferences;
+			self.channel_preferences_loaded = true;
+			self.channel_preferences_status = "";
+			self.channel_cache.invalidate();
+		}
 	}
 	pub fn has_edit(&self) -> bool {
 		self.editing.is_some()
@@ -988,6 +1004,16 @@ impl MessagingUi {
 					self.preview_server_admin(state, guild, "members")
 				{
 					commands.push(command);
+				}
+				if !self.channel_preferences_status.is_empty() {
+					ui.colored_label(design::palette(ui).warning, self.channel_preferences_status);
+					if ui.button("Retry shortcuts").clicked() {
+						if self.channel_preferences_loaded {
+							self.channel_preferences_changed = true;
+						} else {
+							self.channel_preferences_reload = true;
+						}
+					}
 				}
 				let select = self.channel_list(ui, state);
 				if let Some(id) = select
@@ -2423,6 +2449,14 @@ impl MessagingUi {
 				self.sidebar(ui, state, &title, &mut commands);
 			});
 		self.record_reading_sidebar(navigation.response.rect.width() - rail);
+		if self.channel_preferences_changed {
+			self.channel_cache.invalidate();
+		}
+		self.channel_menu
+			.show(&ctx, state, self.guild, &mut commands);
+		if let Some((guild, channel)) = self.channel_menu.invite_requested.take() {
+			self.server_menu.open_invite(state, guild, channel);
+		}
 		self.server_menu
 			.show(&ctx, state, self.guild, &mut commands, &mut self.avatars);
 		if let Some(guild) = self.server_menu.settings_requested.take()

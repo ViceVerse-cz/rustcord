@@ -996,6 +996,20 @@ fn notification_settings(
 				level: s.message_notifications,
 				suppress_everyone: s.suppress_everyone,
 				suppress_roles: s.suppress_roles,
+				channel_mute_until: s.channel_overrides.as_ref().map_or_else(Vec::new, |c| {
+					c.0.iter()
+						.filter_map(|c| {
+							(c.muted == Some(true))
+								.then(|| {
+									c.mute_config
+										.as_ref()
+										.and_then(|m| m.until())
+										.map(|until| (c.channel_id, until))
+								})
+								.flatten()
+						})
+						.collect()
+				}),
 				channels: s
 					.channel_overrides
 					.map_or_else(Vec::new, |c| c.0)
@@ -1013,7 +1027,7 @@ mod tests {
 	use super::*;
 	#[test]
 	fn notification_settings_forward_explicit_mention_suppression() {
-		let setting = decode::<discord_protocol::notifications::Setting>(br#"{"guild_id":"1","muted":false,"message_notifications":1,"channel_overrides":[],"suppress_everyone":false,"suppress_roles":true}"#).unwrap();
+		let setting = decode::<discord_protocol::notifications::Setting>(br#"{"guild_id":"1","muted":false,"message_notifications":1,"channel_overrides":[{"channel_id":"3","muted":true,"mute_config":{"end_time":"2020-01-01T00:00:00Z"}}],"suppress_everyone":false,"suppress_roles":true}"#).unwrap();
 		let Event::NotificationPreferences(client_core::notifications::Event::Settings {
 			entries,
 			replace,
@@ -1028,6 +1042,10 @@ mod tests {
 			(Some(false), Some(true))
 		);
 		assert_eq!(entries[0].guild, Some(model::Id(1)));
+		assert_eq!(
+			entries[0].channel_mute_until,
+			vec![(model::Id(3), 1577836800)]
+		);
 	}
 	use serde_json::{Value, json};
 	use tokio::net::{TcpListener, TcpStream};

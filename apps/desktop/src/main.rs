@@ -3,6 +3,8 @@ mod app_settings;
 mod audio;
 mod avatars;
 mod cache;
+#[cfg(feature = "demo")]
+mod channel_demo;
 mod clipboard;
 mod connection;
 mod credentials;
@@ -310,6 +312,15 @@ fn access_candidates(state: &State, event: &Event) -> Vec<model::Id> {
 		}
 		Event::ChannelChanged(patch) | Event::ThreadChanged { patch, .. } => (None, Some(patch.id)),
 		Event::ThreadRemoved { id, .. } => (None, Some(*id)),
+		Event::ChannelAction(client_core::channel_actions::Event::Finished {
+			channel,
+			result:
+				Ok(
+					client_core::channel_actions::Outcome::Deleted
+					| client_core::channel_actions::Outcome::Channel { .. },
+				),
+			..
+		}) => (None, Some(*channel)),
 		Event::UserAction(client_core::user_actions::Event::Written {
 			action: client_core::user_actions::Action::CloseDm(channel),
 			result: Ok(()),
@@ -1049,6 +1060,12 @@ impl Desktop {
 		self.avatar_start_failed = false;
 		self.messaging.clear_avatars();
 		self.state.generation += 1;
+		self.messaging.channel_preferences = model::ChannelPreferences::default();
+		self.messaging.channel_preferences_changed = false;
+		self.messaging.channel_preferences_loaded = false;
+		self.messaging.channel_preferences_reload = false;
+		self.messaging.channel_preferences_save_pending = false;
+		self.messaging.channel_preferences_status = "";
 		self.messaging.own_presence = model::OwnPresence::default();
 		self.messaging.own_presence_changed = false;
 		self.messaging.draft_restore_pending = false;
@@ -1640,6 +1657,19 @@ impl Desktop {
 		#[cfg(feature = "demo")]
 		if self.state.demo {
 			let event = match command {
+				Command::ChannelAction {
+					guild,
+					channel,
+					request,
+					action,
+				} => channel_demo::execute(
+					&self.state,
+					guild,
+					channel,
+					request,
+					action,
+					&mut self.synthetic_id,
+				),
 				Command::ServerAdmin {
 					guild,
 					request,
@@ -2759,6 +2789,21 @@ impl Desktop {
 				continue;
 			}
 			match outcome {
+				cache::Outcome::ChannelPreferences(result) => match result {
+					Ok(preferences) => self.messaging.restore_channel_preferences(preferences),
+					Err(_) => {
+						self.messaging.channel_preferences_status =
+							"Could not restore channel shortcuts."
+					}
+				},
+				cache::Outcome::ChannelPreferencesSaved(result) => {
+					self.messaging.channel_preferences_save_pending = false;
+					self.messaging.channel_preferences_status = if result.is_ok() {
+						""
+					} else {
+						"Could not save channel shortcuts."
+					};
+				}
 				cache::Outcome::GifFavorites(favorites) => {
 					self.state.restore_gif_favorites(favorites);
 				}
@@ -2888,6 +2933,16 @@ impl Desktop {
 			let ready = matches!(event.event, Event::Ready { .. });
 			let resumed = matches!(event.event, Event::Resumed);
 			let confirmed_channel = confirmed_recovery_channel(&self.state, &event.event);
+			let deleted_shortcut = match &event.event {
+				Event::Unavailable(channel)
+				| Event::ThreadRemoved { id: channel, .. }
+				| Event::ChannelAction(client_core::channel_actions::Event::Finished {
+					channel,
+					result: Ok(client_core::channel_actions::Outcome::Deleted),
+					..
+				}) => Some(*channel),
+				_ => None,
+			};
 			let mut removed_channels = access_candidates(&self.state, &event.event);
 			removed_channels.retain(|id| self.state.can_read_history(*id));
 			let invalidate = matches!(
@@ -2928,6 +2983,7 @@ impl Desktop {
 					|| matches!(
 						&event.event,
 						Event::NotificationPreferences(_)
+							| Event::ChannelAction(_)
 							| Event::UserAction(_)
 							| Event::Disconnected | Event::ReadState(
 							client_core::read_state::Event::Ack { .. }
@@ -2949,6 +3005,16 @@ impl Desktop {
 				self.delete_cached_ids(channel, ids);
 			}
 			removed_channels.retain(|id| !self.state.can_read_history(*id));
+			for channel in removed_channels.iter().copied().chain(deleted_shortcut) {
+				if self.state.channel(channel).is_none() {
+					let preferences = &mut self.messaging.channel_preferences;
+					let previous = preferences.favorites.len() + preferences.pinned.len();
+					preferences.favorites.retain(|id| *id != channel);
+					preferences.pinned.retain(|id| *id != channel);
+					self.messaging.channel_preferences_changed |=
+						previous != preferences.favorites.len() + preferences.pinned.len();
+				}
+			}
 			if let Some(error) = voice_failure
 				&& let Some(command) = self.voice.fail(&mut self.state, error)
 			{
@@ -2970,6 +3036,12 @@ impl Desktop {
 					self.messaging.draft_restore_pending =
 						self.queue_cache(cache::Operation::LoadDrafts);
 					self.queue_cache(cache::Operation::LoadGifFavorites);
+					if !self.messaging.channel_preferences_loaded
+						&& !self.queue_cache(cache::Operation::LoadChannelPreferences)
+					{
+						self.messaging.channel_preferences_status =
+							"Could not restore channel shortcuts.";
+					}
 				}
 				if let Some(secret) = self.pending_save.take()
 					&& let Some(store) = &self.store
@@ -3783,6 +3855,31 @@ impl eframe::App for Desktop {
 		if std::mem::take(&mut self.state.gifs.favorites_changed) {
 			let favorites = self.state.gifs.favorites.clone();
 			self.queue_cache(cache::Operation::SaveGifFavorites(favorites));
+		}
+		if std::mem::take(&mut self.messaging.channel_preferences_reload) {
+			self.messaging.channel_preferences_status =
+				if self.queue_cache(cache::Operation::LoadChannelPreferences) {
+					""
+				} else {
+					"Could not restore channel shortcuts."
+				};
+		}
+		if self.messaging.channel_preferences_changed
+			&& !self.messaging.channel_preferences_save_pending
+		{
+			self.messaging.channel_preferences_changed = false;
+			if !self.state.demo && !self.fixture_only {
+				self.messaging.channel_preferences_save_pending =
+					self.queue_cache(cache::Operation::SaveChannelPreferences(
+						self.messaging.channel_preferences.clone(),
+					));
+				self.messaging.channel_preferences_status =
+					if self.messaging.channel_preferences_save_pending {
+						""
+					} else {
+						"Could not save channel shortcuts."
+					};
+			}
 		}
 		if let Some(variant) = self.messaging.theme_variant_changed.take() {
 			self.variant_changed = true;

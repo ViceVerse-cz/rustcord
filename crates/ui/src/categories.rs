@@ -6,6 +6,7 @@ use model::{Channel, Id};
 use std::collections::{BTreeMap, BTreeSet};
 
 enum Row<'a> {
+	Section(&'static str),
 	Category(&'a Channel, usize),
 	Channel(&'a Channel, bool),
 	Participant(&'a client_core::voice::RosterEntry),
@@ -13,6 +14,7 @@ enum Row<'a> {
 
 #[derive(Clone, Copy)]
 enum CachedRow {
+	Section(&'static str),
 	Category(usize, usize),
 	Channel(usize, bool),
 	Participant(usize),
@@ -22,6 +24,77 @@ type CacheKey = (u64, u64, Option<Id>, Option<Id>, bool);
 pub(super) struct Cache {
 	key: Option<CacheKey>,
 	rows: Vec<CachedRow>,
+}
+impl Cache {
+	pub(super) fn invalidate(&mut self) {
+		self.key = None;
+	}
+}
+
+fn promote<'a>(
+	mut rows: Vec<Row<'a>>,
+	state: &'a State,
+	guild: Id,
+	preferences: &model::ChannelPreferences,
+) -> Vec<Row<'a>> {
+	// Shortcuts remain visible when their original category is collapsed.
+	let present: BTreeSet<_> = rows
+		.iter()
+		.filter_map(|row| match row {
+			Row::Channel(channel, _) => Some(channel.id),
+			_ => None,
+		})
+		.collect();
+	rows.extend(
+		state
+			.channels
+			.iter()
+			.filter(|channel| {
+				channel.guild == Some(guild)
+					&& channel.kind != 4
+					&& state.can_view(channel.id)
+					&& (preferences.is_pinned(channel.id) || preferences.is_favorite(channel.id))
+					&& !present.contains(&channel.id)
+			})
+			.map(|channel| Row::Channel(channel, false)),
+	);
+	let mut pinned = Vec::new();
+	let mut favorites = Vec::new();
+	let mut regular = Vec::new();
+	for row in rows {
+		match row {
+			Row::Channel(channel, _) if preferences.is_pinned(channel.id) => {
+				pinned.push(Row::Channel(channel, false))
+			}
+			Row::Channel(channel, _) if preferences.is_favorite(channel.id) => {
+				favorites.push(Row::Channel(channel, false))
+			}
+			Row::Channel(channel, true)
+				if channel
+					.parent_id
+					.is_some_and(|id| preferences.is_pinned(id)) =>
+			{
+				pinned.push(Row::Channel(channel, true))
+			}
+			Row::Channel(channel, true)
+				if channel
+					.parent_id
+					.is_some_and(|id| preferences.is_favorite(id)) =>
+			{
+				favorites.push(Row::Channel(channel, true))
+			}
+			row => regular.push(row),
+		}
+	}
+	let mut result = Vec::with_capacity(pinned.len() + favorites.len() + regular.len() + 2);
+	for (label, group) in [("Pinned", pinned), ("Favorites", favorites)] {
+		if !group.is_empty() {
+			result.push(Row::Section(label));
+			result.extend(group);
+		}
+	}
+	result.extend(regular);
+	result
 }
 
 fn rows<'a>(
@@ -149,6 +222,11 @@ impl MessagingUi {
 				state.selected,
 				self.show_hidden_channels,
 			);
+			let channel_rows = if let Some(guild) = self.guild {
+				promote(channel_rows, state, guild, &self.channel_preferences)
+			} else {
+				channel_rows
+			};
 			let mut participants = BTreeMap::<Id, Vec<_>>::new();
 			for entry in &state.voice.roster {
 				if Some(entry.guild) == self.guild && state.can_view(entry.channel) {
@@ -182,6 +260,7 @@ impl MessagingUi {
 			self.channel_cache.rows = rows
 				.into_iter()
 				.map(|row| match row {
+					Row::Section(label) => CachedRow::Section(label),
 					Row::Category(c, n) => CachedRow::Category(indices[&c.id], n),
 					Row::Channel(c, n) => CachedRow::Channel(indices[&c.id], n),
 					Row::Participant(p) => {
@@ -226,6 +305,16 @@ impl MessagingUi {
 						continue;
 					};
 					match row {
+						CachedRow::Section(label) => {
+							ui.allocate_ui_with_layout(
+								egui::vec2(ui.available_width(), row_height),
+								egui::Layout::left_to_right(egui::Align::Center),
+								|ui| {
+									ui.add_space(8.0);
+									ui.label(design::eyebrow(ui, label, colors.muted));
+								},
+							);
+						}
 						CachedRow::Participant(entry) => {
 							let entry = &state.voice.roster[entry];
 							ui.horizontal(|ui| {
@@ -308,6 +397,14 @@ impl MessagingUi {
 									self.collapsed_categories.insert(category.id);
 								}
 							}
+							self.channel_menu.context(
+								&response,
+								state,
+								category,
+								&mut self.channel_preferences,
+								&mut self.channel_preferences_changed,
+								state.demo || self.channel_preferences_loaded,
+							);
 						}
 						CachedRow::Channel(channel, nested) => {
 							let channel = &state.channels[channel];
@@ -315,6 +412,14 @@ impl MessagingUi {
 							if channel.kind == 2 {
 								let response =
 									self.voice_channel_button(ui, state, channel, active);
+								self.channel_menu.context(
+									&response,
+									state,
+									channel,
+									&mut self.channel_preferences,
+									&mut self.channel_preferences_changed,
+									state.demo || self.channel_preferences_loaded,
+								);
 								if response.clicked() {
 									selected = Some(channel.id);
 								}
@@ -343,7 +448,7 @@ impl MessagingUi {
 								.push_id(channel.id, |ui| {
 									ui.allocate_exact_size(
 										egui::vec2(ui.available_width(), row_height),
-										if enabled {
+										if enabled || channel.guild.is_some() {
 											egui::Sense::click()
 										} else {
 											egui::Sense::hover()
@@ -567,8 +672,23 @@ impl MessagingUi {
 							if channel.kind == 3 && channel.guild.is_none() {
 								self.group_menu.context(&response, state, channel);
 							}
+							if channel.guild.is_some() {
+								self.channel_menu.context(
+									&response,
+									state,
+									channel,
+									&mut self.channel_preferences,
+									&mut self.channel_preferences_changed,
+									state.demo || self.channel_preferences_loaded,
+								);
+							}
 							if enabled && response.clicked() {
 								selected = Some(channel.id);
+							}
+							if !enabled
+								&& response.clicked() && let Some(url) = external
+							{
+								self.timeline.opening = Some(url);
 							}
 						}
 					}
@@ -582,6 +702,51 @@ impl MessagingUi {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[test]
+	fn shortcuts_survive_collapsed_categories_without_duplicates_or_orphan_threads() {
+		let mut state = test_support::demo_state();
+		state.guilds[0].id = Id(100);
+		state.channels = vec![
+			channel(4, 4, 0, None),
+			channel(7, 0, 0, Some(Id(4))),
+			channel(8, 11, 0, Some(Id(7))),
+			channel(9, 0, 1, Some(Id(4))),
+		];
+		state
+			.permissions
+			.replace(test_support::permission_snapshot(&state))
+			.unwrap();
+		let preferences = model::ChannelPreferences {
+			pinned: vec![Id(7)],
+			favorites: vec![Id(7), Id(9)],
+		};
+		for collapsed in [BTreeSet::new(), BTreeSet::from([Id(4)])] {
+			let output = promote(
+				rows(&state, Some(Id(100)), &collapsed, None, false),
+				&state,
+				Id(100),
+				&preferences,
+			);
+			let ids: Vec<_> = output
+				.iter()
+				.filter_map(|row| {
+					if let Row::Channel(channel, _) = row {
+						Some(channel.id)
+					} else {
+						None
+					}
+				})
+				.collect();
+			assert_eq!(ids.iter().filter(|id| **id == Id(7)).count(), 1);
+			assert_eq!(ids.iter().filter(|id| **id == Id(9)).count(), 1);
+			assert!(matches!(output[0], Row::Section("Pinned")));
+			if collapsed.is_empty() {
+				assert!(matches!(output[2], Row::Channel(c, true) if c.id == Id(8)));
+			}
+		}
+		state.permissions = Default::default();
+		assert!(promote(vec![], &state, Id(100), &preferences).is_empty());
+	}
 	#[test]
 	fn find_and_friends_stay_pinned_while_the_dm_list_scrolls() {
 		for width in [220.0, 320.0] {
@@ -975,6 +1140,7 @@ mod tests {
 				.map(|r| match r {
 					Row::Channel(c, _) | Row::Category(c, _) => c.id.0,
 					Row::Participant(entry) => entry.participant.user.0,
+					Row::Section(_) => 0,
 				})
 				.collect::<Vec<_>>()
 		};

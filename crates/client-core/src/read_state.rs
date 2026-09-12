@@ -201,6 +201,23 @@ impl State {
 			return None;
 		}
 		let channel = self.selected?;
+		Some(self.mark_read_command(channel, message))
+	}
+	/// Explicit sidebar acknowledgement uses known channel metadata without navigating.
+	pub fn can_mark_channel_read(&self, channel: Id) -> bool {
+		self.auth == AuthState::Authenticated
+			&& self.gateway_connected
+			&& self.read_state.pending.is_none()
+			&& self.unread(channel) == Some(true)
+	}
+	pub fn prepare_mark_channel_read(&mut self, channel: Id) -> Option<crate::Command> {
+		if !self.can_mark_channel_read(channel) {
+			return None;
+		}
+		let message = self.channel(channel)?.last_message?;
+		Some(self.mark_read_command(channel, message))
+	}
+	fn mark_read_command(&mut self, channel: Id, message: Id) -> crate::Command {
 		self.read_state.revision = self.read_state.revision.wrapping_add(1);
 		let request = self.read_state.revision;
 		let epoch = self
@@ -211,11 +228,11 @@ impl State {
 		self.read_state.pending = Some((channel, message, request, epoch));
 		// Routine acknowledgements must not resize the timeline on every incoming message.
 		self.read_state.status = None;
-		Some(crate::Command::MarkRead {
+		crate::Command::MarkRead {
 			channel,
 			message,
 			request,
-		})
+		}
 	}
 	pub fn observe_last_message(&mut self, channel: Id, message: Id) {
 		if let Some(channel) = self.channels.iter_mut().find(|c| c.id == channel) {
@@ -471,6 +488,36 @@ mod navigation_tests {
 				older: false,
 			},
 		);
+	}
+	#[test]
+	fn sidebar_acknowledges_unselected_channel_without_touching_navigation_or_draft() {
+		let mut state = state(Some(Id(100)));
+		state.selected = None;
+		assert!(state.can_mark_channel_read(Id(1)));
+		let Some(Command::MarkRead {
+			channel,
+			message,
+			request,
+		}) = state.prepare_mark_channel_read(Id(1))
+		else {
+			panic!("sidebar acknowledgement")
+		};
+		assert_eq!((channel, message), (Id(1), Id(500)));
+		assert!(state.selected.is_none());
+		assert_eq!(state.drafts[&Id(1)], "Preserve draft");
+		assert!(state.prepare_mark_channel_read(Id(1)).is_none());
+		state
+			.apply_read_state(Event::Result {
+				channel,
+				message,
+				request,
+				result: Ok(()),
+			})
+			.unwrap();
+		assert!(!state.can_mark_channel_read(Id(1)));
+		state.gateway_connected = false;
+		assert!(state.prepare_mark_channel_read(Id(1)).is_none());
+		assert!(state.prepare_mark_channel_read(Id(999)).is_none());
 	}
 	#[test]
 	fn unread_and_next_pages_are_bounded_scoped_and_do_not_acknowledge() {

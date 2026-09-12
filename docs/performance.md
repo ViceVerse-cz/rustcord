@@ -3777,3 +3777,47 @@ Final offline framebuffer exports were inspected in dark/light themes at
 rows. Computer Use could not connect to its native pipe (OS error 2); Orca CLI
 was absent. Native interaction, accessibility and live Discord remain unverified.
 Raw samples: [metrics.json](pr-evidence/server-integrations/metrics.json).
+
+## Server channel context menu - September 13, 2026
+
+Baseline `f1edbcf200fcf2bf051b0d7d378b310c678a5a4f`, implementation branch
+`feat/server-channel-menu`. Windows 11 Home 10.0.26200, Ryzen 7 7800X3D
+(16 logical processors), 33,410,678,784 RAM bytes, Rust 1.98.1 MSVC.
+Standard release packages include voice, with no dependency changes.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Standard executable bytes | 67,291,136 | 67,620,864 | +329,728 (+0.490%) |
+| Installed package bytes | 73,640,266 | 73,972,032 | +331,766 (+0.451%) |
+| ZIP bytes | 43,179,702 | 43,286,379 | +106,677 (+0.247%) |
+| Reducer replay median, ms | 46.0853 | 42.4090 | -3.6763 (-7.977%) |
+| Peak/settled working-set bytes | 169,218,048 | 167,342,080 | -1,875,968 (-1.109%) |
+| Peak/settled private bytes | 397,578,240 | 395,743,232 | -1,835,008 (-0.462%) |
+
+Package sizes sum fresh, separate `cargo xtask package` outputs. ZIPs use
+PowerShell `Compress-Archive -CompressionLevel Optimal` without an enclosing
+directory; timestamps are not normalized. Sizes precede this measurement note.
+
+Reducer replay uses direct release binaries: one warmup plus five measured runs
+of 100,000 synthetic events, without concurrent builds. Baseline samples are
+46.0853, 42.8627, 47.3063, 49.8822 and 41.0222 ms; after samples are 42.0104,
+45.7572, 41.5661, 46.6492 and 42.4090 ms. Both retain 500 records and
+236,992-237,477 estimated timeline bytes. The overlapping sample ranges do not
+establish a speedup; this workload does not measure channel action latency.
+
+Native process samples use release builds with `--features demo`, launched with
+`--demo --demo-chat` and `Start-Process -WindowStyle Hidden`: five seconds warmup,
+ten samples one second apart, no concurrent builds or scripted native input.
+The app configures Wgpu and a default 1120x760 logical window. Actual GPU adapter,
+display scale and window visibility/occlusion were not verified. Working set and
+private bytes are Windows process metrics, not GPU allocation. Measured CPU delta
+over ten seconds was 187.5 ms baseline and 0 ms after; timer resolution does not
+prove zero idle CPU, and one process pair does not establish an improvement.
+
+The new menu is covered by synthetic egui mouse/keyboard, permission and narrow
+light/dark tests. Native menu interaction, screenshots, helper/GPU memory,
+frame-time p95 and startup latency are unmeasured: Orca is unavailable and the
+available Computer Use API disables native surfaces. These idle samples are not
+menu performance or live Discord evidence. Shortcut storage has a separate
+enforced limit of 256 IDs, 4 KiB vector capacity and 8 KiB serialized bytes.
+Raw samples: [metrics.json](pr-evidence/server-channel-menu/metrics.json).

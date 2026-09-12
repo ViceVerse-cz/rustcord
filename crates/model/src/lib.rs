@@ -1,5 +1,7 @@
 //! UI-neutral session entities. No filesystem or network dependencies.
 pub mod archives;
+mod channel_preferences;
+pub use channel_preferences::ChannelPreferences;
 pub mod forum;
 pub mod gifs;
 pub mod guild_folders;

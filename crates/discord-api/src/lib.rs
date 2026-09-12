@@ -1,6 +1,7 @@
 // Direct, origin-fixed REST adapter. No cookies, redirects, logging, persistence or bot SDK.
 mod activity_sharing;
 mod archives;
+mod channel_actions;
 mod forum;
 mod group_actions;
 mod guild_folders;
@@ -362,6 +363,17 @@ impl DiscordApi {
 			Command::GuildFolders(settings) => Event::GuildFolders(match settings {
 				Some(settings) => self.save_guild_folders(settings).await,
 				None => self.guild_folders().await,
+			}),
+			Command::ChannelAction {
+				guild,
+				channel,
+				request,
+				action,
+			} => Event::ChannelAction(client_core::channel_actions::Event::Finished {
+				guild,
+				channel,
+				request,
+				result: self.channel_action(guild, channel, &action).await,
 			}),
 			Command::ServerAction { action, request } => {
 				Event::ServerAction(client_core::server_actions::Event::Written {

@@ -1,5 +1,28 @@
 # Discord compatibility — checked 2026-09-10
 
+## Channel context menu — September 12, 2026
+
+Guild channel rows support right-click and Shift+F10 actions. Mark As Read uses
+the existing acknowledgement adapter without changing the selected conversation;
+Invite to Channel opens the existing invite dialog for that channel. Favorites
+and pins are account-isolated local shortcuts, not Discord-synchronized favorites.
+
+Text/announcement editing (name, topic, slowmode and age restriction), channel
+duplication, text-channel creation and confirmed deletion use the documented
+[channel routes](https://docs.discord.com/developers/resources/channel#modify-channel)
+and [guild channel creation route](https://docs.discord.com/developers/resources/guild#create-guild-channel).
+Duplication reads current settings and permission overwrites first; creating under
+a category copies that category's overwrites. Admin actions require known View
+Channel and Manage Channels permissions and surface server rejection.
+
+Mute durations and notification overrides use the existing unofficial
+`PATCH /users/@me/guilds/{guild}/settings` route. Channel mute expiry is decoded from
+service settings; newer permanent mutes replace earlier timers. Edits send only
+fields changed in the form and reject conflicting changes found before saving.
+Read state and invites retain their previously documented limitations.
+No live account/channel mutations were performed; normal-account compatibility
+and native screenshots remain unverified.
+
 Webhook author profiles (September 12, 2026): the documented message
 [`webhook_id`](https://docs.discord.com/developers/resources/message#message-object)
 marks the author as a webhook. Its popout shows the message's name/avatar and a

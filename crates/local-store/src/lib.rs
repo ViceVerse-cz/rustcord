@@ -1,4 +1,5 @@
 //! Account-isolated bounded SQLite cache. This is not Discord's authoritative state.
+mod channel_preferences;
 use model::{Id, Message, ReadingPreferences, User};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::{collections::BTreeMap, path::Path};
@@ -122,7 +123,7 @@ impl LocalStore {
 	fn initialize(mut connection: Connection) -> Result<Self> {
 		connection.busy_timeout(std::time::Duration::from_secs(2))?;
 		let version: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
-		if version > 14 {
+		if version > 15 {
 			return Err(StoreError::Incompatible);
 		}
 		connection.execute_batch("PRAGMA page_size=4096; PRAGMA max_page_count=16384; PRAGMA cache_size=-2048; PRAGMA temp_store=MEMORY; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA wal_autocheckpoint=256; PRAGMA journal_size_limit=8388608; PRAGMA secure_delete=ON; PRAGMA auto_vacuum=INCREMENTAL;
@@ -228,7 +229,11 @@ impl LocalStore {
             CREATE TABLE IF NOT EXISTS minimize_to_tray(
                 singleton INTEGER PRIMARY KEY CHECK(singleton=1),
                 enabled INTEGER NOT NULL CHECK(typeof(enabled)='integer' AND enabled IN (0,1))
-            ); PRAGMA user_version=14;")?;
+            );
+            CREATE TABLE IF NOT EXISTS channel_preferences(
+                account TEXT PRIMARY KEY NOT NULL,
+                value TEXT NOT NULL CHECK(typeof(value)='text' AND length(CAST(value AS BLOB))<=8192)
+            ); PRAGMA user_version=15;")?;
 		let has_animate_gifs: bool = transaction.query_row(
 			"SELECT EXISTS(SELECT 1 FROM pragma_table_info('reading_preferences') WHERE name='animate_gifs')",
 			[],
@@ -860,7 +865,13 @@ impl LocalStore {
 	}
 	pub fn forget_account(&mut self, account: Id) -> Result<()> {
 		let transaction = self.0.transaction()?;
-		for table in ["messages", "channels", "drafts", "gif_favorites"] {
+		for table in [
+			"messages",
+			"channels",
+			"drafts",
+			"gif_favorites",
+			"channel_preferences",
+		] {
 			transaction.execute(
 				&format!("DELETE FROM {table} WHERE account=?1"),
 				[account.to_string()],
@@ -1022,7 +1033,7 @@ mod tests {
 			.0
 			.pragma_query_value(None, "user_version", |row| row.get(0))
 			.unwrap();
-		assert_eq!(version, 14);
+		assert_eq!(version, 15);
 		for invalid in ["-1", "2", "1.5", "'bad'"] {
 			assert!(
 				store
@@ -1105,7 +1116,7 @@ mod tests {
 				.0
 				.pragma_query_value(None, "user_version", |row| row.get(0))
 				.unwrap();
-			assert_eq!(version, 14);
+			assert_eq!(version, 15);
 			let mut messages = store.load_channel(Id(1), Id(2)).unwrap();
 			assert_eq!(messages[0].kind, expected_kind);
 			assert_eq!(messages[0].extra_content.bits(), expected_markers);
@@ -1378,7 +1389,7 @@ mod tests {
 			.0
 			.pragma_query_value(None, "user_version", |row| row.get(0))
 			.unwrap();
-		assert_eq!(version, 14);
+		assert_eq!(version, 15);
 		assert_eq!(
 			store.reading_preferences().unwrap(),
 			ReadingPreferences::default()
@@ -1695,7 +1706,7 @@ mod tests {
 			.0
 			.pragma_query_value(None, "user_version", |row| row.get(0))
 			.unwrap();
-		assert_eq!(version, 14);
+		assert_eq!(version, 15);
 		let messages: Vec<_> = (0..32_u8)
 			.map(|bits| {
 				let mut message = legacy[0].clone();
@@ -1887,7 +1898,7 @@ mod tests {
 			.0
 			.pragma_query_value(None, "user_version", |r| r.get(0))
 			.unwrap();
-		assert_eq!(version, 14);
+		assert_eq!(version, 15);
 		for (json, error) in [
 			("broken JSON".to_owned(), StoreError::Incompatible),
 			(
