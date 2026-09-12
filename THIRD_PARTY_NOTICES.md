@@ -17,6 +17,10 @@ already-resolved **flate2 1.1.10**. Rusqlite statement caching adds **hashlink 0
 All five declare **MIT OR Apache-2.0** in their corresponding registry release
 manifests; their versions and archive checksums are recorded in `Cargo.lock`.
 
+External browser opening enables eframe's `links` feature and adds **webbrowser 1.2.4**
+(MIT OR Apache-2.0). Its MIT license is copied unmodified from the registry release
+to `assets/licenses/files/webbrowser-1.2.4-LICENSE-MIT`; `Cargo.lock` records the archive checksum.
+
 Inline MP3/WAV/Ogg Vorbis attachment playback uses **Symphonia 0.6.1** and its core, metadata,
 MP3, PCM, RIFF, Ogg, Vorbis and common components (MPL-2.0), plus existing **CPAL 0.18.2** (Apache-2.0)
 for output in both default and voice builds. Additional resolved dependencies are
