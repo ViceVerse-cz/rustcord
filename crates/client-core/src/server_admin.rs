@@ -16,6 +16,9 @@ pub struct Event {
 
 #[derive(Default)]
 pub struct View {
+	pub audit_log: Option<model::server_audit_log::Page>,
+	pub audit_query: Option<model::server_audit_log::Query>,
+	pub audit_limit_reached: bool,
 	pub integrations: Option<model::server_integrations::Snapshot>,
 	pub invites: Option<model::server_invites::Snapshot>,
 	pub roles: Option<model::server_roles::Catalog>,
@@ -38,6 +41,14 @@ pub struct View {
 	prune_days: Option<u8>,
 }
 impl View {
+	pub(crate) fn revoke_audit_access(&mut self) {
+		self.audit_log = None;
+		self.audit_query = None;
+		self.audit_limit_reached = false;
+		if matches!(self.action, Some(Action::AuditLog(_))) {
+			self.reset();
+		}
+	}
 	pub(crate) fn revoke_invite_access(&mut self) {
 		self.invites = None;
 		if matches!(self.action, Some(Action::Invites(_))) {
@@ -292,6 +303,7 @@ impl State {
 			return false;
 		}
 		match action {
+			Action::AuditLog(query) => self.audit_log_action_allowed(guild, query),
 			Action::Roles(action) => self.role_action_allowed(guild, action),
 			Action::Invites(action) => self.invite_action_allowed(guild, action),
 			Action::Integrations(action) => self.integration_action_allowed(guild, action),
@@ -337,6 +349,13 @@ impl State {
 		}
 		if self.server_admin.guild != Some(guild) {
 			self.server_admin.reset();
+		}
+		if let Action::AuditLog(query) = &action {
+			if query.before.is_none() {
+				self.server_admin.audit_log = None;
+				self.server_admin.audit_limit_reached = false;
+			}
+			self.server_admin.audit_query = Some(query.clone());
 		}
 		if let Action::LoadMembers(query) = &action {
 			self.server_admin.query = query.clone();
@@ -405,7 +424,9 @@ impl State {
 		self.server_admin.pending = false;
 		self.server_admin.saving = false;
 		if action.as_ref().is_none_or(|action| {
-			if let Action::Integrations(action) = action {
+			if matches!(action, Action::AuditLog(_)) {
+				!self.can_open_audit_log_settings(event.guild)
+			} else if let Action::Integrations(action) = action {
 				!self.integration_action_allowed(event.guild, action)
 			} else if matches!(action, Action::Invites(_)) {
 				!self.can_open_invite_settings(event.guild)
@@ -433,6 +454,9 @@ impl State {
 				return Ok(());
 			}
 			Err(failure) => {
+				if matches!(action, Some(Action::AuditLog(_))) && failure == Failure::Forbidden {
+					self.server_admin.revoke_audit_access();
+				}
 				self.server_admin.error = Some(failure.label());
 				self.server_admin.needs_refresh |=
 					action.as_ref().is_some_and(Action::write) && failure == Failure::Ambiguous;
@@ -442,6 +466,14 @@ impl State {
 				return Ok(());
 			}
 		};
+		if matches!(action, Some(Action::AuditLog(_)))
+			&& self.server_admin.requested_permission_revision
+				!= self.server_admin.permission_revision
+		{
+			self.server_admin.audit_log = None;
+			self.server_admin.error = Some("Server permissions changed; reload the audit log");
+			return Ok(());
+		}
 		if matches!(action, Some(Action::Integrations(_)))
 			&& self.server_admin.requested_permission_revision
 				!= self.server_admin.permission_revision
@@ -476,6 +508,9 @@ impl State {
 				| (Some(Action::Prune { .. }), Outcome::Pruned(_))
 				| (Some(Action::ShowMembers { .. }), Outcome::ChannelList(_))
 		) || match (&action, &result) {
+			(Some(Action::AuditLog(query)), Outcome::AuditLog(page)) => {
+				page.guild == event.guild && page.matches_query(query)
+			}
 			(Some(Action::Integrations(action)), Outcome::Integrations(snapshot)) => {
 				snapshot.guild == event.guild
 					&& crate::server_integrations::expected(action, snapshot)
@@ -530,6 +565,7 @@ impl State {
 			return Ok(());
 		}
 		match result {
+			Outcome::AuditLog(page) => self.apply_audit_log(page),
 			Outcome::Integrations(snapshot) => {
 				if let Some(Action::Integrations(action)) = &action {
 					self.apply_integrations(snapshot, action);

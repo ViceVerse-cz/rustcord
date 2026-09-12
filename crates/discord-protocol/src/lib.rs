@@ -22,6 +22,7 @@ pub mod relationships;
 pub mod rpc;
 pub mod search;
 pub mod server_admin;
+pub mod server_audit_log;
 pub mod server_integrations;
 pub mod server_invites;
 pub mod server_roles;

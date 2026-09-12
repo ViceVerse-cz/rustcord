@@ -17,6 +17,7 @@ enum Page {
 	Roles,
 	Invites,
 	Integrations,
+	AuditLog,
 }
 impl Page {
 	fn allowed(self, state: &State, guild: Id) -> bool {
@@ -27,6 +28,7 @@ impl Page {
 			Self::Roles => state.can_open_role_settings(guild),
 			Self::Invites => state.can_open_invite_settings(guild),
 			Self::Integrations => state.can_open_integration_settings(guild),
+			Self::AuditLog => state.can_open_audit_log_settings(guild),
 		}
 	}
 	fn label(self) -> &'static str {
@@ -38,6 +40,7 @@ impl Page {
 			Self::Roles => "Roles",
 			Self::Invites => "Invites",
 			Self::Integrations => "Integrations",
+			Self::AuditLog => "Audit Log",
 		}
 	}
 }
@@ -63,6 +66,7 @@ pub(super) struct Editor {
 	roles: crate::server_roles::RolesUi,
 	invites: crate::server_invites::InvitesUi,
 	integrations: crate::server_integrations::IntegrationsUi,
+	audit_log: crate::server_audit_log::AuditLogUi,
 }
 
 impl MessagingUi {
@@ -123,7 +127,10 @@ impl MessagingUi {
 			return command;
 		}
 		let webhooks = page == "webhooks";
-		let page = if matches!(page, "integrations" | "webhooks") {
+		let expand_audit = page == "audit-log-expanded";
+		let page = if matches!(page, "audit-log" | "audit-log-expanded") {
+			Page::AuditLog
+		} else if matches!(page, "integrations" | "webhooks") {
 			Page::Integrations
 		} else if page == "invites" {
 			Page::Invites
@@ -141,7 +148,10 @@ impl MessagingUi {
 			page,
 			..Editor::default()
 		};
-		if page == Page::Integrations {
+		if page == Page::AuditLog {
+			self.server_settings.audit_log.preview(expand_audit);
+			self.server_settings.audit_log.load(state, guild)
+		} else if page == Page::Integrations {
 			self.server_settings.integrations.preview(webhooks);
 			self.server_settings.integrations.load(state, guild)
 		} else if page == Page::Invites {
@@ -200,6 +210,9 @@ impl MessagingUi {
 			}
 			if state.can_open_integration_settings(guild) {
 				return self.preview_server_admin(state, guild, "integrations");
+			}
+			if state.can_open_audit_log_settings(guild) {
+				return self.preview_server_admin(state, guild, "audit-log");
 			}
 			return None;
 		}
@@ -316,7 +329,8 @@ impl Editor {
 				|| state.can_open_emoji_settings(guild)
 				|| state.can_open_member_settings(guild)
 				|| state.can_open_role_settings(guild)
-				|| state.can_open_integration_settings(guild))
+				|| state.can_open_integration_settings(guild)
+				|| state.can_open_audit_log_settings(guild))
 			|| !state.guilds.iter().any(|known| known.id == guild)
 		{
 			*self = Self::default();
@@ -341,16 +355,24 @@ impl Editor {
 				Page::Emoji
 			} else if state.can_open_member_settings(guild) {
 				Page::Members
-			} else {
+			} else if state.can_open_integration_settings(guild) {
 				Page::Integrations
+			} else {
+				Page::AuditLog
 			};
 			self.admin = crate::server_admin::Admin::default();
 			self.roles = crate::server_roles::RolesUi::default();
 			self.invites = crate::server_invites::InvitesUi::default();
 			self.integrations = crate::server_integrations::IntegrationsUi::default();
+			self.audit_log = crate::server_audit_log::AuditLogUi::default();
 			state.close_server_admin();
 		}
 		self.invites.sync(state, guild);
+		if self.page == Page::AuditLog
+			&& let Some(command) = self.audit_log.load(state, guild)
+		{
+			commands.push(command);
+		}
 		self.integrations.sync(state, guild);
 		if self.page == Page::Integrations
 			&& let Some(command) = self.integrations.load(state, guild)
@@ -444,19 +466,27 @@ impl Editor {
 								Page::Roles,
 								Page::Invites,
 								Page::Integrations,
+								Page::AuditLog,
 							] {
 								if !page.allowed(state, guild) {
 									continue;
 								}
-								if matches!(page, Page::Emoji | Page::Members | Page::Integrations)
-									|| (page == Page::Roles && !Page::Members.allowed(state, guild))
+								if matches!(
+									page,
+									Page::Emoji
+										| Page::Members | Page::Integrations
+										| Page::AuditLog
+								) || (page == Page::Roles
+									&& !Page::Members.allowed(state, guild))
 								{
 									ui.add_space(16.0);
 									ui.separator();
 									ui.add_space(12.0);
 									ui.label(design::eyebrow(
 										ui,
-										if page == Page::Integrations {
+										if page == Page::AuditLog {
+											"MODERATION"
+										} else if page == Page::Integrations {
 											"APPS"
 										} else if page == Page::Emoji {
 											"EXPRESSION"
@@ -516,6 +546,7 @@ impl Editor {
 									Page::Roles,
 									Page::Invites,
 									Page::Integrations,
+									Page::AuditLog,
 								] {
 									if !page.allowed(state, guild) {
 										continue;
@@ -550,6 +581,10 @@ impl Editor {
 							.auto_shrink([false, false])
 							.show(ui, |ui| {
 								ui.set_width(ui.available_width());
+								if self.page == Page::AuditLog {
+									self.audit_log.show(ui, state, guild, avatars, commands);
+									return;
+								}
 								if self.page == Page::Integrations {
 									self.integrations.show(ui, state, guild, avatars, commands);
 									return;
@@ -627,6 +662,7 @@ impl Editor {
 				self.roles = crate::server_roles::RolesUi::default();
 				self.invites = crate::server_invites::InvitesUi::default();
 				self.integrations = crate::server_integrations::IntegrationsUi::default();
+				self.audit_log = crate::server_audit_log::AuditLogUi::default();
 				state.close_server_settings();
 				state.close_server_admin();
 			}
