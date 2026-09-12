@@ -1745,40 +1745,52 @@ impl Desktop {
 							.content
 							.to_lowercase()
 							.contains(&content.to_lowercase())
-							&& filters.iter().all(|(key, value)| match *key {
-								"author_id" => message.author.id.to_string() == *value,
-								"mentions" => message
-									.mentions
-									.iter()
-									.any(|user| user.id.to_string() == *value),
-								"min_id" => {
-									value.parse::<u64>().is_ok_and(|min| message.id.0 > min)
-								}
-								"max_id" => {
-									value.parse::<u64>().is_ok_and(|max| message.id.0 < max)
-								}
-								"author_type" => match value.as_str() {
-									"webhook" => message.author.webhook,
-									"user" => !message.author.webhook,
-									_ => false, // The offline fixture contains no bot authors.
-								},
-								"has" => match value.as_str() {
-									"link" => {
-										message.content.contains("https://")
-											|| message.content.contains("http://")
-									}
-									"embed" => !message.embeds.is_empty(),
-									"file" => !message.attachments.is_empty(),
-									"image" => message.attachments.iter().any(|a| {
-										a.content_type
-											.as_deref()
-											.is_some_and(|mime| mime.starts_with("image/"))
-									}),
-									"video" => message.attachments.iter().any(|a| a.is_video()),
-									"sound" => message.attachments.iter().any(|a| a.is_audio()),
-									_ => false,
-								},
-								_ => false,
+							&& filters.iter().all(|(group, _)| {
+								filters.iter().filter(|(key, _)| key == group).any(
+									|(key, value)| match *key {
+										"author_id" => message.author.id.to_string() == *value,
+										"mentions" => message
+											.mentions
+											.iter()
+											.any(|user| user.id.to_string() == *value),
+										"min_id" => {
+											value.parse::<u64>().is_ok_and(|min| message.id.0 > min)
+										}
+										"max_id" => {
+											value.parse::<u64>().is_ok_and(|max| message.id.0 < max)
+										}
+										"pinned" => {
+											self.state.is_pinned(channel, message.id)
+												== (value == "true")
+										}
+										"author_type" => match value.as_str() {
+											"webhook" => message.author.webhook,
+											"user" => !message.author.webhook,
+											_ => false, // The offline fixture contains no bot authors.
+										},
+										"has" => match value.as_str() {
+											"link" => {
+												message.content.contains("https://")
+													|| message.content.contains("http://")
+											}
+											"embed" => !message.embeds.is_empty(),
+											"file" => !message.attachments.is_empty(),
+											"image" => message.attachments.iter().any(|a| {
+												a.content_type
+													.as_deref()
+													.is_some_and(|mime| mime.starts_with("image/"))
+											}),
+											"video" => {
+												message.attachments.iter().any(|a| a.is_video())
+											}
+											"sound" => {
+												message.attachments.iter().any(|a| a.is_audio())
+											}
+											_ => false,
+										},
+										_ => false,
+									},
+								)
 							}) {
 							total += 1;
 							if hits.len() < model::SEARCH_PAGE_SIZE {

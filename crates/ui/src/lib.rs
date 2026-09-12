@@ -2545,6 +2545,8 @@ impl MessagingUi {
 		{
 			commands.push(command);
 		}
+		self.search
+			.overlays(&ctx, state, &mut self.avatars, &mut commands);
 		if let Some(anchor) = self.pins_anchor {
 			let dm = state
 				.channels
