@@ -3503,13 +3503,14 @@ Baseline `ec0ce9553dac516fdccd678958be94d1cf1996cf`; Windows 11 Home,
 Ryzen 7 7800X3D, 33,410,678,784 bytes RAM, Rust 1.98.1. Separate clean
 `cargo xtask package` snapshots use standard release builds including voice,
 without default features. Package snapshots include the behavior documentation
-but precede this measurement entry. ZIPs use PowerShell Compress-Archive.
+but precede these refreshed measurement values. After-build includes main's
+cursor/Homebrew changes through `02a859f`; the delta includes those changes. ZIPs use PowerShell Compress-Archive.
 
 | Metric / method | Baseline | After | Delta |
 | --- | ---: | ---: | ---: |
-| Executable bytes | 63,097,856 | 63,088,128 | -9,728 (-0.0154%) |
-| Installed package bytes | 69,337,029 | 69,328,524 | -8,505 (-0.0123%) |
-| Compress-Archive ZIP bytes | 41,683,608 | 41,686,605 | +2,997 (+0.0072%) |
+| Executable bytes | 63,097,856 | 63,091,200 | -6,656 (-0.0105%) |
+| Installed package bytes | 69,337,029 | 69,334,506 | -2,523 (-0.0036%) |
+| Compress-Archive ZIP bytes | 41,683,608 | 41,688,126 | +4,518 (+0.0108%) |
 
 These small size changes are not a performance improvement claim. Shared
 DM/guild tiles replace the separate DM avatar renderer. Local screen capture now
