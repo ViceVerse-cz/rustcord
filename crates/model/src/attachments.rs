@@ -70,6 +70,7 @@ impl Attachment {
 			+ self.waveform.capacity()
 			+ self.media.url.as_ref().map_or(0, String::capacity)
 			+ self.media.proxy_url.as_ref().map_or(0, String::capacity)
+			+ self.media.placeholder.capacity()
 	}
 	pub fn is_image(&self) -> bool {
 		if self.is_audio() || self.is_video() {
