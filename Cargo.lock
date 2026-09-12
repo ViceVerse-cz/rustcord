@@ -1483,6 +1483,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.4.3",
  "image",
+ "libc",
  "model",
  "nnnoiseless",
  "objc2 0.6.4",
@@ -1504,7 +1505,9 @@ dependencies = [
  "tokio-tungstenite",
  "tracing",
  "url",
+ "windows 0.61.3",
  "windows-capture",
+ "windows-core 0.61.2",
  "zeroize",
 ]
 

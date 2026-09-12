@@ -973,8 +973,12 @@ impl MessagingUi {
 						"Stop sharing your camera"
 					} else if state.demo {
 						"Camera is off in the offline preview"
-					} else if !cfg!(target_os = "macos") {
-						"Camera capture is currently available on macOS only"
+					} else if !cfg!(any(
+						target_os = "macos",
+						target_os = "windows",
+						target_os = "linux"
+					)) {
+						"Camera capture is unavailable on this platform"
 					} else if !self.voice_camera_available {
 						"Camera requires H264 support from the voice server"
 					} else if !state.can_camera(channel) {

@@ -337,6 +337,8 @@ Focused-window push-to-talk is the initial guarantee. Global push-to-talk and Li
 
 **Owner scope revision (September 11, 2026): add outgoing screen sharing on macOS and Windows.** Clicking Share opens settings for a screen/window, 720p or 1080p, 15/30/60 fps and cursor visibility before explicit capture. All quality choices are exposed without a local Nitro gate; service acceptance is not an entitlement bypass or a verified compatibility claim. Use native OS capture and Discord-compatible stream transport/DAVE encryption. Camera video and receiving streams remain later capabilities. Keep video dependencies limited to implemented capabilities and supported platforms. No recording or audio/video file cache by default.
 
+**Owner scope revision (September 12, 2026): outgoing camera capture in connected DM and guild calls is in scope on Windows and Linux as well as the existing macOS implementation.** Reuse the existing bounded camera preview, H264 sender and DAVE transport. Capture remains explicitly user-started; receiving video, recording and live interoperability claims require separate work or validation.
+
 ## 12. Security, privacy, and source integrity
 
 The app has no project-controlled data collection, relay, analytics, telemetry, crash submission, update tracking, or remote configuration. Default networking should be limited to the authenticated Discord features the user invokes and necessary validated service media endpoints. Dependency downloads during development are separate from runtime behavior.

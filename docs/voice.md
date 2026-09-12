@@ -264,18 +264,23 @@ Capture uses macOS 14+ ScreenCaptureKit (screen-recording permission in System S
 
 The native demo (`cargo run --locked -p serein -- --demo --demo-voice`) exposes a synthetic picker without OS source discovery or capture. Live screen sharing requires the same owner-controlled developer-session gate as voice testing. See [compatibility and limits](discord-compatibility.md#outgoing-screen-sharing--september-11-2026).
 
-## Camera in calls (macOS local implementation)
+## Camera in calls (macOS, Windows and Linux)
 
-The voice build can send the default macOS camera after an explicit camera-on click in a
+The voice build can send a native camera after an explicit camera-on click in a
 connected DM or guild call. The camera button remains available in narrow call controls.
 A local preview replaces your avatar; permission/device errors appear in the call stage.
 Guild camera use requires STREAM permission. Camera-off, permission loss, call failure,
 leave and logout stop capture; a call security pause stops the camera and requires another
 click after reconnection. Demo mode never requests camera or microphone access.
 
-AVFoundation captures 640×480 frames, capped at 15 frames/second; OpenH264 encodes on a
-worker with a 600 kbit/s target (not a measured bandwidth guarantee). One pending native
-frame (1,228,800 bytes), one RGB preview, one encoded frame (128 KiB), and up to 256 RTP
+AVFoundation on macOS, Media Foundation on Windows and V4L2 on Linux capture
+640×480 frames, capped at 15 encoded frames/second; OpenH264 encodes on a
+worker with a 600 kbit/s target (not a measured bandwidth guarantee). macOS retains one pending
+BGRA frame (1,228,800 bytes). Windows validates each native buffer against a 3,194,880-byte
+ceiling (including row padding), requests one source buffer and queues at most one
+921,600-byte RGB frame. Linux requests two mapped buffers, accepts at most four of
+4 MiB each, and decodes YUYV or MJPEG on the worker with a 4 MiB JPEG allocation limit.
+One RGB preview, one encoded frame (128 KiB), and up to 256 RTP
 packets from one bounded frame are retained. Frames are independently decodable to tolerate
 drops. DAVE H264 frame encryption precedes RTP fragmentation and the existing authenticated
 UDP transport. No camera recording or cache is created; the codec is included on supported platforms.
@@ -284,6 +289,26 @@ Video SSRC assignment, H264 selection and opcode 12 announcements follow the
 [public interoperability implementation](https://github.com/dank074/Discord-video-stream/blob/master/src/client/voice/BaseMediaConnection.ts)
 (checked September 11, 2026); these normal-user video extensions remain unofficial and
 live-unverified. This initial sender has no remote-video decoding, camera picker, adaptive
-bitrate or RTP retransmission. Windows/Linux capture is explicitly unavailable. Physical
+bitrate or RTP retransmission. Physical
 permission/device behavior, delivery to the official client and network-loss performance
 require the owner-controlled live gate; an offline launch does not establish those results.
+
+Windows uses the first enumerated camera and requires a native 640×480 mode that
+Media Foundation can convert to RGB32. Allow desktop camera access in Windows
+Settings > Privacy & security > Camera; Windows N may require the Media Feature
+Pack. Linux tries `/dev/video0` through `/dev/video63` and uses the first accessible
+progressive, single-plane 640×480 YUYV/MJPEG streaming camera. The session or sandbox
+must already permit access to its device node; this implementation does not request
+camera access through a desktop portal or change device permissions. These fixed-mode
+adapters can reject cameras that only offer other resolutions or formats.
+
+Frame waits time out after five seconds without a usable frame; stop is checked at
+most every 100 ms while waiting. Native driver initialization/teardown has no hard
+deadline. The process-wide worker slot stays occupied until cleanup finishes so rapid
+toggles cannot accumulate blocked capture workers. Native driver/codec allocations
+are separate from application queue limits and are not a measured whole-process bound.
+
+Windows uses the documented [asynchronous source reader](https://learn.microsoft.com/en-us/windows/win32/medfound/using-the-source-reader-in-asynchronous-mode)
+and [bounded 2D buffer locking](https://learn.microsoft.com/en-us/windows/win32/api/mfobjects/nf-mfobjects-imf2dbuffer2-lock2dsize).
+Linux follows the kernel's [V4L2 capture interface](https://www.kernel.org/doc/html/latest/userspace-api/media/v4l/capture.c.html).
+Both feed the existing camera transport; no Discord wire behavior changed in this extension.

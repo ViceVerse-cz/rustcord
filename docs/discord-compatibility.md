@@ -61,6 +61,19 @@ was read or changed. Avatar/banner uploads, username, guild profiles and securit
 settings remain outside this editor. Sources, limits and reproduction are in
 [profiles.md](profiles.md#editing-your-profile--september-11-2026).
 
+## Outgoing camera capture — September 12, 2026
+
+The existing camera sender now accepts native capture on Windows (Media Foundation)
+and Linux (V4L2), alongside macOS (AVFoundation). Both new adapters feed the existing
+H264 negotiation, opcode 12 video announcement, DAVE encryption and bounded RTP
+sender. These normal-user video extensions remain unofficial and live-unverified.
+The button requires a connected call, channel video permission and negotiated H264;
+capture requires an explicit click. No camera opens in the synthetic demo.
+Native limits, platform requirements and the owner-operated validation gate are in
+[Camera in calls](voice.md#camera-in-calls-macos-windows-and-linux). Receiving video
+and recording remain unsupported. This section supersedes older camera-exclusion
+statements in the historical voice/screen-sharing notes below.
+
 ## Outgoing screen sharing — September 11, 2026
 
 The standard build adds macOS 14+ ScreenCaptureKit and Windows Graphics Capture senders for an existing connected DM/server voice call. Share opens a native egui source/settings dialog first. It exposes 720p/1080p and 15/30/60 fps to all accounts, plus cursor visibility; only the explicit Share screen action creates a stream. No subscription fields are changed. Camera video, receiving streams and system/desktop audio remain unsupported.
