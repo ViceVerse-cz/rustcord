@@ -14,6 +14,8 @@ mod categories;
 mod composer_text;
 pub mod design;
 mod embeds;
+mod extensions_ui;
+pub use extensions_ui::{ExtensionContext, ExtensionEntry, ExtensionRequest, ExtensionUi};
 pub mod emoji;
 mod emoji_picker;
 pub mod fonts;
@@ -80,6 +82,7 @@ enum MemberRow {
 
 #[derive(Default)]
 pub struct MessagingUi {
+	pub extensions: ExtensionUi,
 	friends: friends::Friends,
 	account_menu: account_menu::AccountMenu,
 	pub own_presence: model::OwnPresence,
@@ -1876,6 +1879,7 @@ impl MessagingUi {
                         })
                         .inner
                         .on_hover_text("Choose, drop, or paste files (Ctrl/Cmd/Option+V). Up to 10 files and 20 MB total. Send starts the upload.");
+                    if !editing_here { self.extensions.composer_menu(ui, state); }
                     if attach.clicked() {
                         self.attach_requested = true;
                     }
@@ -2196,6 +2200,12 @@ impl MessagingUi {
 		self.timeline.video.seen = false;
 		let mut commands = Vec::new();
 		let ctx = ui.ctx().clone();
+		self.extensions.reset_theme_shortcut(&ctx);
+		if self.extensions.has_result() {
+			self.settings.open = false;
+		}
+		self.extensions
+			.show_result(&ctx, state, &mut self.draft_changes, self.editing.is_some());
 		let settings_open = self.settings.open;
 		if settings_open {
 			self.show_settings(&ctx, state, &mut commands);
@@ -2484,6 +2494,7 @@ impl MessagingUi {
 					})
 					.show(ui, |ui| {
 						self.timeline.hide_media_links = self.reading_preferences.hide_media_links;
+						self.timeline.extension_actions = self.extensions.message_actions();
 						self.timeline.show(
 							ui,
 							state,
@@ -2492,6 +2503,10 @@ impl MessagingUi {
 							(&mut self.avatars, &mut self.profile),
 							self.pending_upload.as_ref(),
 						);
+						if let Some((action, text)) = self.timeline.extension_request.take() {
+							self.extensions
+								.invoke_message(action, text, state, ui.ctx());
+						}
 						if let Some((message, anchor, trigger)) =
 							self.timeline.reaction_picker.take()
 						{

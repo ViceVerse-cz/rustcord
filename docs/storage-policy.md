@@ -1,5 +1,15 @@
 # Local storage policy and audit
 
+Community extensions (September 12): packages and grants are stored under the
+application data directory's `extensions` subtree. Plugin data/grants are
+account-isolated; declarative themes are device preferences. Installation,
+validation, invocation storage and removal run on a bounded background worker.
+Disabling removes Serein's package and extension data, and failed cleanup is
+reported and retried. Logout removes the account's plugin data. Imported
+original files and source repositories are never deleted. No credentials belong
+in plugin storage; it is not encrypted. Only bounded metadata may remain after
+successful disable. See `extensions.md` for the creator and permission model.
+
 Schema 13 adds a constrained webhook boolean to cached message authors. It comes
 from the service message webhook_id and follows the existing bounded author data
 through message, reply, and profile views. Legacy rows default to unknown (false)

@@ -1,0 +1,506 @@
+//! Maps the bounded extension worker to native UI requests; no plugin runs here.
+use crate::extensions::{Event, ExtensionHost, InstallSource, InstalledExtension, Job};
+use client_core::State;
+use eframe::egui;
+use extensions::{CatalogEntry, ExtensionKind, Invocation};
+use std::{
+	collections::{BTreeMap, BTreeSet},
+	path::PathBuf,
+	sync::{Arc, mpsc},
+};
+use ui::{ExtensionContext, ExtensionEntry, ExtensionRequest};
+
+struct Pending {
+	generation: u64,
+	cleanup: bool,
+	reconcile: bool,
+	invocation: Option<(String, Invocation, ExtensionContext)>,
+}
+#[derive(Default)]
+pub struct Bridge {
+	host: Option<ExtensionHost>,
+	scope: Option<(u64, Option<String>)>,
+	pending: BTreeMap<u64, Pending>,
+	installed: Vec<InstalledExtension>,
+	disabled: BTreeSet<String>,
+	catalog: BTreeMap<String, CatalogEntry>,
+	imported: Option<InstallSource>,
+	picker: Option<mpsc::Receiver<Option<PathBuf>>>,
+}
+impl Bridge {
+	pub fn cleanup_pending(&self) -> bool {
+		self.pending.values().any(|pending| pending.cleanup)
+	}
+	pub fn logout(&mut self, ctx: &egui::Context) -> Result<(), String> {
+		self.picker = None;
+		self.pending.retain(|_, pending| pending.cleanup);
+		if let Some(host) = &mut self.host {
+			host.cancel();
+			if let Some((generation, Some(account))) = &self.scope {
+				let token = host.submit(
+					Job::Logout {
+						account: account.clone(),
+					},
+					ctx,
+				)?;
+				self.pending.insert(
+					token,
+					Pending {
+						generation: *generation,
+						cleanup: true,
+						reconcile: false,
+						invocation: None,
+					},
+				);
+			}
+		}
+		Ok(())
+	}
+	pub fn tick(
+		&mut self,
+		state: &State,
+		messaging: &mut ui::MessagingUi,
+		ctx: &egui::Context,
+		runtime: &tokio::runtime::Runtime,
+		window: &Arc<winit::window::Window>,
+		demo: bool,
+	) {
+		let account = state
+			.user
+			.as_ref()
+			.filter(|_| state.demo || state.auth == client_core::auth::AuthState::Authenticated)
+			.map(|u| u.id.0.to_string());
+		if self.host.is_none() {
+			let root = if demo {
+				Some(std::env::temp_dir().join("serein-extension-demo"))
+			} else {
+				dirs::data_local_dir().map(|root| root.join("serein").join("extensions"))
+			};
+			let Some(root) = root else {
+				messaging.extensions.status = "Application data directory is unavailable.".into();
+				return;
+			};
+			self.host = Some(ExtensionHost::new(root));
+		}
+		let scope = (state.generation, account.clone());
+		if self.scope.as_ref() != Some(&scope) {
+			self.host.as_mut().unwrap().cancel();
+			self.pending.retain(|_, pending| pending.cleanup);
+			self.picker = None;
+			self.imported = None;
+			self.installed.clear();
+			self.disabled.clear();
+			messaging.extensions.reset_runtime();
+			self.scope = Some(scope);
+			self.submit(
+				Job::Load {
+					account: account.clone(),
+				},
+				None,
+				state.generation,
+				ctx,
+				messaging,
+			);
+			self.entries(messaging);
+		}
+		if self.pending.values().any(|pending| {
+			pending
+				.invocation
+				.as_ref()
+				.is_some_and(|(_, _, context)| !context.is_current(state))
+		}) {
+			self.host.as_mut().unwrap().cancel();
+			self.pending.retain(|_, pending| pending.cleanup);
+			self.submit(
+				Job::Load {
+					account: account.clone(),
+				},
+				None,
+				state.generation,
+				ctx,
+				messaging,
+			);
+			messaging.extensions.status =
+				"Result discarded because the conversation or draft changed.".into();
+		}
+		while let Some((token, outcome)) = self.host.as_mut().unwrap().poll() {
+			let pending = self.pending.remove(&token);
+			if pending
+				.as_ref()
+				.is_none_or(|p| p.generation != state.generation)
+			{
+				if let Err(error) = outcome {
+					messaging.extensions.status = error;
+				}
+				continue;
+			}
+			match outcome {
+				Err(error) => {
+					messaging.extensions.report_error(error);
+					if pending.is_some_and(|p| p.reconcile) {
+						self.submit(
+							Job::Load {
+								account: account.clone(),
+							},
+							None,
+							state.generation,
+							ctx,
+							messaging,
+						);
+					}
+				}
+				Ok(Event::Loaded(installed)) => {
+					self.disabled = installed
+						.iter()
+						.filter(|e| e.error.is_some())
+						.map(|e| e.manifest.id.clone())
+						.collect();
+					if let Some(error) = installed.iter().find_map(|e| e.error.as_ref()) {
+						messaging.extensions.status = error.clone();
+					}
+					self.installed = installed;
+					self.apply_theme(ctx);
+					self.entries(messaging);
+				}
+				Ok(Event::Catalog(catalog)) => {
+					self.catalog = catalog
+						.entries
+						.into_iter()
+						.map(|entry| (entry.manifest.id.clone(), entry))
+						.collect();
+					self.entries(messaging);
+					messaging.extensions.status =
+						"Catalog refreshed. Updates are installed only when you choose them."
+							.into();
+				}
+				Ok(Event::Imported {
+					manifest,
+					source,
+					download_bytes,
+				}) => {
+					let sha256 = source_hash(&source).to_owned();
+					self.imported = Some(source);
+					messaging.extensions.offer_import(ExtensionEntry {
+						manifest,
+						sha256,
+						reviewed: false,
+						download_bytes,
+						enabled: false,
+						update_available: false,
+						update_manifest: None,
+						cleanup_pending: false,
+					});
+					messaging.extensions.status =
+						"Package inspected. Review its source and capabilities before enabling."
+							.into();
+				}
+				Ok(Event::Enabled(installed)) => {
+					messaging.extensions.remove_runtime(&installed.manifest.id);
+					let theme = installed.manifest.kind == ExtensionKind::Theme;
+					self.installed.retain(|old| {
+						old.manifest.id != installed.manifest.id
+							&& !(theme && old.manifest.kind == ExtensionKind::Theme)
+					});
+					self.disabled.remove(&installed.manifest.id);
+					self.installed.push(installed);
+					self.imported = None;
+					self.apply_theme(ctx);
+					self.entries(messaging);
+					messaging.extensions.status = "Extension enabled.".into();
+				}
+				Ok(Event::Disabled(id)) => {
+					self.installed.retain(|entry| entry.manifest.id != id);
+					self.disabled.remove(&id);
+					messaging.extensions.remove_runtime(&id);
+					self.apply_theme(ctx);
+					self.entries(messaging);
+					messaging.extensions.status =
+						"Disabled. Downloaded code and extension data were removed.".into();
+				}
+				Ok(Event::Invoked { id, output }) => {
+					if let Some((requested, invocation, context)) =
+						pending.and_then(|p| p.invocation)
+						&& requested == id && !self.disabled.contains(&id)
+						&& self.installed.iter().any(|e| e.manifest.id == id)
+					{
+						messaging
+							.extensions
+							.present_output(id, invocation, context, output, state);
+					}
+				}
+				Ok(Event::LoggedOut) => {}
+			}
+		}
+		if let Some(receiver) = &self.picker {
+			match receiver.try_recv() {
+				Ok(path) => {
+					self.picker = None;
+					if let Some(path) = path {
+						self.submit(
+							Job::InspectImport { path },
+							None,
+							state.generation,
+							ctx,
+							messaging,
+						);
+					}
+				}
+				Err(mpsc::TryRecvError::Disconnected) => {
+					self.picker = None;
+					messaging.extensions.status = "Extension file selection ended.".into();
+				}
+				Err(mpsc::TryRecvError::Empty) => {}
+			}
+		}
+		for request in std::mem::take(&mut messaging.extensions.requests) {
+			match request {
+				ExtensionRequest::RefreshCatalog => {
+					if demo {
+						messaging.extensions.status = "Offline demo: import a local synthetic package. Catalog networking is disabled.".into();
+					} else {
+						self.submit(Job::RefreshCatalog, None, state.generation, ctx, messaging);
+					}
+				}
+				ExtensionRequest::Import if self.picker.is_none() => {
+					let (send, receive) = mpsc::sync_channel(1);
+					let future = platform::save::extension_source(window.clone());
+					let ctx = ctx.clone();
+					runtime.spawn(async move {
+						let _ = send.send(future.await);
+						ctx.request_repaint();
+					});
+					self.picker = Some(receive);
+				}
+				ExtensionRequest::Import => {}
+				ExtensionRequest::Enable {
+					id,
+					grants,
+					sha256,
+					reviewed,
+				} => {
+					let source = self.source_for(&id, &sha256, reviewed);
+					if let Some(source) = source {
+						if demo && matches!(source, InstallSource::Catalog(_)) {
+							messaging.extensions.status =
+								"Offline demo: import the local package instead.".into();
+							continue;
+						}
+						self.submit(
+							Job::Enable {
+								source,
+								grants,
+								account: account.clone(),
+							},
+							None,
+							state.generation,
+							ctx,
+							messaging,
+						);
+					} else {
+						messaging.extensions.status =
+							"Refresh the catalog or import this package again.".into();
+					}
+				}
+				ExtensionRequest::Disable { id } => {
+					if let Some(entry) = self.installed.iter().find(|e| e.manifest.id == id) {
+						let kind = entry.manifest.kind;
+						self.pending.retain(|_, pending| pending.cleanup);
+						messaging.extensions.remove_runtime(&id);
+						self.disabled.insert(id.clone());
+						self.apply_theme(ctx);
+						self.entries(messaging);
+						self.submit(
+							Job::Disable {
+								id,
+								kind,
+								account: account.clone(),
+							},
+							None,
+							state.generation,
+							ctx,
+							messaging,
+						);
+					}
+				}
+				ExtensionRequest::Invoke {
+					id,
+					invocation,
+					context,
+				} => {
+					if !context.is_current(state)
+						|| self.disabled.contains(&id)
+						|| !self.installed.iter().any(|e| e.manifest.id == id)
+					{
+						continue;
+					}
+					if let Some(account) = &account {
+						let pending = Some((id.clone(), invocation.clone(), context));
+						self.submit(
+							Job::Invoke {
+								id,
+								account: account.clone(),
+								invocation,
+							},
+							pending,
+							state.generation,
+							ctx,
+							messaging,
+						);
+					}
+				}
+			}
+		}
+		messaging.extensions.busy = self.picker.is_some() || self.host.as_ref().unwrap().busy();
+		if !messaging.extensions.busy {
+			self.pending.retain(|_, pending| pending.cleanup);
+		}
+	}
+	fn submit(
+		&mut self,
+		job: Job,
+		invocation: Option<(String, Invocation, ExtensionContext)>,
+		generation: u64,
+		ctx: &egui::Context,
+		messaging: &mut ui::MessagingUi,
+	) {
+		let cleanup = matches!(job, Job::Disable { .. } | Job::Logout { .. });
+		let reconcile = cleanup || matches!(job, Job::Enable { .. });
+		match self.host.as_mut().unwrap().submit(job, ctx) {
+			Ok(token) => {
+				self.pending.insert(
+					token,
+					Pending {
+						cleanup,
+						reconcile,
+						generation,
+						invocation,
+					},
+				);
+			}
+			Err(error) => messaging.extensions.report_error(error),
+		}
+	}
+	fn source_for(&self, id: &str, sha256: &str, reviewed: bool) -> Option<InstallSource> {
+		self.imported
+			.as_ref()
+			.filter(|source| !reviewed && source_id(source) == id && source_hash(source) == sha256)
+			.cloned()
+			.or_else(|| {
+				self.catalog
+					.get(id)
+					.filter(|entry| reviewed && entry.sha256 == sha256)
+					.cloned()
+					.map(InstallSource::Catalog)
+			})
+	}
+
+	fn entries(&self, messaging: &mut ui::MessagingUi) {
+		let mut entries: BTreeMap<String, ExtensionEntry> = self
+			.catalog
+			.iter()
+			.map(|(id, entry)| {
+				(
+					id.clone(),
+					ExtensionEntry {
+						manifest: entry.manifest.clone(),
+						sha256: entry.sha256.clone(),
+						reviewed: true,
+						download_bytes: entry.download_bytes,
+						enabled: false,
+						update_available: false,
+						update_manifest: None,
+						cleanup_pending: false,
+					},
+				)
+			})
+			.collect();
+		for installed in &self.installed {
+			let catalog = self.catalog.get(&installed.manifest.id);
+			let update = catalog.filter(|entry| {
+				entry.manifest.version != installed.manifest.version
+					|| !entry.sha256.eq_ignore_ascii_case(&installed.sha256)
+			});
+			entries.insert(
+				installed.manifest.id.clone(),
+				ExtensionEntry {
+					manifest: installed.manifest.clone(),
+					sha256: catalog
+						.map_or_else(|| installed.sha256.clone(), |entry| entry.sha256.clone()),
+					reviewed: installed.reviewed,
+					download_bytes: catalog
+						.map_or(installed.download_bytes, |entry| entry.download_bytes),
+					enabled: !self.disabled.contains(&installed.manifest.id),
+					cleanup_pending: self.disabled.contains(&installed.manifest.id),
+					update_available: update.is_some(),
+					update_manifest: update.map(|entry| entry.manifest.clone()),
+				},
+			);
+		}
+		messaging
+			.extensions
+			.set_entries(entries.into_values().collect());
+	}
+	fn apply_theme(&self, ctx: &egui::Context) {
+		ui::design::set_extension_theme(
+			self.installed
+				.iter()
+				.filter(|entry| !self.disabled.contains(&entry.manifest.id))
+				.find_map(|entry| entry.theme.as_ref()),
+		);
+		ui::design::apply(ctx);
+	}
+}
+fn source_id(source: &InstallSource) -> &str {
+	match source {
+		InstallSource::Catalog(entry) => &entry.manifest.id,
+		InstallSource::Local { manifest, .. } => &manifest.id,
+	}
+}
+
+fn source_hash(source: &InstallSource) -> &str {
+	match source {
+		InstallSource::Catalog(entry) => &entry.sha256,
+		InstallSource::Local { sha256, .. } => sha256,
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	#[test]
+	fn cancelled_import_cannot_replace_the_catalog_bytes_the_user_approved() {
+		let package =
+			extensions::parse_package(include_bytes!("../../../extensions/ocean.serein-extension"))
+				.unwrap();
+		let manifest = package.manifest;
+		let id = manifest.id.clone();
+		let imported = InstallSource::Local {
+			path: PathBuf::from("original.serein-extension"),
+			sha256: "a".repeat(64),
+			manifest: manifest.clone(),
+		};
+		let catalog = CatalogEntry {
+			manifest,
+			sha256: "b".repeat(64),
+			source_commit: "c".repeat(40),
+			download_bytes: 100,
+			release_url: "https://example.org/release.json".into(),
+		};
+		let bridge = Bridge {
+			imported: Some(imported),
+			catalog: BTreeMap::from([(id.clone(), catalog)]),
+			..Default::default()
+		};
+		assert!(matches!(
+			bridge.source_for(&id, &"b".repeat(64), true),
+			Some(InstallSource::Catalog(_))
+		));
+		assert!(matches!(
+			bridge.source_for(&id, &"a".repeat(64), false),
+			Some(InstallSource::Local { .. })
+		));
+		assert!(bridge.source_for(&id, &"a".repeat(64), true).is_none());
+		assert!(bridge.source_for(&id, &"b".repeat(64), false).is_none());
+		assert!(bridge.source_for(&id, &"d".repeat(64), true).is_none());
+	}
+}

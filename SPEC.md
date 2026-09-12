@@ -153,7 +153,7 @@ There is no `apps/server`, server deployment, database container, object store s
 
 `model` must not depend on GUI, networking, audio, or filesystem crates. `discord-protocol` owns service wire shapes; do not make raw JSON objects the application state. `client-core` owns application behavior and ports. Adapters report typed outcomes. The UI receives bounded state/views and emits typed commands; it does not send HTTP requests, own tokens, implement gateway reconnects, or decide server authorization.
 
-`session-cache` owns the RAM working set; `local-store` owns explicit local persistence with bounded account-isolated data. Keep egui texture handles in the rendering side rather than generic domain entities. Voice transport and native media dependencies ship in every desktop build, without a voice feature flag. `apps/desktop` composes the parts and remains thin. Do not introduce a plugin system or generic enterprise framework.
+`session-cache` owns the RAM working set; `local-store` owns explicit local persistence with bounded account-isolated data. Keep egui texture handles in the rendering side rather than generic domain entities. Voice transport and native media dependencies ship in every desktop build, without a voice feature flag. `apps/desktop` composes the parts and remains thin. Owner revision (September 12, 2026): allow an opt-in community extension host for bounded local tools and native UI panels, with sandboxed WebAssembly and declarative themes. Do not introduce a generic enterprise framework.
 
 ## 5. Technology policy
 
@@ -264,7 +264,7 @@ CPU/GPU resource limits are separate. Release texture handles and image-loader c
 
 Use a compact familiar layout: guild rail, channel/DM sidebar, channel header, central timeline, multiline composer, and optional member/details pane. Include a clear connection state and a compact voice control area only while relevant. Keep navigation resizable, keyboard-operable, and responsive at different display scales.
 
-Use consistent typography, spacing, focus indication, contrast, dark/light themes, and sensible density. Persist useful settings locally and explain the storage and reset controls. Do not introduce remote theme downloads, ads, quests, store pages, or decorative activity that increases idle usage.
+Use consistent typography, spacing, focus indication, contrast, dark/light themes, and sensible density. Persist useful settings locally and explain the storage and reset controls. Owner revision (September 12, 2026): permit a free, Git-backed Extensions catalog and explicit plugin/theme downloads. No ads, quests, paid marketplace, background updates, or decorative activity that increases idle usage. Creators own their source repositories; catalog entries pin reviewed versions and hashes. Disabling deletes downloaded extension code and data and releases extension-owned runtime state; a bounded shared catalog/preference record may remain.
 
 Keep unavailable channel kinds and unsupported message types recognizable with an honest placeholder and an explicit external-open action where safe. Never pretend unknown content does not exist merely because the renderer lacks a widget. Do not ship a button that appears functional but silently does nothing.
 
@@ -341,7 +341,7 @@ Focused-window push-to-talk is the initial guarantee. Global push-to-talk and Li
 
 ## 12. Security, privacy, and source integrity
 
-The app has no project-controlled data collection, relay, analytics, telemetry, crash submission, update tracking, or remote configuration. Default networking should be limited to the authenticated Discord features the user invokes and necessary validated service media endpoints. Dependency downloads during development are separate from runtime behavior.
+The app has no project-controlled data collection, relay, analytics, telemetry, crash submission, update tracking, or remote configuration. Default networking should be limited to the authenticated Discord features the user invokes and necessary validated service media endpoints. Owner revision (September 12, 2026): credential-free catalog and pinned extension downloads are permitted on explicit Extensions browsing, refresh, enable and update actions. Extensions themselves have no networking, credentials, filesystem, shell, microphone or direct Discord API access. Dependency downloads during development are separate from runtime behavior.
 
 Make credential handling reviewable in a small part of the codebase. Deny accidental serialization of secrets. Redact request headers, URL query parameters, session identifiers, message bodies, attachments, and user-specific payloads from diagnostics. Do not derive `Debug` over whole network state containing credentials. Write tests that use synthetic secret markers to detect accidental leakage.
 

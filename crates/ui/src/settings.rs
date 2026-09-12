@@ -23,9 +23,10 @@ enum Page {
 	Activity,
 	Voice,
 	Storage,
+	Extensions,
 }
 impl Page {
-	const ALL: [Self; 8] = [
+	const ALL: [Self; 9] = [
 		Self::Account,
 		Self::Profile,
 		Self::General,
@@ -34,15 +35,17 @@ impl Page {
 		Self::Activity,
 		Self::Voice,
 		Self::Storage,
+		Self::Extensions,
 	];
 	const USER: [Self; 2] = [Self::Account, Self::Profile];
-	const APP: [Self; 6] = [
+	const APP: [Self; 7] = [
 		Self::General,
 		Self::Appearance,
 		Self::Notifications,
 		Self::Activity,
 		Self::Voice,
 		Self::Storage,
+		Self::Extensions,
 	];
 	fn label(self) -> &'static str {
 		match self {
@@ -54,6 +57,7 @@ impl Page {
 			Self::Activity => "Game Activity",
 			Self::Voice => "Voice & Audio",
 			Self::Storage => "Data & Privacy",
+			Self::Extensions => "Extensions",
 		}
 	}
 	fn description(self) -> &'static str {
@@ -66,6 +70,7 @@ impl Page {
 			Self::Activity => "Show others what you are playing.",
 			Self::Voice => "Microphone, speakers and voice processing.",
 			Self::Storage => "What Serein keeps on this device.",
+			Self::Extensions => "Community plugins and themes, made for your native client.",
 		}
 	}
 	fn matches(self, query: &str) -> bool {
@@ -84,6 +89,9 @@ impl Page {
 				"voice audio microphone speakers devices volume gain noise suppression push to talk"
 			}
 			Self::Storage => "data privacy local storage clear cache drafts credentials",
+			Self::Extensions => {
+				"extensions plugins themes shop store catalog import community tools"
+			}
 		};
 		keywords.contains(query)
 	}
@@ -239,6 +247,7 @@ impl MessagingUi {
 										false,
 									),
 									Page::Storage => self.storage_page(ui, state),
+									Page::Extensions => self.extensions.settings(ui, state),
 								}
 								ui.add_space(24.0);
 							});
@@ -574,6 +583,7 @@ impl MessagingUi {
 	}
 
 	fn appearance_settings(&mut self, ui: &mut egui::Ui) {
+		self.extensions.reset_theme_button(ui);
 		let colors = design::palette(ui);
 		ui.add_space(8.0);
 		ui.label(design::eyebrow(ui, "Theme", colors.muted));
@@ -607,7 +617,7 @@ impl MessagingUi {
 			ui.horizontal_wrapped(|ui| {
 				ui.spacing_mut().item_spacing = egui::vec2(12.0, 10.0);
 				for variant in design::Variant::ALL {
-					let swatch = design::colors(ui.visuals().dark_mode, variant);
+					let swatch = design::builtin_colors(ui.visuals().dark_mode, variant);
 					let selected = variant == current;
 					let (rect, response) =
 						ui.allocate_exact_size(egui::vec2(76.0, 70.0), egui::Sense::click());
