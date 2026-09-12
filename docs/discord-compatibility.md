@@ -804,3 +804,21 @@ newer Gateway state wins over late HTTP results. No automatic write retries occu
 Successful sends wait for Gateway identity data rather than inventing an outgoing row.
 Synthetic reducer, protocol and local HTTP tests cover this path; live requests,
 service challenges and recipient privacy restrictions remain unverified.
+
+### Additional system message display (September 12, 2026)
+
+The timeline now describes friend-request acceptance (67), Stage speaking requests (30),
+HD-stream upgrades (55), reported-message deletion (58), timeout/kick/ban results
+(59–61), resolved reports (62), and voice hangouts (65). These use the existing compact
+system rows: small event-specific icons, muted sentences, strong clickable names and
+inline timestamps. Copy/reply summaries share the same model descriptions. Unknown
+types and unsupported rich content retain their explicit external-open fallback.
+
+Type names and field meanings were checked against the
+[Discord Userdoccers protocol research](https://docs.discord.food/resources/message#message-types).
+The newer normal-user types are unofficial, not official compatibility guarantees.
+Only existing author/mention/content fields are used; missing moderation targets say
+"a member". No duration, moderator reason, subscription entitlement or call outcome
+is invented. This adds display support, not moderation, stream upgrades or automatic
+call joining. Synthetic model/parser/UI tests cover the descriptions and fallback;
+live rendering and native visual comparison remain unverified.

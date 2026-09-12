@@ -195,7 +195,7 @@ fn system_icon(kind: u8, colors: &crate::design::Palette) -> (crate::icons::Icon
 	match kind {
 		1 | 7 => (Icon::ArrowRight, colors.positive),
 		2 => (Icon::ArrowLeft, colors.danger),
-		3 => (Icon::Phone, colors.positive),
+		3 | 65 => (Icon::Phone, colors.positive),
 		4 => (Icon::Pencil, colors.muted),
 		5 => (Icon::Image, colors.muted),
 		6 => (Icon::Pin, colors.muted),
@@ -206,7 +206,11 @@ fn system_icon(kind: u8, colors: &crate::design::Palette) -> (crate::icons::Icon
 		18 | 21 => (Icon::Threads, colors.muted),
 		22 => (Icon::AddPeople, colors.muted),
 		24 | 36 | 38 => (Icon::ShieldWarning, colors.danger),
-		37 | 39 => (Icon::ShieldWarning, colors.positive),
+		37 | 39 | 62 => (Icon::ShieldWarning, colors.positive),
+		58 => (Icon::Trash, colors.muted),
+		59..=61 => (Icon::ShieldWarning, colors.danger),
+		55 => (Icon::ScreenShare, colors.accent),
+		67 => (Icon::Check, colors.positive),
 		25 | 26 | 32 => (Icon::Crown, colors.warning),
 		44 => (Icon::ShoppingCart, colors.accent),
 		46 => (Icon::ChartBar, colors.muted),
@@ -2403,7 +2407,20 @@ mod tests {
 				demo: true,
 				..Default::default()
 			};
-			for (id, kind, content) in [(1, 7, ""), (2, 4, "new channel name"), (3, 222, "")] {
+			for (id, kind, content) in [
+				(1, 7, ""),
+				(2, 4, "new channel name"),
+				(3, 222, ""),
+				(4, 67, ""),
+				(5, 59, ""),
+				(6, 65, ""),
+				(7, 30, ""),
+				(8, 55, ""),
+				(9, 58, ""),
+				(10, 60, ""),
+				(11, 61, ""),
+				(12, 62, ""),
+			] {
 				let mut message = text_message(id);
 				let old_key = layout_key(&message);
 				message.kind = kind;
@@ -2422,7 +2439,7 @@ mod tests {
 					egui::RawInput {
 						screen_rect: Some(egui::Rect::from_min_size(
 							egui::Pos2::ZERO,
-							egui::vec2(width, 800.0),
+							egui::vec2(width, 2000.0),
 						)),
 						..Default::default()
 					},
@@ -2434,7 +2451,13 @@ mod tests {
 							&mut None,
 							(&mut avatars, &mut None),
 							None,
-						)
+						);
+						assert!(ui.min_rect().width() <= width, "system rows overflow");
+						let colors = crate::design::palette(ui);
+						assert_eq!(
+							system_icon(67, &colors),
+							(crate::icons::Icon::Check, colors.positive)
+						);
 					},
 				);
 				for shape in &output.shapes {
@@ -2447,8 +2470,24 @@ mod tests {
 			assert!(painted.iter().any(|s| s == "! Joined the server."));
 			assert!(painted.iter().any(|s| s == " changed the channel name"));
 			assert!(painted.iter().any(|s| s == "new channel name"));
-			// Two system rows show a name run each; only the unknown type paints an author header.
-			assert_eq!(painted.iter().filter(|s| *s == "Robin").count(), 3);
+			for description in [
+				" accepted your friend request.",
+				" timed out ",
+				" started a voice hangout.",
+				" requested to speak.",
+				" upgraded the stream to HD.",
+				" deleted a reported message.",
+				" kicked ",
+				" banned ",
+				" resolved a report.",
+			] {
+				assert!(
+					painted.iter().any(|s| s == description),
+					"missing {description}"
+				);
+			}
+			// One name per system row; only the unknown type paints an author header.
+			assert_eq!(painted.iter().filter(|s| *s == "Robin").count(), 12);
 			assert_eq!(
 				painted
 					.iter()
