@@ -10,14 +10,22 @@ pub const MAX_RELATIONSHIPS: usize = 4000;
 pub const MAX_RELATIONSHIP_BYTES: usize = 128 * 1024;
 pub const MAX_FRIEND_BYTES: usize = 2 * 1024 * 1024;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
+	AddFriend { username: String },
+	ResolveFriend { user: Id, accept: bool },
 	CloseDm(Id),
 	Block { user: Id, blocked: bool },
 	Mute { channel: Id, muted: bool },
 }
 
 pub enum Event {
+	Requests(Option<Vec<(model::User, String, bool)>>),
+	Request {
+		user: Id,
+		incoming: Option<bool>,
+		profile: Option<(model::User, String)>,
+	},
 	FriendProfile((model::User, String)),
 	Friends(Option<Vec<(model::User, String)>>),
 	Friend {
@@ -38,6 +46,9 @@ pub enum Event {
 }
 #[derive(Default)]
 pub struct Actions {
+	requests: BTreeMap<Id, (model::User, String, bool)>,
+	requests_known: bool,
+	last_requested: Option<String>,
 	friends: BTreeMap<Id, (model::User, String)>,
 	friends_known: bool,
 	relationships: BTreeMap<Id, bool>,
@@ -55,6 +66,51 @@ impl Actions {
 	}
 }
 impl State {
+	pub fn pending_friends(&self) -> impl Iterator<Item = &(model::User, String, bool)> {
+		self.user_actions
+			.requests
+			.values()
+			.filter(|(u, _, _)| self.user_blocked(u.id) == Some(false))
+	}
+	pub fn friend_requests_known(&self) -> bool {
+		self.user_actions.requests_known
+	}
+	pub fn add_friend(&mut self, username: &str) -> Option<Command> {
+		if username.len() > 132 {
+			self.user_actions.status = Some("Enter a Discord username of at most 32 characters.");
+			return None;
+		}
+		let username = username.trim().trim_start_matches('@').to_ascii_lowercase();
+		if !valid_username(&username) {
+			self.user_actions.status =
+				Some("Enter a Discord username: 2–32 letters, numbers, underscores or periods.");
+			return None;
+		}
+		if self.user_actions.last_requested.as_deref() == Some(&username)
+			|| self
+				.user_actions
+				.friends
+				.values()
+				.any(|(_, n)| n == &username)
+			|| self
+				.user_actions
+				.requests
+				.values()
+				.any(|(_, n, _)| n == &username)
+		{
+			self.user_actions.status =
+				Some("Already friends or a request is pending. Check the Pending tab.");
+			return None;
+		}
+		self.request_user_action(Action::AddFriend { username })
+	}
+	pub fn resolve_friend_request(&mut self, user: Id, accept: bool) -> Option<Command> {
+		let (_, _, incoming) = self.user_actions.requests.get(&user)?;
+		if (accept && !incoming) || self.user_blocked(user) != Some(false) {
+			return None;
+		}
+		self.request_user_action(Action::ResolveFriend { user, accept })
+	}
 	pub fn friends(&self) -> impl Iterator<Item = &model::User> {
 		self.user_actions
 			.friends
@@ -79,10 +135,10 @@ impl State {
 			},
 			_,
 			false,
-		)) = self.user_actions.pending
-			&& target == user
+		)) = &self.user_actions.pending
+			&& *target == user
 		{
-			return Some(blocked);
+			return Some(*blocked);
 		}
 		self.user_actions
 			.relationships
@@ -91,7 +147,7 @@ impl State {
 			.or_else(|| (self.demo || self.user_actions.known).then_some(false))
 	}
 	pub(crate) fn pending_dm_muted(&self, channel: Id) -> Option<bool> {
-		match self.user_actions.pending {
+		match &self.user_actions.pending {
 			Some((
 				Action::Mute {
 					channel: target,
@@ -99,7 +155,7 @@ impl State {
 				},
 				_,
 				false,
-			)) if target == channel => Some(muted),
+			)) if *target == channel => Some(*muted),
 			_ => None,
 		}
 	}
@@ -158,7 +214,7 @@ impl State {
 		}
 		self.user_actions.sequence = self.user_actions.sequence.wrapping_add(1);
 		let request = self.user_actions.sequence;
-		self.user_actions.pending = Some((action, request, false));
+		self.user_actions.pending = Some((action.clone(), request, false));
 		self.user_actions.status = None;
 		Some(Command::UserAction { action, request })
 	}
@@ -188,6 +244,93 @@ impl State {
 	}
 	pub(crate) fn apply_user_action(&mut self, event: Event) -> Result<(), &'static str> {
 		match event {
+			Event::Requests(entries) => {
+				self.user_actions.requests.clear();
+				self.user_actions.requests_known = false;
+				if let Some(entries) = entries {
+					if entries.len() > MAX_RELATIONSHIPS
+						|| entries.capacity() * size_of::<(model::User, String, bool)>()
+							+ entries
+								.iter()
+								.map(|(u, n, _)| u.heap_bytes() + n.capacity() + 64)
+								.sum::<usize>() > MAX_FRIEND_BYTES
+					{
+						return Err("Friend requests exceed safe capacity");
+					}
+					for (user, name, incoming) in entries {
+						if self.user_actions.requests.contains_key(&user.id) {
+							return Err("Duplicate friend request");
+						}
+						self.apply_user_action(Event::Request {
+							user: user.id,
+							incoming: Some(incoming),
+							profile: Some((user, name)),
+						})?;
+					}
+					self.user_actions.requests_known = true;
+				}
+			}
+			Event::Request {
+				user,
+				incoming,
+				profile,
+			} => {
+				if user.0 == 0 {
+					return Err("Invalid friend request");
+				}
+				if let Some((Action::ResolveFriend { user: target, .. }, _, observed)) =
+					&mut self.user_actions.pending
+					&& *target == user
+				{
+					*observed = true;
+				}
+				if let Some(incoming) = incoming {
+					let profile = profile.or_else(|| {
+						(!self.user_actions.requests.contains_key(&user)).then(|| {
+							(
+								model::User {
+									id: user,
+									name: "Unknown user".into(),
+									avatar: None,
+									discriminator: 0,
+									webhook: false,
+								},
+								format!("User ID: {user}"),
+							)
+						})
+					});
+					if let Some((record, name)) = profile {
+						if user != record.id || !valid_friend(&record, &name) {
+							return Err("Invalid friend request profile");
+						}
+						let entries = &mut self.user_actions.requests;
+						let bytes = entries
+							.iter()
+							.filter(|(id, _)| **id != user)
+							.map(|(_, (u, n, _))| {
+								u.heap_bytes()
+									+ n.capacity() + size_of::<(Id, model::User, String, bool)>()
+									+ 64
+							})
+							.sum::<usize>();
+						if (!entries.contains_key(&user) && entries.len() >= MAX_RELATIONSHIPS)
+							|| bytes
+								+ record.heap_bytes() + name.capacity()
+								+ size_of::<(Id, model::User, String, bool)>()
+								+ 64 > MAX_FRIEND_BYTES
+						{
+							return Err("Friend requests exceed safe capacity");
+						}
+						entries.insert(user, (record, name, incoming));
+					} else if let Some(entry) = self.user_actions.requests.get_mut(&user) {
+						entry.2 = incoming;
+					}
+				} else if let Some((_, name, _)) = self.user_actions.requests.remove(&user)
+					&& self.user_actions.last_requested.as_deref() == Some(&name)
+				{
+					self.user_actions.last_requested = None;
+				}
+			}
 			Event::FriendProfile(profile) => {
 				if self.user_actions.friends.contains_key(&profile.0.id) {
 					return self.apply_user_action(Event::Friend {
@@ -230,6 +373,12 @@ impl State {
 				friend,
 				profile,
 			} => {
+				let profile = profile.or_else(|| {
+					self.user_actions
+						.requests
+						.get(&user)
+						.map(|(u, n, _)| (u.clone(), n.clone()))
+				});
 				if !friend {
 					self.user_actions.friends.remove(&user);
 				} else if let Some((record, name)) = profile {
@@ -300,12 +449,13 @@ impl State {
 				request,
 				result,
 			} => {
-				let Some((pending, sequence, observed)) = self.user_actions.pending else {
+				let Some((pending, sequence, observed)) = &self.user_actions.pending else {
 					return Ok(());
 				};
-				if pending != action || sequence != request {
+				if *pending != action || *sequence != request {
 					return Ok(());
 				}
+				let observed = *observed;
 				self.user_actions.pending = None;
 				if let Err(failure) = result {
 					self.user_actions.status = Some(failure.label());
@@ -317,6 +467,23 @@ impl State {
 				}
 				if !observed {
 					match action {
+						Action::AddFriend { ref username } => {
+							self.user_actions.last_requested = Some(username.clone())
+						}
+						Action::ResolveFriend { user, accept } => {
+							if let Some((record, name, _)) =
+								self.user_actions.requests.remove(&user)
+							{
+								self.user_actions.last_requested = None;
+								if accept {
+									self.apply_user_action(Event::Friend {
+										user,
+										friend: true,
+										profile: Some((record, name)),
+									})?;
+								}
+							}
+						}
 						Action::CloseDm(channel) => {
 							self.remove_channels(&std::collections::BTreeSet::from([channel]));
 							if self.selected == Some(channel) {
@@ -333,6 +500,11 @@ impl State {
 					"Request completed · latest service settings shown"
 				} else {
 					match action {
+						Action::AddFriend { .. } => {
+							"Friend request sent · waiting for service update"
+						}
+						Action::ResolveFriend { accept: true, .. } => "Friend request accepted",
+						Action::ResolveFriend { accept: false, .. } => "Friend request removed",
 						Action::CloseDm(_) => "DM closed · messages and drafts were not deleted",
 						Action::Block { blocked: true, .. } => "User blocked",
 						Action::Block { blocked: false, .. } => "User unblocked",
@@ -350,6 +522,7 @@ impl State {
 	fn store_relationship(&mut self, user: Id, blocked: bool) -> Result<(), &'static str> {
 		if blocked {
 			self.user_actions.friends.remove(&user);
+			self.user_actions.requests.remove(&user);
 		}
 		let entries = &mut self.user_actions.relationships;
 		// Fixed-size IDs and booleans: <= 4000 entries and a conservative 32-byte entry estimate.
@@ -366,6 +539,13 @@ impl State {
 	}
 }
 
+pub fn valid_username(name: &str) -> bool {
+	(2..=32).contains(&name.len())
+		&& !name.contains("..")
+		&& name
+			.bytes()
+			.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'_' | b'.'))
+}
 fn valid_friend(user: &model::User, username: &str) -> bool {
 	user.id.0 != 0
 		&& !user.name.is_empty()
@@ -384,6 +564,105 @@ fn valid_friend(user: &model::User, username: &str) -> bool {
 mod tests {
 	use super::*;
 	use crate::{Envelope, Event as CoreEvent};
+	#[test]
+	fn friend_requests_validate_bound_and_reconcile_without_duplicate_writes() {
+		let mut state = state();
+		let user = state.channels[0].recipients[0].clone();
+		state
+			.apply_user_action(Event::Relationships(Some(vec![])))
+			.unwrap();
+		state
+			.apply_user_action(Event::Requests(Some(vec![(
+				user.clone(),
+				"synthetic".into(),
+				true,
+			)])))
+			.unwrap();
+		assert_eq!(state.pending_friends().count(), 1);
+		assert!(state.add_friend("../invalid").is_none());
+		let send = state.add_friend(" @new_friend ").unwrap();
+		assert!(state.add_friend("new_friend").is_none());
+		assert!(state.resolve_friend_request(user.id, true).is_none());
+		finish(&mut state, send, Ok(()));
+		assert!(state.add_friend("new_friend").is_none());
+		assert_eq!(
+			state.pending_friends().count(),
+			1,
+			"no invented outgoing identity"
+		);
+		let accept = state.resolve_friend_request(user.id, true).unwrap();
+		finish(&mut state, accept, Err(Failure::Forbidden));
+		assert_eq!(state.pending_friends().count(), 1);
+		let accept = state.resolve_friend_request(user.id, true).unwrap();
+		state
+			.apply_user_action(Event::Request {
+				user: user.id,
+				incoming: None,
+				profile: None,
+			})
+			.unwrap();
+		finish(&mut state, accept, Ok(()));
+		assert_eq!(
+			state.friends().count(),
+			0,
+			"newer Gateway removal wins over acceptance"
+		);
+		state
+			.apply_user_action(Event::Request {
+				user: user.id,
+				incoming: Some(false),
+				profile: Some((user.clone(), "synthetic".into())),
+			})
+			.unwrap();
+		assert!(state.resolve_friend_request(user.id, true).is_none());
+		let cancel = state.resolve_friend_request(user.id, false).unwrap();
+		finish(&mut state, cancel, Ok(()));
+		assert_eq!(state.pending_friends().count(), 0);
+		state
+			.apply_user_action(Event::Request {
+				user: user.id,
+				incoming: Some(true),
+				profile: Some((user.clone(), "synthetic".into())),
+			})
+			.unwrap();
+		let accept = state.resolve_friend_request(user.id, true).unwrap();
+		state
+			.apply_user_action(Event::Friend {
+				user: user.id,
+				friend: true,
+				profile: None,
+			})
+			.unwrap();
+		state
+			.apply_user_action(Event::Request {
+				user: user.id,
+				incoming: None,
+				profile: None,
+			})
+			.unwrap();
+		assert_eq!(
+			state.friends().count(),
+			1,
+			"acceptance without repeated metadata retains the request profile"
+		);
+		finish(&mut state, accept, Ok(()));
+		assert_eq!(state.friends().count(), 1);
+		assert_eq!(state.pending_friends().count(), 0);
+		assert!(
+			state
+				.apply_user_action(Event::Requests(Some(vec![(
+					user,
+					"huge".repeat(MAX_FRIEND_BYTES),
+					true
+				)])))
+				.is_err()
+		);
+		state.gateway_connected = false;
+		assert!(state.add_friend("another").is_none());
+		state.logout();
+		assert!(!state.friend_requests_known());
+		assert_eq!(state.pending_friends().count(), 0);
+	}
 	fn state() -> State {
 		let user = |id| model::User {
 			id: Id(id),

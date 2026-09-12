@@ -783,3 +783,24 @@ video pages continue using their external link action. No live Discord media was
 The native MPEG-4 source does not support external tracks; it receives an unnamed byte
 stream without a base URL and Media Foundation starts with socket support disabled.
 See [Microsoft MPEG-4 source documentation](https://learn.microsoft.com/en-us/windows/win32/medfound/mpeg-4-file-source).
+
+### Friend requests (September 12, 2026)
+
+Friends now includes Add Friend and Pending, with searchable incoming/outgoing lists,
+accept/decline/cancel controls, and explicit empty, disconnected and failure states.
+Sending accepts modern unique usernames; personalized greeting notes are not supported.
+The relationship adapter uses unofficial normal-user routes: POST
+`/users/@me/relationships` with username and null discriminator, PUT
+`/users/@me/relationships/{id}` with an empty object to accept, and DELETE to decline
+or cancel. These shapes and incoming/outgoing types 3/4 are corroborated by the
+[discord.py-self HTTP implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/http.py)
+and [relationship enum](https://github.com/dolfies/discord.py-self/blob/master/discord/enums.py),
+not official support or proof of live interoperability.
+
+READY and relationship dispatches retain at most 4,000 pending profiles / 2 MiB,
+separate from confirmed friends. Missing profile metadata remains explicitly unknown.
+Writes reuse the existing single pending user-action slot and session generation;
+newer Gateway state wins over late HTTP results. No automatic write retries occur.
+Successful sends wait for Gateway identity data rather than inventing an outgoing row.
+Synthetic reducer, protocol and local HTTP tests cover this path; live requests,
+service challenges and recipient privacy restrictions remain unverified.

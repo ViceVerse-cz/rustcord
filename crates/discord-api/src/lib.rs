@@ -351,10 +351,11 @@ impl DiscordApi {
 				})
 			}
 			Command::UserAction { action, request } => {
+				let result = self.user_action(&action).await;
 				Event::UserAction(client_core::user_actions::Event::Written {
 					action,
 					request,
-					result: self.user_action(action).await,
+					result,
 				})
 			}
 			Command::Invite { code } => {

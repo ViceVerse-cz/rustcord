@@ -4,8 +4,29 @@ use reqwest::Method;
 use serde_json::json;
 
 impl DiscordApi {
-	pub(super) async fn user_action(&self, action: Action) -> Result<(), Failure> {
+	pub(super) async fn user_action(&self, action: &Action) -> Result<(), Failure> {
+		// Unofficial normal-user routes: discord.py-self/http.py, checked 2026-09-12.
+		if let Action::AddFriend { username } = action {
+			if !client_core::user_actions::valid_username(username) {
+				return Err(Failure::Protocol);
+			}
+			return self
+				.request(
+					Method::POST,
+					"/users/@me/relationships",
+					Some(json!({"username":username,"discriminator":null})),
+				)
+				.await
+				.map(|_| ())
+				.map_err(|f| {
+					f.protocol_at(
+						"Friend request rejected · check the username and recipient's privacy settings",
+					)
+				});
+		}
 		let id = match action {
+			Action::AddFriend { .. } => unreachable!(),
+			Action::ResolveFriend { user, .. } => user,
 			Action::CloseDm(id)
 			| Action::Block { user: id, .. }
 			| Action::Mute { channel: id, .. } => id,
@@ -14,13 +35,26 @@ impl DiscordApi {
 			return Err(Failure::Protocol);
 		}
 		match action {
+			Action::AddFriend { .. } => unreachable!(),
+			Action::ResolveFriend { user, accept } => self
+				.request(
+					if *accept { Method::PUT } else { Method::DELETE },
+					&format!("/users/@me/relationships/{user}"),
+					accept.then(|| json!({})),
+				)
+				.await
+				.map(|_| ()),
 			Action::CloseDm(channel) => self
 				.request(Method::DELETE, &format!("/channels/{channel}"), None)
 				.await
 				.map(|_| ()),
 			Action::Block { user, blocked } => self
 				.request(
-					if blocked { Method::PUT } else { Method::DELETE },
+					if *blocked {
+						Method::PUT
+					} else {
+						Method::DELETE
+					},
 					&format!("/users/@me/relationships/{user}"),
 					blocked.then(|| json!({"type": 2})),
 				)
@@ -34,7 +68,7 @@ impl DiscordApi {
 				if setting.guild_id.is_some()
 					|| !setting.channel_overrides.is_some_and(|o| {
 						o.0.iter()
-							.any(|c| c.channel_id == channel && c.muted == Some(muted))
+							.any(|c| c.channel_id == *channel && c.muted == Some(*muted))
 					}) {
 					return Err(Failure::ProtocolAt(
 						"DM mute response did not confirm the requested setting",
@@ -65,6 +99,38 @@ mod tests {
 		.unwrap();
 		api.base = format!("http://{}", listener.local_addr().unwrap());
 		let cases = [
+			(
+				Action::AddFriend {
+					username: "synthetic_friend".into(),
+				},
+				"POST /users/@me/relationships",
+				Some(json!({"username":"synthetic_friend","discriminator":null})),
+				204,
+				"",
+				Ok(()),
+			),
+			(
+				Action::ResolveFriend {
+					user: Id(2),
+					accept: true,
+				},
+				"PUT /users/@me/relationships/2",
+				Some(json!({})),
+				204,
+				"",
+				Ok(()),
+			),
+			(
+				Action::ResolveFriend {
+					user: Id(2),
+					accept: false,
+				},
+				"DELETE /users/@me/relationships/2",
+				None,
+				204,
+				"",
+				Ok(()),
+			),
 			(
 				Action::CloseDm(Id(10)),
 				"DELETE /channels/10",
@@ -215,7 +281,7 @@ mod tests {
 			assert_eq!(result, expected);
 		}
 		assert_eq!(
-			api.user_action(Action::CloseDm(Id(0))).await,
+			api.user_action(&Action::CloseDm(Id(0))).await,
 			Err(Failure::Protocol)
 		);
 		assert!(

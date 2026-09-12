@@ -873,6 +873,33 @@ pub fn video_demo_state() -> State {
 /// Offline friends overview using existing synthetic relationship data.
 pub fn friends_demo_state() -> State {
 	let mut state = demo_state();
+	state.apply(Envelope {
+		generation: state.generation,
+		event: Event::UserAction(client_core::user_actions::Event::Requests(Some(vec![
+			(
+				model::User {
+					id: Id(8001),
+					name: "Avery".into(),
+					avatar: None,
+					discriminator: 0,
+					webhook: false,
+				},
+				"avery.synthetic".into(),
+				true,
+			),
+			(
+				model::User {
+					id: Id(8002),
+					name: "Morgan".into(),
+					avatar: None,
+					discriminator: 0,
+					webhook: false,
+				},
+				"morgan.synthetic".into(),
+				false,
+			),
+		]))),
+	});
 	state.selected = None;
 	state.apply(Envelope {
 		generation: state.generation,

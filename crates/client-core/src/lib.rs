@@ -2214,6 +2214,21 @@ impl Event {
 								.sum::<usize>()
 					})
 				}
+				Self::UserAction(user_actions::Event::Requests(entries)) => {
+					entries.as_ref().map_or(0, |e| {
+						e.capacity() * size_of::<(User, String, bool)>()
+							+ e.iter()
+								.map(|(u, n, _)| u.heap_bytes() + n.capacity())
+								.sum::<usize>()
+					})
+				}
+				Self::UserAction(user_actions::Event::Request { profile, .. }) => profile
+					.as_ref()
+					.map_or(0, |(u, n)| u.heap_bytes() + n.capacity()),
+				Self::UserAction(user_actions::Event::Written {
+					action: user_actions::Action::AddFriend { username },
+					..
+				}) => username.capacity(),
 				Self::UserAction(user_actions::Event::Friend { profile, .. }) => profile
 					.as_ref()
 					.map_or(0, |(u, n)| u.heap_bytes() + n.capacity()),
