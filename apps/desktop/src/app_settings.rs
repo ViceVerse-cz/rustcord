@@ -6,6 +6,23 @@ pub struct Settings {
 	pub state: crate::toggle_setting::Settings,
 }
 impl Settings {
+	pub fn save(&mut self, cache: Option<&crate::cache::Cache>, generation: u64) -> bool {
+		if !self.state.dirty || self.state.saving {
+			return false;
+		}
+		let accepted = cache.is_some_and(|cache| {
+			cache.queue(
+				generation,
+				model::Id(0),
+				crate::cache::Operation::SaveAppPreferences(self.current.clone()),
+			)
+		});
+		// A full cache queue must not turn a device preference into a session-only change.
+		self.state.dirty = !accepted;
+		self.state.saving = accepted;
+		self.state.failed = !accepted;
+		accepted
+	}
 	pub fn observe(&mut self, ui: &ui::MessagingUi) {
 		let value = AppPreferences {
 			notifications_enabled: ui.notifications_enabled,
