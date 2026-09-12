@@ -6,6 +6,7 @@ mod guild_folders;
 mod profile_edit;
 pub mod rpc;
 mod server_actions;
+mod server_admin;
 mod server_settings;
 pub mod upload;
 mod user_actions;
@@ -318,6 +319,11 @@ impl DiscordApi {
 	}
 	pub async fn execute(&self, command: Command) -> Event {
 		match command {
+			Command::ServerAdmin {
+				guild,
+				request,
+				action,
+			} => Event::ServerAdmin(self.server_admin(guild, request, &action).await),
 			Command::ServerSettings {
 				guild,
 				request,

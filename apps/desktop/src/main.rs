@@ -7,6 +7,7 @@ mod clipboard;
 mod connection;
 mod credentials;
 mod downloads;
+mod emoji_upload;
 mod extension_bridge;
 mod extensions;
 mod game_activity;
@@ -237,6 +238,7 @@ struct Desktop {
 	uploads: uploads::Uploads,
 	group_icon: group_icon::GroupIcon,
 	server_icon: group_icon::GroupIcon,
+	emoji_upload: emoji_upload::EmojiUpload,
 	clipboard: Option<clipboard::Paste>,
 	download_close_pending: bool,
 	window: Arc<winit::window::Window>,
@@ -930,6 +932,7 @@ impl Desktop {
 			uploads: uploads::Uploads::default(),
 			group_icon: group_icon::GroupIcon::default(),
 			server_icon: group_icon::GroupIcon::default(),
+			emoji_upload: emoji_upload::EmojiUpload::default(),
 			clipboard: None,
 			download_close_pending: false,
 			window: cc
@@ -986,6 +989,7 @@ impl Desktop {
 	fn connect(&mut self, secret: SessionSecret, save: bool, ctx: &egui::Context) {
 		self.group_icon.cancel();
 		self.server_icon.cancel();
+		self.emoji_upload.cancel();
 		if let Some(store) = &mut self.store {
 			store.cancel_load();
 		}
@@ -1025,6 +1029,7 @@ impl Desktop {
 		let extension_logout = self.extensions.logout(ctx);
 		self.group_icon.cancel();
 		self.server_icon.cancel();
+		self.emoji_upload.cancel();
 		self.notifications.clear();
 		self.uploads.cancel();
 		if let Some(store) = &mut self.store {
@@ -1449,6 +1454,18 @@ impl Desktop {
 		}
 	}
 	fn command(&mut self, command: Command) {
+		if let Command::ServerAdmin {
+			guild,
+			request,
+			action,
+		} = &command
+			&& !self
+				.state
+				.server_admin_command_allowed(*guild, *request, action)
+		{
+			self.state.command_rejected(command);
+			return;
+		}
 		if let Command::ServerSettings {
 			guild,
 			request,
@@ -1582,6 +1599,11 @@ impl Desktop {
 		#[cfg(feature = "demo")]
 		if self.state.demo {
 			let event = match command {
+				Command::ServerAdmin {
+					guild,
+					request,
+					action,
+				} => server_settings_demo::execute_admin(&self.state, guild, request, *action),
 				Command::ServerSettings {
 					guild,
 					request,
@@ -3095,7 +3117,16 @@ impl eframe::App for Desktop {
 		);
 		// Move native handles once; never load dropped bytes on the rendering thread.
 		if !dropped.is_empty() {
-			if upload_allowed
+			if self.messaging.accepts_server_emoji_drops() {
+				let paths: Vec<_> = dropped
+					.into_iter()
+					.take(11)
+					.map(|file| file.path().to_path_buf())
+					.collect();
+				if !paths.is_empty() {
+					self.messaging.queue_server_emoji_drop(paths);
+				}
+			} else if upload_allowed
 				&& can_attach
 				&& self.login.is_none()
 				&& !self.confirming_close
@@ -3175,6 +3206,11 @@ impl eframe::App for Desktop {
 		if let Some((scope, result)) = self.server_icon.poll_server(&self.state) {
 			self.messaging.accept_server_icon(&ctx, scope, result);
 		}
+		if let Some((scope, result)) = self.emoji_upload.poll(self.state.generation, |guild| {
+			self.state.server_admin.guild == Some(guild) && self.state.can_create_guild_emoji(guild)
+		}) {
+			self.messaging.accept_server_emojis(&ctx, scope, result);
+		}
 		self.messaging.voice_available = true;
 		if close_requested
 			&& !self.close_approved
@@ -3187,6 +3223,7 @@ impl eframe::App for Desktop {
 				|| self.messaging.has_edit()
 				|| self.messaging.has_server_settings_changes()
 				|| self.state.server_settings.pending
+				|| self.state.server_admin.pending
 				|| self.uploads.has_unsent()
 				|| self.forgetting
 				|| self.messaging.startup_busy
@@ -3455,6 +3492,27 @@ impl eframe::App for Desktop {
 					self.messaging.accept_server_icon(&ctx, scope, Err(error));
 				}
 			}
+			if let Some((generation, guild, request, paths)) =
+				self.messaging.take_server_emoji_request()
+			{
+				let scope = (generation, guild, request);
+				let result = if generation != self.state.generation
+					|| !self.state.can_create_guild_emoji(guild)
+				{
+					Err("You can no longer upload emoji to this server")
+				} else {
+					self.emoji_upload.start(
+						scope,
+						paths,
+						self.runtime.handle(),
+						&ctx,
+						self.window.clone(),
+					)
+				};
+				if let Err(error) = result {
+					self.messaging.accept_server_emojis(&ctx, scope, Err(error));
+				}
+			}
 			for key in self.messaging.take_avatar_requests() {
 				if !self
 					.avatars
@@ -3497,6 +3555,7 @@ impl eframe::App for Desktop {
 					|| self.messaging.has_edit()
 					|| self.messaging.has_server_settings_changes()
 					|| self.state.server_settings.pending
+					|| self.state.server_admin.pending
 					|| self.uploads.has_unsent()
 				{
 					self.confirming_logout = true;

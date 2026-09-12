@@ -75,7 +75,9 @@ impl ServerMenu {
 					let available = !state.server_action_pending()
 						&& !state.server_invite_pending()
 						&& (state.demo || state.gateway_connected);
-					if state.can_manage_guild(guild)
+					if (state.can_manage_guild(guild)
+						|| state.can_open_emoji_settings(guild)
+						|| state.can_open_member_settings(guild))
 						&& menu_row(ui, icons::Icon::Gear, "Server Settings", colors.text).clicked()
 					{
 						self.settings_requested = Some(guild);

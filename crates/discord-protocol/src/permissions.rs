@@ -10,7 +10,7 @@ use std::{collections::BTreeSet, marker::PhantomData};
 const MAX_ITEMS: usize = 4000;
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 
-struct List<T, const N: usize>(Vec<T>);
+pub(crate) struct List<T, const N: usize>(pub(crate) Vec<T>);
 impl<T, const N: usize> Default for List<T, N> {
 	fn default() -> Self {
 		Self(Vec::new())
@@ -61,7 +61,7 @@ fn bits<'de, D: Deserializer<'de>>(d: D) -> Result<u128, D::Error> {
 		.map_err(|_| serde::de::Error::custom("Permission bits overflow"))
 }
 #[derive(Deserialize)]
-struct Role {
+pub(crate) struct Role {
 	id: Id,
 	permissions: Bits,
 	#[serde(default)]
@@ -80,7 +80,7 @@ struct RoleColors {
 	primary_color: u32,
 }
 impl Role {
-	fn checked(self) -> Result<p::Role, DecodeError> {
+	pub(crate) fn checked(self) -> Result<p::Role, DecodeError> {
 		nonzero(self.id)?;
 		let color = self
 			.colors

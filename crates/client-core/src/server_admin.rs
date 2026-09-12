@@ -1,0 +1,434 @@
+//! Explicit, scoped emoji and member administration. One request is retained at a time.
+use crate::{
+	Command, State,
+	auth::{AuthState, Failure},
+};
+use model::{
+	Id, permissions as p,
+	server_admin::{Action, Emojis, Members, Query, Result as Outcome},
+};
+
+pub struct Event {
+	pub guild: Id,
+	pub request: u64,
+	pub result: Result<Outcome, Failure>,
+}
+#[derive(Default)]
+pub struct View {
+	pub guild: Option<Id>,
+	pub emojis: Option<Emojis>,
+	pub members: Option<Members>,
+	pub query: Query,
+	pub pending: bool,
+	pub saving: bool,
+	pub error: Option<&'static str>,
+	pub revision: u64,
+	pub pruned: Option<u64>,
+	pub needs_refresh: bool,
+	sequence: u64,
+	action: Option<Action>,
+	prune_days: Option<u8>,
+}
+impl View {
+	pub(crate) fn reset(&mut self) {
+		*self = Self {
+			sequence: self.sequence.wrapping_add(1),
+			revision: self.revision.wrapping_add(1),
+			..Self::default()
+		};
+	}
+}
+impl State {
+	pub fn guild_permission(&self, guild: Id, bits: u128) -> bool {
+		let Some(user) = &self.user else {
+			return false;
+		};
+		let Some(metadata) = self.permissions.guilds.get(&guild) else {
+			return false;
+		};
+		self.guild(guild).is_some()
+			&& self
+				.permissions
+				.effective(guild, metadata, user.id, Some(&[]), Self::permission_time())
+				.is_some_and(|value| value & bits == bits)
+	}
+	pub fn can_open_emoji_settings(&self, guild: Id) -> bool {
+		self.guild_permission(guild, p::MANAGE_GUILD_EXPRESSIONS)
+			|| self.guild_permission(guild, p::CREATE_GUILD_EXPRESSIONS)
+	}
+	pub fn can_create_guild_emoji(&self, guild: Id) -> bool {
+		self.guild_permission(guild, p::CREATE_GUILD_EXPRESSIONS)
+	}
+	pub fn can_edit_guild_emoji(&self, guild: Id, id: Id) -> bool {
+		if self.server_admin.guild != Some(guild) {
+			return false;
+		}
+		let Some(row) = self
+			.server_admin
+			.emojis
+			.as_ref()
+			.and_then(|page| page.items.iter().find(|row| row.emoji.id == id))
+		else {
+			return false;
+		};
+		!row.emoji.managed
+			&& (self.guild_permission(guild, p::MANAGE_GUILD_EXPRESSIONS)
+				|| (self.can_create_guild_emoji(guild)
+					&& row
+						.uploader
+						.as_ref()
+						.zip(self.user.as_ref())
+						.is_some_and(|(uploader, user)| uploader.id == user.id)))
+	}
+	pub fn can_open_member_settings(&self, guild: Id) -> bool {
+		self.can_manage_guild(guild)
+	}
+	fn admin_member(&self, guild: Id, user: Id) -> Option<&model::server_admin::Member> {
+		(self.server_admin.guild == Some(guild)).then_some(())?;
+		self.server_admin
+			.members
+			.as_ref()?
+			.items
+			.iter()
+			.find(|member| member.user.id == user)
+	}
+	fn above_admin_member(&self, guild: Id, user: Id) -> bool {
+		let Some(actor) = self.user.as_ref().map(|user| user.id) else {
+			return false;
+		};
+		let Some(metadata) = self.permissions.guilds.get(&guild) else {
+			return false;
+		};
+		let Some(owner) = metadata.owner else {
+			return false;
+		};
+		if user == actor || user == owner {
+			return false;
+		}
+		let Some(member) = self.admin_member(guild, user) else {
+			return false;
+		};
+		if actor == owner {
+			return true;
+		}
+		let Some(roles) = metadata.roles.as_ref() else {
+			return false;
+		};
+		let Some(own) = metadata.member.as_ref() else {
+			return false;
+		};
+		let highest = |ids: &[Id]| -> Option<&p::Role> {
+			let everyone = roles.iter().find(|role| role.id == guild)?;
+			let mut highest = everyone;
+			for id in ids {
+				let role = roles.iter().find(|role| role.id == *id)?;
+				if role.cmp_hierarchy(highest).is_gt() {
+					highest = role;
+				}
+			}
+			Some(highest)
+		};
+		highest(&own.roles)
+			.zip(highest(&member.roles))
+			.is_some_and(|(own, target)| own.cmp_hierarchy(target).is_gt())
+	}
+	pub fn can_kick_guild_member(&self, guild: Id, user: Id) -> bool {
+		self.guild_permission(guild, p::KICK_MEMBERS) && self.above_admin_member(guild, user)
+	}
+	pub fn can_edit_guild_nickname(&self, guild: Id, user: Id) -> bool {
+		if self.user.as_ref().is_some_and(|own| own.id == user) {
+			self.guild_permission(guild, p::CHANGE_NICKNAME)
+		} else {
+			self.guild_permission(guild, p::MANAGE_NICKNAMES)
+				&& self.above_admin_member(guild, user)
+		}
+	}
+	pub fn can_edit_member_role(&self, guild: Id, user: Id, role: Id) -> bool {
+		let own = self.user.as_ref().is_some_and(|actor| actor.id == user);
+		if !self.guild_permission(guild, p::MANAGE_ROLES)
+			|| (!own && !self.above_admin_member(guild, user))
+			|| self.admin_member(guild, user).is_none()
+			|| role == guild
+		{
+			return false;
+		}
+		let Some(row) = self
+			.server_admin
+			.members
+			.as_ref()
+			.and_then(|page| page.roles.iter().find(|row| row.role.id == role))
+		else {
+			return false;
+		};
+		if row.managed {
+			return false;
+		}
+		let Some(metadata) = self.permissions.guilds.get(&guild) else {
+			return false;
+		};
+		if self
+			.user
+			.as_ref()
+			.is_some_and(|user| metadata.owner == Some(user.id))
+		{
+			return true;
+		}
+		let Some(own) = metadata.member.as_ref() else {
+			return false;
+		};
+		metadata.roles.as_ref().is_some_and(|roles| {
+			roles
+				.iter()
+				.filter(|role| own.roles.contains(&role.id))
+				.any(|role| role.cmp_hierarchy(&row.role).is_gt())
+		})
+	}
+	pub fn can_prune_guild(&self, guild: Id) -> bool {
+		if self.server_admin.guild != Some(guild) {
+			return false;
+		}
+		let Some(page) = &self.server_admin.members else {
+			return false;
+		};
+		if page
+			.features
+			.iter()
+			.any(|feature| feature == "PRUNE_REQUIRES_ADMIN")
+		{
+			self.guild_permission(guild, p::ADMINISTRATOR)
+		} else {
+			self.guild_permission(guild, p::MANAGE_GUILD | p::KICK_MEMBERS)
+		}
+	}
+	pub fn can_show_members_in_channel_list(&self, guild: Id) -> bool {
+		self.can_manage_guild(guild)
+			&& self.server_admin.guild == Some(guild)
+			&& self
+				.server_admin
+				.members
+				.as_ref()
+				.is_some_and(|page| page.show_in_channel_list.is_some())
+	}
+	pub fn server_members_shortcut(&self, guild: Id) -> bool {
+		self.can_open_member_settings(guild)
+			&& self.server_members_shortcuts.get(&guild) == Some(&true)
+	}
+	pub fn server_admin_action_allowed(&self, guild: Id, action: &Action) -> bool {
+		if !action.valid() {
+			return false;
+		}
+		match action {
+			Action::LoadEmojis => self.can_open_emoji_settings(guild),
+			Action::CreateEmoji { .. } => self.can_create_guild_emoji(guild),
+			Action::RenameEmoji { id, .. } | Action::DeleteEmoji { id } => {
+				self.can_edit_guild_emoji(guild, *id)
+			}
+			Action::LoadMembers(_) => self.can_open_member_settings(guild),
+			Action::SetRole { user, role, .. } => self.can_edit_member_role(guild, *user, *role),
+			Action::SetNickname { user, .. } => self.can_edit_guild_nickname(guild, *user),
+			Action::Kick { user } => self.can_kick_guild_member(guild, *user),
+			Action::Prune { days, execute } => {
+				self.can_prune_guild(guild)
+					&& (!execute
+						|| (self.server_admin.prune_days == Some(*days)
+							&& self.server_admin.pruned.is_some()))
+			}
+			Action::ShowMembers { .. } => self.can_show_members_in_channel_list(guild),
+		}
+	}
+	pub fn request_server_admin(&mut self, guild: Id, mut action: Action) -> Option<Command> {
+		match &mut action {
+			Action::LoadMembers(query) => query.search.shrink_to_fit(),
+			Action::SetNickname { nick, .. } => nick.shrink_to_fit(),
+			Action::CreateEmoji { name, image } => {
+				name.shrink_to_fit();
+				image.shrink_to_fit();
+			}
+			Action::RenameEmoji { name, .. } => name.shrink_to_fit(),
+			_ => {}
+		}
+		if self.server_admin.pending
+			|| self.server_settings.saving
+			|| (self.server_admin.needs_refresh && action.write())
+			|| !self.server_admin_action_allowed(guild, &action)
+			|| (!self.demo && (self.auth != AuthState::Authenticated || !self.gateway_connected))
+		{
+			return None;
+		}
+		if self.server_admin.guild != Some(guild) {
+			self.server_admin.reset();
+		}
+		if let Action::LoadMembers(query) = &action {
+			self.server_admin.query = query.clone();
+		}
+		self.server_admin.guild = Some(guild);
+		self.server_admin.sequence = self.server_admin.sequence.wrapping_add(1);
+		self.server_admin.pending = true;
+		self.server_admin.saving = action.write();
+		self.server_admin.error = None;
+		let mut retained = action.clone();
+		if let Action::CreateEmoji { image, .. } = &mut retained {
+			*image = String::new();
+		}
+		self.server_admin.action = Some(retained);
+		Some(Command::ServerAdmin {
+			guild,
+			request: self.server_admin.sequence,
+			action: Box::new(action),
+		})
+	}
+	pub fn server_admin_command_allowed(&self, guild: Id, request: u64, action: &Action) -> bool {
+		self.server_admin.guild == Some(guild)
+			&& self.server_admin.sequence == request
+			&& self.server_admin.pending
+			&& self.server_admin_action_allowed(guild, action)
+	}
+	pub fn close_server_admin(&mut self) {
+		if !self.server_admin.saving {
+			self.server_admin.reset();
+		}
+	}
+	pub(crate) fn cancel_server_admin(&mut self) {
+		if self.server_admin.pending {
+			self.server_admin.needs_refresh |= self.server_admin.saving;
+			self.server_admin.error = Some(if self.server_admin.saving {
+				"Outcome unknown; reload before retrying"
+			} else {
+				"Server administration disconnected; reload to continue"
+			});
+			self.server_admin.pending = false;
+			self.server_admin.saving = false;
+			self.server_admin.action = None;
+			self.server_admin.sequence = self.server_admin.sequence.wrapping_add(1);
+		}
+	}
+	pub(crate) fn apply_server_admin(&mut self, event: Event) -> Result<(), &'static str> {
+		if self.server_admin.guild != Some(event.guild)
+			|| self.server_admin.sequence != event.request
+			|| !self.server_admin.pending
+		{
+			return Ok(());
+		}
+		let action = self.server_admin.action.take();
+		self.server_admin.pending = false;
+		self.server_admin.saving = false;
+		if action.as_ref().is_none_or(|action| {
+			if action.emoji() {
+				!self.can_open_emoji_settings(event.guild)
+			} else {
+				!self.can_open_member_settings(event.guild)
+			}
+		}) {
+			self.server_admin.reset();
+			return Ok(());
+		}
+		let result = match event.result {
+			Ok(result) if result.valid() => result,
+			Ok(_) => {
+				self.server_admin.error =
+					Some("Server administration response exceeded safe bounds");
+				self.server_admin.needs_refresh = true;
+				return Ok(());
+			}
+			Err(failure) => {
+				self.server_admin.error = Some(failure.label());
+				self.server_admin.needs_refresh |=
+					action.as_ref().is_some_and(Action::write) && failure == Failure::Ambiguous;
+				if failure.ends_session() {
+					self.fail(failure);
+				}
+				return Ok(());
+			}
+		};
+		let expected = matches!(
+			(&action, &result),
+			(
+				Some(
+					Action::LoadEmojis
+						| Action::CreateEmoji { .. }
+						| Action::RenameEmoji { .. }
+						| Action::DeleteEmoji { .. }
+				),
+				Outcome::Emojis(_)
+			) | (Some(Action::LoadMembers(_)), Outcome::Members(_))
+				| (Some(Action::Prune { .. }), Outcome::Pruned(_))
+				| (Some(Action::ShowMembers { .. }), Outcome::ChannelList(_))
+		) || match (&action, &result) {
+			(
+				Some(Action::SetRole { user, .. } | Action::SetNickname { user, .. }),
+				Outcome::Member(member),
+			) => *user == member.user.id,
+			(Some(Action::Kick { user }), Outcome::Kicked(id)) => user == id,
+			_ => false,
+		};
+		if !expected {
+			self.server_admin.error =
+				Some("Unexpected server administration response; reload to continue");
+			self.server_admin.needs_refresh = true;
+			return Ok(());
+		}
+		match result {
+			Outcome::Emojis(page) => {
+				if let Some(guild) = self.guilds.iter_mut().find(|guild| guild.id == event.guild) {
+					guild.emojis = Some(page.items.iter().map(|row| row.emoji.clone()).collect());
+				}
+				self.invalidate_navigation();
+				self.server_admin.emojis = Some(page);
+			}
+			Outcome::Members(page) => {
+				if let Some(enabled) = page.show_in_channel_list {
+					if self.server_members_shortcuts.len() < crate::MAX_NAV
+						|| self.server_members_shortcuts.contains_key(&event.guild)
+					{
+						self.server_members_shortcuts.insert(event.guild, enabled);
+					}
+				} else {
+					self.server_members_shortcuts.remove(&event.guild);
+				}
+				self.server_admin.members = Some(page);
+			}
+			Outcome::Member(mut member) => {
+				if let Some(row) = self.server_admin.members.as_mut().and_then(|page| {
+					page.items
+						.iter_mut()
+						.find(|row| row.user.id == member.user.id)
+				}) {
+					member.join_source = row.join_source;
+					member.invite_code.clone_from(&row.invite_code);
+					*row = member;
+				}
+			}
+			Outcome::Kicked(user) => {
+				if let Some(page) = &mut self.server_admin.members {
+					page.items.retain(|row| row.user.id != user);
+					page.total = page.total.saturating_sub(1);
+				}
+			}
+			Outcome::Pruned(count) => {
+				self.server_admin.pruned = count;
+				self.server_admin.prune_days = match &action {
+					Some(Action::Prune {
+						days,
+						execute: false,
+					}) => Some(*days),
+					_ => None,
+				};
+			}
+			Outcome::ChannelList(enabled) => {
+				if let Some(page) = &mut self.server_admin.members {
+					page.show_in_channel_list = Some(enabled);
+				}
+				if self.server_members_shortcuts.len() < crate::MAX_NAV
+					|| self.server_members_shortcuts.contains_key(&event.guild)
+				{
+					self.server_members_shortcuts.insert(event.guild, enabled);
+				}
+			}
+		}
+		if matches!(action, Some(Action::LoadEmojis | Action::LoadMembers(_))) {
+			self.server_admin.needs_refresh = false;
+		}
+		self.server_admin.revision = self.server_admin.revision.wrapping_add(1);
+		Ok(())
+	}
+}

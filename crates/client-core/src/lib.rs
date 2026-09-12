@@ -23,6 +23,7 @@ pub mod resident;
 pub mod screen;
 pub mod search;
 pub mod server_actions;
+pub mod server_admin;
 pub mod server_settings;
 mod threads;
 pub mod typing;
@@ -43,6 +44,11 @@ pub const EVENT_SLOTS: usize = 8; // UI drain batch; reliable events share a 32 
 pub const COMMAND_SLOTS: usize = 16; // ordinary commands <=16 KiB; one pending group icon <=350 KiB
 
 pub enum Command {
+	ServerAdmin {
+		guild: Id,
+		request: u64,
+		action: Box<model::server_admin::Action>,
+	},
 	ServerSettings {
 		guild: Id,
 		request: u64,
@@ -163,6 +169,7 @@ pub enum Command {
 	},
 }
 pub enum Event {
+	ServerAdmin(server_admin::Event),
 	ServerSettings(server_settings::Event),
 	JoinInvite {
 		request: u64,
@@ -331,6 +338,8 @@ pub struct State {
 	pub user_actions: user_actions::Actions,
 	pub server_actions: server_actions::Actions,
 	pub server_settings: server_settings::Editor,
+	pub server_admin: server_admin::View,
+	pub server_members_shortcuts: BTreeMap<Id, bool>,
 	pub group_actions: group_actions::Actions,
 	pub typing: typing::Typing,
 	pub permissions: permissions::Permissions,
@@ -400,6 +409,8 @@ impl Default for State {
 			user_actions: user_actions::Actions::default(),
 			server_actions: server_actions::Actions::default(),
 			server_settings: server_settings::Editor::default(),
+			server_admin: server_admin::View::default(),
+			server_members_shortcuts: BTreeMap::new(),
 			group_actions: group_actions::Actions::default(),
 			typing: typing::Typing::default(),
 			permissions: permissions::Permissions::default(),
@@ -822,6 +833,16 @@ impl State {
 		})
 	}
 	pub fn command_rejected(&mut self, command: Command) {
+		if let Command::ServerAdmin { guild, request, .. } = command {
+			let _ = self.apply_server_admin(server_admin::Event {
+				guild,
+				request,
+				result: Err(auth::Failure::ProtocolAt(
+					"Server administration was not queued; try again",
+				)),
+			});
+			return;
+		}
 		if let Command::ServerSettings { guild, request, .. } = command {
 			let _ = self.apply_server_settings(server_settings::Event {
 				guild,
@@ -1283,6 +1304,7 @@ impl State {
 			Event::UserAction(event) => self.apply_user_action(event),
 			Event::ServerAction(event) => self.apply_server_action(event),
 			Event::ServerSettings(event) => self.apply_server_settings(event),
+			Event::ServerAdmin(event) => self.apply_server_admin(event),
 			Event::GroupAction(event) => self.apply_group_action(event),
 			Event::ThreadsSync {
 				guild,
@@ -1645,11 +1667,14 @@ impl State {
 				self.cancel_user_action();
 				self.cancel_server_action();
 				self.cancel_server_settings();
+				self.cancel_server_admin();
 				self.cancel_group_action();
 				self.cancel_invite_join();
 				self.user_actions.reset();
 				self.server_actions.reset();
 				self.server_settings.reset();
+				self.server_admin.reset();
+				self.server_members_shortcuts.clear();
 				self.group_actions.reset();
 				self.clear_own_profile();
 				self.user = Some(user);
@@ -1972,6 +1997,7 @@ impl State {
 				self.cancel_user_action();
 				self.cancel_server_action();
 				self.cancel_server_settings();
+				self.cancel_server_admin();
 				self.cancel_group_action();
 				self.cancel_invite_join();
 				self.read_state.cancel();
@@ -1999,6 +2025,7 @@ impl State {
 				self.cancel_user_action();
 				self.cancel_server_action();
 				self.cancel_server_settings();
+				self.cancel_server_admin();
 				self.cancel_group_action();
 				self.cancel_invite_join();
 				self.direct_presences.clear();
@@ -2078,6 +2105,23 @@ impl State {
 		{
 			self.server_settings.reset();
 		}
+		if access_changed && !self.server_members_shortcuts.is_empty() {
+			let guilds: BTreeSet<_> = self.guilds.iter().map(|guild| guild.id).collect();
+			self.server_members_shortcuts
+				.retain(|id, _| guilds.contains(id));
+		}
+		if let Some(guild) = self.server_admin.guild {
+			if !self.can_open_emoji_settings(guild) && !self.can_open_member_settings(guild) {
+				self.server_admin.reset();
+			} else {
+				if !self.can_open_emoji_settings(guild) {
+					self.server_admin.emojis = None;
+				}
+				if !self.can_open_member_settings(guild) {
+					self.server_admin.members = None;
+				}
+			}
+		}
 		self.enforce_resident_budget();
 	}
 	fn invalidate_members(&mut self) {
@@ -2155,6 +2199,7 @@ impl State {
 			self.cancel_user_action();
 			self.cancel_server_action();
 			self.cancel_server_settings();
+			self.cancel_server_admin();
 			self.cancel_group_action();
 			self.cancel_invite_join();
 			self.direct_presences.clear();
@@ -2239,6 +2284,10 @@ impl Event {
 						size_of::<model::server_settings::Settings>() + value.heap_bytes()
 					})
 				}
+				Self::ServerAdmin(event) => event
+					.result
+					.as_ref()
+					.map_or(0, model::server_admin::Result::bytes),
 				Self::GuildFolders(result) => result
 					.as_ref()
 					.map_or(0, model::guild_folders::Settings::heap_bytes),

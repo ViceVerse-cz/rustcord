@@ -1256,9 +1256,6 @@ pub fn switch(
 		egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *enabled, label)
 	});
 	let painter = ui.painter();
-	if response.hovered() && ui.is_enabled() {
-		painter.rect_filled(rect.expand2(egui::vec2(8.0, 0.0)), 6, p.hover);
-	}
 	let mut y = rect.top() + 8.0;
 	painter.galley(egui::pos2(rect.left(), y), title.clone(), p.text_strong);
 	y += title.size().y + 4.0;
@@ -1269,11 +1266,17 @@ pub fn switch(
 		egui::pos2(rect.right() - 20.0, rect.top() + 8.0 + title.size().y / 2.0),
 		egui::vec2(40.0, 24.0),
 	);
-	let mut fill = if *enabled { p.positive } else { p.muted };
+	let mut fill = if *enabled { p.accent } else { p.base };
 	if !ui.is_enabled() {
 		fill = fill.gamma_multiply(0.4);
 	}
 	painter.rect_filled(pill, 12, fill);
+	painter.rect_stroke(
+		pill,
+		12,
+		Stroke::new(1.0, if *enabled { fill } else { p.border }),
+		egui::StrokeKind::Inside,
+	);
 	let knob = egui::pos2(
 		if *enabled {
 			pill.right() - 12.0
@@ -1283,16 +1286,6 @@ pub fn switch(
 		pill.center().y,
 	);
 	painter.circle_filled(knob, 9.0, Color32::WHITE);
-	crate::icons::paint(
-		painter,
-		if *enabled {
-			crate::icons::Icon::Check
-		} else {
-			crate::icons::Icon::Close
-		},
-		egui::Rect::from_center_size(knob, egui::Vec2::splat(10.0)),
-		fill,
-	);
 	if response.has_focus() {
 		painter.rect_stroke(
 			pill.expand(3.0),

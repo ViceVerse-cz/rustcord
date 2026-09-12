@@ -44,6 +44,7 @@ mod reactions;
 mod reading;
 pub mod screen;
 mod search;
+mod server_admin;
 mod server_invite;
 mod server_menu;
 mod server_settings;
@@ -103,6 +104,7 @@ pub struct MessagingUi {
 	settings: settings::Settings,
 	server_settings: server_settings::Editor,
 	server_icon_sequence: u64,
+	server_emoji_sequence: u64,
 	switcher: switcher::Switcher,
 	focus_switched_composer: bool,
 	switcher_frame: bool,
@@ -917,6 +919,19 @@ impl MessagingUi {
 						self.switcher.open(&ctx);
 					}
 					ui.add_space(8.0);
+				}
+				if let Some(guild) = self.guild
+					&& state.can_open_member_settings(guild)
+					&& state.server_members_shortcut(guild)
+					&& ui
+						.add_sized(
+							[ui.available_width(), 32.0],
+							egui::Button::new("Members").frame(false),
+						)
+						.clicked() && let Some(command) =
+					self.preview_server_admin(state, guild, "members")
+				{
+					commands.push(command);
 				}
 				let select = self.channel_list(ui, state);
 				if let Some(id) = select
@@ -2204,8 +2219,39 @@ impl MessagingUi {
 			ui.disable();
 		}
 		if self.server_settings.is_open() {
+			if self.profile.is_some()
+				&& ctx
+					.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+			{
+				self.profile = None;
+				commands.push(state.clear_profile());
+			}
 			self.server_settings
 				.show(&ctx, state, &mut self.avatars, &mut commands);
+			if let Some(user) = self.server_settings.admin.profile.take() {
+				self.profile = Some(user);
+			}
+			if self.profile.is_some() {
+				ctx.set_sublayer(
+					egui::LayerId::new(
+						egui::Order::Foreground,
+						egui::Id::unique("server-settings"),
+					),
+					egui::LayerId::new(
+						egui::Order::Foreground,
+						egui::Id::unique("user-profile-popout"),
+					),
+				);
+			}
+			if let Some(action) = self.server_settings.admin.user_action.take() {
+				self.user_action = Some(action);
+			}
+			if let Some(channel) = self.server_settings.admin.message.take()
+				&& self.server_settings.navigate_away(state)
+				&& let Some(command) = state.select(channel)
+			{
+				commands.push(command);
+			}
 			ui.disable();
 		}
 		// Foreground confirmation handles Escape before background search/archive shortcuts.
@@ -2663,11 +2709,13 @@ impl MessagingUi {
 		}
 		self.contact_editor.show(&ctx, state, &mut commands);
 		if let Some(user) = &self.profile {
-			let profile_guild = state
-				.channels
-				.iter()
-				.find(|channel| Some(channel.id) == state.selected)
-				.and_then(|channel| channel.guild);
+			let profile_guild = self.server_settings.guild().or_else(|| {
+				state
+					.channels
+					.iter()
+					.find(|channel| Some(channel.id) == state.selected)
+					.and_then(|channel| channel.guild)
+			});
 			if user.webhook {
 				if state.profile.is_some() {
 					commands.push(state.clear_profile());
@@ -2752,7 +2800,9 @@ impl MessagingUi {
 					self.profile_link = None;
 					self.profile_anchor = None;
 					commands.push(state.clear_profile());
-					if let Some(command) = state.select(channel) {
+					if self.server_settings.navigate_away(state)
+						&& let Some(command) = state.select(channel)
+					{
 						commands.push(command);
 					}
 				}

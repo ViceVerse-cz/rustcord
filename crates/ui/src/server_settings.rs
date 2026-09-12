@@ -12,12 +12,23 @@ enum Page {
 	#[default]
 	Profile,
 	Engagement,
+	Emoji,
+	Members,
 }
 impl Page {
+	fn allowed(self, state: &State, guild: Id) -> bool {
+		match self {
+			Self::Profile | Self::Engagement => state.can_manage_guild(guild),
+			Self::Emoji => state.can_open_emoji_settings(guild),
+			Self::Members => state.can_open_member_settings(guild),
+		}
+	}
 	fn label(self) -> &'static str {
 		match self {
 			Self::Profile => "Server Profile",
 			Self::Engagement => "Engagement",
+			Self::Emoji => "Emoji",
+			Self::Members => "Members",
 		}
 	}
 }
@@ -39,6 +50,7 @@ pub(super) struct Editor {
 	icon_error: Option<&'static str>,
 	form_error: Option<&'static str>,
 	emoji_picker: crate::emoji_picker::Picker,
+	pub(super) admin: crate::server_admin::Admin,
 }
 
 impl MessagingUi {
@@ -46,15 +58,70 @@ impl MessagingUi {
 	pub fn preview_server_engagement(&mut self) {
 		self.server_settings.page = Page::Engagement;
 	}
+	pub fn preview_server_admin(
+		&mut self,
+		state: &mut State,
+		guild: Id,
+		page: &str,
+	) -> Option<Command> {
+		let page = if page == "members" {
+			Page::Members
+		} else {
+			Page::Emoji
+		};
+		if !page.allowed(state, guild) {
+			return None;
+		}
+		self.settings.open = false;
+		self.server_settings = Editor {
+			scope: Some((state.generation, guild)),
+			page,
+			..Editor::default()
+		};
+		self.server_settings
+			.admin
+			.load(state, guild, page == Page::Members)
+	}
+	pub fn accepts_server_emoji_drops(&self) -> bool {
+		self.server_settings.is_open() && self.server_settings.page == Page::Emoji
+	}
+	pub fn queue_server_emoji_drop(&mut self, paths: Vec<std::path::PathBuf>) {
+		if self.accepts_server_emoji_drops() {
+			self.server_settings.admin.queue_files(paths);
+		}
+	}
+	pub fn take_server_emoji_request(&mut self) -> Option<(u64, Id, u64, Vec<std::path::PathBuf>)> {
+		let (generation, guild) = self.server_settings.scope?;
+		let paths = self.server_settings.admin.take_files()?;
+		self.server_emoji_sequence = self.server_emoji_sequence.wrapping_add(1);
+		self.server_settings.admin.request = self.server_emoji_sequence;
+		Some((generation, guild, self.server_emoji_sequence, paths))
+	}
+	pub fn accept_server_emojis(
+		&mut self,
+		ctx: &egui::Context,
+		scope: (u64, Id, u64),
+		result: Result<Vec<(String, String, bool, egui::ColorImage)>, &'static str>,
+	) {
+		if self.server_settings.scope == Some((scope.0, scope.1))
+			&& self.server_settings.admin.request == scope.2
+		{
+			self.server_settings.admin.accept_files(ctx, result);
+		}
+	}
 	pub fn has_server_settings_changes(&self) -> bool {
 		self.server_settings.is_open()
 			&& (self.server_settings.dirty()
 				|| self.server_settings.submitted
 				|| self.server_settings.icon_pending)
+			|| self.server_settings.admin.has_changes()
 	}
 	/// Opens the same permission-checked editor used by the server menu.
 	pub fn preview_server_settings(&mut self, state: &mut State, guild: Id) -> Option<Command> {
 		if !state.can_manage_guild(guild) {
+			if state.can_open_emoji_settings(guild) {
+				return self.preview_server_admin(state, guild, "emoji");
+			}
 			return None;
 		}
 		self.settings.open = false;
@@ -117,6 +184,26 @@ impl MessagingUi {
 }
 
 impl Editor {
+	pub fn guild(&self) -> Option<Id> {
+		self.scope.map(|(_, guild)| guild)
+	}
+	pub fn navigate_away(&mut self, state: &mut State) -> bool {
+		if !self.is_open() {
+			return true;
+		}
+		if self.dirty()
+			|| self.admin.has_changes()
+			|| state.server_admin.saving
+			|| state.server_settings.saving
+		{
+			self.admin.navigation_error();
+			return false;
+		}
+		*self = Self::default();
+		state.close_server_settings();
+		state.close_server_admin();
+		true
+	}
 	pub fn is_open(&self) -> bool {
 		self.scope.is_some()
 	}
@@ -143,12 +230,37 @@ impl Editor {
 			return;
 		};
 		if generation != state.generation
-			|| !state.can_manage_guild(guild)
+			|| !(state.can_manage_guild(guild)
+				|| state.can_open_emoji_settings(guild)
+				|| state.can_open_member_settings(guild))
 			|| !state.guilds.iter().any(|known| known.id == guild)
 		{
 			*self = Self::default();
 			state.close_server_settings();
+			state.close_server_admin();
 			return;
+		}
+		if !self.page.allowed(state, guild) {
+			if !state.can_manage_guild(guild) {
+				self.draft = None;
+				self.baseline = None;
+				self.icon = Patch::Absent;
+				self.icon_preview = None;
+				self.icon_pending = false;
+				self.icon_requested = false;
+			}
+			self.page = if state.can_manage_guild(guild) {
+				Page::Profile
+			} else {
+				Page::Emoji
+			};
+			self.admin = crate::server_admin::Admin::default();
+			state.close_server_admin();
+		}
+		if matches!(self.page, Page::Emoji | Page::Members)
+			&& let Some(command) = self.admin.load(state, guild, self.page == Page::Members)
+		{
+			commands.push(command);
 		}
 		if state.server_settings.guild == Some(guild) {
 			if self.submitted && !state.server_settings.pending {
@@ -209,7 +321,26 @@ impl Editor {
 								.map_or("Server", |known| known.name.as_str());
 							ui.label(design::eyebrow(ui, name, colors.muted));
 							ui.add_space(12.0);
-							for page in [Page::Profile, Page::Engagement] {
+							for page in
+								[Page::Profile, Page::Engagement, Page::Emoji, Page::Members]
+							{
+								if !page.allowed(state, guild) {
+									continue;
+								}
+								if matches!(page, Page::Emoji | Page::Members) {
+									ui.add_space(16.0);
+									ui.separator();
+									ui.add_space(12.0);
+									ui.label(design::eyebrow(
+										ui,
+										if page == Page::Emoji {
+											"EXPRESSION"
+										} else {
+											"PEOPLE"
+										},
+										colors.muted,
+									));
+								}
 								if ui
 									.add_sized(
 										[ui.available_width(), 32.0],
@@ -251,8 +382,13 @@ impl Editor {
 							close = close_control(&mut close_ui).clicked();
 						}
 						if !wide {
-							ui.horizontal(|ui| {
-								for page in [Page::Profile, Page::Engagement] {
+							ui.horizontal_wrapped(|ui| {
+								for page in
+									[Page::Profile, Page::Engagement, Page::Emoji, Page::Members]
+								{
+									if !page.allowed(state, guild) {
+										continue;
+									}
 									ui.selectable_value(&mut self.page, page, page.label());
 								}
 								close = close_control(ui).clicked();
@@ -273,6 +409,17 @@ impl Editor {
 							.auto_shrink([false, false])
 							.show(ui, |ui| {
 								ui.set_width(ui.available_width());
+								if matches!(self.page, Page::Emoji | Page::Members) {
+									self.admin.show(
+										ui,
+										state,
+										guild,
+										self.page == Page::Members,
+										avatars,
+										commands,
+									);
+									return;
+								}
 								if let Some(error) = state.server_settings.error {
 									ui.colored_label(colors.danger, error);
 									if !state.server_settings.pending
@@ -307,11 +454,16 @@ impl Editor {
 					});
 			});
 		if close || modal.should_close() {
-			if self.dirty() || state.server_settings.saving {
+			if self.dirty()
+				|| state.server_settings.saving
+				|| self.admin.has_changes()
+				|| state.server_admin.saving
+			{
 				self.discard = true;
 			} else {
 				self.scope = None;
 				state.close_server_settings();
+				state.close_server_admin();
 			}
 		}
 		if self.discard {
@@ -319,24 +471,27 @@ impl Editor {
 				egui::Modal::new(egui::Id::unique("discard-server-settings")).show(ctx, |ui| {
 					ui.set_max_width(380.0);
 					ui.heading("Discard unsaved changes?");
-					ui.label(if state.server_settings.saving {
-						"Wait for the current save to finish before closing."
-					} else {
-						"Your changes to this server will be lost."
-					});
+					ui.label(
+						if state.server_settings.saving || state.server_admin.saving {
+							"Wait for the current save to finish before closing."
+						} else {
+							"Your changes to this server will be lost."
+						},
+					);
 					ui.horizontal(|ui| {
 						if ui.button("Keep Editing").clicked() {
 							self.discard = false;
 						}
 						if ui
 							.add_enabled(
-								!state.server_settings.saving,
+								!state.server_settings.saving && !state.server_admin.saving,
 								egui::Button::new("Discard Changes"),
 							)
 							.clicked()
 						{
 							*self = Self::default();
 							state.close_server_settings();
+							state.close_server_admin();
 						}
 					});
 				});

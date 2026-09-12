@@ -33,6 +33,28 @@ pub fn icon_source(
 	}
 }
 
+pub fn emoji_sources(
+	parent: Arc<winit::window::Window>,
+) -> impl std::future::Future<Output = Option<Vec<PathBuf>>> + Send + 'static {
+	let dialog = rfd::AsyncFileDialog::new()
+		.set_parent(parent.as_ref())
+		.set_title("Choose emoji images")
+		.add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp"])
+		.pick_files();
+	async move {
+		let files = dialog.await?;
+		drop(parent);
+		// Keep one excess entry so the caller can report the selection limit.
+		Some(
+			files
+				.into_iter()
+				.take(11)
+				.map(|file| file.path().to_owned())
+				.collect(),
+		)
+	}
+}
+
 pub fn attachment_source(
 	parent: Arc<winit::window::Window>,
 ) -> impl std::future::Future<Output = Option<Vec<PathBuf>>> + Send + 'static {

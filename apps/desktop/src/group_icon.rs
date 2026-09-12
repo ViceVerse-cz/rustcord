@@ -129,6 +129,14 @@ fn read(path: &Path, output_edge: u32) -> Result<(String, egui::ColorImage), &'s
 }
 
 fn decode(bytes: &[u8], output_edge: u32) -> Result<(String, egui::ColorImage), &'static str> {
+	decode_image(bytes, output_edge, true)
+}
+
+pub(crate) fn decode_image(
+	bytes: &[u8],
+	output_edge: u32,
+	square: bool,
+) -> Result<(String, egui::ColorImage), &'static str> {
 	if bytes.len() > MAX_INPUT {
 		return Err("Choose an image up to 8 MB");
 	}
@@ -144,16 +152,20 @@ fn decode(bytes: &[u8], output_edge: u32) -> Result<(String, egui::ColorImage), 
 		.decode()
 		.map_err(|_| "Image is unsupported or too large; use at most 4096 × 4096 pixels")?;
 	let edge = image.width().min(image.height());
-	let crop = image.view(
-		(image.width() - edge) / 2,
-		(image.height() - edge) / 2,
-		edge,
-		edge,
-	);
+	let crop = if square {
+		image.view(
+			(image.width() - edge) / 2,
+			(image.height() - edge) / 2,
+			edge,
+			edge,
+		)
+	} else {
+		image.view(0, 0, image.width(), image.height())
+	};
 	let image = image::DynamicImage::ImageRgba8(image::imageops::thumbnail(
 		&*crop,
-		edge.min(output_edge.clamp(1, 512)),
-		edge.min(output_edge.clamp(1, 512)),
+		crop.width().min(output_edge.clamp(1, 512)),
+		crop.height().min(output_edge.clamp(1, 512)),
 	));
 	let mut png = Cursor::new(Vec::new());
 	image

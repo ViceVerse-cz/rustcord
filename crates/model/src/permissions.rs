@@ -4,6 +4,11 @@ use crate::Id;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const ADMINISTRATOR: u128 = 1 << 3;
+pub const KICK_MEMBERS: u128 = 1 << 1;
+pub const MANAGE_GUILD_EXPRESSIONS: u128 = 1 << 30;
+pub const CREATE_GUILD_EXPRESSIONS: u128 = 1 << 43;
+pub const CHANGE_NICKNAME: u128 = 1 << 26;
+pub const MANAGE_NICKNAMES: u128 = 1 << 27;
 pub const MANAGE_CHANNELS: u128 = 1 << 4;
 pub const MANAGE_GUILD: u128 = 1 << 5;
 pub const ADD_REACTIONS: u128 = 1 << 6;
