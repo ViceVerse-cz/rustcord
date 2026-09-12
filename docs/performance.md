@@ -3566,6 +3566,28 @@ data removal; shared host code and allocator reserves remain possible costs.
 Raw numeric samples: [metrics.json](pr-evidence/community-extensions/metrics.json).
 No live Discord, microphone, macOS native or Linux native UI claim is made.
 
+## Notification preference save retries - September 12, 2026
+
+Baseline `d00bd04`, branch `fix/remember-notifications`; Windows 11 Home
+10.0.26200, Rust 1.98.1. Both snapshots use `cargo xtask package`, standard
+release features including voice, before adding this measurement note.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Executable bytes | 65,071,104 | 65,071,104 | 0 |
+| Installed package bytes | 71,389,398 | 71,389,398 | 0 |
+| ZIP bytes (Python zipfile, DEFLATE level 9, sorted paths) | 42,280,563 | 42,280,541 | -22 (-0.000052%) |
+
+One package per revision; these sizes do not establish a speed improvement.
+Only a rejected preference enqueue is retried on subsequent UI frames. The
+existing sixteen-command cache queue and one outstanding preference write remain
+bounded. A synthetic regression fills the queue, drains it, retries through the
+desktop's save path, and reopens SQLite with a fresh UI for both enabled and
+disabled notifications. The old behavior fails that regression; the fix passes.
+Native restart interaction, CPU/RSS and save latency are unmeasured: the native
+Computer Use pipe was unavailable (OS error 2), and Orca CLI was absent. No live
+Discord session or system notification was exercised for this verification.
+
 ## Extension shop previews - September 12, 2026
 
 Baseline `d00bd04`, after `c306df4` (includes main through `4ddba82`);

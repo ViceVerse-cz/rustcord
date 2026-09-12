@@ -998,19 +998,10 @@ impl Desktop {
 			return;
 		}
 		self.app_settings.observe(&self.messaging);
-		if self.app_settings.state.dirty && !self.app_settings.state.saving {
-			let accepted = self.cache.as_ref().is_some_and(|cache| {
-				cache.queue(
-					self.state.generation,
-					model::Id(0),
-					cache::Operation::SaveAppPreferences(self.app_settings.current.clone()),
-				)
-			});
-			self.app_settings.state.dirty = false;
-			self.app_settings.state.saving = accepted;
-			self.app_settings.state.failed = !accepted;
-			self.cache_pending += usize::from(accepted);
-		}
+		self.cache_pending += usize::from(
+			self.app_settings
+				.save(self.cache.as_ref(), self.state.generation),
+		);
 	}
 	fn save_reading_preferences(&mut self, ctx: &egui::Context) {
 		if self.fixture_only {
