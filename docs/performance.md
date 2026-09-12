@@ -3453,3 +3453,44 @@ fix and passed after it at 180/240-point widths, light/dark and hover/no-hover.
 This is not a native screenshot or timing benchmark. Native application control
 is unavailable; CPU/RSS/p95 frame comparisons and native visual inspection remain
 unmeasured. No speed or live-service compatibility improvement is claimed.
+
+## Community extensions - September 12, 2026
+
+Baseline `0e355da`, implementation `46e81a1`; Windows 11 (10.0.26200),
+Ryzen 7 7800X3D, 33,410,678,784 bytes RAM, Rust 1.98.1, release/wgpu.
+Standard packages include voice. Package snapshots precede this measurement
+note; development evidence and SDK/package examples are not bundled.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Executable bytes | 63,095,808 | 65,076,736 | +1,980,928 (+3.14%) |
+| Installed package bytes | 69,333,622 | 71,385,534 | +2,051,912 (+2.96%) |
+| ZIP bytes (Compress-Archive) | 41,682,785 | 42,425,224 | +742,439 (+1.78%) |
+| Settled working set, median bytes | 169,791,488 | 170,258,432 | +466,944 |
+| Settled private bytes, median | 398,897,152 | 397,594,624 | -1,302,528 |
+| Process CPU ms per ~10 s, median | 15.625 | 0 | -15.625 |
+
+Native method: three alternating baseline/after launches with `--demo
+--demo-settings=appearance`, all community plugins disabled. Each process used
+five seconds warmup, then twenty 500 ms samples (~10.2 seconds). Both exposed a
+native window; Start-Process used Hidden on both. No child processes were
+reported. No concurrent task builds ran during the measured series. Values are
+Get-Process WorkingSet64, PrivateMemorySize64 and TotalProcessorTime, not GPU
+allocations. The CPU range was 0-46.875 ms per sample window; its small difference
+is timer quantization/noise, not a speed improvement. Private-byte variation
+also exceeds the small median delta. A preceding exploratory launch had a
+209 MB baseline working set, so it is not included in these three-run medians.
+Display scale, interactive startup p95, scrolling frame p95 and visual correctness
+remain unmeasured: the native computer-use helper failed to connect (OS error 2).
+
+`cargo run --locked --release -p extensions --example benchmark` executes real
+committed Rust Wasm packages against short synthetic Unicode input. After one
+warmup, median parse+invoke of five samples was 2.525 ms (uppercase) and 2.190 ms
+(word count); median of 100 invocations, each with a fresh runtime, was 1.210 ms
+and 1.093 ms. These have no predecessor feature baseline. They do not measure
+UI frame latency or prove exact process-memory reclamation. Wasm/module/store
+objects are invocation-owned, and host cleanup tests verify installed files and
+data removal; shared host code and allocator reserves remain possible costs.
+
+Raw numeric samples: [metrics.json](pr-evidence/community-extensions/metrics.json).
+No live Discord, microphone, macOS native or Linux native UI claim is made.

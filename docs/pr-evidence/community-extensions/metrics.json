@@ -1,0 +1,100 @@
+{
+  "baseline": "0e355da",
+  "implementation": "46e81a1",
+  "package": {
+    "baseline": {
+      "executable": 63095808,
+      "installed": 69333622,
+      "zip": 41682785
+    },
+    "after": {
+      "executable": 65076736,
+      "installed": 71385534,
+      "zip": 42425224
+    }
+  },
+  "native_samples": [
+    {
+      "run": 1,
+      "name": "baseline",
+      "seconds": 10.207122499999999,
+      "cpu_ms": 15.625,
+      "working_set_settled": 169787392,
+      "working_set_peak": 169787392,
+      "private_settled": 399265792,
+      "private_peak": 399265792,
+      "main_window": true,
+      "children": []
+    },
+    {
+      "run": 1,
+      "name": "after",
+      "seconds": 10.1959977,
+      "cpu_ms": 0,
+      "working_set_settled": 170323968,
+      "working_set_peak": 170323968,
+      "private_settled": 398045184,
+      "private_peak": 398045184,
+      "main_window": true,
+      "children": []
+    },
+    {
+      "run": 2,
+      "name": "baseline",
+      "seconds": 10.1751585,
+      "cpu_ms": 46.875,
+      "working_set_settled": 169791488,
+      "working_set_peak": 169791488,
+      "private_settled": 398897152,
+      "private_peak": 398897152,
+      "main_window": true,
+      "children": []
+    },
+    {
+      "run": 2,
+      "name": "after",
+      "seconds": 10.1843796,
+      "cpu_ms": 0,
+      "working_set_settled": 170258432,
+      "working_set_peak": 170258432,
+      "private_settled": 397594624,
+      "private_peak": 397594624,
+      "main_window": true,
+      "children": []
+    },
+    {
+      "run": 3,
+      "name": "baseline",
+      "seconds": 10.1979197,
+      "cpu_ms": 0,
+      "working_set_settled": 169938944,
+      "working_set_peak": 169938944,
+      "private_settled": 397758464,
+      "private_peak": 397758464,
+      "main_window": true,
+      "children": []
+    },
+    {
+      "run": 3,
+      "name": "after",
+      "seconds": 10.256333999999999,
+      "cpu_ms": 15.625,
+      "working_set_settled": 170172416,
+      "working_set_peak": 170172416,
+      "private_settled": 397377536,
+      "private_peak": 397377536,
+      "main_window": true,
+      "children": []
+    }
+  ],
+  "sandbox_us": {
+    "uppercase": {
+      "parse_invoke": 2525,
+      "invoke": 1210
+    },
+    "word_count": {
+      "parse_invoke": 2190,
+      "invoke": 1093
+    }
+  }
+}
