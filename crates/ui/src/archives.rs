@@ -173,13 +173,13 @@ mod tests {
 				..Default::default()
 			};
 			frame(&ctx, None, |root| {
-				assert!(ui.channel_list(root, &state).is_none());
+				assert!(ui.channel_list(root, &mut state).is_none());
 			});
 			assert!(ui.archive_parent.is_none());
 			// The forum row is now a destination; the header Threads control opens archives.
 			for key in [egui::Key::Tab, egui::Key::Enter] {
 				frame(&ctx, Some(key), |root| {
-					if ui.channel_list(root, &state) == Some(Id(7)) {
+					if ui.channel_list(root, &mut state) == Some(Id(7)) {
 						ui.archive_parent = Some(Id(7));
 					}
 				});

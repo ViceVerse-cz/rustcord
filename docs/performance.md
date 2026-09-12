@@ -3453,3 +3453,25 @@ fix and passed after it at 180/240-point widths, light/dark and hover/no-hover.
 This is not a native screenshot or timing benchmark. Native application control
 is unavailable; CPU/RSS/p95 frame comparisons and native visual inspection remain
 unmeasured. No speed or live-service compatibility improvement is claimed.
+
+## DM sidebar scrolling and stacked group avatars - September 12, 2026
+
+Baseline `0e355da`; Windows, Ryzen 7 7800X3D, 33,410,678,784 bytes RAM,
+Rust 1.98.1. Standard release packages include voice; separate snapshots exclude
+the unrelated obsolete `dist/voice` directory, which remains untouched.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Executable bytes | 63,095,808 | 63,097,856 | +2,048 (+0.0032%) |
+| Installed bytes | 73,315,659 | 73,317,707 | +2,048 (+0.0028%) |
+| Compress-Archive ZIP bytes | 43,546,895 | 43,547,211 | +316 (+0.0007%) |
+
+Friends and the DM section heading are two prefix rows in the existing virtualized
+list. No additional scroller, cached row collection or per-frame full-list traversal.
+Groups without custom icons paint at most two member avatars via the existing bounded
+avatar cache/request path; cold groups may fetch those two images. No new dependencies,
+cache limits, storage fields or network transports. Synthetic tests check pinned-search
+geometry, Friends navigation, bounded visible rows and stacked artwork at 24/32/144 points.
+Native screenshot/control is unavailable, so visual inspection and CPU/RSS/p95 frame
+comparisons remain unmeasured. These tests do not establish native smoothness or live
+Discord interoperability; no speed improvement is claimed.
