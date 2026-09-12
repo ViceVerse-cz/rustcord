@@ -3565,3 +3565,40 @@ data removal; shared host code and allocator reserves remain possible costs.
 
 Raw numeric samples: [metrics.json](pr-evidence/community-extensions/metrics.json).
 No live Discord, microphone, macOS native or Linux native UI claim is made.
+
+## Extension shop previews - September 12, 2026
+
+Baseline `d00bd04`, after `c306df4` (includes main through `4ddba82`);
+Windows 11, Ryzen 7 7800X3D, Rust 1.98.1, release/wgpu. Standard packages
+include voice. Package snapshots precede this note; development evidence and
+preview PNGs are not bundled in the standard executable/package.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Executable bytes | 65,071,104 | 65,256,448 | +185,344 (+0.285%) |
+| Installed bytes | 71,389,398 | 71,576,932 | +187,534 (+0.263%) |
+| Compress-Archive ZIP bytes | 42,431,635 | 42,498,422 | +66,787 (+0.157%) |
+| Native capture workload peak WorkingSet64, median bytes | 232,525,824 | 233,938,944 | +1,413,120 (+0.61%) |
+| Sampled process CPU, median ms | 390.625 | 421.875 | +31.250 |
+
+Native method: existing `profile_preview --demo --page=extensions`, 1120x760
+logical / 1400x950 framebuffer, 125% display scale. One warmup per variant,
+then five alternating launches, 100 ms WorkingSet64/TotalProcessorTime samples
+until the fixture exits. This measures synthetic startup, rendering, GPU readback
+and PNG writing together, not idle CPU, interactive startup p95 or frame p95.
+Both executables ran from C:, with no concurrent Cargo builds. GPU allocations
+and child processes are not included. Completion was verified using each saved
+1400x950 PNG and stdout marker; PowerShell's polled ExitCode was unavailable.
+The small timing differences are not a speed improvement claim.
+
+The baseline example harness seeds the same starter catalog without changing
+application UI. The after fixture preloads all three local thumbnails; production
+loads only visible cards. The shop keeps up to eight 640x360 RGBA thumbnails
+(7,372,800 pixel bytes), rejects oversized inputs, and evicts offscreen images.
+It uses the existing worker/HTTPS client and adds no dependency or idle animation.
+These component limits are not whole-process RAM or GPU measurements.
+
+Native dark/light, narrow and theme-page screenshots were captured and inspected
+using the existing wgpu framebuffer example. Keyboard/consent/cache behavior is
+covered by offline egui tests; no OS input automation or live Discord claim is
+made. Raw measurements: [metrics.json](pr-evidence/extension-shop/metrics.json).
