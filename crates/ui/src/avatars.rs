@@ -494,6 +494,27 @@ impl Avatars {
 				self.request(key);
 			}
 		}
+		if !painted && channel.icon.is_none() && !channel.recipients.is_empty() {
+			let users = &channel.recipients;
+			let diameter = if users.len() > 1 { size * 0.66 } else { size };
+			for (index, user) in users.iter().take(2).enumerate() {
+				let corner = if index == 0 {
+					rect.left_top()
+				} else {
+					rect.right_bottom() - egui::Vec2::splat(diameter)
+				};
+				let avatar = egui::Rect::from_min_size(corner, egui::Vec2::splat(diameter));
+				if index == 1 {
+					ui.painter().circle_filled(
+						avatar.center(),
+						diameter * 0.5 + size * 0.04,
+						colors.sidebar,
+					);
+				}
+				self.paint_user(ui, user, diameter, avatar, demo);
+			}
+			painted = true;
+		}
 		if !painted {
 			ui.painter()
 				.circle_filled(rect.center(), size / 2.0, colors.raised);
@@ -806,16 +827,15 @@ impl Avatars {
 		});
 		response
 	}
-	pub fn show(
+	fn paint_user(
 		&mut self,
 		ui: &mut egui::Ui,
 		user: &User,
 		size: f32,
+		rect: egui::Rect,
 		demo: bool,
-	) -> egui::Response {
-		let (_, response) = ui.allocate_exact_size(egui::Vec2::splat(size), egui::Sense::click());
-		let response = response.on_hover_text(&user.name);
-		if ui.is_rect_visible(response.rect) {
+	) {
+		if ui.is_rect_visible(rect) {
 			self.clock += 1;
 			let avatar = user
 				.avatar
@@ -878,9 +898,6 @@ impl Avatars {
 					.insert(key.to_string(), (Instant::now(), false));
 				self.accept(ui.ctx(), key.to_string(), Some(image));
 			}
-			let rect = ui
-				.layout()
-				.align_size_within_rect(egui::Vec2::splat(size), response.rect);
 			if !self.paint(ui, &key, rect, (size * 0.5) as u8) {
 				crate::design::paint_avatar(ui, &user.name, size, rect);
 				if !demo {
@@ -888,6 +905,20 @@ impl Avatars {
 				}
 			}
 		}
+	}
+	pub fn show(
+		&mut self,
+		ui: &mut egui::Ui,
+		user: &User,
+		size: f32,
+		demo: bool,
+	) -> egui::Response {
+		let (_, response) = ui.allocate_exact_size(egui::Vec2::splat(size), egui::Sense::click());
+		let response = response.on_hover_text(&user.name);
+		let rect = ui
+			.layout()
+			.align_size_within_rect(egui::Vec2::splat(size), response.rect);
+		self.paint_user(ui, user, size, rect, demo);
 		if response.hovered() || response.has_focus() {
 			ui.painter().circle_stroke(
 				ui.layout()
@@ -1007,6 +1038,77 @@ mod tests {
 		assert!(images.animations.is_empty());
 		assert!(images.gif_texture(&ctx, &gif, false).is_none());
 		assert_eq!(images.take_requests(), vec![format!("gif:{}", gif.preview)]);
+	}
+	#[test]
+	fn group_fallback_stacks_two_members_and_preserves_custom_icons() {
+		for size in [24.0, 32.0, 144.0] {
+			for count in [0, 1, 2, 3] {
+				for custom in [false, true] {
+					let ctx = egui::Context::default();
+					crate::design::apply(&ctx);
+					let mut images = Avatars::default();
+					let mut channel = test_support::demo_state()
+						.channels
+						.into_iter()
+						.find(|c| c.kind == 3)
+						.unwrap();
+					let user = test_support::message(1, channel.id).author;
+					channel.recipients = (0..count)
+						.map(|i| {
+							let mut user = user.clone();
+							user.id = model::Id(i + 100);
+							user
+						})
+						.collect();
+					channel.icon = custom.then(|| "0123456789abcdef0123456789abcdef".into());
+					if let Some(hash) = &channel.icon {
+						let key = format!("group-icon-{}-{hash}", channel.id);
+						images.attempts.insert(key.clone(), (Instant::now(), false));
+						images.accept(
+							&ctx,
+							key,
+							Some(ColorImage::filled([32, 32], egui::Color32::RED)),
+						);
+					}
+					let mut slot = egui::Rect::NOTHING;
+					let mut output = ctx.run_ui(Default::default(), |ui| {
+						slot = images.show_group(ui, &channel, size, true).rect;
+					});
+					output.textures_delta.clear();
+					let artwork: Vec<_> = output
+						.shapes
+						.iter()
+						.filter_map(|s| match &s.shape {
+							egui::Shape::Rect(m)
+								if images
+									.textures
+									.values()
+									.any(|(_, texture)| texture.id() == m.fill_texture_id()) =>
+							{
+								Some(m.rect)
+							}
+							_ => None,
+						})
+						.collect();
+					assert_eq!(
+						artwork.len(),
+						if custom { 1 } else { count.min(2) as usize }
+					);
+					for rect in &artwork {
+						assert!(slot.contains_rect(*rect));
+					}
+					if artwork.len() == 2 {
+						assert!(artwork[0].intersects(artwork[1]));
+						assert!(
+							artwork[0].left() < artwork[1].left()
+								&& artwork[0].top() < artwork[1].top()
+						);
+					}
+					assert!(images.take_requests().is_empty());
+					output.drop_without_applying_deltas();
+				}
+			}
+		}
 	}
 	#[test]
 	fn avatar_artwork_matches_fallback_in_justified_layout() {
