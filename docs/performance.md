@@ -3777,3 +3777,50 @@ Final offline framebuffer exports were inspected in dark/light themes at
 rows. Computer Use could not connect to its native pipe (OS error 2); Orca CLI
 was absent. Native interaction, accessibility and live Discord remain unverified.
 Raw samples: [metrics.json](pr-evidence/server-integrations/metrics.json).
+
+## Server audit log - September 13, 2026
+
+Baseline `f1edbcf`, branch `feat/server-audit-log`; exact source fingerprint and
+raw samples are in [metrics.json](pr-evidence/server-audit-log/metrics.json).
+Windows 11 Home 10.0.26200, Ryzen 7 7800X3D (16 logical processors),
+33,410,678,784 RAM bytes, Rust 1.98.1. Both standard packages include voice.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Standard executable bytes | 67,291,136 | 67,436,032 | +144,896 (+0.215%) |
+| Installed package bytes | 73,640,266 | 73,787,169 | +146,903 (+0.199%) |
+| ZIP bytes (CompressionLevel.Optimal) | 43,179,719 | 43,230,371 | +50,652 (+0.117%) |
+| Reducer replay median, ms | 47.0764 | 64.0595 | +16.9831 (+36.076%) |
+| Profile peak working-set bytes | 172,224,512 | 170,233,856 | -1,990,656 |
+| Profile peak private bytes | 397,463,552 | 395,927,552 | -1,536,000 |
+
+Packages use clean staging of the same 234 paths, .NET ZipFile with Optimal
+compression and no enclosing directory. Sizes precede this measurement note;
+ZIP timestamps are not normalized. No dependencies changed.
+
+Replay uses one warmup and five direct release runs of 100,000 synthetic events,
+retaining 500 records and 236,992-237,477 estimated timeline bytes. Baseline runs
+span 45.3208-47.3546 ms; after runs span 57.2998-104.8310 ms. Concurrent compiler
+processes were observed during both sets. These timings are confounded and do
+not establish a regression caused by the audit log or measure its request latency.
+
+Process samples use release demo builds, Wgpu, default 1120x760 logical window
+at the 125% environment scale, Start-Process Hidden, five seconds warmup and
+twenty samples 500 ms apart. Profile uses `--demo --demo-server-settings`;
+the new Audit Log sample adds `--demo-server-page=audit-log` with 50 loaded
+synthetic events from a 75-entry fixture. There is no predecessor Audit Log page.
+
+- Baseline Profile: peak/settled working set 172,224,512 bytes; private bytes 397,463,552; CPU delta 15.625 ms.
+- After Profile: peak/settled working set 170,233,856 bytes; private bytes 395,927,552; CPU delta 0 ms.
+- New Audit Log: peak/settled working set 170,745,856 bytes; private bytes 396,906,496; CPU delta 0 ms.
+
+No child processes were observed. Concurrent builds were present during all
+process samples. Single-run differences and timer resolution do not establish
+memory improvements or zero idle CPU. Visibility/occlusion, actual GPU adapter,
+GPU allocations, frame-time p95 and startup latency remain unverified.
+
+Inspected synthetic offline framebuffer exports in dark/light themes at
+1440x1000 and narrow 800x900 logical sizes (125% output), with expanded invite
+details. Native computer APIs are disabled in this session, so native input and
+accessibility validation remain unavailable. These exports, layout tests and
+local HTTP fixtures do not prove live Discord interoperability.

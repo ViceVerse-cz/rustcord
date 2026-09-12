@@ -80,6 +80,7 @@ pub fn execute_admin(
 	);
 	let owner = state.user.as_ref().expect("fixture user");
 	let result = match action {
+		Action::AuditLog(query) => execute_audit_log(state, guild, query),
 		Action::Invites(action) => execute_invites(state, guild, action),
 		Action::Integrations(action) => execute_integrations(state, guild, action),
 		Action::Roles(action) => execute_roles(state, guild, action),
@@ -557,6 +558,7 @@ pub fn open(state: &mut State, messaging: &mut ui::MessagingUi) {
 				"admin" => model::permissions::ADMINISTRATOR,
 				"manager" => model::permissions::MANAGE_GUILD,
 				"webhooks" => model::permissions::MANAGE_WEBHOOKS,
+				"audit" => model::permissions::VIEW_AUDIT_LOG,
 				_ => 0,
 			};
 		}
@@ -751,4 +753,99 @@ fn execute_integrations(
 		}
 	}
 	model::server_admin::Result::Integrations(page)
+}
+
+fn execute_audit_log(
+	state: &State,
+	guild: Id,
+	query: model::server_audit_log::Query,
+) -> model::server_admin::Result {
+	use model::{
+		Patch,
+		server_audit_log::{Change, Entry, PAGE_SIZE, Page},
+	};
+	let mut moderator = state.user.as_ref().unwrap().clone();
+	moderator.id = Id(9801);
+	moderator.name = "Morgan".into();
+	moderator.avatar = None;
+	let mut owner = state.user.as_ref().unwrap().clone();
+	owner.name = "Avery".into();
+	let users = vec![owner, moderator];
+	let channel = state
+		.channels
+		.iter()
+		.find(|channel| channel.guild == Some(guild) && channel.kind == 0)
+		.unwrap()
+		.id;
+	let entries: Vec<_> = (0..75)
+		.map(|index| {
+			let action_type = [30, 61, 60, 1, 40, 40, 50, 31, 72][index % 9];
+			let (key, name) = match action_type {
+				30 | 31 => ("name", "Community".to_owned()),
+				60 | 61 => ("name", "serein".to_owned()),
+				1 => ("name", "Synthetic Workspace".to_owned()),
+				40 => ("code", format!("demoInvite{index}")),
+				50 => ("name", "Build updates".to_owned()),
+				_ => ("count", "1".to_owned()),
+			};
+			let mut changes = vec![Change {
+				key: key.into(),
+				old: if matches!(action_type, 1 | 31 | 61) {
+					Patch::Value("Previous name".into())
+				} else {
+					Patch::Absent
+				},
+				new: Patch::Value(name.clone()),
+			}];
+			if action_type == 40 {
+				changes.extend(
+					[
+						("channel_id", channel.to_string()),
+						("max_uses", "0".into()),
+						("max_age", "2592000".into()),
+						("temporary", "false".into()),
+					]
+					.into_iter()
+					.map(|(key, value)| Change {
+						key: key.into(),
+						old: Patch::Absent,
+						new: Patch::Value(value),
+					}),
+				);
+			}
+			Entry {
+				// Fixed synthetic September 12, 2026 timestamps; never real account history.
+				id: Id(
+					((1_789_243_200_000u64 - index as u64 * 900_000 - 1_420_070_400_000) << 22)
+						+ index as u64,
+				),
+				user_id: Some(users[index % 2].id),
+				target_id: Some(if action_type == 40 {
+					name
+				} else {
+					(9700 + index).to_string()
+				}),
+				action_type,
+				reason: (index == 0).then(|| "Organize community permissions (synthetic).".into()),
+				changes,
+				options: vec![],
+			}
+		})
+		.filter(|entry| {
+			query.user.is_none_or(|user| entry.user_id == Some(user))
+				&& query
+					.action
+					.is_none_or(|action| entry.action_type == action)
+				&& query.before.is_none_or(|before| entry.id < before)
+		})
+		.take(PAGE_SIZE)
+		.collect();
+	let page = Page {
+		guild,
+		has_more: entries.len() == PAGE_SIZE,
+		entries,
+		users,
+	};
+	assert!(page.valid_response());
+	model::server_admin::Result::AuditLog(page)
 }

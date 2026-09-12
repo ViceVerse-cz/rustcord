@@ -973,3 +973,23 @@ an installation date. Webhook execution tokens and URLs are discarded by decodin
 and are never exposed, copied, logged or persisted by this view. OAuth command
 permission editing, webhook execution URL copying, avatar uploads, and creator
 subscription settings are not part of this slice.
+
+### Server audit log (September 12, 2026)
+
+Server Settings > Audit Log is available with View Audit Log permission; Manage
+Server alone does not grant access. The read-only view fetches the documented
+[guild audit log endpoint](https://docs.discord.com/developers/resources/audit-log#get-guild-audit-log)
+on demand, with user/action filters and explicit backward pagination. Entry cards
+show the available actor, action, timestamp, reason and before/after changes.
+Unknown action codes and missing actors remain visible without invented metadata.
+Change values preserve absent versus null; no audit mutation or background polling
+is added. Permissions, guild/session scope and request sequence are rechecked
+before accepting a response. Closing settings or losing access releases history.
+
+Requests use 50-entry pages; retained history stops at 500 entries or 2 MiB and
+offers reload/filtering instead of unbounded collection. The user selector lists
+actors in loaded results, not a separately scraped member directory. The service
+documents a 45-day retention window; this client does not archive audit history.
+Developer documentation describes the protocol, not approval or evidence of
+normal-user session interoperability. Parser, reducer and local HTTP tests are
+synthetic; live normal-account behavior remains unverified.

@@ -12,6 +12,7 @@ pub const MANAGE_NICKNAMES: u128 = 1 << 27;
 pub const MANAGE_CHANNELS: u128 = 1 << 4;
 pub const MANAGE_GUILD: u128 = 1 << 5;
 pub const ADD_REACTIONS: u128 = 1 << 6;
+pub const VIEW_AUDIT_LOG: u128 = 1 << 7;
 pub const STREAM: u128 = 1 << 9;
 pub const VIEW_CHANNEL: u128 = 1 << 10;
 pub const SEND_MESSAGES: u128 = 1 << 11;

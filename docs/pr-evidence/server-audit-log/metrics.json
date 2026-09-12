@@ -1,0 +1,2532 @@
+{
+  "baseline_commit": "f1edbcf200fcf2bf051b0d7d378b310c678a5a4f",
+  "branch": "feat/server-audit-log",
+  "source_fingerprint_sha256": "d0395bdcd5a231c1b8bc44c779d3d268efaebab7947906e2fb01e920ed7fccc3",
+  "environment": {
+    "os": "Microsoft Windows 11 Home",
+    "os_version": "10.0.26200",
+    "cpu": "AMD Ryzen 7 7800X3D 8-Core Processor",
+    "logical_processors": 16,
+    "ram_bytes": 33410678784,
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)"
+  },
+  "package_method": "System.IO.Compression.ZipFile.CreateFromDirectory(source, destination, CompressionLevel.Optimal, false)",
+  "package_note": "Measured before final docs/performance.md note; runtime source unchanged during build. Clean package staged from baseline 234-file manifest; baseline artifacts untouched. ZIP timestamps not normalized.",
+  "baseline_package": {
+    "exe_bytes": 67291136,
+    "exe_sha256": "537482dcb6cf20087d5dbb05e53f33f76e1e5ad21913636bfb86d4e3c15d4104",
+    "installed_bytes": 73640266,
+    "installed_files": 234,
+    "zip_bytes": 43179719
+  },
+  "after_package": {
+    "exe_bytes": 67436032,
+    "exe_sha256": "dc8bdcf7b1ea23da0576f1e9411605811dda098323ec78abd252804a09b6f610",
+    "installed_bytes": 73787169,
+    "installed_files": 234,
+    "zip_bytes": 43230371
+  },
+  "baseline_replay": {
+    "warmup": "Synthetic reducer replay: 100000 events in 48.4344ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+    "runs": [
+      "Synthetic reducer replay: 100000 events in 47.2946ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 47.0764ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 47.3546ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 45.3208ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 46.6156ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility."
+    ],
+    "concurrent_build_processes_before": [
+      {
+        "ProcessName": "cargo",
+        "Id": 17472,
+        "CPU": 1.109375
+      },
+      {
+        "ProcessName": "cargo",
+        "Id": 24728,
+        "CPU": 0.96875
+      },
+      {
+        "ProcessName": "cargo",
+        "Id": 25596,
+        "CPU": 0.046875
+      },
+      {
+        "ProcessName": "cargo",
+        "Id": 32712,
+        "CPU": 0.046875
+      },
+      {
+        "ProcessName": "rustc",
+        "Id": 16456,
+        "CPU": 555.25
+      }
+    ],
+    "concurrent_build_processes_after": [
+      {
+        "ProcessName": "cargo",
+        "Id": 17472,
+        "CPU": 1.109375
+      },
+      {
+        "ProcessName": "cargo",
+        "Id": 24728,
+        "CPU": 0.96875
+      },
+      {
+        "ProcessName": "cargo",
+        "Id": 25596,
+        "CPU": 0.046875
+      },
+      {
+        "ProcessName": "cargo",
+        "Id": 32712,
+        "CPU": 0.046875
+      },
+      {
+        "ProcessName": "rustc",
+        "Id": 16456,
+        "CPU": 556.125
+      }
+    ],
+    "timing_confounded_by_concurrent_builds": true
+  },
+  "after_replay": {
+    "concurrent_build_processes_after": [
+      {
+        "ProcessName": "cargo",
+        "Id": 15276,
+        "CPU": 0.015625
+      },
+      {
+        "ProcessName": "cargo",
+        "Id": 18792,
+        "CPU": 0.046875
+      },
+      {
+        "ProcessName": "cargo",
+        "Id": 22188,
+        "CPU": 1.15625
+      },
+      {
+        "ProcessName": "cargo",
+        "Id": 22484,
+        "CPU": 0.4375
+      },
+      {
+        "ProcessName": "cargo",
+        "Id": 25404,
+        "CPU": 0.703125
+      },
+      {
+        "ProcessName": "cargo",
+        "Id": 28628,
+        "CPU": 0.015625
+      },
+      {
+        "ProcessName": "link",
+        "Id": 22228,
+        "CPU": 7.03125
+      },
+      {
+        "ProcessName": "rustc",
+        "Id": 25548,
+        "CPU": 32.140625
+      },
+      {
+        "ProcessName": "rustc",
+        "Id": 29744,
+        "CPU": 471.03125
+      }
+    ],
+    "concurrent_build_processes_before": [
+      {
+        "ProcessName": "cargo",
+        "Id": 15276,
+        "CPU": 0.015625
+      },
+      {
+        "ProcessName": "cargo",
+        "Id": 18792,
+        "CPU": 0.046875
+      },
+      {
+        "ProcessName": "cargo",
+        "Id": 22188,
+        "CPU": 1.15625
+      },
+      {
+        "ProcessName": "cargo",
+        "Id": 22484,
+        "CPU": 0.4375
+      },
+      {
+        "ProcessName": "cargo",
+        "Id": 25404,
+        "CPU": 0.703125
+      },
+      {
+        "ProcessName": "cargo",
+        "Id": 28628,
+        "CPU": 0.015625
+      },
+      {
+        "ProcessName": "link",
+        "Id": 22228,
+        "CPU": 6.4375
+      },
+      {
+        "ProcessName": "rustc",
+        "Id": 25548,
+        "CPU": 32.140625
+      },
+      {
+        "ProcessName": "rustc",
+        "Id": 29744,
+        "CPU": 465.640625
+      }
+    ],
+    "runs": [
+      "Synthetic reducer replay: 100000 events in 104.831ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 71.2504ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 57.2998ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 64.0595ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+      "Synthetic reducer replay: 100000 events in 58.8932ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility."
+    ],
+    "warmup": "Synthetic reducer replay: 100000 events in 86.3279ms; retained timeline 236992..237477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility."
+  },
+  "baseline_replay_median_ms": 47.0764,
+  "after_replay_median_ms": 64.0595,
+  "baseline_profile": {
+    "executable": "E:/codex-builds/server-audit-log-baseline-target/release/serein.exe",
+    "args": [
+      "--demo",
+      "--demo-server-settings"
+    ],
+    "warmup_ms": 5000,
+    "sample_interval_ms": 500,
+    "samples": [
+      {
+        "time_utc": "2026-09-12T21:55:32.7674761Z",
+        "cpu_ms": 437.5,
+        "working_set_bytes": 172224512,
+        "private_bytes": 397463552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 6980,
+            "CPU": 0.328125
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 17472,
+            "CPU": 1.109375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 24728,
+            "CPU": 0.96875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 25596,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 26100,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 32712,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 3416,
+            "CPU": 1.609375
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 15476,
+            "CPU": 0.03125
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 16456,
+            "CPU": 565.953125
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 22744,
+            "CPU": 1.28125
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 26316,
+            "CPU": 0.1875
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T21:55:33.3023597Z",
+        "cpu_ms": 437.5,
+        "working_set_bytes": 172224512,
+        "private_bytes": 397463552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 6980,
+            "CPU": 0.328125
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 17472,
+            "CPU": 1.109375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 24728,
+            "CPU": 0.96875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 25596,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 26100,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 32712,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 15476,
+            "CPU": 0.5
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 16456,
+            "CPU": 566.921875
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 22744,
+            "CPU": 2.96875
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T21:55:33.8157772Z",
+        "cpu_ms": 437.5,
+        "working_set_bytes": 172224512,
+        "private_bytes": 397463552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 6980,
+            "CPU": 0.328125
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 17472,
+            "CPU": 1.109375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 24728,
+            "CPU": 0.96875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 25596,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 26100,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 32712,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 15476,
+            "CPU": 1
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 16456,
+            "CPU": 567.921875
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 22744,
+            "CPU": 4.109375
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T21:55:34.3339662Z",
+        "cpu_ms": 437.5,
+        "working_set_bytes": 172224512,
+        "private_bytes": 397463552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 6980,
+            "CPU": 0.328125
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 17472,
+            "CPU": 1.109375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 24728,
+            "CPU": 0.96875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 25596,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 26100,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 32712,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 15212,
+            "CPU": 0.203125
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 15476,
+            "CPU": 1.515625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 16456,
+            "CPU": 568.9375
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 22984,
+            "CPU": 0.28125
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T21:55:34.8520871Z",
+        "cpu_ms": 437.5,
+        "working_set_bytes": 172224512,
+        "private_bytes": 397463552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 6980,
+            "CPU": 0.328125
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 17472,
+            "CPU": 1.109375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 24728,
+            "CPU": 0.96875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 25596,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 26100,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 32712,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 15212,
+            "CPU": 0.59375
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 15476,
+            "CPU": 2.765625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 16456,
+            "CPU": 569.953125
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T21:55:35.3706459Z",
+        "cpu_ms": 437.5,
+        "working_set_bytes": 172224512,
+        "private_bytes": 397463552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 6980,
+            "CPU": 0.328125
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 17472,
+            "CPU": 1.109375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 24728,
+            "CPU": 0.96875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 25596,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 26100,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 32712,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 15212,
+            "CPU": 0.96875
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 15476,
+            "CPU": 5.828125
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 16456,
+            "CPU": 570.984375
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T21:55:35.8854548Z",
+        "cpu_ms": 437.5,
+        "working_set_bytes": 172224512,
+        "private_bytes": 397463552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 6980,
+            "CPU": 0.34375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 17472,
+            "CPU": 1.109375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 24728,
+            "CPU": 0.96875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 25596,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 26100,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 32712,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 8940,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 15212,
+            "CPU": 1.46875
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 16456,
+            "CPU": 572
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T21:55:36.4023692Z",
+        "cpu_ms": 437.5,
+        "working_set_bytes": 172224512,
+        "private_bytes": 397463552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 6980,
+            "CPU": 0.34375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 17472,
+            "CPU": 1.109375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 24728,
+            "CPU": 0.96875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 25596,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 26100,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 32712,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 8940,
+            "CPU": 0.453125
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 15212,
+            "CPU": 1.984375
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 16456,
+            "CPU": 572.96875
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T21:55:36.9156358Z",
+        "cpu_ms": 437.5,
+        "working_set_bytes": 172224512,
+        "private_bytes": 397463552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 6980,
+            "CPU": 0.34375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 17472,
+            "CPU": 1.109375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 24728,
+            "CPU": 0.96875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 25596,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 26100,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 32712,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 8940,
+            "CPU": 0.90625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 15212,
+            "CPU": 2.453125
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 16456,
+            "CPU": 574
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T21:55:37.4285881Z",
+        "cpu_ms": 437.5,
+        "working_set_bytes": 172224512,
+        "private_bytes": 397463552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 6980,
+            "CPU": 0.34375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 17472,
+            "CPU": 1.109375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 24728,
+            "CPU": 0.96875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 25596,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 26100,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 32712,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 8940,
+            "CPU": 1.1875
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 16456,
+            "CPU": 574.96875
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T21:55:37.9490949Z",
+        "cpu_ms": 437.5,
+        "working_set_bytes": 172224512,
+        "private_bytes": 397463552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 6980,
+            "CPU": 0.34375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 17472,
+            "CPU": 1.109375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 24728,
+            "CPU": 0.96875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 25596,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 26100,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 32712,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 8940,
+            "CPU": 1.671875
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 16456,
+            "CPU": 575.96875
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T21:55:38.4841400Z",
+        "cpu_ms": 437.5,
+        "working_set_bytes": 172224512,
+        "private_bytes": 397463552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 6980,
+            "CPU": 0.34375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 17472,
+            "CPU": 1.109375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 24728,
+            "CPU": 0.96875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 25596,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 26100,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 32712,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 8940,
+            "CPU": 2.171875
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 16456,
+            "CPU": 577.03125
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T21:55:38.9968763Z",
+        "cpu_ms": 437.5,
+        "working_set_bytes": 172224512,
+        "private_bytes": 397463552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 6980,
+            "CPU": 0.34375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 17472,
+            "CPU": 1.109375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 24728,
+            "CPU": 0.96875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 25596,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 26100,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 32712,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 8940,
+            "CPU": 2.671875
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 16456,
+            "CPU": 578
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T21:55:39.5109249Z",
+        "cpu_ms": 437.5,
+        "working_set_bytes": 172224512,
+        "private_bytes": 397463552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 6980,
+            "CPU": 0.34375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 17472,
+            "CPU": 1.109375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 24728,
+            "CPU": 0.96875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 25596,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 26100,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 32712,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 8940,
+            "CPU": 3.1875
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 16456,
+            "CPU": 579.03125
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T21:55:40.0232519Z",
+        "cpu_ms": 437.5,
+        "working_set_bytes": 172224512,
+        "private_bytes": 397463552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 6980,
+            "CPU": 0.34375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 17472,
+            "CPU": 1.109375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 24728,
+            "CPU": 0.96875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 25596,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 26100,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 32712,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 8940,
+            "CPU": 3.703125
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 16456,
+            "CPU": 580.0625
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T21:55:40.5362320Z",
+        "cpu_ms": 437.5,
+        "working_set_bytes": 172224512,
+        "private_bytes": 397463552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 17472,
+            "CPU": 1.109375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 24728,
+            "CPU": 0.96875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 25596,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 32712,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 16456,
+            "CPU": 581.078125
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T21:55:41.0494288Z",
+        "cpu_ms": 437.5,
+        "working_set_bytes": 172224512,
+        "private_bytes": 397463552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 17472,
+            "CPU": 1.109375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 24728,
+            "CPU": 0.96875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 25596,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 32712,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 16456,
+            "CPU": 582.109375
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T21:55:41.5683603Z",
+        "cpu_ms": 453.125,
+        "working_set_bytes": 172224512,
+        "private_bytes": 397463552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 17472,
+            "CPU": 1.109375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 24728,
+            "CPU": 0.96875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 25596,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 32712,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 16456,
+            "CPU": 583.125
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T21:55:42.0842332Z",
+        "cpu_ms": 453.125,
+        "working_set_bytes": 172224512,
+        "private_bytes": 397463552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 17472,
+            "CPU": 1.109375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 24728,
+            "CPU": 0.96875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 25596,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 32712,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 16456,
+            "CPU": 584.140625
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T21:55:42.5971208Z",
+        "cpu_ms": 453.125,
+        "working_set_bytes": 172224512,
+        "private_bytes": 397463552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 17472,
+            "CPU": 1.109375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 24728,
+            "CPU": 0.96875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 25596,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 32712,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 16456,
+            "CPU": 585.171875
+          }
+        ]
+      }
+    ],
+    "children": [],
+    "cpu_delta_ms": 15.625,
+    "peak_working_set_bytes": 172224512,
+    "settled_working_set_bytes": 172224512,
+    "peak_private_bytes": 397463552,
+    "settled_private_bytes": 397463552,
+    "concurrent_build_detected": true
+  },
+  "after_profile": {
+    "executable": "E:/codex-builds/server-audit-log-target/release/serein.exe",
+    "args": [
+      "--demo",
+      "--demo-server-settings"
+    ],
+    "warmup_ms": 5000,
+    "sample_interval_ms": 500,
+    "samples": [
+      {
+        "time_utc": "2026-09-12T22:10:44.4345967Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170233856,
+        "private_bytes": 395927552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 512.015625
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:10:44.9626099Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170233856,
+        "private_bytes": 395927552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 517.625
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:10:45.4731060Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170233856,
+        "private_bytes": 395927552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 521.5625
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:10:45.9879235Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170233856,
+        "private_bytes": 395927552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 524.546875
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:10:46.5085628Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170233856,
+        "private_bytes": 395927552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 527.953125
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:10:47.0253907Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170233856,
+        "private_bytes": 395927552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 529.734375
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:10:47.5426112Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170233856,
+        "private_bytes": 395927552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 530.75
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:10:48.0580657Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170233856,
+        "private_bytes": 395927552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 531.765625
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:10:48.5738642Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170233856,
+        "private_bytes": 395927552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 532.75
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:10:49.0881930Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170233856,
+        "private_bytes": 395927552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 533.75
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:10:49.6039794Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170233856,
+        "private_bytes": 395927552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 534.71875
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:10:50.1434732Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170233856,
+        "private_bytes": 395927552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 535.765625
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:10:50.6562346Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170233856,
+        "private_bytes": 395927552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 536.671875
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:10:51.1736406Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170233856,
+        "private_bytes": 395927552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 537.6875
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:10:51.6919956Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170233856,
+        "private_bytes": 395927552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 538.625
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:10:52.2086181Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170233856,
+        "private_bytes": 395927552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 539.625
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:10:52.7192300Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170233856,
+        "private_bytes": 395927552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 540.59375
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:10:53.2393539Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170233856,
+        "private_bytes": 395927552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 541.59375
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:10:53.7556287Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170233856,
+        "private_bytes": 395927552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 542.59375
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:10:54.2714671Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170233856,
+        "private_bytes": 395927552,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 543.59375
+          }
+        ]
+      }
+    ],
+    "children": [],
+    "cpu_delta_ms": 0,
+    "peak_working_set_bytes": 170233856,
+    "settled_working_set_bytes": 170233856,
+    "peak_private_bytes": 395927552,
+    "settled_private_bytes": 395927552,
+    "concurrent_build_detected": true
+  },
+  "after_audit": {
+    "executable": "E:/codex-builds/server-audit-log-target/release/serein.exe",
+    "args": [
+      "--demo",
+      "--demo-server-settings",
+      "--demo-server-page=audit-log"
+    ],
+    "warmup_ms": 5000,
+    "sample_interval_ms": 500,
+    "samples": [
+      {
+        "time_utc": "2026-09-12T22:11:00.0171307Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170745856,
+        "private_bytes": 396906496,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 554.8125
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:11:00.5334183Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170745856,
+        "private_bytes": 396906496,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 555.828125
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:11:01.0493344Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170745856,
+        "private_bytes": 396906496,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 556.859375
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:11:01.5630343Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170745856,
+        "private_bytes": 396906496,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 557.859375
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:11:02.0788001Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170745856,
+        "private_bytes": 396906496,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 558.859375
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:11:02.5985696Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170745856,
+        "private_bytes": 396906496,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 559.875
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:11:03.1148493Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170745856,
+        "private_bytes": 396906496,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 560.875
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:11:03.6313282Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170745856,
+        "private_bytes": 396906496,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 561.875
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:11:04.1742526Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170745856,
+        "private_bytes": 396906496,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 562.921875
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:11:04.6931414Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170745856,
+        "private_bytes": 396906496,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 563.9375
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:11:05.2072658Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170745856,
+        "private_bytes": 396906496,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 564.9375
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:11:05.7228132Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170745856,
+        "private_bytes": 396906496,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 565.953125
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:11:06.2378211Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170745856,
+        "private_bytes": 396906496,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 566.90625
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:11:06.7537174Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170745856,
+        "private_bytes": 396906496,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 567.921875
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:11:07.2733633Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170745856,
+        "private_bytes": 396906496,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 568.953125
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:11:07.7898316Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170745856,
+        "private_bytes": 396906496,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 569.921875
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:11:08.3014121Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170745856,
+        "private_bytes": 396906496,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 570.90625
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:11:08.8167608Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170745856,
+        "private_bytes": 396906496,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 571.921875
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:11:09.3270821Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170745856,
+        "private_bytes": 396906496,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 572.953125
+          }
+        ]
+      },
+      {
+        "time_utc": "2026-09-12T22:11:09.8417251Z",
+        "cpu_ms": 500,
+        "working_set_bytes": 170745856,
+        "private_bytes": 396906496,
+        "concurrent_build_processes": [
+          {
+            "ProcessName": "cargo",
+            "Id": 18792,
+            "CPU": 0.046875
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22188,
+            "CPU": 1.15625
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 22484,
+            "CPU": 0.4375
+          },
+          {
+            "ProcessName": "cargo",
+            "Id": 28628,
+            "CPU": 0.015625
+          },
+          {
+            "ProcessName": "rustc",
+            "Id": 29744,
+            "CPU": 573.96875
+          }
+        ]
+      }
+    ],
+    "children": [],
+    "cpu_delta_ms": 0,
+    "peak_working_set_bytes": 170745856,
+    "settled_working_set_bytes": 170745856,
+    "peak_private_bytes": 396906496,
+    "settled_private_bytes": 396906496,
+    "concurrent_build_detected": true
+  },
+  "process_method": "Release --features demo with --demo --demo-server-settings; default 1120x760 logical window, Wgpu. Start-Process -WindowStyle Hidden; visibility/occlusion and actual adapter unverified. 5s warmup then 20 samples/500ms. Concurrent parent/other task compiler processes detected and recorded: timing confounded, no improvement/regression attribution. CPU is process timer resolution; GPU allocations/frame p95/startup latency unmeasured.",
+  "limitations": [
+    "Concurrent builds were observed in both baseline and after replay/process samples; timings do not isolate this change.",
+    "Offline framebuffer exports are synthetic and do not prove native input/accessibility or live Discord interoperability.",
+    "GPU allocations, startup latency and frame-time p95 were not measured."
+  ],
+  "screenshots": {
+    "before": "before.png",
+    "after": "after.png",
+    "narrow": "narrow.png",
+    "light": "light.png"
+  }
+}
