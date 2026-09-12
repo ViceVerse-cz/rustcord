@@ -1,5 +1,11 @@
-//! Inline controls and one bounded texture. The desktop owns media decoding and playback.
+//! Inline player: one bounded texture with Discord-style overlay controls. The desktop owns
+//! media decoding and playback; this module only draws frames and emits commands.
 use model::{Attachment, Id, Message};
+
+const CORNER: u8 = 8;
+const MAX_WIDTH: f32 = 420.0;
+const MAX_HEIGHT: f32 = 320.0;
+const BAR_HEIGHT: f32 = 60.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum VideoState {
@@ -27,6 +33,10 @@ pub struct VideoUi {
 	pub seen: bool,
 	pub volume: f32,
 	texture: Option<egui::TextureHandle>,
+	/// Vertical transparent-to-black ramp behind the overlay controls.
+	shade: Option<egui::TextureHandle>,
+	/// Keyboard focus rested on an overlay control last frame, so keep the overlay visible.
+	controls_focused: bool,
 }
 impl Default for VideoUi {
 	fn default() -> Self {
@@ -39,6 +49,8 @@ impl Default for VideoUi {
 			seen: false,
 			volume: 1.0,
 			texture: None,
+			shade: None,
+			controls_focused: false,
 		}
 	}
 }
@@ -97,67 +109,215 @@ impl VideoUi {
 			}
 		});
 	}
+	fn shade(&mut self, ctx: &egui::Context) -> egui::TextureId {
+		self.shade
+			.get_or_insert_with(|| {
+				let pixels = (0..16)
+					.map(|row| egui::Color32::from_black_alpha((row * 200 / 15) as u8))
+					.collect();
+				ctx.load_texture(
+					"inline-video-shade",
+					egui::ColorImage {
+						size: [1, 16],
+						source_size: egui::vec2(1.0, 16.0),
+						pixels,
+					},
+					egui::TextureOptions::LINEAR,
+				)
+			})
+			.id()
+	}
 	pub fn show(&mut self, ui: &mut egui::Ui, message: &Message, attachment: &Attachment) {
 		let colors = crate::design::palette(ui);
 		let active = self.active.as_ref().is_some_and(|(channel, id, file)| {
 			*channel == message.channel && *id == message.id && file == attachment
 		});
 		let state = if active { self.state } else { VideoState::Idle };
-		let width = ui.available_width().clamp(1.0, 420.0);
-		let card = egui::Frame::new()
-			.fill(colors.raised)
-			.stroke(egui::Stroke::new(1.0, colors.border))
-			.corner_radius(8)
-			.inner_margin(8)
-			.show(ui, |ui| {
-				let width = (width - 16.0).max(1.0);
-				ui.set_width(width);
-				ui.spacing_mut().item_spacing = egui::vec2(6.0, 4.0);
-				ui.add(
-					egui::Label::new(crate::design::semibold(ui, &attachment.filename, 13.0))
-						.truncate(),
-				)
-				.on_hover_text(&attachment.filename);
-				let (rect, _) =
-					ui.allocate_exact_size(stage_size(attachment, width), egui::Sense::hover());
-				ui.painter().rect_filled(rect, 4, egui::Color32::BLACK);
-				if let Some(texture) = self.texture.as_ref().filter(|_| active) {
-					let size = texture.size_vec2();
-					let scale = (rect.width() / size.x).min(rect.height() / size.y);
-					ui.painter().image(
-						texture.id(),
-						egui::Rect::from_center_size(rect.center(), size * scale),
-						egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
-						egui::Color32::WHITE,
-					);
+		let width = ui.available_width().clamp(1.0, MAX_WIDTH);
+		let (stage, response) =
+			ui.allocate_exact_size(stage_size(attachment, width), egui::Sense::click());
+		let label = match state {
+			VideoState::Loading => "Cancel",
+			VideoState::Playing => "Pause",
+			VideoState::Paused => "Resume",
+			VideoState::Ended => "Replay",
+			VideoState::Failed(_) => "Retry",
+			VideoState::Idle => "Play",
+		};
+		response.widget_info(|| {
+			egui::WidgetInfo::labeled(
+				egui::WidgetType::Button,
+				ui.is_enabled(),
+				format!("{label} video {}", attachment.filename),
+			)
+		});
+		let painter = ui.painter().with_clip_rect(stage);
+		painter.rect_filled(stage, CORNER, egui::Color32::BLACK);
+		if let Some(texture) = self.texture.as_ref().filter(|_| active) {
+			let size = texture.size_vec2();
+			let scale = (stage.width() / size.x).min(stage.height() / size.y);
+			let image_rect = egui::Rect::from_center_size(stage.center(), size * scale);
+			egui::Image::new(egui::load::SizedTexture::new(
+				texture.id(),
+				image_rect.size(),
+			))
+			.corner_radius(CORNER)
+			.paint_at(ui, image_rect);
+		}
+		let hovered = response.hovered() || ui.rect_contains_pointer(stage);
+		let show_controls = active
+			&& state != VideoState::Idle
+			&& (hovered || state != VideoState::Playing || self.controls_focused);
+		let center = if show_controls {
+			stage.center() - egui::vec2(0.0, BAR_HEIGHT * 0.25)
+		} else {
+			stage.center()
+		};
+		let white = egui::Color32::WHITE;
+		let show_center = match state {
+			VideoState::Loading => {
+				ui.put(
+					egui::Rect::from_center_size(center, egui::Vec2::splat(36.0)),
+					egui::Spinner::new().size(36.0).color(white),
+				);
+				false
+			}
+			VideoState::Playing => false,
+			_ => true,
+		};
+		if show_center {
+			let radius = 28.0;
+			painter.circle_filled(
+				center,
+				radius,
+				if hovered {
+					egui::Color32::from_rgba_unmultiplied(0, 0, 0, 200)
 				} else {
-					crate::icons::paint(
-						ui.painter(),
-						crate::icons::Icon::Video,
-						egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(40.0)),
-						colors.muted,
-					);
-				}
-				ui.horizontal(|ui| {
-					let label = match state {
-						VideoState::Loading => "Cancel",
-						VideoState::Playing => "Pause",
-						VideoState::Ended => "Replay",
-						VideoState::Failed(_) => "Retry",
-						_ => "Play",
-					};
-					if ui
-						.add_sized([62.0, 32.0], egui::Button::new(label))
-						.clicked()
-					{
-						self.toggle(message, attachment, state);
-					}
-					let can_seek = active
-						&& self.duration.is_finite()
-						&& self.duration > 0.0
-						&& matches!(state, VideoState::Playing | VideoState::Paused);
-					let mut position = if active { self.position.max(0.0) } else { 0.0 };
+					egui::Color32::from_rgba_unmultiplied(0, 0, 0, 160)
+				},
+			);
+			painter.circle_stroke(
+				center,
+				radius,
+				egui::Stroke::new(1.5, egui::Color32::from_white_alpha(60)),
+			);
+			if matches!(state, VideoState::Ended | VideoState::Failed(_)) {
+				crate::icons::paint(
+					&painter,
+					crate::icons::Icon::Reload,
+					egui::Rect::from_center_size(center, egui::Vec2::splat(26.0)),
+					white,
+				);
+			} else {
+				painter.add(egui::Shape::convex_polygon(
+					vec![
+						center + egui::vec2(-8.0, -12.0),
+						center + egui::vec2(13.0, 0.0),
+						center + egui::vec2(-8.0, 12.0),
+					],
+					white,
+					egui::Stroke::NONE,
+				));
+			}
+		}
+		if let VideoState::Failed(error) = state {
+			let text_rect = egui::Rect::from_min_max(
+				egui::pos2(stage.left() + 12.0, center.y + 38.0),
+				egui::pos2(stage.right() - 12.0, stage.bottom()),
+			);
+			ui.scope_builder(
+				egui::UiBuilder::new()
+					.max_rect(text_rect)
+					.layout(egui::Layout::top_down(egui::Align::Center)),
+				|ui| {
+					ui.add(
+						egui::Label::new(
+							egui::RichText::new(error)
+								.size(12.0)
+								.color(egui::Color32::from_white_alpha(230)),
+						)
+						.wrap(),
+					)
+					.on_hover_text(error);
+				},
+			);
+		}
+		if (show_controls && state != VideoState::Playing) || (!active && hovered) {
+			let font = egui::FontId::proportional(12.0);
+			let galley = painter.layout(
+				attachment.filename.clone(),
+				font,
+				white,
+				(stage.width() - 32.0).max(16.0),
+			);
+			let pill = egui::Rect::from_min_size(
+				stage.left_top() + egui::vec2(8.0, 8.0),
+				galley.size() + egui::vec2(12.0, 6.0),
+			);
+			painter.rect_filled(pill, 4, egui::Color32::from_black_alpha(150));
+			painter.galley(pill.min + egui::vec2(6.0, 3.0), galley, white);
+		}
+		if state == VideoState::Idle
+			&& let Some(duration) = attachment.duration_ms.filter(|ms| *ms > 0)
+		{
+			let galley = painter.layout_no_wrap(
+				timestamp(duration as f64 / 1000.0),
+				egui::FontId::proportional(12.0),
+				white,
+			);
+			let badge = egui::Rect::from_min_size(
+				egui::pos2(
+					stage.left() + 8.0,
+					stage.bottom() - 8.0 - galley.size().y - 6.0,
+				),
+				galley.size() + egui::vec2(12.0, 6.0),
+			);
+			painter.rect_filled(badge, 4, egui::Color32::from_black_alpha(150));
+			painter.galley(badge.min + egui::vec2(6.0, 3.0), galley, white);
+		}
+		if response.clicked() {
+			self.toggle(message, attachment, state);
+		}
+		let mut controls_focused = false;
+		if show_controls {
+			let bar = egui::Rect::from_min_max(
+				egui::pos2(stage.left(), stage.bottom() - BAR_HEIGHT),
+				stage.right_bottom(),
+			);
+			let shade = self.shade(ui.ctx());
+			egui::Image::new(egui::load::SizedTexture::new(shade, bar.size()))
+				.corner_radius(egui::CornerRadius {
+					nw: 0,
+					ne: 0,
+					sw: CORNER,
+					se: CORNER,
+				})
+				.paint_at(ui, bar);
+			let can_seek = self.duration.is_finite()
+				&& self.duration > 0.0
+				&& matches!(state, VideoState::Playing | VideoState::Paused);
+			let inner = bar.shrink2(egui::vec2(10.0, 6.0));
+			ui.scope_builder(
+				egui::UiBuilder::new()
+					.max_rect(inner)
+					.layout(egui::Layout::top_down(egui::Align::Min)),
+				|ui| {
+					let visuals = ui.visuals_mut();
+					visuals.selection.bg_fill = colors.accent;
+					visuals.widgets.inactive.bg_fill = egui::Color32::from_white_alpha(70);
+					visuals.widgets.hovered.bg_fill = egui::Color32::from_white_alpha(110);
+					visuals.widgets.active.bg_fill = egui::Color32::from_white_alpha(140);
+					visuals.widgets.inactive.fg_stroke.color = white;
+					visuals.widgets.hovered.fg_stroke.color = white;
+					visuals.widgets.active.fg_stroke.color = white;
+					visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
+					visuals.widgets.hovered.bg_stroke = egui::Stroke::NONE;
+					visuals.widgets.active.bg_stroke = egui::Stroke::NONE;
+					ui.spacing_mut().item_spacing = egui::vec2(8.0, 2.0);
+					ui.spacing_mut().slider_rail_height = 4.0;
+					ui.spacing_mut().interact_size.y = 18.0;
 					ui.spacing_mut().slider_width = ui.available_width().max(16.0);
+					let mut position = self.position.max(0.0);
 					let seek = ui.add_enabled(
 						can_seek,
 						egui::Slider::new(
@@ -168,60 +328,112 @@ impl VideoUi {
 						.trailing_fill(true),
 					);
 					seek.widget_info(|| egui::WidgetInfo::slider(can_seek, position, "Seek video"));
+					controls_focused |= seek.has_focus();
 					if seek.on_hover_text("Seek video").changed() {
 						self.command = Some(VideoCommand::Seek(position));
 					}
-				});
-				ui.horizontal(|ui| {
-					let (position, duration) = if active {
-						(self.position, self.duration)
-					} else {
-						(0.0, 0.0)
-					};
-					ui.small(format!(
-						"{} / {}",
-						timestamp(position),
-						if duration > 0.0 {
-							timestamp(duration)
+					ui.horizontal(|ui| {
+						ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
+						let (glyph_rect, glyph) =
+							ui.allocate_exact_size(egui::Vec2::splat(22.0), egui::Sense::CLICK);
+						let glyph_color = if glyph.hovered() {
+							white
 						} else {
-							"--:--".into()
+							egui::Color32::from_white_alpha(220)
+						};
+						let c = glyph_rect.center();
+						match state {
+							VideoState::Playing => {
+								for x in [-3.5, 3.5] {
+									ui.painter().rect_filled(
+										egui::Rect::from_center_size(
+											c + egui::vec2(x, 0.0),
+											egui::vec2(3.5, 13.0),
+										),
+										1,
+										glyph_color,
+									);
+								}
+							}
+							VideoState::Paused | VideoState::Idle => {
+								ui.painter().add(egui::Shape::convex_polygon(
+									vec![
+										c + egui::vec2(-5.0, -7.0),
+										c + egui::vec2(7.0, 0.0),
+										c + egui::vec2(-5.0, 7.0),
+									],
+									glyph_color,
+									egui::Stroke::NONE,
+								));
+							}
+							VideoState::Loading => crate::icons::paint(
+								ui.painter(),
+								crate::icons::Icon::Close,
+								glyph_rect.shrink(4.0),
+								glyph_color,
+							),
+							VideoState::Ended | VideoState::Failed(_) => crate::icons::paint(
+								ui.painter(),
+								crate::icons::Icon::Reload,
+								glyph_rect.shrink(3.0),
+								glyph_color,
+							),
 						}
-					));
-					ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-						ui.spacing_mut().slider_width = 52.0;
-						let volume = ui
-							.add(egui::Slider::new(&mut self.volume, 0.0..=1.0).show_value(false));
-						volume.widget_info(|| {
-							egui::WidgetInfo::slider(
-								ui.is_enabled(),
-								self.volume as f64,
-								"Video volume",
-							)
+						if glyph.on_hover_text(label).clicked() {
+							self.toggle(message, attachment, state);
+						}
+						ui.label(
+							egui::RichText::new(format!(
+								"{} / {}",
+								timestamp(self.position),
+								if self.duration > 0.0 {
+									timestamp(self.duration)
+								} else {
+									"--:--".into()
+								}
+							))
+							.size(12.0)
+							.color(white),
+						);
+						ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+							ui.spacing_mut().slider_width = 56.0;
+							let volume = ui.add(
+								egui::Slider::new(&mut self.volume, 0.0..=1.0)
+									.show_value(false)
+									.trailing_fill(true),
+							);
+							volume.widget_info(|| {
+								egui::WidgetInfo::slider(
+									ui.is_enabled(),
+									self.volume as f64,
+									"Video volume",
+								)
+							});
+							controls_focused |= volume.has_focus();
+							if volume.on_hover_text("Video volume").changed() {
+								self.command = Some(VideoCommand::Volume(self.volume));
+							}
+							crate::icons::inline(
+								ui,
+								crate::icons::Icon::Speaker,
+								16.0,
+								egui::Color32::from_white_alpha(220),
+							);
 						});
-						if volume.on_hover_text("Video volume").changed() {
-							self.command = Some(VideoCommand::Volume(self.volume));
-						}
-						crate::icons::inline(ui, crate::icons::Icon::Speaker, 16.0, colors.muted);
 					});
-				});
-				let status = match state {
-					VideoState::Loading => "Loading video…",
-					VideoState::Failed(error) => error,
-					_ => "",
-				};
-				ui.add(
-					egui::Label::new(egui::RichText::new(status).small().color(
-						if matches!(state, VideoState::Failed(_)) {
-							colors.danger
-						} else {
-							colors.muted
-						},
-					))
-					.truncate(),
-				)
-				.on_hover_text(status);
-			});
-		if ui.is_rect_visible(card.response.rect)
+				},
+			);
+		}
+		self.controls_focused = controls_focused;
+		if response.has_focus() {
+			ui.painter().rect_stroke(
+				stage,
+				CORNER,
+				egui::Stroke::new(2.0, colors.accent),
+				egui::StrokeKind::Inside,
+			);
+		}
+		if ui.is_rect_visible(stage)
 			&& self.active.as_ref().is_some_and(|(channel, id, file)| {
 				*channel == message.channel && *id == message.id && file == attachment
 			}) {
@@ -239,10 +451,11 @@ fn stage_size(attachment: &Attachment, width: f32) -> egui::Vec2 {
 	} else {
 		16.0 / 9.0
 	};
-	egui::vec2(width, (width / ratio.clamp(0.5, 3.0)).min(320.0))
+	egui::vec2(width, (width / ratio.clamp(0.5, 3.0)).min(MAX_HEIGHT))
 }
+/// Stage plus the download/open row the attachment list draws underneath.
 pub(super) fn estimated_height(attachment: &Attachment, width: f32) -> f32 {
-	stage_size(attachment, (width.min(420.0) - 16.0).max(1.0)).y + 150.0
+	stage_size(attachment, width.clamp(1.0, MAX_WIDTH)).y + 54.0
 }
 fn timestamp(seconds: f64) -> String {
 	let seconds = seconds.max(0.0) as u64;
@@ -309,6 +522,15 @@ mod tests {
 							false,
 						);
 						assert!(ui.min_rect().width() <= width + 2.0);
+						// The stage and the file-action row drive the layout estimate; overlay
+						// controls never add height.
+						assert!(
+							(ui.min_rect().height() - estimated_height(&attachment, width)).abs()
+								< 24.0,
+							"{} vs {}",
+							ui.min_rect().height(),
+							estimated_height(&attachment, width)
+						);
 					},
 				)
 				.drop_without_applying_deltas();
@@ -347,6 +569,10 @@ mod tests {
 				frame(&mut video, Some(key));
 			}
 			assert!(matches!(video.command.take(), Some(VideoCommand::Seek(value)) if value > 0.0));
+			// While a control keeps keyboard focus, playback resuming must not hide the overlay.
+			video.state = VideoState::Playing;
+			frame(&mut video, Some(egui::Key::ArrowRight));
+			assert!(matches!(video.command.take(), Some(VideoCommand::Seek(_))));
 			for key in [egui::Key::Tab, egui::Key::ArrowLeft] {
 				frame(&mut video, Some(key));
 			}

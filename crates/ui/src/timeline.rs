@@ -1652,9 +1652,13 @@ impl TimelineView {
 				self.browse_away();
 			}
 		}
+		// Older pages appended to the live timeline keep their cursor after loading; that
+		// alone must not raise the bar the moment a reader nudges upward. Only pages that are
+		// detached from the live edge (targeted or forward history) show it immediately.
+		let detached_page = state.history_targeted || state.history_after.is_some();
 		if (!self.following && distance_from_bottom > 3.0 * area.height())
 			|| self.target_browsing
-			|| browsing_history
+			|| detached_page
 		{
 			let unread = state
 				.selected

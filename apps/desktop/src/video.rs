@@ -1,7 +1,5 @@
 //! One explicit inline player; native decoding and network reads stay on one lazy worker.
-#[cfg(windows)]
 mod output;
-#[cfg(windows)]
 mod source;
 use std::sync::{
 	Arc, Mutex,
@@ -24,7 +22,6 @@ struct Session {
 	update: Mutex<Update>,
 }
 impl Session {
-	#[cfg(windows)]
 	fn new(volume: f32) -> Self {
 		Self {
 			cancelled: Arc::new(AtomicBool::new(false)),
@@ -38,7 +35,6 @@ impl Session {
 		}
 	}
 }
-#[cfg(windows)]
 #[derive(Clone)]
 struct Request {
 	session: Arc<Session>,
@@ -48,7 +44,6 @@ struct Request {
 #[derive(Default)]
 pub struct Video {
 	session: Option<Arc<Session>>,
-	#[cfg(windows)]
 	requests: Option<tokio::sync::watch::Sender<Option<Request>>>,
 }
 impl Video {
@@ -56,7 +51,6 @@ impl Video {
 		if let Some(session) = self.session.take() {
 			session.cancelled.store(true, Ordering::Release);
 		}
-		#[cfg(windows)]
 		if let Some(requests) = &self.requests {
 			requests.send_replace(None);
 		}
@@ -113,18 +107,6 @@ impl Video {
 			}
 		}
 	}
-	#[cfg(not(windows))]
-	fn start(
-		&mut self,
-		_: model::Attachment,
-		_: f32,
-		_: &tokio::runtime::Handle,
-		_: &eframe::egui::Context,
-		_: bool,
-	) -> Result<(), &'static str> {
-		Err("Inline video is currently available on Windows; download to play externally")
-	}
-	#[cfg(windows)]
 	fn start(
 		&mut self,
 		attachment: model::Attachment,
@@ -188,7 +170,6 @@ impl Drop for Video {
 	}
 }
 
-#[cfg(windows)]
 fn play(
 	request: &Request,
 	runtime: &tokio::runtime::Handle,
@@ -203,10 +184,14 @@ fn play(
 		runtime.clone(),
 	)?;
 	let decoder = Decoder::open(source)?;
-	play_decoded(decoder, session, ctx)
+	let result = play_decoded(decoder, session, ctx);
+	// Cancellation aborts in-flight source reads; that is a clean stop, not a decode failure.
+	if session.cancelled.load(Ordering::Acquire) {
+		return Ok(());
+	}
+	result
 }
 
-#[cfg(windows)]
 fn play_decoded(
 	mut decoder: platform::video::Decoder,
 	session: &Session,
@@ -426,7 +411,7 @@ fn play_decoded(
 	}
 }
 
-#[cfg(all(test, windows, feature = "demo"))]
+#[cfg(all(test, feature = "demo"))]
 mod tests {
 	use super::*;
 	use std::time::{Duration, Instant};
@@ -476,7 +461,8 @@ mod tests {
 		session.paused.store(false, Ordering::Release);
 		wait(&|s| s.position > 1.7);
 		session.cancelled.store(true, Ordering::Release);
-		assert!(thread.join().unwrap().is_ok());
+		let result = thread.join().unwrap();
+		assert!(result.is_ok(), "{result:?}");
 		for bytes in [
 			include_bytes!("../tests/fixtures/video-silent.mov").as_slice(),
 			include_bytes!("../tests/fixtures/video-short-audio.mov").as_slice(),

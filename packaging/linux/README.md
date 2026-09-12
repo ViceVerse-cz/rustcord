@@ -37,7 +37,9 @@ loaded Vulkan/EGL, X11/Wayland libraries and the D-Bus/desktop-portal services t
 ELF inspection cannot discover. A working graphical session, graphics driver,
 portal backend and unlocked Secret Service provider are still necessary for the
 corresponding features. The package recommends a GTK or KDE portal backend and
-GNOME Keyring; an existing compatible provider can be used instead. GTK/WebKit
+GNOME Keyring; an existing compatible provider can be used instead. It also recommends
+the GStreamer base, good and libav plugin sets, which inline attachment video loads at
+run time through `decodebin`; without them the player reports an unsupported format. GTK/WebKit
 and voice library requirements come from the built executable. The
 resulting version constraints target the build distribution; inspect `Depends`
 with `dpkg-deb --field <package.deb> Depends` before distributing elsewhere.

@@ -15,6 +15,9 @@ zeroize.workspace = true
 getrandom.workspace = true
 rfd = { version = "=0.17.2", default-features = false, features = ["xdg-portal", "wayland"] }
 
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+symphonia = { version = "=0.6.1", default-features = false, features = ["aac"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk4 = { version = "=0.11.4", features = ["v4_10"] }
 webkit6 = "=0.6.1"
@@ -29,6 +32,17 @@ windows = { version = "=0.61.3", features = ["UI_Notifications", "Win32_Security
 
 [target.'cfg(target_os = "macos")'.dependencies]
 futures-lite = "=2.6.1"
+objc2-video-toolbox = { version = "=0.3.2", default-features = false, features = ["std", "bitflags", "objc2", "objc2-core-media", "objc2-core-video", "VTBase", "VTErrors", "VTSession", "VTDecompressionSession"] }
+objc2-core-media = { version = "=0.3.2", default-features = false, features = ["std", "bitflags", "objc2", "objc2-core-video", "CMBase", "CMTime", "CMAttachment", "CMBlockBuffer", "CMFormatDescription", "CMSampleBuffer"] }
+objc2-core-video = { version = "=0.3.2", default-features = false, features = ["std", "bitflags", "objc2", "CVBase", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVReturn"] }
+objc2-core-foundation = { version = "=0.3.2", default-features = false, features = ["std", "CFBase", "CFDictionary", "CFNumber", "CFString"] }
+
+[target.'cfg(target_os = "linux")'.dependencies.gstreamer]
+version = "=0.25.3"
+[target.'cfg(target_os = "linux")'.dependencies.gstreamer-app]
+version = "=0.25.2"
+[target.'cfg(target_os = "linux")'.dependencies.gstreamer-video]
+version = "=0.25.3"
 
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 wry.workspace = true

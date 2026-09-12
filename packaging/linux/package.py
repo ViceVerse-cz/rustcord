@@ -140,7 +140,8 @@ def package(root, application_version):
             "Maintainer: Serein contributors <noreply@github.com>\n"
             "Homepage: https://github.com/ViceVerse-cz/rustcord\n"
             f"Installed-Size: {installed_kib}\nDepends: {depends}\n"
-            "Recommends: gnome-keyring, xdg-desktop-portal-gtk | xdg-desktop-portal-kde\n"
+            "Recommends: gnome-keyring, xdg-desktop-portal-gtk | xdg-desktop-portal-kde, "
+            "gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-libav\n"
             "Description: Unofficial native Discord client\n"
             " Native Rust desktop client for existing Discord accounts.\n"
             " Unofficial, experimental, and not endorsed by Discord.\n",
@@ -155,7 +156,8 @@ def package(root, application_version):
         shutil.copyfile(candidate, artifact)
         print(f"Unsigned Debian package: {artifact} ({artifact.stat().st_size} bytes; "
               f"Installed-Size {installed_kib} KiB).")
-        print(f"Runtime dependencies: {depends}; recommends a Secret Service provider (gnome-keyring).")
+        print(f"Runtime dependencies: {depends}; recommends a Secret Service provider "
+              "(gnome-keyring) and GStreamer plugins for inline attachment video.")
 
 
 if __name__ == "__main__":
