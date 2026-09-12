@@ -2260,7 +2260,7 @@ impl MessagingUi {
 		let wide_members = ui.available_width() >= 720.0;
 		self.search.sync(&ctx, state, &mut commands);
 		let search_open =
-			self.search.open && !self.search.pins() && state.selected.is_some() && !selected_voice;
+			self.search.results_visible(state) && state.selected.is_some() && !selected_voice;
 		let show_members = !selected_voice
 			&& !search_open
 			&& state.selected.is_some()
@@ -2270,6 +2270,14 @@ impl MessagingUi {
 				self.members_narrow_open
 			};
 		if search_open {
+			self.channel_header(
+				ui,
+				state,
+				selected_voice,
+				show_members,
+				wide_members,
+				&mut commands,
+			);
 			let width = if wide_members {
 				search::PANE_WIDTH.min(ui.available_width() * 0.45)
 			} else {
@@ -2344,14 +2352,16 @@ impl MessagingUi {
 					self.friends_page(ui, state, &mut commands);
 					return;
 				}
-				self.channel_header(
-					ui,
-					state,
-					selected_voice,
-					show_members,
-					wide_members,
-					&mut commands,
-				);
+				if !search_open {
+					self.channel_header(
+						ui,
+						state,
+						selected_voice,
+						show_members,
+						wide_members,
+						&mut commands,
+					);
+				}
 				self.call_bar(ui, state, &mut commands);
 				self.timeline.download.show_status(ui);
 				let Some(channel) = state.selected else {
