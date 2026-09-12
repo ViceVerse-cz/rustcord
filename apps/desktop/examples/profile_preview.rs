@@ -286,7 +286,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 					});
 				}
 			} else {
-				messaging.preview_settings(&page);
+				messaging.preview_settings(
+					if page == "extensions" && args.iter().any(|arg| arg == "--themes") {
+						"themes"
+					} else {
+						&page
+					},
+				);
 				if page == "extensions" {
 					seed_catalog(&mut messaging.extensions);
 					messaging

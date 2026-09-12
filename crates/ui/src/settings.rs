@@ -24,9 +24,10 @@ enum Page {
 	Voice,
 	Storage,
 	Extensions,
+	Themes,
 }
 impl Page {
-	const ALL: [Self; 9] = [
+	const ALL: [Self; 10] = [
 		Self::Account,
 		Self::Profile,
 		Self::General,
@@ -36,9 +37,10 @@ impl Page {
 		Self::Voice,
 		Self::Storage,
 		Self::Extensions,
+		Self::Themes,
 	];
 	const USER: [Self; 2] = [Self::Account, Self::Profile];
-	const APP: [Self; 7] = [
+	const APP: [Self; 8] = [
 		Self::General,
 		Self::Appearance,
 		Self::Notifications,
@@ -46,6 +48,7 @@ impl Page {
 		Self::Voice,
 		Self::Storage,
 		Self::Extensions,
+		Self::Themes,
 	];
 	fn label(self) -> &'static str {
 		match self {
@@ -58,6 +61,7 @@ impl Page {
 			Self::Voice => "Voice & Audio",
 			Self::Storage => "Data & Privacy",
 			Self::Extensions => "Extensions",
+			Self::Themes => "Themes",
 		}
 	}
 	fn description(self) -> &'static str {
@@ -70,7 +74,8 @@ impl Page {
 			Self::Activity => "Show others what you are playing.",
 			Self::Voice => "Microphone, speakers and voice processing.",
 			Self::Storage => "What Serein keeps on this device.",
-			Self::Extensions => "Community plugins and themes, made for your native client.",
+			Self::Extensions => "Manage community plugins.",
+			Self::Themes => "Choose a community theme.",
 		}
 	}
 	fn matches(self, query: &str) -> bool {
@@ -89,9 +94,8 @@ impl Page {
 				"voice audio microphone speakers devices volume gain noise suppression push to talk"
 			}
 			Self::Storage => "data privacy local storage clear cache drafts credentials",
-			Self::Extensions => {
-				"extensions plugins themes shop store catalog import community tools"
-			}
+			Self::Extensions => "extensions plugins shop store catalog import community tools",
+			Self::Themes => "themes shop store catalog import community appearance colors",
 		};
 		keywords.contains(query)
 	}
@@ -247,7 +251,11 @@ impl MessagingUi {
 										false,
 									),
 									Page::Storage => self.storage_page(ui, state),
-									Page::Extensions => self.extensions.settings(ui, state),
+									Page::Extensions | Page::Themes => {
+										self.extensions
+											.select_themes(self.settings.page == Page::Themes);
+										self.extensions.settings(ui, state);
+									}
 								}
 								ui.add_space(24.0);
 							});

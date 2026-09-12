@@ -744,6 +744,12 @@ impl MessagingUi {
 	}
 
 	fn voice_audio_controls(&mut self, ui: &mut egui::Ui) {
+		// Both settings surfaces use this path. Queue discovery once, without opening streams.
+		if ui.is_enabled() && self.voice_device_status.is_empty() {
+			self.voice_device_status = "Looking for audio devices...";
+			self.voice_refresh_devices = true;
+			ui.ctx().request_repaint();
+		}
 		let colors = design::palette(ui);
 		let mut device = |ui: &mut egui::Ui, input: bool| {
 			let label = ui

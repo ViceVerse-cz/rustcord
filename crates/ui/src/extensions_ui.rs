@@ -151,6 +151,13 @@ impl ExtensionUi {
 	pub fn preview_themes(&mut self, themes: bool) {
 		self.themes = themes;
 	}
+	pub(crate) fn select_themes(&mut self, themes: bool) {
+		if self.themes != themes {
+			self.themes = themes;
+			self.query.clear();
+			self.enlarged = None;
+		}
+	}
 	pub fn receive_preview(&mut self, id: String, image: Option<egui::ColorImage>) {
 		if !self.entries.iter().any(|entry| entry.manifest.id == id) {
 			return;
@@ -495,49 +502,35 @@ impl ExtensionUi {
 		self.preview_clock = self.preview_clock.saturating_add(1);
 
 		let colors = design::palette(ui);
-		if ui.available_width() >= 540.0 {
-			ui.label(design::semibold(ui, "Make Serein yours", 26.0).color(colors.text_strong));
-			ui.label(
-				egui::RichText::new("A new look. A useful little tool. Made by the community.")
-					.color(colors.muted),
-			);
-			ui.add_space(4.0);
-		}
 		ui.horizontal_wrapped(|ui| {
-			for (themes, label) in [(false, "Plugins"), (true, "Themes")] {
-				if ui
-					.add(
-						egui::Button::new(label)
-							.selected(self.themes == themes)
-							.min_size(egui::vec2(90.0, 34.0)),
-					)
-					.clicked()
-				{
-					self.themes = themes;
-					self.query.clear();
-				}
-			}
-		});
-		ui.horizontal_wrapped(|ui| {
-			ui.add(
+			let search_width = (ui.available_width() - 260.0).max(120.0);
+			ui.add_sized(
+				[search_width, 40.0],
 				egui::TextEdit::singleline(&mut self.query)
 					.hint_text(if self.themes {
 						"Search themes"
 					} else {
-						"Search plugins"
+						"Search extensions"
 					})
 					.char_limit(128)
-					.desired_width((ui.available_width() - 260.0).max(120.0)),
+					.margin(egui::vec2(12.0, 8.0))
+					.align(egui::Align2::LEFT_CENTER),
 			);
 			if ui
-				.add_enabled(!self.busy, egui::Button::new("Refresh"))
+				.add_enabled(
+					!self.busy,
+					egui::Button::new("Refresh").min_size(egui::vec2(0.0, 40.0)),
+				)
 				.clicked()
 			{
 				self.previews.clear();
 				self.queue(ui.ctx(), ExtensionRequest::RefreshCatalog);
 			}
 			if ui
-				.add_enabled(!self.busy, egui::Button::new("Import package..."))
+				.add_enabled(
+					!self.busy,
+					egui::Button::new("Import package...").min_size(egui::vec2(0.0, 40.0)),
+				)
 				.clicked()
 			{
 				self.queue(ui.ctx(), ExtensionRequest::Import);
