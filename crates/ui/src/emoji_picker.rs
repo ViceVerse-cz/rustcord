@@ -172,6 +172,8 @@ impl Picker {
 					.frame(false)
 					.min_size(egui::Vec2::splat(28.0)),
 			)
+		} else if selected.is_none() {
+			crate::icons::button(ui, crate::icons::Icon::Smile, 28.0, "Choose trait emoji")
 		} else {
 			ui.add_sized(
 				[28.0, 28.0],
